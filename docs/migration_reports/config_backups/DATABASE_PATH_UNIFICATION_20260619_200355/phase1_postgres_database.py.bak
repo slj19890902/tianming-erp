@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+import os
+from collections.abc import Generator
+
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+
+DATABASE_URL = os.getenv(
+    "TM_ERP_DATABASE_URL",
+    os.getenv(
+        "TARGET_DB_URL",
+        "sqlite+pysqlite:///./data/tm_phase3_dev.sqlite3",
+    ),
+)
+
+
+def create_database_engine(database_url: str = DATABASE_URL) -> Engine:
+    connect_args = {}
+    if database_url.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
+    return create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+
+
+engine = create_database_engine()
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+
+def get_session() -> Generator[Session, None, None]:
+    with SessionLocal() as session:
+        yield session

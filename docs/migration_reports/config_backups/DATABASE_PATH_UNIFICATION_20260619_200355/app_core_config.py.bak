@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import os
+import secrets
+from ipaddress import ip_address
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "carton_erp.sqlite3"
+DEFAULT_BACKUP_DIR = Path(r"Z:\sata1-18015598002\BoxERP\backups")
+DEFAULT_SECRET_FILE = PROJECT_ROOT / "data" / "session_secret.key"
+DEFAULT_ALLOWED_ORIGINS = (
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+)
+PRIVATE_LAN_ORIGIN_REGEX = (
+    r"^https?://(?:localhost|127\.0\.0\.1|"
+    r"10(?:\.\d{1,3}){3}|"
+    r"192\.168\.\d{1,3}\.\d{1,3}|"
+    r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})"
+    r"(?::\d{1,5})?$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    database_path: Path
+    backup_dir: Path
+    allowed_origins: tuple[str, ...]
+    allowed_origin_regex: str
+    secret_key: str
+    bind_host: str
+    port: int
+    environment: str
+    sqlite_busy_timeout_ms: int = 5_000
+    session_cookie_name: str = "erp_session"
+    session_expire_minutes: int = 480
+    session_cookie_secure: bool = False
+
+    @property
+    def database_url(self) -> str:
+        return f"sqlite+pysqlite:///{self.database_path.as_posix()}"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+
+def normalize_path(value: str | Path) -> Path:
+    """Normalize a path without requiring a mapped NAS drive to be online."""
+    path = Path(value).expanduser()
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return Path(os.path.abspath(path))
+
+
+def _resolved_path(env_name: str, default: Path) -> Path:
+    return normalize_path(os.getenv(env_name, str(default)))
+
+
+def _load_or_create_secret(secret_file: Path) -> str:
+    if secret_file.exists():
+        secret = secret_file.read_text(encoding="utf-8").strip()
+        if secret:
+            return secret
+
+    secret_file.parent.mkdir(parents=True, exist_ok=True)
+    secret = secrets.token_urlsafe(48)
+    secret_file.write_text(secret, encoding="utf-8")
+    return secret
+
+
+def _allowed_origins() -> tuple[str, ...]:
+    raw = os.getenv("ERP_ALLOWED_ORIGINS", "")
+    if not raw.strip():
+        return DEFAULT_ALLOWED_ORIGINS
+    origins = tuple(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
+    for origin in origins:
+        parsed = urlsplit(origin)
+        host = parsed.hostname
+        if (
+            origin == "*"
+            or parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+        ):
+            raise ValueError("ERP_ALLOWED_ORIGINS 仅允许局域网 HTTP/HTTPS 来源")
+        if host == "localhost":
+            continue
+        try:
+            address = ip_address(host)
+        except ValueError as error:
+            raise ValueError(
+                "ERP_ALLOWED_ORIGINS 只能使用 localhost 或局域网 IP"
+            ) from error
+        if not (address.is_private or address.is_loopback):
+            raise ValueError("ERP_ALLOWED_ORIGINS 禁止公网 IP")
+    return origins or DEFAULT_ALLOWED_ORIGINS
+
+
+def load_settings() -> Settings:
+    database_path = _resolved_path("ERP_DATABASE_PATH", DEFAULT_DATABASE_PATH)
+    backup_dir = _resolved_path("ERP_BACKUP_DIR", DEFAULT_BACKUP_DIR)
+    secret_file = _resolved_path("ERP_SECRET_KEY_FILE", DEFAULT_SECRET_FILE)
+    secret_key = os.getenv("ERP_SECRET_KEY", "").strip() or _load_or_create_secret(
+        secret_file
+    )
+    return Settings(
+        database_path=database_path,
+        backup_dir=backup_dir,
+        allowed_origins=_allowed_origins(),
+        allowed_origin_regex=PRIVATE_LAN_ORIGIN_REGEX,
+        secret_key=secret_key,
+        bind_host=os.getenv("ERP_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
+        port=int(os.getenv("ERP_PORT", "8000")),
+        environment=os.getenv("ERP_ENVIRONMENT", "development").strip().lower()
+        or "development",
+        sqlite_busy_timeout_ms=int(os.getenv("ERP_SQLITE_BUSY_TIMEOUT_MS", "5000")),
+        session_cookie_name=os.getenv(
+            "ERP_SESSION_COOKIE_NAME",
+            "erp_session",
+        ).strip()
+        or "erp_session",
+        session_expire_minutes=int(
+            os.getenv("ERP_SESSION_EXPIRE_MINUTES", "480")
+        ),
+        session_cookie_secure=os.getenv(
+            "ERP_SESSION_COOKIE_SECURE",
+            "false",
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
+
+
+settings = load_settings()

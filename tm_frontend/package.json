@@ -1,0 +1,33 @@
+{
+  "name": "tm_frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vueuse/core": "^14.3.0",
+    "element-plus": "^2.14.2",
+    "html5-qrcode": "^2.3.8",
+    "pinia": "^3.0.4",
+    "print-js": "^1.6.0",
+    "qrcode.vue": "^3.6.0",
+    "vue": "^3.5.38",
+    "vue-router": "^4.6.3",
+    "vxe-pc-ui": "^4.14.39",
+    "vxe-table": "^4.19.14",
+    "xe-utils": "^4.0.9",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.57",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.21",
+    "vue-tsc": "^2.2.12"
+  }
+}

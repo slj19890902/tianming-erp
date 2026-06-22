@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Generator
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+
+@pytest.fixture()
+def requisition_app(tmp_path: Path):
+    from app.api.auth import router as auth_router
+    from app.api.deps import get_db
+    from app.api.incoming import router as incoming_router
+    from app.api.requisition import router as requisition_router
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "requisition.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with session_factory() as session:
+        users = [
+            User(
+                username=role,
+                password_hash=hash_password("RolePass123!"),
+                role=role,
+                real_name=role,
+                display_name=role,
+                must_change_password=False,
+            )
+            for role in ("admin", "finance", "sales", "workshop")
+        ]
+        customer = Customer(
+            customer_number=1,
+            customer_code="SME",
+            name="苏州思迈尔包装有限公司",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        session.add_all([*users, customer])
+        session.flush()
+        product = Product(
+            customer_id=customer.id,
+            product_code="21301028",
+            customer_material_code="SME-028",
+            product_name="中性外箱",
+            legacy_material_text="K=A-BC",
+            length_mm=Decimal("520"),
+            width_mm=Decimal("350"),
+            height_mm=Decimal("300"),
+            box_category="normal",
+        )
+        session.add(product)
+        session.flush()
+        order = Order(
+            order_number="PO-20260614-001",
+            customer_id=customer.id,
+            order_date=date(2026, 6, 14),
+            delivery_date=date(2026, 6, 21),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("360"),
+        )
+        session.add(order)
+        session.flush()
+        session.add(
+            OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                quantity=100,
+                unit_price=Decimal("3.60"),
+                subtotal=Decimal("360"),
+                material_status="pending",
+                snapshot_product_name="中性外箱",
+                snapshot_spec="520×350×300mm",
+                snapshot_material="K=A-BC",
+            )
+        )
+        session.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(requisition_router, prefix="/api/requisition")
+    app.include_router(incoming_router, prefix="/api/incoming")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    return app, session_factory
+
+
+def _login(client: TestClient, role: str) -> None:
+    response = client.post(
+        "/api/auth/login",
+        json={"username": role, "password": "RolePass123!"},
+    )
+    assert response.status_code == 200
+
+
+def _batch_payload() -> dict:
+    return {
+        "supplier_name": "苏州纸板供应商",
+        "items": [
+            {
+                "order_item_id": 1,
+                "inventory_deducted_qty": 20,
+                "requisition_qty": 85,
+                "cardboard_len": "1756",
+                "cardboard_width": "654",
+                "special_process": "大做小",
+                "remark": "多备5张损耗",
+            }
+        ],
+    }
+
+
+def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> None:
+    from app.models.order import OrderItem
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = requisition_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        created = client.post("/api/requisition/batches", json=_batch_payload())
+
+    assert pending.status_code == 200
+    row = pending.json()["items"][0]
+    assert row["requisition_status"] == "未报料"
+    assert Decimal(str(row["suggested_cardboard_len"])) == Decimal("1756")
+    assert Decimal(str(row["suggested_cardboard_width"])) == Decimal("654")
+    assert created.status_code == 201, created.text
+    assert created.json()["requisition_number"].startswith(
+        f"BL-{date.today():%Y%m%d}-"
+    )
+    assert created.json()["items"][0]["requisition_qty"] == 85
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        assert item.inventory_deducted_qty == 20
+        assert item.requisition_qty == 85
+        assert item.requisition_status == "已报料"
+        assert item.special_process == "大做小"
+        assert session.scalar(select(Requisition)) is not None
+        assert session.scalar(select(RequisitionItem)) is not None
+
+
+def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receive(
+    requisition_app,
+) -> None:
+    app, _ = requisition_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/requisition/batches", json=_batch_payload())
+        assert created.status_code == 201, created.text
+        scheduled = client.put(
+            "/api/requisition/items/1/supplier-schedule",
+            json={
+                "supplier_delivery_time": "2026-06-15T08:30:00",
+                "supplier_order_number": "SUP-8899",
+            },
+        )
+        incoming = client.get("/api/incoming/pending")
+        cancelled = client.put(
+            "/api/requisition/items/1/cancel",
+            json={"reason": "供应商规格确认错误"},
+        )
+
+    assert scheduled.status_code == 200
+    assert scheduled.json()["requisition_status"] == "供应商已排单"
+    assert incoming.status_code == 200
+    assert incoming.json()["items"][0]["requisition_status"] == "供应商已排单"
+    assert incoming.json()["items"][0]["supplier_delivery_time"].startswith(
+        "2026-06-15T08:30"
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["requisition_status"] == "未报料"
+
+
+def test_submitted_requisition_items_can_be_listed(requisition_app) -> None:
+    app, _ = requisition_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        client.post("/api/requisition/batches", json=_batch_payload())
+        client.put(
+            "/api/requisition/items/1/supplier-schedule",
+            json={"supplier_delivery_time": "2026-06-15T08:30:00"},
+        )
+        response = client.get("/api/requisition/items")
+
+    assert response.status_code == 200
+    row = response.json()["items"][0]
+    assert row["item_id"] == 1
+    assert row["order_number"] == "PO-20260614-001"
+    assert row["customer_name"] == "苏州思迈尔包装有限公司"
+    assert row["requisition_status"] == "供应商已排单"
+    assert row["supplier_delivery_time"].startswith("2026-06-15T08:30")
+
+
+def test_requisition_api_hides_legacy_history_prefix_in_order_number(
+    requisition_app,
+) -> None:
+    from app.models.order import Order
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        session.get(Order, 1).order_number = "RUIDA-42838"
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        client.post("/api/requisition/batches", json=_batch_payload())
+        response = client.get("/api/requisition/items")
+
+    assert response.status_code == 200
+    row = response.json()["items"][0]
+    assert row["display_order_number"] == "TM20260614-0001"
+    assert row["order_number"] == "TM20260614-0001"
+    assert "RUIDA" not in str(response.json())
+
+
+def test_requisition_cannot_change_or_cancel_after_material_received(
+    requisition_app,
+) -> None:
+    app, _ = requisition_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        client.post("/api/requisition/batches", json=_batch_payload())
+        received = client.put("/api/incoming/receive/1")
+        cancelled = client.put(
+            "/api/requisition/items/1/cancel",
+            json={"reason": "错误操作"},
+        )
+        edited = client.put(
+            "/api/requisition/items/1",
+            json={
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 100,
+                "cardboard_len": "1756",
+                "cardboard_width": "654",
+                "special_process": "无",
+                "remark": None,
+            },
+        )
+
+    assert received.status_code == 200
+    assert cancelled.status_code == 409
+    assert edited.status_code == 409
+
+
+def test_history_search_returns_latest_successful_requisition(requisition_app) -> None:
+    app, _ = requisition_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        client.post("/api/requisition/batches", json=_batch_payload())
+        response = client.get(
+            "/api/requisition/search_history",
+            params={"keyword": "思迈尔 21301028 520"},
+        )
+
+    assert response.status_code == 200
+    result = response.json()["items"][0]
+    assert result["product_code"] == "21301028"
+    assert Decimal(str(result["cardboard_len"])) == Decimal("1756")
+    assert result["material"] == "K=A-BC"
+
+
+def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> None:
+    app, _ = requisition_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/requisition/batches", json=_batch_payload())
+        response = client.get(
+            f"/api/requisition/batches/{created.json()['id']}/print"
+        )
+
+    assert response.status_code == 200
+    serialized = str(response.json()).lower()
+    for forbidden in ("unit_price", "subtotal", "cost", "amount"):
+        assert forbidden not in serialized
+
+
+def test_phase11_migration_is_additive_and_preserves_order_items(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "phase11.sqlite3"
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("ERP_SECRET_KEY", "phase11-migration-test")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    command.upgrade(config, "f4b2c9d7a110")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, username, password_hash, role, real_name, display_name,
+                is_active, must_change_password
+            ) VALUES (1, 'admin', 'hash', 'admin', 'admin', 'admin', 1, 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO customers (
+                id, customer_number, customer_code, name, payment_term_days,
+                credit_limit, default_tax_rate, status, is_active
+            ) VALUES (1, 1, 'T', '测试客户', 30, 0, 0.13, 'active', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO products (
+                id, customer_id, product_code, customer_material_code,
+                product_name, box_category, unit, is_active
+            ) VALUES (1, 1, 'P1', 'M1', '测试箱', 'normal', '只', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO sales_orders (
+                id, order_number, customer_id, order_date, status,
+                payment_status, total_amount
+            ) VALUES (1, 'PO-OLD-001', 1, '2026-06-01',
+                      'pending_production', 'unpaid', 10)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO sales_order_items (
+                id, order_id, product_id, quantity, delivered_quantity,
+                is_force_closed, unit_price, subtotal, material_status,
+                snapshot_product_name
+            ) VALUES (9, 1, 1, 10, 0, 0, 1, 10, 'pending', '历史纸箱')
+            """
+        )
+        connection.commit()
+
+    command.upgrade(config, "head")
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "b71c4a9e2d10_phase11_requisition_workflow.py"
+    ).read_text(encoding="utf-8")
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT id, quantity, requisition_status FROM sales_order_items WHERE id=9"
+        ).fetchone()
+        tables = {
+            value[0]
+            for value in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+
+    assert row == (9, 10, "未报料")
+    assert {"material_requisitions", "material_requisition_items"} <= tables
+    assert "drop_table" not in migration.lower()
+    assert "drop_column" not in migration.lower()

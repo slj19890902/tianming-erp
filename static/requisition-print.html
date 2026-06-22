@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>供应商采购报料单</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#eef2f5;color:#111;font:14px/1.35 "Microsoft YaHei",sans-serif}
+    .sheet{width:900px;margin:18px auto;padding:18px 20px;background:#fff;box-shadow:0 4px 18px #0002}
+    h1{margin:0;text-align:center;font-size:25px;letter-spacing:6px}.meta{display:flex;justify-content:space-between;margin:10px 0}
+    table{width:100%;border-collapse:collapse}th,td{border:1px solid #111;padding:6px;text-align:center}th{background:#f3f4f6}
+    .left{text-align:left}.total{margin-top:10px;text-align:right;font-size:17px;font-weight:700}.actions{text-align:center;margin:15px}
+    button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700}
+    @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions{display:none}@page{size:A4 landscape;margin:10mm}}
+  </style>
+</head>
+<body>
+  <div class="actions"><button onclick="window.print()">打印 / 保存为 PDF</button></div>
+  <main class="sheet">
+    <h1>供应商采购报料单</h1>
+    <div class="meta"><span id="number"></span><span id="date"></span><span id="supplier"></span></div>
+    <table><thead><tr><th>序号</th><th>存货编码 / 产品</th><th>材质</th><th>纸板规格(mm)</th><th>张数</th><th>特殊处理</th></tr></thead><tbody id="rows"></tbody></table>
+    <div class="total" id="total"></div>
+  </main>
+  <script>
+    const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+    const cleanCode=value=>String(value||"-").split(" / ",1)[0].trim();
+    const cleanName=value=>{
+      let text=String(value||"-").trim();
+      if(text.includes(" / ")) text=text.split(" / ",2)[1].trim();
+      return text.replace(/\s+(WCX1|WZX|NZX|CTSNH)\b.*$/i,"").trim();
+    };
+    (async()=>{
+      const id=new URLSearchParams(location.search).get("id");
+      const response=await fetch(`/api/requisition/batches/${encodeURIComponent(id)}/print`,{credentials:"include"});
+      if(!response.ok){document.body.innerHTML="<p>无法读取报料单，请确认登录状态。</p>";return}
+      const data=await response.json();
+      number.textContent=`报料单号：${data.requisition_number}`;
+      date.textContent=`日期：${data.requisition_date}`;
+      supplier.textContent=`供应商：${data.supplier_name||"未指定"}`;
+      rows.innerHTML=data.items.map((row,index)=>`<tr><td>${index+1}</td><td class="left">${escapeHtml(cleanCode(row.product_code))} / ${escapeHtml(cleanName(row.product_name))}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.special_process||"无")}</td></tr>`).join("");
+      total.textContent=`总张数：${data.total_quantity}`;
+    })();
+  </script>
+</body>
+</html>

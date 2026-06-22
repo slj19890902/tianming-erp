@@ -1,0 +1,1942 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>纸箱厂 ERP</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.26.0/dist/index.js"></script>
+    <style>
+      :root {
+        --bg: #eef3f7;
+        --panel: #fff;
+        --line: #d5dee8;
+        --line-strong: #b8c6d5;
+        --text: #1e293b;
+        --muted: #64748b;
+        --primary: #1769aa;
+        --primary-dark: #0f4f86;
+        --green: #15803d;
+        --orange: #c2410c;
+        --red: #b91c1c;
+        --blue-soft: #e8f2fc;
+        --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+      }
+      * { box-sizing: border-box; }
+      [v-cloak] { display: none; }
+      body {
+        margin: 0;
+        min-width: 1180px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.5 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      }
+      button, input, select, textarea { font: inherit; }
+      button { cursor: pointer; }
+      .login-shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, rgba(23,105,170,.16), rgba(21,128,61,.1)), #eef3f7;
+      }
+      .login-card {
+        width: 420px;
+        padding: 28px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+      .login-card h1 { margin: 0 0 6px; font-size: 24px; }
+      .login-card p { margin: 0 0 22px; color: var(--muted); }
+      .login-help { margin-top: 10px; text-align: center; }
+      .link-btn { border: 0; background: transparent; color: var(--primary); }
+      .link-btn:hover { text-decoration: underline; }
+      .field { margin-bottom: 12px; }
+      .field label { display: block; margin-bottom: 5px; font-weight: 700; color: #334155; }
+      .input, .select, .textarea {
+        width: 100%;
+        min-height: 34px;
+        padding: 7px 9px;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        background: #fff;
+        color: var(--text);
+        outline: none;
+      }
+      .textarea { min-height: 72px; resize: vertical; }
+      .input:focus, .select:focus, .textarea:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(23,105,170,.12);
+      }
+      .btn {
+        min-height: 32px;
+        padding: 6px 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        background: #fff;
+        color: #263548;
+      }
+      .btn:hover { background: #f1f5f9; }
+      .btn.primary { color: #fff; background: var(--primary); border-color: var(--primary); }
+      .btn.primary:hover { background: var(--primary-dark); }
+      .btn.success { color: #fff; background: var(--green); border-color: var(--green); }
+      .btn.danger { color: #fff; background: var(--red); border-color: var(--red); }
+      .btn.small { min-height: 27px; padding: 3px 8px; }
+      .btn:disabled { cursor: not-allowed; opacity: .55; }
+      .app-shell { min-height: 100vh; display: grid; grid-template-rows: 50px 1fr; }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line-strong);
+        background: linear-gradient(180deg, #fff, #edf4fb);
+      }
+      .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 800; }
+      .brand-mark {
+        width: 28px; height: 28px; display: grid; place-items: center;
+        border-radius: 5px; color: #fff; background: var(--primary);
+      }
+      .top-actions { display: flex; align-items: center; gap: 8px; }
+      .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 0; }
+      .sidebar { padding: 10px 8px; border-right: 1px solid var(--line-strong); background: #f8fafc; }
+      .menu-title { padding: 8px 10px 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
+      .menu-item {
+        width: 100%; display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 3px; padding: 8px 9px; border: 1px solid transparent;
+        border-radius: 4px; background: transparent; color: #263548; text-align: left;
+      }
+      .menu-item:hover { background: #eef5fb; border-color: #d5e5f5; }
+      .menu-item.active { background: #dbeafe; border-color: #93c5fd; color: #0f4f86; font-weight: 800; }
+      .main { min-width: 0; padding: 12px; overflow: auto; }
+      .page-head {
+        display: flex; align-items: flex-end; justify-content: space-between;
+        margin-bottom: 10px;
+      }
+      .page-head h2 { margin: 0; font-size: 20px; }
+      .page-head p { margin: 2px 0 0; color: var(--muted); }
+      .toolbar, .filterbar {
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        padding: 9px; border: 1px solid var(--line); background: #fff;
+      }
+      .toolbar { justify-content: space-between; border-radius: 5px 5px 0 0; }
+      .filterbar { border-top: 0; }
+      .toolbar-group { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+      .page-subtitle { margin-top: 4px; color: var(--muted); }
+      .order-page-shell { display: grid; gap: 12px; }
+      .order-head-card, .order-filter-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 2px 8px rgba(15,23,42,.03);
+      }
+      .order-head-card { padding: 14px 16px; }
+      .order-filter-card { padding: 12px 14px; }
+      .order-head-actions, .order-filter-grid {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .order-filter-grid .input,
+      .order-filter-grid .select,
+      .order-filter-grid .search-select { min-width: 180px; }
+      .order-filter-grid .search-keyword { min-width: 360px; }
+      .order-group-table th,
+      .order-group-table td { vertical-align: middle; }
+      .order-group-row td { background: #fff; }
+      .order-group-row:hover td { background: #f8fbfe; }
+      .col-customer-name { min-width: 220px; }
+      .col-customer-po { width: 160px; max-width: 160px; }
+      .col-actions { min-width: 140px; }
+      .order-group-summary { display: flex; flex-direction: column; gap: 4px; }
+      .order-group-summary small { color: var(--muted); }
+      .order-group-detail-row td { padding: 0; background: #f6f9fc; }
+      .order-group-detail-card {
+        margin: 10px 14px 14px;
+        padding: 12px;
+        border: 1px solid #dbe4ee;
+        border-radius: 8px;
+        background: #f8fbff;
+      }
+      .order-group-detail-card table th { position: static; background: #eef4fa; }
+      .sub-order-number { font-weight: 700; color: #0f4f86; }
+      .main-order-number { color: var(--muted); font-size: 12px; }
+      .cell-right { text-align: right; }
+      .cell-actions { white-space: nowrap; }
+      .filterbar .input, .filterbar .select { width: auto; min-width: 170px; }
+      .panel { border: 1px solid var(--line); background: #fff; box-shadow: 0 2px 8px rgba(15,23,42,.03); }
+      .table-wrap { overflow: auto; max-height: calc(100vh - 220px); }
+      table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+      th, td { padding: 8px 9px; border-right: 1px solid #e8edf2; border-bottom: 1px solid #e2e8f0; text-align: left; }
+      th { position: sticky; top: 0; z-index: 1; background: #edf4fb; color: #334155; font-weight: 800; }
+      tbody tr:hover { background: #f8fbfe; }
+      .empty { padding: 36px; color: var(--muted); text-align: center; }
+      .status {
+        display: inline-block; padding: 2px 8px; border-radius: 999px;
+        background: #e2e8f0; color: #475569; font-size: 12px;
+      }
+      .status.green { background: #dcfce7; color: #166534; }
+      .status.orange { background: #ffedd5; color: #9a3412; }
+      .status.red { background: #fee2e2; color: #991b1b; }
+      .status.blue { background: #dbeafe; color: #1e40af; }
+      .cards { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 10px; }
+      .card { padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: var(--shadow); }
+      .card-label { color: var(--muted); font-weight: 700; }
+      .card-value { margin-top: 6px; font-size: 25px; font-weight: 800; color: var(--primary-dark); }
+      .card-hint { margin-top: 4px; color: #94a3b8; }
+      .section-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+      .section-title { padding: 10px 12px; border-bottom: 1px solid var(--line); font-weight: 800; background: #f8fafc; }
+      .section-body { padding: 12px; }
+      .line-items { width: 100%; }
+      .line-items td { padding: 5px; }
+      .line-items .input, .line-items .select { min-width: 110px; }
+      .line-items .search-select { min-width: 170px; }
+      .order-template-cell { width: 190px; min-width: 190px; }
+      .order-code-cell { width: 160px; min-width: 160px; }
+      .order-code-input { min-width: 150px !important; width: 150px; }
+      .order-name-cell { min-width: 180px; }
+      .modal-mask {
+        position: fixed; inset: 0; z-index: 50; display: grid; align-items: start;
+        justify-items: center; overflow: auto; padding: 12px;
+        background: rgba(15,23,42,.45);
+      }
+      .modal {
+        width: min(1400px, 98vw); overflow: visible;
+        border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; box-shadow: var(--shadow);
+      }
+      .modal table { table-layout: fixed; white-space: normal; }
+      .modal th, .modal td { padding: 5px 6px; overflow-wrap: anywhere; }
+      .modal-head, .modal-foot {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 11px 14px; border-bottom: 1px solid var(--line); background: #f8fafc;
+      }
+      .modal-foot { justify-content: flex-end; border-top: 1px solid var(--line); border-bottom: 0; gap: 8px; }
+      .modal-body { padding: 14px; }
+      .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 12px; }
+      .form-grid .wide { grid-column: 1 / -1; }
+      .toast {
+        position: fixed; right: 20px; bottom: 20px; z-index: 80;
+        max-width: 420px; padding: 11px 16px; border-radius: 5px;
+        color: #fff; background: #334155; box-shadow: var(--shadow);
+      }
+      .toast.error { background: var(--red); }
+      .loading-bar { height: 3px; background: linear-gradient(90deg, transparent, var(--primary), transparent); animation: slide 1s infinite; }
+      @keyframes slide { from { transform: translateX(-60%); } to { transform: translateX(60%); } }
+      .muted { color: var(--muted); }
+      .right { text-align: right; }
+      .danger-text { color: var(--red); }
+      .sensitive-price { font-variant-numeric: tabular-nums; }
+      .role-workshop .sensitive-price { display: none !important; }
+      .search-select { position: relative; min-width: 220px; }
+      .search-select-list {
+        position: absolute; left: 0; right: 0; top: calc(100% + 3px); z-index: 90;
+        max-height: 260px; overflow: auto; border: 1px solid var(--line-strong);
+        border-radius: 4px; background: #fff; box-shadow: var(--shadow);
+      }
+      .search-select-option { width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid #eef2f7; background: #fff; text-align: left; }
+      .search-select-option:hover { background: var(--blue-soft); }
+      .compact-input { min-width: 96px !important; }
+      .spec-input { min-width: 145px !important; }
+      .order-detail-row td { padding: 0; background: #f8fafc; }
+      .order-detail-box { padding: 10px 14px 14px; }
+      .warning-row { background: #fff7ed !important; }
+      .toast.warning { background: #b45309; }
+      .requisition-selected { background: #eff6ff; }
+      .remember-line { display:flex; align-items:center; gap:7px; margin:8px 0 14px; color:#475569; }
+      .customer-group { border:1px solid var(--line); margin-bottom:8px; background:#fff; }
+      .customer-group-title { display:flex; justify-content:space-between; padding:9px 12px; background:#eaf2f9; font-weight:800; }
+      .customer-product-master-list { border:1px solid var(--line); background:#fff; }
+      .customer-master-row {
+        display:grid; grid-template-columns:80px minmax(260px,1fr) 120px 40px;
+        gap:10px; align-items:center; padding:11px 12px; border-bottom:1px solid #e8edf2;
+        cursor:pointer;
+      }
+      .customer-master-row:hover { background:#f3f8fd; }
+      .product-breadcrumb { display:flex; align-items:center; gap:8px; font-weight:800; color:var(--primary-dark); }
+      .drawing-gallery { display:flex; flex-wrap:wrap; gap:10px; }
+      .drawing-card { width:180px; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#fff; }
+      .drawing-thumb { display:block; width:100%; height:115px; object-fit:contain; background:#f8fafc; cursor:zoom-in; }
+      .drawing-meta { padding:8px; font-size:12px; color:var(--muted); }
+      .drawing-version { display:inline-block; margin-bottom:5px; padding:2px 7px; border-radius:12px; background:#e2e8f0; color:#475569; font-weight:800; }
+      .drawing-version.current { background:#dcfce7; color:#166534; }
+      .pager {
+        display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+        padding: 8px 10px; border: 1px solid var(--line); border-top: 0; background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <div v-if="!user" class="login-shell">
+        <form class="login-card" @submit.prevent="login">
+          <h1>纸箱厂 ERP</h1>
+          <p>订单、来料、送货、回单、对账、开票与收款闭环</p>
+          <div class="field"><label>用户名</label><input class="input" v-model.trim="loginForm.username" autocomplete="username" /></div>
+          <div class="field"><label>密码</label><input class="input" v-model="loginForm.password" type="password" autocomplete="current-password" /></div>
+          <label class="remember-line"><input type="checkbox" v-model="loginForm.remember_me" /> 记住登录（常用电脑 30 天免重复登录）</label>
+          <div v-if="loginError" class="danger-text" style="margin-bottom:10px">{{ loginError }}</div>
+          <button class="btn primary" style="width:100%" :disabled="loading">{{ loading ? "登录中..." : "登录" }}</button>
+          <div class="login-help"><button class="link-btn" type="button" @click="forgotPassword">忘记密码</button></div>
+        </form>
+      </div>
+
+      <div v-else :class="['app-shell', `role-${user.role}`]">
+        <header class="topbar">
+          <div class="brand"><span class="brand-mark">ERP</span><span>三级纸箱厂 ERP</span></div>
+          <div class="top-actions">
+            <span>{{ user.real_name || user.username }}</span>
+            <span class="status blue">{{ roleLabel(user.role) }}</span>
+            <button class="btn small" @click="openChangePassword()">修改密码</button>
+            <button class="btn small" @click="refreshCurrent">刷新</button>
+            <button class="btn small" @click="logout">退出</button>
+          </div>
+        </header>
+        <div class="layout">
+          <aside class="sidebar">
+            <div class="menu-title">业务中心</div>
+            <button v-for="item in menus" :key="item.key" :class="['menu-item', {active: activePage === item.key}]" @click="go(item.key)">
+              <span>{{ item.label }}</span><span v-if="item.count !== undefined" class="status">{{ item.count }}</span>
+            </button>
+          </aside>
+          <main class="main">
+            <div v-if="loading" class="loading-bar"></div>
+
+            <template v-if="activePage === 'dashboard'">
+              <div class="page-head"><div><h2>首页仪表盘</h2><p>所有指标直接来自当前数据库。</p></div></div>
+              <div class="cards">
+                <div class="card"><div class="card-label">本月累计营收</div><div class="card-value">¥ {{ money(kpi.monthly_revenue) }}</div><div class="card-hint">{{ kpi.month || "-" }}</div></div>
+                <div v-if="!isWorkshop" class="card sensitive-price"><div class="card-label">本月毛利润</div><div class="card-value">¥ {{ money(kpi.monthly_gross_profit) }}</div><div class="card-hint">基于回单与成本快照</div></div>
+                <div v-if="!isWorkshop" class="card sensitive-price"><div class="card-label">待收账款</div><div class="card-value">¥ {{ money(kpi.outstanding_receivables) }}</div><div class="card-hint">应收减已核销</div></div>
+                <div class="card"><div class="card-label">今日待发货</div><div class="card-value">{{ kpi.today_pending_delivery_tasks || 0 }}</div><div class="card-hint">材料已到且仍有余量</div></div>
+                <div class="card"><div class="card-label">今日待收料</div><div class="card-value">{{ kpi.today_pending_incoming_tasks || 0 }}</div><div class="card-hint">车间来料任务</div></div>
+              </div>
+              <div class="section-grid">
+                <div class="panel"><div class="section-title">快捷入口</div><div class="section-body toolbar-group">
+                  <button v-if="canSales" class="btn primary" @click="openOrder">新建订单</button>
+                  <button class="btn" @click="go('orders')">订单列表</button>
+                  <button class="btn" @click="go('deliveries')">送货管理</button>
+                  <button v-if="canFinance" class="btn" @click="go('finance')">月结对账</button>
+                  <button v-if="isWorkshop || canAdmin" class="btn" onclick="window.location.href='/incoming.html'">来料入库</button>
+                </div></div>
+                <div class="panel"><div class="section-title">数据状态</div><div class="section-body">
+                  <div>客户：{{ customers.length }} 家</div>
+                  <div>产品：{{ products.length }} 个</div>
+                  <div>订单：{{ ordersTotal }} 张</div>
+                  <div>送货单：{{ deliveriesTotal }} 张</div>
+                </div></div>
+              </div>
+            </template>
+
+            <template v-else-if="activePage === 'customers'">
+              <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
+              <div class="toolbar">
+                <div class="toolbar-group"><button v-if="canAdmin" class="btn primary" @click="openCustomer()">新增客户</button></div>
+                <div class="toolbar-group"><label><input type="checkbox" v-model="filters.showInactive" @change="pages.customers=1;loadCustomers()" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @keyup.enter="pages.customers=1; loadCustomers()" /><button class="btn" @click="pages.customers=1; loadCustomers()">查询</button></div>
+              </div>
+              <data-panel :empty="!customers.length">
+                <table><thead><tr><th>客户编号</th><th>客户缩写</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in customers" :key="row.id">
+                  <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
+                  <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
+                  <td class="toolbar-group"><button class="btn small" @click="openCustomer(row)">{{ canAdmin ? "查看/编辑" : "查看" }}</button><button v-if="user.role==='admin'" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                </tr></tbody></table>
+              </data-panel>
+              <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
+            </template>
+
+            <template v-else-if="activePage === 'products'">
+              <page-head title="常用箱与材质" desc="先选择客户，再维护该客户的常用箱。"></page-head>
+              <div class="toolbar">
+                <div class="toolbar-group">
+                  <button :class="['btn', {primary: productTab === 'products'}]" @click="productTab='products'">产品资料</button>
+                  <button :class="['btn', {primary: productTab === 'materials'}]" @click="productTab='materials'">材质字典</button>
+                  <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
+                  <button v-if="user.role==='admin' && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
+                </div>
+                <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
+                  <label><input type="checkbox" v-model="filters.showInactiveProducts" @change="pages.products=1; loadProducts()" /> 显示已停用纸箱</label>
+                  <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @keyup.enter="pages.products=1; loadProducts()" />
+                  <input class="input" style="min-width:180px" placeholder="产品名称" v-model.trim="filters.productName" @keyup.enter="pages.products=1; loadProducts()" />
+                  <input class="input" style="min-width:180px" placeholder="规格 / 尺寸" v-model.trim="filters.productSpec" @keyup.enter="pages.products=1; loadProducts()" />
+                  <input class="input" style="min-width:180px" placeholder="材质" v-model.trim="filters.productMaterial" @keyup.enter="pages.products=1; loadProducts()" />
+                  <button class="btn" @click="pages.products=1; loadProducts()">查询</button>
+                  <button class="btn" @click="resetProductFilters">清空筛选</button>
+                </div>
+              </div>
+              <div v-if="productTab === 'products'">
+                <div v-if="productTrashOpen" class="panel">
+                  <div class="toolbar"><strong>产品垃圾站（保留 30 天）</strong><div class="toolbar-group"><button class="btn" @click="loadProductTrash()">刷新</button><button class="btn danger" @click="emptyProductTrash()">清空垃圾站</button><button class="btn" @click="productTrashOpen=false">关闭</button></div></div>
+                  <div v-if="!productTrashItems.length" class="empty">垃圾站为空</div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" @click="restoreProduct(row)">恢复</button><button class="btn small danger" @click="purgeProduct(row)">彻底清理</button></td></tr></tbody></table></div>
+                </div>
+                <template v-if="!selectedProductCustomer">
+                  <div class="toolbar"><input class="input" style="min-width:360px" placeholder="输入客户名称、编号或缩写" v-model.trim="productCustomerSearch" /><span class="muted">共 {{ filteredProductCustomers.length }} 家客户</span></div>
+                  <div class="customer-product-master-list">
+                    <div v-for="row in filteredProductCustomers" :key="row.id" class="customer-master-row" @click="selectProductCustomer(row)">
+                      <strong>{{ row.customer_number || "-" }}</strong><span>{{ row.name }}</span><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag><strong>›</strong>
+                    </div>
+                    <div v-if="!filteredProductCustomers.length" class="empty">没有匹配客户</div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="toolbar">
+                    <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
+                    <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
+                  </div>
+                  <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质（克重）</th><th>楞型</th><th>状态</th><th>图纸版本</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.customer_material_code || row.product_code) }}</strong></td><td>{{ plainProductText(row.product_name) }}</td><td>{{ spec(row) }}</td><td>{{ materialDisplay(row.material_id, row.legacy_material_text) }}</td><td>{{ materialFlute(row.material_id) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td>{{ drawingVersionText(row) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                </template>
+              </div>
+              <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
+              <data-panel v-else-if="productTab === 'materials'" :empty="!materials.length">
+                <div class="toolbar"><button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button></div>
+                <table><thead><tr><th>材质代码</th><th>配纸</th><th>层数</th><th>楞型</th><th>克重说明</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in materials" :key="row.id"><td>{{ row.code }}</td><td>{{ row.paper_composition || "-" }}</td><td>{{ row.layer_count || "-" }}</td><td>{{ row.flute_type || "-" }}</td><td>{{ row.basis_weight_description || "-" }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.quote_price) }}</td><td class="toolbar-group"><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td></tr></tbody></table>
+              </data-panel>
+            </template>
+
+            <template v-else-if="activePage === 'orders'">
+              <div class="order-page-shell">
+                <div class="order-head-card">
+                  <div class="order-head-actions">
+                    <div>
+                      <h2 style="margin:0;font-size:22px">订单管理</h2>
+                      <div class="page-subtitle">按客户 + 客户单号分组展示，展开后查看系统单号和明细系统单号</div>
+                    </div>
+                    <div class="toolbar-group">
+                      <button v-if="canSales" class="btn primary" @click="openOrder">新建订单</button>
+                      <button v-if="canSales" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                      <button class="btn" @click="loadOrders()">刷新</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="order-filter-card">
+                  <div class="order-filter-grid">
+                    <input class="input search-keyword" v-model.trim="filters.orderKeyword" placeholder="搜索客户名称、客户单号、系统单号、明细单号、产品" @keyup.enter="pages.orders=1; loadOrders()" />
+                    <search-select v-model="filters.orderCustomer" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户筛选" :allow-empty="true" @change="pages.orders=1; loadOrders()"></search-select>
+                    <input class="input" type="date" v-model="filters.orderDateFrom" @change="pages.orders=1; loadOrders()" />
+                    <input class="input" type="date" v-model="filters.orderDateTo" @change="pages.orders=1; loadOrders()" />
+                    <select class="select" v-model="filters.orderStatus" @change="pages.orders=1; loadOrders()">
+                      <option value="">全部状态</option>
+                      <option v-for="status in orderStatusOptions" :key="status" :value="status">{{ statusText(status) }}</option>
+                    </select>
+                    <div class="toolbar-group">
+                      <button class="btn" @click="pages.orders=1; loadOrders()">搜索</button>
+                      <button class="btn" @click="resetOrderFilters()">清空筛选</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <data-panel :empty="!orders.length">
+                <table class="order-group-table">
+                  <thead>
+                    <tr>
+                      <th class="col-customer-name">客户名称</th>
+                      <th class="col-customer-po">客户单号</th>
+                      <th>下单日期</th>
+                      <th>交期</th>
+                      <th>子单数</th>
+                      <th class="cell-right">总数量</th>
+                      <th v-if="!isWorkshop" class="sensitive-price cell-right">总金额</th>
+                      <th>状态</th>
+                      <th>展开</th>
+                      <th class="col-actions">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template v-for="group in groupedOrderRows" :key="group.key">
+                      <tr class="order-group-row">
+                        <td class="col-customer-name">
+                          <div class="order-group-summary">
+                            <strong>{{ group.customer_name || "-" }}</strong>
+                            <small v-if="group.orders.length > 1">按客户 + 客户单号合并显示</small>
+                          </div>
+                        </td>
+                        <td class="col-customer-po">{{ group.customer_po || "-" }}</td>
+                        <td>{{ group.order_date || "-" }}</td>
+                        <td>{{ group.latest_delivery_date || "-" }}</td>
+                        <td>{{ group.child_count }}</td>
+                        <td class="cell-right">{{ group.total_quantity }}</td>
+                        <td v-if="!isWorkshop" class="sensitive-price cell-right">¥ {{ money(group.total_amount) }}</td>
+                        <td>
+                          <div v-if="group.hasHistoryOnly" class="status blue">历史归档</div>
+                          <status-tag v-else :value="group.group_status"></status-tag>
+                        </td>
+                        <td><button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button></td>
+                        <td class="cell-actions">
+                          <div class="toolbar-group">
+                            <button class="btn small" @click="openOrderDetail(group.orders[0])">查看</button>
+                            <button v-if="canSales" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
+                        <td :colspan="isWorkshop ? 9 : 10">
+                          <div class="order-group-detail-card">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>明细系统单号</th>
+                                  <th>主系统单号</th>
+                                  <th>产品名称</th>
+                                  <th>存货编码</th>
+                                  <th>规格</th>
+                                  <th>材质</th>
+                                  <th class="cell-right">数量</th>
+                                  <th v-if="!isWorkshop" class="sensitive-price cell-right">单价</th>
+                                  <th v-if="!isWorkshop" class="sensitive-price cell-right">金额</th>
+                                  <th>状态</th>
+                                  <th>操作</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <template v-for="row in group.orders" :key="row.id">
+                                  <tr v-for="item in row.items" :key="item.id">
+                                    <td><span class="sub-order-number">{{ item.item_order_number || "-" }}</span></td>
+                                    <td><span class="main-order-number">{{ row.order_number }}</span></td>
+                                    <td>{{ plainProductText(item.snapshot_product_name) }}</td>
+                                    <td>{{ plainProductText(item.snapshot_product_code) }}</td>
+                                    <td>{{ item.snapshot_spec || "-" }}</td>
+                                    <td>{{ item.display_material || displayMaterialText(item.snapshot_material) }}</td>
+                                    <td class="cell-right">{{ item.quantity }}</td>
+                                    <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
+                                    <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
+                                    <td>
+                                      <div v-if="row.is_history_order" class="status blue">历史归档</div>
+                                      <status-tag v-else :value="row.status"></status-tag>
+                                    </td>
+                                    <td class="toolbar-group">
+                                      <button class="btn small" @click="openOrderDetail(row)">详情</button>
+                                      <button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button>
+                                    </td>
+                                  </tr>
+                                </template>
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </data-panel>
+              <pager :page="pages.orders" :total="ordersTotal" :page-size="pageSize" @change="pages.orders=$event; loadOrders()"></pager>
+            </template>
+
+            <template v-else-if="activePage === 'orders_legacy'">
+              <page-head title="订单管理" desc="标准一主多明细订单，提交时由后端强事务处理。"></page-head>
+              <div class="toolbar">
+                <div><button v-if="canSales" class="btn primary" @click="openOrder">新建订单</button></div>
+                <div class="toolbar-group">
+                  <select class="select" v-model="filters.orderView" style="min-width:150px">
+                    <option value="plain">普通列表</option>
+                    <option value="customer_po">按客户单号分组</option>
+                    <option value="customer_name">按客户名称分组</option>
+                    <option value="order_date">按日期分组</option>
+                  </select>
+                  <input class="input" style="width:260px" v-model.trim="filters.orderKeyword" placeholder="搜索订单号、TM编号、客户单号、客户名称" @keyup.enter="pages.orders=1; loadOrders()" />
+                  <search-select v-model="filters.orderCustomer" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" :allow-empty="true" @change="pages.orders=1; loadOrders()"></search-select>
+                  <button class="btn" @click="pages.orders=1; loadOrders()">搜索</button>
+                </div>
+              </div>
+              <data-panel :empty="!orders.length">
+                <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
+                <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
+                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 12 : 13"><div class="order-detail-box"><table><thead><tr><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td>{{ item.snapshot_material || "-" }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><button v-if="canSales" class="btn small danger" @click="deleteOrderItem(row,item)">删除</button></td></tr></tbody></table></div></td></tr>
+                </template></tbody>
+                <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
+                  <tr>
+                    <td><div class="toolbar-group"><button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button></div></td>
+                    <td></td>
+                    <td><strong>{{ group.label }}</strong></td>
+                    <td>{{ group.customer_po || "-" }}</td>
+                    <td>{{ group.customer_name || "-" }}</td>
+                    <td>{{ group.order_date || "-" }}</td>
+                    <td>{{ group.latest_delivery_date || "-" }}</td>
+                    <td>{{ group.child_count }}</td>
+                    <td>{{ group.total_quantity }}</td>
+                    <td>{{ group.total_delivered_quantity }}</td>
+                    <td><status-tag :value="group.all_received ? 'received' : 'pending'"></status-tag></td>
+                    <td><div class="status blue">历史归档</div></td>
+                    <td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(group.total_amount) }}</td>
+                  </tr>
+                  <tr v-if="expandedOrders[group.key]" class="order-detail-row">
+                    <td :colspan="isWorkshop ? 12 : 13">
+                      <div class="order-detail-box">
+                        <table>
+                          <thead><tr><th>TM编号</th><th>下单日期</th><th>产品</th><th>数量</th><th>金额</th><th>状态</th><th>操作</th></tr></thead>
+                          <tbody>
+                            <tr v-for="row in group.orders" :key="row.id">
+                              <td><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></td>
+                              <td>{{ row.order_date }}</td>
+                              <td>{{ row.items.map(item => plainProductText(item.snapshot_product_name)).join(' / ') }}</td>
+                              <td>{{ sum(row.items,'quantity') }}</td>
+                              <td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td>
+                              <td><div class="status blue">历史归档</div></td>
+                              <td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                </template></tbody></table>
+              </data-panel>
+              <pager :page="pages.orders" :total="ordersTotal" :page-size="pageSize" @change="pages.orders=$event; loadOrders()"></pager>
+            </template>
+
+            <template v-else-if="activePage === 'requisition'">
+              <page-head title="智能报料工作台" desc="历史智索、库存抵扣、合并报料；供应商到货后直接在 WMS 确认入库。"></page-head>
+              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openRequisition">合并报料</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!requisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>材质</th><th>订单数</th><th>交期</th></tr></thead><tbody><tr v-for="row in requisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td>{{ row.material }}</td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td></tr></tbody></table></data-panel>
+              <data-panel v-else :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>特殊工艺</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
+            </template>
+
+            <template v-else-if="activePage === 'deliveries'">
+              <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
+              <div class="toolbar"><div><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <data-panel :empty="!deliveries.length">
+                <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status || 'waiting_receipt'"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canFinance && row.status==='dispatched'" class="btn small" @click="openReceipt(row)">{{ row.return_receipt_id ? "编辑回单" : "确认回单" }}</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button></td></tr></tbody></table>
+              </data-panel>
+              <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
+            </template>
+
+            <template v-else-if="activePage === 'finance'">
+              <page-head title="对账、开票与收款" desc="对账金额按客户实际签收数量计算。"></page-head>
+              <div class="toolbar"><div><button class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
+              <div class="panel">
+                <div class="section-title">对账单</div>
+                <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in statements" :key="row.id"><td>{{ row.statement_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button class="btn small" @click="registerInvoice(row)">登记开票</button><button class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
+              </div>
+              <div class="panel" style="margin-top:10px">
+                <div class="section-title">开票记录</div>
+                <div class="table-wrap"><table><thead><tr><th>发票号码</th><th>对账单号</th><th>客户</th><th>开票日期</th><th class="sensitive-price">开票金额</th></tr></thead>
+                <tbody><tr v-for="row in invoices" :key="row.id"><td>{{ row.invoice_number }}</td><td>{{ row.statement_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.invoice_date }}</td><td class="sensitive-price">¥ {{ money(row.invoice_amount) }}</td></tr></tbody></table><div v-if="!invoices.length" class="empty">暂无开票记录</div></div>
+                <pager :page="pages.invoices" :total="invoicesTotal" :page-size="pageSize" @change="pages.invoices=$event; loadFinance()"></pager>
+              </div>
+            </template>
+
+            <template v-else-if="activePage === 'system'">
+              <page-head title="系统设置" desc="管理员可管理账号临时密码及 NAS 数据备份。"></page-head>
+              <div class="panel" style="margin-bottom:10px">
+                <div class="section-title">用户与密码</div>
+                <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in systemUsers" :key="row.id"><td>{{ row.username }}</td><td>{{ row.real_name }}</td><td>{{ roleLabel(row.role) }}</td><td>{{ row.must_change_password ? "是" : "否" }}</td><td><button class="btn small danger" @click="openResetPassword(row)">重置密码</button></td></tr></tbody></table></div>
+              </div>
+              <div class="section-title">NAS 备份</div>
+              <div class="toolbar"><button class="btn primary" @click="createBackup">立即备份到 NAS</button><button class="btn" @click="loadBackups">刷新列表</button></div>
+              <data-panel :empty="!backups.length"><table><thead><tr><th>文件名</th><th>创建时间</th><th>大小</th></tr></thead><tbody><tr v-for="row in backups" :key="row.filename"><td>{{ row.filename }}</td><td>{{ row.created_at }}</td><td>{{ fileSize(row.size) }}</td></tr></tbody></table></data-panel>
+            </template>
+          </main>
+        </div>
+      </div>
+
+      <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
+        <div class="modal">
+          <div class="modal-head"><strong>{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small" @click="closeModal">关闭</button></div>
+          <div class="modal-body">
+            <div v-if="modal.type === 'customer'" class="form-grid">
+              <div class="field"><label>客户编号</label><input class="input" type="number" v-model.number="customerForm.customer_number" /></div>
+              <div class="field"><label>客户缩写</label><input class="input" v-model.trim="customerForm.customer_code" /></div>
+              <div class="field"><label>客户名称</label><input class="input" v-model.trim="customerForm.name" /></div>
+              <div class="field"><label>联系人</label><input class="input" v-model.trim="customerForm.contact_person" /></div>
+              <div class="field"><label>电话</label><input class="input" v-model.trim="customerForm.phone" /></div>
+              <div class="field"><label>账期天数</label><input class="input" type="number" v-model.number="customerForm.payment_term_days" /></div>
+              <div class="field"><label>送货方式</label><select class="select" v-model="customerForm.delivery_method"><option>自提</option><option>配送</option><option>物流</option></select></div>
+              <div class="field wide"><label>地址</label><input class="input" v-model.trim="customerForm.address" /></div>
+              <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+              <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
+            </div>
+            <div v-else-if="modal.type === 'product'" class="form-grid">
+              <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
+              <div class="field"><label>品号</label><input class="input" v-model.trim="productForm.product_code" /></div>
+              <div class="field"><label>客户料号</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
+              <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
+              <div class="field"><label>材质</label><select class="select" v-model="productForm.material_id"><option :value="null">未指定</option><option v-for="m in materials" :value="m.id">{{ m.code }}</option></select></div>
+              <div class="field"><label>箱型</label><select class="select" v-model="productForm.box_category"><option value="normal">普通箱</option><option value="die_cut">模切箱</option></select></div>
+              <div class="field"><label>长(mm)</label><input class="input" type="number" v-model="productForm.length_mm" /></div>
+              <div class="field"><label>宽(mm)</label><input class="input" type="number" v-model="productForm.width_mm" /></div>
+              <div class="field"><label>高(mm)</label><input class="input" type="number" v-model="productForm.height_mm" /></div>
+              <div class="field"><label>印刷内容</label><input class="input" v-model.trim="productForm.print_content" /></div>
+              <div class="field"><label>生产工艺</label><input class="input" v-model.trim="productForm.production_process" /></div>
+              <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+              <div class="field"><label>上传新版本图纸</label><input class="input" type="file" accept="image/png,image/jpeg,image/webp" @change="drawingFile=$event.target.files[0] || null" /></div>
+              <div v-if="productForm.id" class="field wide"><label>图纸版本历史</label><div v-if="!(productForm.drawings || []).length" class="muted">暂无图纸</div><div v-else class="drawing-gallery"><div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-card"><a :href="drawing.image_path" target="_blank"><img class="drawing-thumb" :src="drawing.thumbnail_path" alt="产品图纸缩略图" /></a><div class="drawing-meta"><span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "当前生效版" : "历史版本" }}</span><div>{{ formatDateTime(drawing.uploaded_at) }}</div><button v-if="user.role==='admin'" class="btn small danger" style="margin-top:6px" @click.prevent="deleteProductDrawing(drawing)">删除</button></div></div></div></div>
+              <div class="field wide"><label>备注</label><textarea class="textarea" v-model="productForm.remark"></textarea></div>
+            </div>
+            <div v-else-if="modal.type === 'material'" class="form-grid">
+              <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
+              <div class="field"><label>楞型</label><select class="select" v-model="materialForm.flute_type"><option>AB</option><option>BE</option><option>B</option><option>E</option></select></div>
+              <div class="field"><label>层数</label><input class="input" type="number" min="1" v-model.number="materialForm.layer_count" /></div>
+              <div class="field wide"><label>克重组合</label><input class="input" placeholder="170g/130g/80g/170g/150g" v-model.trim="materialForm.basis_weight_description" @change="recommendMaterialCode" /></div>
+              <div class="field"><label>配纸</label><input class="input" v-model.trim="materialForm.paper_composition" /></div>
+              <div class="field sensitive-price"><label>平方报价</label><input class="input" type="number" step="0.0001" v-model="materialForm.quote_price" /></div>
+              <div class="field"><label>计价单位</label><input class="input" v-model.trim="materialForm.price_unit" /></div>
+              <div class="field"><label>供应商</label><input class="input" v-model.trim="materialForm.supplier_name" /></div>
+              <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialForm.remarks" /></div>
+            </div>
+            <div v-else-if="modal.type === 'orderPdfImport'">
+              <div class="form-grid" style="margin-bottom:12px">
+                <div class="field wide">
+                  <label>上传客户采购订单 PDF</label>
+                  <input class="input" type="file" accept="application/pdf,.pdf" @change="onOrderPdfFileChange" />
+                </div>
+              </div>
+              <div class="toolbar-group" style="margin-bottom:12px">
+                <button class="btn primary" :disabled="!orderPdfImport.file || loading" @click="previewOrderPdfImport">识别预览草稿</button>
+                <span class="muted" v-if="orderPdfImport.file">{{ orderPdfImport.file.name }}</span>
+              </div>
+              <div v-if="orderPdfImport.draft">
+                <div class="form-grid" style="margin-bottom:12px">
+                  <div class="field"><label>识别客户</label><div>{{ orderPdfImport.draft.customer_name || "-" }}</div></div>
+                  <div class="field"><label>客户单号</label><div>{{ orderPdfImport.draft.customer_po || "-" }}</div></div>
+                  <div class="field"><label>下单日期</label><div>{{ orderPdfImport.draft.order_date || "-" }}</div></div>
+                  <div class="field"><label>交货日期</label><div>{{ orderPdfImport.draft.delivery_date || "-" }}</div></div>
+                  <div class="field"><label>系统匹配客户</label><div>{{ orderPdfImport.matchedCustomerLabel || "未匹配" }}</div></div>
+                  <div class="field"><label>识别明细数</label><div>{{ orderPdfImport.draft.item_count || 0 }}</div></div>
+                </div>
+                <div v-if="orderPdfImport.draft.warnings?.length" class="status orange" style="display:block;margin-bottom:10px">
+                  <div v-for="(warning, index) in orderPdfImport.draft.warnings" :key="index">{{ warning }}</div>
+                </div>
+                <table>
+                  <thead><tr><th>行号</th><th>存货编码</th><th>识别名称</th><th>识别规格</th><th>系统匹配产品</th><th>数量</th><th class="sensitive-price">单价</th><th class="sensitive-price">金额</th><th>交货日期</th></tr></thead>
+                  <tbody>
+                    <tr v-for="item in orderPdfImport.draft.items" :key="item.line_no">
+                      <td>{{ item.line_no }}</td>
+                      <td>{{ item.product_code }}</td>
+                      <td>{{ item.product_name }}</td>
+                      <td>{{ item.specification || "-" }}</td>
+                      <td>{{ item.matched_product_code ? `${item.matched_product_code} / ${item.matched_product_name}` : "未匹配" }}</td>
+                      <td>{{ item.quantity }}</td>
+                      <td class="sensitive-price">¥ {{ money(item.unit_price) }}</td>
+                      <td class="sensitive-price">¥ {{ money(item.amount) }}</td>
+                      <td>{{ item.delivery_date || "-" }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="muted" style="margin-top:8px">识别结果只生成草稿，不会直接写入订单。带入后仍可人工修改客户、产品、数量和单价，再保存正式订单。</div>
+              </div>
+            </div>
+            <div v-else-if="modal.type === 'order'">
+              <div class="form-grid">
+                <div class="field"><label>客户</label><search-select v-model="orderForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母" @change="prepareOrderProducts"></search-select></div>
+                <div class="field"><label>客户订单号</label><input class="input" v-model.trim="orderForm.customer_po" /></div>
+                <div class="field"><label>下单日期</label><input class="input" type="date" v-model="orderForm.order_date" @change="refreshOrderNumberPreview" /></div>
+                <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderForm.delivery_date" /></div>
+              </div>
+              <div v-if="!orderForm.customer_id" class="status orange" style="margin:10px 0">请先选择客户，再选择常用箱并填写数量。</div>
+              <div v-else class="form-grid" style="margin-bottom:10px">
+                <div class="field"><label>主系统单号预览</label><div>{{ orderNumberPreview || "-" }}</div></div>
+                <div class="field wide"><label>明细系统单号预览</label><div>{{ orderForm.items.map((item, index) => itemOrderNumberPreview(index)).join(" / ") }}</div></div>
+              </div>
+              <table class="line-items"><thead><tr><th>历史模板搜索</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格尺寸</th><th>数量</th><th class="sensitive-price">单价</th><th></th></tr></thead><tbody>
+                <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" :value="displayMaterialText(item.material)" @input="item.material=$event.target.value" /></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" @blur="item.unit_price=money(item.unit_price)" v-model="item.unit_price" /></td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
+              </tbody></table>
+              <button class="btn" style="margin-top:8px" @click="addOrderItem">增加明细</button>
+              <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><input class="input" v-model.trim="orderForm.remark" /></div>
+            </div>
+            <div v-else-if="modal.type === 'orderEdit'">
+              <div class="form-grid">
+                <div class="field"><label>客户</label><div>{{ orderEditForm.customer_name || "-" }}</div></div>
+                <div class="field"><label>客户订单号</label><input class="input" v-model.trim="orderEditForm.customer_po" /></div>
+                <div class="field"><label>主系统单号</label><div>{{ orderEditForm.order_number || "-" }}</div></div>
+                <div class="field"><label>下单日期</label><div>{{ orderEditForm.order_date || "-" }}</div></div>
+                <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderEditForm.delivery_date" /></div>
+                <div class="field wide"><label>备注</label><input class="input" v-model.trim="orderEditForm.remark" /></div>
+              </div>
+            </div>
+            <div v-else-if="modal.type === 'orderItem'" class="form-grid">
+              <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div><div class="field"><label>名称</label><input class="input" v-model.trim="orderItemForm.product_name" /></div><div class="field"><label>材质</label><input class="input" v-model.trim="orderItemForm.material" /></div><div class="field"><label>规格</label><input class="input" v-model.trim="orderItemForm.specification" /></div><div class="field"><label>数量</label><input class="input" type="number" min="1" v-model.number="orderItemForm.quantity" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>单价</label><input class="input" type="number" step="0.01" v-model="orderItemForm.unit_price" /></div>
+            </div>
+            <div v-else-if="modal.type === 'orderDetail' && orderDetail">
+              <div class="form-grid">
+                <div class="field"><label>系统单号</label><div>{{ displayOrderNumber(orderDetail) }}</div></div>
+                <div class="field"><label>客户</label><div>{{ orderDetail.customer_name }}</div></div>
+                <div class="field"><label>客户单号</label><div>{{ orderDetail.customer_po || "-" }}</div></div>
+                <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
+                <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
+                <div class="field"><label>状态</label><div v-if="orderDetail.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDetail.status"></status-tag></div>
+                <div v-if="!isWorkshop" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
+                <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
+              </div>
+              <div class="section-title">只读订单详情</div>
+              <table><thead><tr><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>数量</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in orderDetail.items" :key="item.id"><td>{{ item.snapshot_product_code }}</td><td>{{ item.snapshot_product_name }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.display_material || displayMaterialText(item.snapshot_material) || "-" }}</td><td>{{ item.quantity }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td></tr></tbody></table>
+            </div>
+            <div v-else-if="modal.type === 'requisition'">
+              <div class="field" style="width:360px"><label>供应商（选填）</label><input class="input" v-model.trim="requisitionForm.supplier_name" /></div>
+              <table><thead><tr><th>客户 / 订单 / 产品</th><th>订单数</th><th>抵扣库存</th><th>实际报料数</th><th>纸板长(mm)</th><th>纸板宽(mm)</th><th>特殊处理</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':line.special_process!=='无'}"><td>{{ line.customer_name }}<br>{{ line.order_number }} / {{ line.product_code }} {{ line.product_name }}</td><td>{{ line.quantity }}</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process"><option>无</option><option>大做小</option><option>双拼</option><option>多拼</option></select></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
+              <div class="muted" style="margin-top:8px">纸板长、纸板宽必须填写；保存后由车间/管理员到“来料入库”完成入库，入库后才能送货。</div>
+            </div>
+            <div v-else-if="modal.type === 'receipt'">
+              <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
+              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异原因</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" :max="line.delivered_quantity" v-model.number="line.actual_received_quantity" /></td><td><input class="input" v-model.trim="line.difference_reason" :placeholder="Number(line.actual_received_quantity)!==Number(line.delivered_quantity) ? '差异时必填' : '无差异'" /></td></tr></tbody></table>
+            </div>
+            <div v-else-if="modal.type === 'delivery'">
+              <div class="form-grid">
+                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id"><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
+                <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
+                <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
+              </div>
+              <div v-if="!deliveryOptions.length" class="status orange" style="margin-bottom:10px">只有已入库的订单明细才能生成送货单，请先去来料入库。</div>
+              <table><thead><tr><th><input type="checkbox" :checked="allDeliverySelected" @change="toggleAllDelivery($event.target.checked)" /> 全选</th><th>订单号</th><th>品号/产品</th><th>剩余可发</th><th>本次送货</th><th>提示</th></tr></thead><tbody><tr v-for="row in deliveryOptions" :key="row.item_id" :class="{'warning-row':Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity)}"><td><input type="checkbox" v-model="deliveryForm.selected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.remaining_quantity }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="deliveryForm.quantities[row.item_id]" /></td><td class="danger-text">{{ Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity) ? "超出可送数量，允许提交" : "" }}</td></tr></tbody></table>
+            </div>
+            <div v-else-if="modal.type === 'statement'">
+              <div class="form-grid">
+                <div class="field"><label>客户</label><search-select v-model="statementForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="loadPendingStatements"></search-select></div>
+                <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementForm.statement_month" @change="loadPendingStatements" /></div>
+              </div>
+              <table><thead><tr><th><input type="checkbox" :checked="allStatementSelected" @change="toggleAllStatement($event.target.checked)" /> 全选</th><th>回单日期</th><th>送货单</th><th>产品</th><th>实收数量</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="row in pendingStatements" :key="row.return_receipt_item_id"><td><input type="checkbox" v-model="statementForm.selected[row.return_receipt_item_id]" /></td><td>{{ row.actual_received_date }}</td><td>{{ row.delivery_number }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(row.receivable_amount) }}</td></tr></tbody></table>
+              <div v-if="!pendingStatements.length" class="empty">该客户当前没有可对账的已回单明细</div>
+            </div>
+            <div v-else-if="modal.type === 'password'" class="form-grid">
+              <div v-if="modal.force" class="field wide danger-text">当前为临时密码，修改完成后才能继续使用系统。</div>
+              <div class="field wide"><label>当前密码</label><input class="input" type="password" autocomplete="current-password" v-model="passwordForm.current_password" /></div>
+              <div class="field"><label>新密码</label><input class="input" type="password" autocomplete="new-password" v-model="passwordForm.new_password" /></div>
+              <div class="field"><label>确认新密码</label><input class="input" type="password" autocomplete="new-password" v-model="passwordForm.confirm_password" /></div>
+              <div class="field wide muted">至少 10 位，并同时包含字母和数字。</div>
+            </div>
+            <div v-else-if="modal.type === 'resetPassword'" class="form-grid">
+              <div class="field wide">正在重置账号：<strong>{{ resetPasswordForm.username }}</strong></div>
+              <div class="field"><label>临时密码</label><input class="input" type="password" autocomplete="new-password" v-model="resetPasswordForm.new_password" /></div>
+              <div class="field"><label>确认临时密码</label><input class="input" type="password" autocomplete="new-password" v-model="resetPasswordForm.confirm_password" /></div>
+              <div class="field wide muted">重置后，该账号下次登录必须修改密码。</div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="modal?.type === 'orderPdfImport' && orderPdfImport.draft" class="btn primary" :disabled="loading" @click="applyPdfDraftToOrderForm">带入新建订单</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading" @click="saveModal">保存</button>
+          </div>
+        </div>
+      </div>
+      <div v-if="toast.message" :class="['toast', {error: toast.error}]">{{ toast.message }}</div>
+    </div>
+
+    <script>
+      axios.defaults.withCredentials = true;
+      axios.interceptors.response.use(
+        (response) => response,
+        (error) => {
+          const status = error?.response?.status;
+          if (status === 401 && window.erpAuthRequired) {
+            if (!window.erpCheckingSession) window.erpAuthRequired();
+          }
+          if (status === 403 && window.erpForbidden) window.erpForbidden(error?.response?.data?.detail);
+          return Promise.reject(error);
+        }
+      );
+
+      const { createApp } = Vue;
+      const today = () => new Date().toISOString().slice(0, 10);
+      const plusDays = (days) => {
+        const value = new Date();
+        value.setDate(value.getDate() + days);
+        return value.toISOString().slice(0, 10);
+      };
+      const month = () => today().slice(0, 7);
+      const roleMenus = {
+        admin: ["dashboard", "customers", "products", "orders", "requisition", "deliveries", "finance", "system"],
+        finance: ["dashboard", "customers", "orders", "finance"],
+        sales: ["dashboard", "customers", "orders", "requisition", "deliveries"],
+        workshop: ["dashboard", "orders", "deliveries"]
+      };
+      const blankCustomer = () => ({
+        id: null, customer_number: 1, customer_code: "", name: "",
+        payment_term_days: 30, delivery_method: "配送", contact_person: "",
+        phone: "", address: "", default_tax_rate: "0.13", invoice_title: "",
+        tax_no: "", bank_account: "", remark: "", status: "active"
+      });
+      const blankProduct = () => ({
+        id: null, customer_id: null, product_code: "", customer_material_code: "",
+        product_name: "", material_id: null, legacy_material_text: null,
+        length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
+        box_style: "", print_content: "", printing_colors: "",
+        production_process: "", unit: "只", sale_unit_price: "0",
+        sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
+        suggested_price: null, die_cut_path: null, drawings: [],
+        remark: "", is_active: true
+      });
+      const blankMaterial = () => ({
+        id:null, code:"", paper_composition:"", layer_count:5, flute_type:"AB",
+        basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
+        supplier_name:"", quote_date:null, remarks:"", is_active:true
+      });
+
+      const app = createApp({
+        data() {
+          return {
+            user: null, loading: false, loginError: "", activePage: "dashboard",
+            loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
+            kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
+            deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
+            pendingStatements: [], backups: [], systemUsers: [], expandedOrders: {},
+            requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
+            orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
+            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
+            customersTotal: 0, productsTotal: 0, ordersTotal: 0, deliveriesTotal: 0,
+            statementsTotal: 0, invoicesTotal: 0, pageSize: 25,
+            pages: { customers: 1, products: 1, orders: 1, deliveries: 1, statements: 1, invoices: 1 },
+            productTab: "products", modal: null,
+            selectedProductCustomer: null, productCustomerSearch: "",
+            productTrashOpen: false, productTrashItems: [],
+            filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"", orderView:"customer_po" },
+            customerForm: blankCustomer(), productForm: blankProduct(),
+            materialForm: blankMaterial(),
+            orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), remark: "", items: [] },
+            orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
+            orderNumberPreview: "",
+            orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
+            deliveryForm: { customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {} },
+            statementForm: { customer_id: null, statement_month: month(), selected: {} },
+            passwordForm: { current_password: "", new_password: "", confirm_password: "" },
+            resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
+            toast: { message: "", error: false }, toastTimer: null
+          };
+        },
+        computed: {
+          isWorkshop() { return this.user?.role === "workshop"; },
+          canAdmin() { return this.user?.role === "admin"; },
+          canSales() { return ["admin", "sales"].includes(this.user?.role); },
+          canFinance() { return ["admin", "finance"].includes(this.user?.role); },
+          canDelivery() { return ["admin", "sales"].includes(this.user?.role); },
+          canRequisition() { return ["admin", "sales"].includes(this.user?.role); },
+          isForcedPassword() { return this.modal?.type === "password" && this.modal.force; },
+          canSaveModal() {
+            if (!this.modal) return false;
+            if (["customer","product","material"].includes(this.modal.type)) return this.canAdmin;
+            if (["order","orderEdit","orderItem"].includes(this.modal.type)) return this.canSales;
+            if (this.modal.type === "delivery") return this.canDelivery;
+            if (this.modal.type === "statement") return this.canFinance;
+            if (this.modal.type === "requisition") return this.canRequisition;
+            if (this.modal.type === "receipt") return this.canFinance;
+            if (this.modal.type === "password") return true;
+            if (this.modal.type === "resetPassword") return this.user?.role === "admin";
+            return false;
+          },
+          menus() {
+            const items = [
+              { key: "dashboard", label: "首页仪表盘" },
+              { key: "customers", label: "客户管理" },
+              { key: "products", label: "常用箱与材质" },
+              { key: "orders", label: "订单管理", count: this.ordersTotal },
+              { key: "requisition", label: "报料管理", count: this.requisitionPending.length },
+              { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
+              { key: "finance", label: "对账开票收款" },
+              { key: "system", label: "系统备份" }
+            ];
+            const allowed = roleMenus[this.user?.role] || [];
+            return items.filter(item => allowed.includes(item.key));
+          },
+          deliveryCustomers() {
+            const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
+            return this.customerOptions.filter(row => ids.includes(row.id));
+          },
+          deliveryOptions() { return this.pendingDeliveryItems.filter(row => row.customer_id === Number(this.deliveryForm.customer_id)); }
+          ,
+          activeCustomerOptions() { return this.customerOptions.filter(row=>row.is_active); },
+          filteredProductCustomers() {
+            const keyword = this.productCustomerSearch.trim().toLowerCase();
+            const rows = this.customerOptions.filter(row => row.is_active);
+            if (!keyword) return rows;
+            return rows.filter(row => [row.name,row.customer_code,row.customer_number]
+              .some(value => String(value || "").toLowerCase().includes(keyword)));
+          },
+          productTotalPages() {
+            return Math.max(1, Math.ceil(Number(this.productsTotal || 0) / Number(this.pageSize || 25)));
+          },
+          groupedOrderRows() {
+            this.filters.orderView = "customer_po";
+            const keyByView = {
+              customer_po: (row) => row.customer_po || `NO_PO_${row.id}`,
+              customer_name: (row) => `${row.customer_name || "-"}#${row.customer_id || row.id}`,
+              order_date: (row) => row.order_date || "未设置日期",
+            };
+            const labelByView = {
+              customer_po: (row) => row.customer_po || "未填写客户单号",
+              customer_name: (row) => row.customer_name || "-",
+              order_date: (row) => row.order_date || "未设置日期",
+            };
+            const groups = new Map();
+            for (const row of this.orders) {
+              const key = `${this.filters.orderView}:${keyByView[this.filters.orderView](row)}`;
+              const normalizedKey = this.filters.orderView === "customer_po" && row.customer_po
+                ? `${key}:${row.customer_id}`
+                : key;
+              if (!groups.has(normalizedKey)) {
+                groups.set(normalizedKey, {
+                  key: normalizedKey,
+                  label: row.customer_po || "未填写客户单号",
+                  customer_po: row.customer_po || null,
+                  customer_name: row.customer_name || null,
+                  order_date: row.order_date || null,
+                  latest_delivery_date: row.delivery_date || null,
+                  child_count: 0,
+                  total_quantity: 0,
+                  total_delivered_quantity: 0,
+                  total_amount: 0,
+                  all_received: true,
+                  group_status: row.status,
+                  hasHistoryOnly: true,
+                  orders: [],
+                });
+              }
+              const group = groups.get(normalizedKey);
+              group.orders.push(row);
+              group.child_count += 1;
+              group.total_quantity += this.sum(row.items, "quantity");
+              group.total_delivered_quantity += this.sum(row.items, "delivered_quantity");
+              group.total_amount += Number(row.total_amount || 0);
+              group.all_received = group.all_received && row.items.every((item) => item.material_status === "received");
+              group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
+              if (!group.hasHistoryOnly) group.group_status = row.status;
+              if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
+                group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
+              }
+            }
+            return [...groups.values()];
+          },
+          orderStatusOptions() {
+            return [
+              "pending_production",
+              "production",
+              "pending_delivery",
+              "partially_delivered",
+              "delivered",
+              "cancelled",
+            ];
+          },
+          allRequisitionSelected() { return this.requisitionPending.length > 0 && this.requisitionPending.every(row => this.requisitionSelected[row.item_id]); },
+          allDeliverySelected() { return this.deliveryOptions.length > 0 && this.deliveryOptions.every(row => this.deliveryForm.selected[row.item_id]); },
+          allStatementSelected() { return this.pendingStatements.length > 0 && this.pendingStatements.every(row => this.statementForm.selected[row.return_receipt_item_id]); }
+        },
+        async mounted() {
+          window.erpAuthRequired = () => {
+            this.activePage = "dashboard";
+            this.user = null;
+            this.loginError = "登录已失效，请重新登录";
+          };
+          window.erpForbidden = (message) => this.showToast(message || "权限不足", true);
+          window.erpCheckingSession = true;
+          await this.checkSession();
+          window.erpCheckingSession = false;
+        },
+        methods: {
+          roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",workshop:"车间"})[role] || role; },
+          money(value) { return Number(value || 0).toFixed(2); },
+          formatDateTime(value) { return value ? new Date(value).toLocaleString("zh-CN", { hour12:false }) : "-"; },
+          fileSize(value) { return `${(Number(value || 0) / 1024 / 1024).toFixed(2)} MB`; },
+          sum(items, key) { return (items || []).reduce((total, item) => total + Number(item[key] || 0), 0); },
+          customerName(id) { return this.customerOptions.find(row => row.id === id)?.name || this.customers.find(row => row.id === id)?.name || `客户#${id}`; },
+          materialName(id, fallback) {
+            return this.displayMaterialText(this.materials.find(row => row.id === id)?.code || fallback || "-");
+          },
+          materialDisplay(id, fallback) {
+            const row=this.materials.find(item=>item.id===id);
+            if (!row) return this.displayMaterialText(fallback || "-");
+            return `${this.displayMaterialText(row.code)}${row.basis_weight_description ? ` (${row.basis_weight_description})` : ""}`;
+          },
+          materialFlute(id) { return this.materials.find(row=>row.id===id)?.flute_type || "-"; },
+          plainProductText(value) { return String(value || "-").trim() || "-"; },
+          displayMaterialText(value) {
+            const text = String(value || "").trim();
+            if (!text) return "-";
+            const cleaned = text.replace(/^\d+\s+/, "").trim();
+            return cleaned || text;
+          },
+          formatBoardDimension(value) {
+            if (value === null || value === undefined || value === "") return "-";
+            const number = Number(value);
+            if (!Number.isFinite(number)) return String(value || "-").trim() || "-";
+            return `${Math.round(number)}mm`;
+          },
+          formatBoardSpec(length, width) {
+            if (length === null || length === undefined || length === "" || width === null || width === undefined || width === "") return "未填写";
+            return `${this.formatBoardDimension(length)} × ${this.formatBoardDimension(width)}`;
+          },
+          displayOrderNumber(row) { return row?.display_order_number || row?.order_number || "-"; },
+          drawingVersionText(row) {
+            if (row?.current_drawing_version) return row.current_drawing_version;
+            if (row?.drawing_version) return row.drawing_version;
+            return "-";
+          },
+          spec(row) { return [row.length_mm,row.width_mm,row.height_mm].every(v => v !== null && v !== undefined) ? `${row.length_mm}×${row.width_mm}×${row.height_mm}mm` : "-"; },
+          statusTone(value) {
+            if (["received","dispatched","settled","active","delivered","confirmed","已入库","已结算"].includes(value)) return "green";
+            if (["cancelled","inactive"].includes(value)) return "red";
+            if (["pending","unsettled","waiting_receipt","pending_production"].includes(value)) return "orange";
+            return "blue";
+          },
+          statusText(value) {
+            return ({
+              active:"启用", inactive:"停用", pending:"待处理", received:"材料已到",
+              pending_production:"待排产", production:"生产中", pending_delivery:"待送货",
+              partially_delivered:"部分送货", delivered:"已送货", cancelled:"已作废",
+              dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认",
+              unsettled:"未结清", settled:"已结清", "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
+            })[value] || value || "-";
+          },
+          showToast(message, error=false) {
+            clearTimeout(this.toastTimer);
+            this.toast = { message, error };
+            this.toastTimer = setTimeout(() => this.toast.message = "", 3200);
+          },
+          errorMessage(error) { return error?.response?.data?.detail || error?.message || "操作失败"; },
+          normalizeValidationErrors(error, fieldMap = {}) {
+            const detail = error?.response?.data?.detail;
+            if (!Array.isArray(detail) || !detail.length) return "";
+            return detail.map(item => {
+              const loc = Array.isArray(item?.loc) ? item.loc : [];
+              const fieldKey = loc.slice(1).join(".");
+              const leafKey = loc.length ? loc[loc.length - 1] : "";
+              const fieldLabel = fieldMap[fieldKey] || fieldMap[leafKey] || fieldKey || "字段";
+              const message = item?.msg || item?.message || "校验失败";
+              if (/Field required/i.test(message)) return `${fieldLabel}不能为空`;
+              if (/valid integer/i.test(message)) return `${fieldLabel}必须填写数字`;
+              if (/valid decimal/i.test(message)) return `${fieldLabel}必须填写数字`;
+              if (/greater than 0/i.test(message)) return `${fieldLabel}必须大于 0`;
+              return `${fieldLabel}：${message}`;
+            }).join("；");
+          },
+          normalizeOrderSaveError(error) {
+            if (error?.message && !error?.response) return error.message;
+            const validation = this.normalizeValidationErrors(error, {
+              "items.0.product_id": "第1条产品",
+              "items.0.quantity": "第1条数量",
+              "items.0.unit_price": "第1条单价",
+              product_id: "产品",
+              quantity: "数量",
+              unit_price: "单价"
+            });
+            if (validation) return validation;
+            const detail = error?.response?.data?.detail;
+            if (Array.isArray(detail)) {
+              return detail.map(item => item?.msg || item?.message || "订单保存失败").join("；");
+            }
+            if (typeof detail === "string" && detail.trim()) return detail.trim();
+            return "订单保存失败，请先检查客户、产品和数量是否填写完整。";
+          },
+          resetOrderFilters() {
+            this.filters.orderKeyword = "";
+            this.filters.orderCustomer = "";
+            this.filters.orderDateFrom = "";
+            this.filters.orderDateTo = "";
+            this.filters.orderStatus = "";
+            this.pages.orders = 1;
+            this.loadOrders();
+          },
+          validateOrderForm() {
+            if (!this.orderForm.customer_id) return "请先选择客户";
+            if (!Array.isArray(this.orderForm.items) || !this.orderForm.items.length) return "请至少添加一条订单明细";
+            for (const [index, item] of this.orderForm.items.entries()) {
+              if (!item.product_id) {
+                return `第 ${index + 1} 条请先选择产品`;
+              }
+              if (item.quantity === "" || item.quantity === null || item.quantity === undefined) {
+                return `第 ${index + 1} 条请填写数量`;
+              }
+              if (Number(item.quantity) <= 0) {
+                return `第 ${index + 1} 条数量必须大于 0`;
+              }
+              if (item.unit_price === "" || item.unit_price === null || item.unit_price === undefined) {
+                return `第 ${index + 1} 条请填写单价`;
+              }
+              if (Number.isNaN(Number(item.unit_price)) || Number(item.unit_price) < 0) {
+                return `第 ${index + 1} 条单价必须是大于等于 0 的数字`;
+              }
+            }
+            return "";
+          },
+          validateRequisitionForm() {
+            if (!Array.isArray(this.requisitionForm.items) || !this.requisitionForm.items.length) return "请先选择待报料明细";
+            for (const [index, line] of this.requisitionForm.items.entries()) {
+              if (line.requisition_qty === "" || line.requisition_qty === null || line.requisition_qty === undefined) {
+                return `第 ${index + 1} 条请填写实际报料数`;
+              }
+              if (Number(line.requisition_qty) < 0) {
+                return `第 ${index + 1} 条实际报料数不能小于 0`;
+              }
+              if (line.cardboard_len === "" || line.cardboard_len === null || line.cardboard_len === undefined) {
+                return `第 ${index + 1} 条请输入纸板长`;
+              }
+              if (Number(line.cardboard_len) <= 0) {
+                return `第 ${index + 1} 条纸板长必须大于 0`;
+              }
+              if (line.cardboard_width === "" || line.cardboard_width === null || line.cardboard_width === undefined) {
+                return `第 ${index + 1} 条请输入纸板宽`;
+              }
+              if (Number(line.cardboard_width) <= 0) {
+                return `第 ${index + 1} 条纸板宽必须大于 0`;
+              }
+            }
+            return "";
+          },
+          async checkSession() {
+            try {
+              const { data } = await axios.get("/api/auth/me");
+              this.user = data.user;
+              this.activePage = "dashboard";
+              await this.loadBase();
+              await this.loadPage("dashboard");
+              if (this.user.must_change_password) this.openChangePassword(true);
+            } catch (error) {
+              if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
+            }
+          },
+          async login() {
+            this.loading = true; this.loginError = "";
+            try {
+              await axios.post("/api/auth/login", this.loginForm);
+              if (this.loginForm.remember_me) localStorage.setItem("erp_username", this.loginForm.username);
+              else localStorage.removeItem("erp_username");
+              const { data } = await axios.get("/api/auth/me");
+              this.user = data.user;
+              this.activePage = "dashboard";
+              const currentPassword = this.loginForm.password;
+              this.loginForm.password = "";
+              await this.loadBase(); await this.loadPage("dashboard");
+              if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
+            } catch (error) { this.loginError = this.errorMessage(error); }
+            finally { this.loading = false; }
+          },
+          async logout() {
+            await axios.post("/api/auth/logout");
+            this.activePage = "dashboard";
+            this.user = null;
+          },
+          async loadBase() {
+            const tasks = [this.loadProducts(), this.loadMaterials(), this.loadOrders(), this.loadDeliveries()];
+            if (!this.isWorkshop) tasks.unshift(this.loadCustomers(), this.loadCustomerOptions());
+            await Promise.all(tasks);
+          },
+          async go(page) { this.activePage = page; await this.loadPage(page); },
+          async loadPage(page) {
+            this.loading = true;
+            try {
+              if (page === "dashboard") await this.loadKpi();
+              if (page === "customers") await this.loadCustomers();
+              if (page === "products") await Promise.all([this.loadProducts(), this.loadMaterials()]);
+              if (page === "orders") await this.loadOrders();
+              if (page === "requisition") await this.loadRequisition();
+              if (page === "deliveries") await this.loadDeliveries();
+              if (page === "finance") await this.loadFinance();
+              if (page === "system") await this.loadSystem();
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          refreshCurrent() { return this.loadPage(this.activePage); },
+          async loadKpi() { this.kpi = (await axios.get("/api/dashboard/kpi")).data; },
+          async loadCustomers() {
+            if (this.isWorkshop) return;
+            const { data } = await axios.get("/api/master/customers", { params: {
+              keyword: this.filters.customerKeyword, include_inactive:this.filters.showInactive,
+              page: this.pages.customers, page_size: this.pageSize
+            } });
+            this.customers = data.items; this.customersTotal = data.total;
+          },
+          async loadCustomerOptions() {
+            if (this.isWorkshop) return;
+            this.customerOptions = (await axios.get("/api/master/customers", { params:{ page_size:200, include_inactive:true } })).data.items;
+          },
+          async loadProducts() {
+            if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
+              this.products = []; this.productsTotal = 0; return;
+            }
+            const params = {
+              keyword: this.filters.productKeyword,
+              product_code: this.filters.productCode,
+              product_name: this.filters.productName,
+              spec: this.filters.productSpec,
+              material: this.filters.productMaterial,
+              include_inactive:this.filters.showInactiveProducts,
+              page: this.pages.products,
+              page_size: this.pageSize
+            };
+            if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
+            else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
+            const { data } = await axios.get("/api/master/products", { params });
+            this.products = data.items; this.productsTotal = data.total;
+          },
+          async loadMaterials() { this.materials = (await axios.get("/api/master/materials", { params: { page_size: 200 } })).data.items; },
+          async loadOrders() {
+            const params = { page: this.pages.orders, page_size: this.pageSize };
+            if (this.filters.orderCustomer) params.customer_id = this.filters.orderCustomer;
+            if (this.filters.orderDateFrom) params.date_from = this.filters.orderDateFrom;
+            if (this.filters.orderDateTo) params.date_to = this.filters.orderDateTo;
+            if (this.filters.orderStatus) params.status = this.filters.orderStatus;
+            if (this.filters.orderKeyword) {
+              params.keyword = this.filters.orderKeyword;
+              params.customer_name = this.filters.orderKeyword;
+            }
+            const { data } = await axios.get("/api/orders", { params });
+            this.orders = data.items; this.ordersTotal = data.total;
+          },
+          async loadRequisition() {
+            const [pending, items] = await Promise.all([
+              axios.get("/api/requisition/pending"),
+              axios.get("/api/requisition/items")
+            ]);
+            this.requisitionPending = pending.data.items;
+            this.requisitionItems = items.data.items;
+          },
+          async loadDeliveries() {
+            const [list, pending] = await Promise.all([
+              axios.get("/api/deliveries", { params: { page: this.pages.deliveries, page_size: this.pageSize } }),
+              axios.get("/api/deliveries/pending_items")
+            ]);
+            this.deliveries = list.data.items; this.deliveriesTotal = list.data.total;
+            this.pendingDeliveryItems = pending.data.items;
+          },
+          async loadFinance() {
+            const [statements, invoices] = await Promise.all([
+              axios.get("/api/finance/statements", { params: { page: this.pages.statements, page_size: this.pageSize } }),
+              axios.get("/api/finance/invoices", { params: { page: this.pages.invoices, page_size: this.pageSize } })
+            ]);
+            this.statements = statements.data.items; this.statementsTotal = statements.data.total;
+            this.invoices = invoices.data.items; this.invoicesTotal = invoices.data.total;
+          },
+          async loadBackups() { this.backups = (await axios.get("/api/system/backups")).data.items; },
+          async loadSystem() {
+            const [backups, users] = await Promise.all([
+              axios.get("/api/system/backups"),
+              axios.get("/api/auth/users")
+            ]);
+            this.backups = backups.data.items;
+            this.systemUsers = users.data.items;
+          },
+          forgotPassword() {
+            this.loginError = "请联系管理员在“系统设置 → 用户与密码”中重置。系统不会通过匿名页面直接修改密码。";
+          },
+          openChangePassword(force=false, currentPassword="") {
+            this.passwordForm = { current_password: currentPassword, new_password: "", confirm_password: "" };
+            this.modal = { type:"password", title: force ? "首次登录必须修改密码" : "修改密码", force };
+          },
+          openResetPassword(user) {
+            this.resetPasswordForm = { username:user.username, new_password:"", confirm_password:"" };
+            this.modal = { type:"resetPassword", title:"重置账号密码" };
+          },
+          openCustomer(row=null) {
+            const next = row ? JSON.parse(JSON.stringify(row)) : blankCustomer();
+            if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
+            this.customerForm = next; this.modal = { type:"customer", title: row ? "编辑客户" : "新增客户" };
+          },
+          async openProduct(row=null) {
+            let detail = row;
+            if (row?.id) detail = (await axios.get(`/api/master/products/${row.id}`)).data;
+            this.productForm = detail ? { ...blankProduct(), ...JSON.parse(JSON.stringify(detail)) } : { ...blankProduct(), customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null, drawings:[] };
+            this.drawingFile = null;
+            this.modal = { type:"product", title: row ? "编辑产品" : "新增产品" };
+          },
+          async deleteProductDrawing(drawing) {
+            if (!confirm("确定删除该版本图纸吗？")) return;
+            try {
+              await axios.delete(`/api/master/products/drawings/${drawing.id}`);
+              const { data } = await axios.get(`/api/master/products/${this.productForm.id}`);
+              this.productForm = { ...blankProduct(), ...data };
+              await this.loadProducts();
+              this.showToast("图纸版本已删除");
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async selectProductCustomer(row) {
+            this.selectedProductCustomer = row;
+            this.filters.productCustomer = row.id;
+            this.filters.productKeyword = "";
+            this.filters.productCode = "";
+            this.filters.productName = "";
+            this.filters.productSpec = "";
+            this.filters.productMaterial = "";
+            this.pages.products = 1;
+            await this.loadProducts();
+          },
+          resetProductFilters() {
+            this.filters.productKeyword = "";
+            this.filters.productCode = "";
+            this.filters.productName = "";
+            this.filters.productSpec = "";
+            this.filters.productMaterial = "";
+            this.pages.products = 1;
+            this.loadProducts();
+          },
+          backToProductCustomers() {
+            this.selectedProductCustomer = null;
+            this.filters.productCustomer = "";
+            this.filters.productKeyword = "";
+            this.filters.productCode = "";
+            this.filters.productName = "";
+            this.filters.productSpec = "";
+            this.filters.productMaterial = "";
+            this.products = [];
+            this.productsTotal = 0;
+          },
+          openMaterial(row=null) {
+            this.materialForm = row ? {...blankMaterial(),...JSON.parse(JSON.stringify(row))} : blankMaterial();
+            this.modal={type:"material",title:row ? "编辑材质" : "新增材质"};
+          },
+          recommendMaterialCode() {
+            const weights=(this.materialForm.basis_weight_description.match(/\d+(?:\.\d+)?/g)||[]).join("-");
+            if (weights) this.materialForm.code=`M${weights}-${this.materialForm.flute_type}`;
+          },
+          weightFromMaterialCode() {
+            const values=(this.materialForm.code.match(/\d+(?:\.\d+)?/g)||[]);
+            if (values.length>=3) this.materialForm.basis_weight_description=values.map(value=>`${value}g`).join("/");
+          },
+          toggleAllRequisition(checked) { this.requisitionPending.forEach(row=>this.requisitionSelected[row.item_id]=checked); },
+          toggleAllDelivery(checked) { this.deliveryOptions.forEach(row=>this.deliveryForm.selected[row.item_id]=checked); },
+          toggleAllStatement(checked) { this.pendingStatements.forEach(row=>this.statementForm.selected[row.return_receipt_item_id]=checked); },
+          async deleteCustomer(row) {
+            if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
+            try { await axios.delete(`/api/master/customers/${row.id}`); await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
+            catch(error){this.showToast(this.errorMessage(error),true);}
+          },
+          async toggleCustomerStatus(row) {
+            const action = row.is_active ? "停用" : "启用";
+            if (!confirm(`确认${action}客户“${row.name}”吗？`)) return;
+            try {
+              await axios.put(`/api/master/customers/${row.id}/status`, {is_active:!row.is_active});
+              await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
+              this.showToast(`客户已${action}`);
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async deleteProduct(row) {
+            if (!confirm(`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`)) return;
+            try { await axios.delete(`/api/master/products/${row.id}`); await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
+            catch(error){this.showToast(this.errorMessage(error),true);}
+          },
+          async toggleProductTrash() {
+            this.productTrashOpen = !this.productTrashOpen;
+            if (this.productTrashOpen) await this.loadProductTrash();
+          },
+          async loadProductTrash() {
+            const { data } = await axios.get("/api/master/products/trash", {params:{page_size:200}});
+            this.productTrashItems = data.items;
+          },
+          async restoreProduct(row) {
+            if (!confirm(`确认恢复“${row.product_name}”吗？`)) return;
+            try {
+              await axios.put(`/api/master/products/${row.id}/restore`);
+              await Promise.all([this.loadProductTrash(), this.loadProducts()]);
+              this.showToast("产品已恢复并重新启用");
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async purgeProduct(row) {
+            if (!confirm(`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`)) return;
+            try {
+              await axios.delete(`/api/master/products/${row.id}/purge`);
+              await this.loadProductTrash();
+              this.showToast("产品已清理");
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async emptyProductTrash() {
+            if (!confirm("确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。")) return;
+            try {
+              const { data } = await axios.post("/api/master/products/trash/empty");
+              await this.loadProductTrash();
+              this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async toggleProductStatus(row) {
+            const action = row.is_active ? "停用" : "启用";
+            if (!confirm(`确认${action}纸箱“${row.product_name}”吗？`)) return;
+            try {
+              await axios.put(`/api/master/products/${row.id}/status`, {is_active:!row.is_active});
+              await this.loadProducts();
+              this.showToast(`纸箱已${action}`);
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async deleteMaterial(row) {
+            if (!confirm(`确认删除材质“${row.code}”吗？`)) return;
+            try { await axios.delete(`/api/master/materials/${row.id}`); await this.loadMaterials(); this.showToast("材质已删除"); }
+            catch(error){this.showToast(this.errorMessage(error),true);}
+          },
+          openOrder() {
+            this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), remark:"", items:[] };
+            this.orderNumberPreview = "";
+            this.orderProductOptions = {};
+            this.modal = { type:"order", title:"新建多明细订单" };
+            this.addOrderItem();
+            this.refreshOrderNumberPreview();
+          },
+          openOrderPdfImport() {
+            this.orderPdfImport = { file:null, draft:null, matchedCustomerLabel:"" };
+            this.modal = { type:"orderPdfImport", title:"识别采购订单 PDF" };
+          },
+          onOrderPdfFileChange(event) {
+            this.orderPdfImport.file = event?.target?.files?.[0] || null;
+            this.orderPdfImport.draft = null;
+            this.orderPdfImport.matchedCustomerLabel = "";
+          },
+          async previewOrderPdfImport() {
+            if (!this.orderPdfImport.file) {
+              this.showToast("请先选择 PDF 文件", true);
+              return;
+            }
+            this.loading = true;
+            try {
+              const form = new FormData();
+              form.append("file", this.orderPdfImport.file);
+              const { data } = await axios.post("/api/orders/pdf-preview", form);
+              this.orderPdfImport.draft = data;
+              const matchedCustomer = this.activeCustomerOptions.find(row => row.id === data.matched_customer_id);
+              this.orderPdfImport.matchedCustomerLabel = matchedCustomer ? matchedCustomer.name : "";
+            } catch (error) {
+              this.orderPdfImport.draft = null;
+              this.orderPdfImport.matchedCustomerLabel = "";
+              const status = error?.response?.status;
+              if (status === 404 || status === 405) {
+                this.showToast("当前后端还没有加载 PDF 识别接口，请刷新页面后重试；若仍失败，请重启 ERP 服务。", true);
+              } else {
+                this.showToast(this.errorMessage(error), true);
+              }
+            } finally {
+              this.loading = false;
+            }
+          },
+          async applyPdfDraftToOrderForm() {
+            const draft = this.orderPdfImport.draft;
+            if (!draft) {
+              this.showToast("请先完成 PDF 识别", true);
+              return;
+            }
+            this.orderForm = {
+              customer_id: draft.matched_customer_id || null,
+              customer_po: draft.customer_po || "",
+              order_date: draft.order_date || today(),
+              delivery_date: draft.delivery_date || plusDays(7),
+              remark: `PDF识别草稿：${draft.source_name || "客户采购订单"}`,
+              items: (draft.items || []).map(item => ({
+                product_id: item.matched_product_id || null,
+                product_code: item.product_code || "",
+                product_name: item.matched_product_name || item.product_name || "",
+                material: "",
+                specification: item.specification || "",
+                quantity: Number(item.quantity || 0) || null,
+                unit_price: item.unit_price || "",
+              })),
+            };
+            this.orderProductOptions = {};
+            this.modal = { type:"order", title:"新建多明细订单" };
+            for (let index = 0; index < this.orderForm.items.length; index += 1) {
+              await this.searchOrderProducts(index, this.orderForm.items[index].product_code || "");
+            }
+            await this.refreshOrderNumberPreview();
+          },
+          openOrderEditor(group) {
+            const first = group?.orders?.[0];
+            if (!first) return;
+            this.orderEditForm = {
+              order_ids: group.orders.map(row => row.id),
+              customer_name: group.customer_name || "",
+              customer_po: group.customer_po || "",
+              order_number: first.order_number || "",
+              order_date: first.order_date || "",
+              delivery_date: first.delivery_date || "",
+              remark: first.remark || "",
+            };
+            this.modal = { type:"orderEdit", title:`编辑客户订单组 ${group.customer_po || first.order_number}` };
+          },
+          prepareOrderProducts() {
+            this.orderForm.items = [];
+            this.orderProductOptions = {};
+            this.addOrderItem();
+            this.refreshOrderNumberPreview();
+          },
+          async refreshOrderNumberPreview() {
+            if (!this.orderForm.customer_id) {
+              this.orderNumberPreview = "";
+              return;
+            }
+            const { data } = await axios.get("/api/orders/number-preview", {
+              params: {
+                item_count: Math.max(this.orderForm.items.length || 1, 1),
+                order_date: this.orderForm.order_date || today(),
+              }
+            });
+            this.orderNumberPreview = data.order_number || "";
+          },
+          itemOrderNumberPreview(index) {
+            if (!this.orderNumberPreview) return "-";
+            return `${this.orderNumberPreview}-${String(index + 1).padStart(3, "0")}`;
+          },
+          addOrderItem() {
+            const index = this.orderForm.items.length;
+            this.orderForm.items.push({ product_id:null, product_code:"", product_name:"", material:"", specification:"", quantity:null, unit_price:"" });
+            if (this.orderForm.customer_id) this.searchOrderProducts(index, "");
+            if (this.modal?.type === "order") this.refreshOrderNumberPreview();
+          },
+          removeOrderItem(index) {
+            if (this.orderForm.items.length > 1) {
+              this.orderForm.items.splice(index,1);
+              if (this.modal?.type === "order") this.refreshOrderNumberPreview();
+            }
+          },
+          async searchOrderProducts(index, keyword) {
+            if (!this.orderForm.customer_id) {
+              this.orderProductOptions[index] = [];
+              return;
+            }
+            const { data } = await axios.get("/api/master/products", { params:{ customer_id:this.orderForm.customer_id, keyword, page_size:50 } });
+            this.orderProductOptions[index] = data.items.map(p => ({...p, _label:`${p.product_code} · ${p.product_name} · ${this.spec(p)}`}));
+          },
+          async selectOrderProduct(index, productId) {
+            if (!productId) return;
+            const { data } = await axios.get(`/api/master/products/${productId}`);
+            const item = this.orderForm.items[index];
+            item.product_id = data.id;
+            item.product_code = data.product_code || "";
+            item.product_name = data.product_name || "";
+            item.material = this.materialName(data.material_id, data.legacy_material_text);
+            item.specification = this.spec(data);
+            item.unit_price = this.money(data.sale_unit_price);
+          },
+          toggleOrderGroup(key) { this.expandedOrders[key] = !this.expandedOrders[key]; },
+          toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
+          async openOrderDetail(row) {
+            const { data } = await axios.get(`/api/orders/${row.id}`);
+            this.orderDetail = data;
+            this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
+          },
+          openOrderItem(order, item) {
+            this.orderItemForm = {
+              id:item.id, order_number:this.displayOrderNumber(order), product_code:item.snapshot_product_code || "",
+              product_name:item.snapshot_product_name || "", material:item.display_material || this.displayMaterialText(item.snapshot_material) || "",
+              specification:item.snapshot_spec || "", quantity:item.quantity, unit_price:this.money(item.unit_price)
+            };
+            this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
+          },
+          async deleteOrderItem(order, item) {
+            if (!confirm(`确认删除 ${this.displayOrderNumber(order)} 中的“${item.snapshot_product_name}”吗？`)) return;
+            try { await axios.delete(`/api/orders/items/${item.id}`); await this.loadOrders(); this.showToast("订单明细已删除"); }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async openRequisition() {
+            const rows = this.requisitionPending.filter(row => this.requisitionSelected[row.item_id]);
+            if (!rows.length) { this.showToast("请先勾选待报料明细", true); return; }
+            this.requisitionForm = { supplier_name:"", items:rows.map(row => ({
+              order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_name:row.customer_name,
+              product_code:row.product_code, product_name:row.product_name, quantity:row.quantity,
+              inventory_deducted_qty:Number(row.inventory_deducted_qty || 0),
+              requisition_qty:Number(row.requisition_qty ?? row.quantity),
+              cardboard_len:row.suggested_cardboard_len, cardboard_width:row.suggested_cardboard_width,
+              special_process:row.special_process || "无", remark:""
+            }))};
+            this.modal = {type:"requisition", title:"生成合并报料单"};
+            await Promise.all(this.requisitionForm.items.map(async line => {
+              const keyword = `${line.customer_name} ${line.product_code}`;
+              const {data} = await axios.get("/api/requisition/search_history", {params:{keyword}});
+              const hit = data.items?.[0];
+              if (hit) { line.cardboard_len=hit.cardboard_len || line.cardboard_len; line.cardboard_width=hit.cardboard_width || line.cardboard_width; }
+            }));
+          },
+          autoRequisitionQty(line) { line.requisition_qty = Math.max(Number(line.quantity)-Number(line.inventory_deducted_qty || 0),0); },
+          openIncomingPage() {
+            window.location.href = "/incoming.html";
+          },
+          onModalMaskClick() {
+            if (this.modal?.type === "order" || this.modal?.type === "orderEdit") return;
+            this.closeModal();
+          },
+          async cancelRequisition(row) {
+            const reason = prompt("请输入取消报料原因");
+            if (!reason?.trim()) return;
+            try { await axios.put(`/api/requisition/items/${row.item_id}/cancel`, {reason}); await this.loadRequisition(); this.showToast("已退回待报料池"); }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async openReceipt(row) {
+            const delivery = (await axios.get(`/api/deliveries/${row.id}`)).data;
+            let receipt = null;
+            if (row.return_receipt_id) receipt = (await axios.get(`/api/finance/return_receipts/${row.return_receipt_id}`)).data;
+            const saved = new Map((receipt?.items || []).map(item => [item.delivery_item_id,item]));
+            this.receiptForm = {
+              id:receipt?.id || null, delivery_id:row.id,
+              actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
+              items:delivery.items.map(item => ({
+                delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
+                delivered_quantity:item.delivered_quantity,
+                actual_received_quantity:saved.get(item.id)?.actual_received_quantity ?? item.delivered_quantity,
+                difference_reason:saved.get(item.id)?.difference_reason || ""
+              }))
+            };
+            this.modal={type:"receipt",title:receipt ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
+          },
+          async openDelivery() {
+            await this.loadDeliveries();
+            this.deliveryForm = { customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", selected:{}, quantities:{} };
+            this.pendingDeliveryItems.forEach(row => this.deliveryForm.quantities[row.item_id] = row.remaining_quantity);
+            this.modal = { type:"delivery", title:"新增送货单" };
+          },
+          async openStatement() {
+            this.statementForm = { customer_id:this.activeCustomerOptions[0]?.id || null, statement_month:month(), selected:{} };
+            this.modal = { type:"statement", title:"生成月结对账单" };
+            await this.loadPendingStatements();
+          },
+          async loadPendingStatements() {
+            if (!this.statementForm.customer_id) { this.pendingStatements=[]; return; }
+            this.pendingStatements = (await axios.get("/api/finance/pending_statements", { params:{ customer_id:this.statementForm.customer_id } })).data.items
+              .filter(row => String(row.actual_received_date).startsWith(this.statementForm.statement_month));
+          },
+          closeModal() { if (!this.isForcedPassword) this.modal = null; },
+          async saveModal() {
+            this.loading = true;
+            try {
+              if (this.modal.type === "customer") {
+                const payload = { ...this.customerForm };
+                delete payload.id; delete payload.is_active;
+                if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
+                else await axios.post("/api/master/customers", payload);
+                await this.loadCustomers();
+              }
+              if (this.modal.type === "product") {
+                const payload = { ...this.productForm };
+                delete payload.id;
+                ["length_mm","width_mm","height_mm","sale_unit_price"].forEach(key => { if (payload[key] === "") payload[key] = null; });
+                let saved;
+                if (this.productForm.id) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
+                else saved=(await axios.post("/api/master/products", payload)).data;
+                if (this.drawingFile) {
+                  const form=new FormData(); form.append("file",this.drawingFile);
+                  await axios.post(`/api/master/products/${saved.id}/drawings`,form);
+                }
+                await this.loadProducts();
+              }
+              if (this.modal.type === "material") {
+                const payload={...this.materialForm}; delete payload.id;
+                if (payload.quote_price==="") payload.quote_price=null;
+                if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
+                else await axios.post("/api/master/materials",payload);
+                await this.loadMaterials();
+              }
+              if (this.modal.type === "order") {
+                const orderError = this.validateOrderForm();
+                if (orderError) throw new Error(orderError);
+                await axios.post("/api/orders", { ...this.orderForm });
+                await Promise.all([this.loadOrders(), this.loadKpi()]);
+              }
+              if (this.modal.type === "orderEdit") {
+                const payload = {
+                  customer_po: this.orderEditForm.customer_po,
+                  delivery_date: this.orderEditForm.delivery_date || null,
+                  remark: this.orderEditForm.remark || null,
+                };
+                await Promise.all(
+                  this.orderEditForm.order_ids.map((orderId) =>
+                    axios.put(`/api/orders/${orderId}`, payload)
+                  )
+                );
+                await this.loadOrders();
+              }
+              if (this.modal.type === "orderItem") {
+                const payload = {...this.orderItemForm}; delete payload.id; delete payload.order_number;
+                await axios.put(`/api/orders/items/${this.orderItemForm.id}`, payload);
+                await this.loadOrders();
+              }
+              if (this.modal.type === "requisition") {
+                const requisitionError = this.validateRequisitionForm();
+                if (requisitionError) throw new Error(requisitionError);
+                const payload = {
+                  supplier_name:this.requisitionForm.supplier_name,
+                  items:this.requisitionForm.items.map(({customer_name,order_number,product_code,product_name,quantity,...line}) => line)
+                };
+                const {data} = await axios.post("/api/requisition/batches", payload);
+                this.requisitionSelected = {};
+                await this.loadRequisition();
+                window.open(`/requisition-print.html?id=${data.id}`, "_blank");
+              }
+              if (this.modal.type === "receipt") {
+                const payload = {
+                  actual_received_date:this.receiptForm.actual_received_date,
+                  signed_by:this.receiptForm.signed_by,
+                  items:this.receiptForm.items.map(({product_code,product_name,delivered_quantity,...line}) => ({
+                    ...line, difference_reason:line.difference_reason || null
+                  }))
+                };
+                if (this.receiptForm.id) await axios.put(`/api/finance/return_receipts/${this.receiptForm.id}`, payload);
+                else await axios.post("/api/finance/return_receipts", {...payload,delivery_id:this.receiptForm.delivery_id});
+                await this.loadDeliveries();
+              }
+              if (this.modal.type === "delivery") {
+                const items = this.deliveryOptions.filter(row => this.deliveryForm.selected[row.item_id]).map(row => ({
+                  order_item_id: row.item_id, delivered_quantity: Number(this.deliveryForm.quantities[row.item_id]), remarks:null
+                }));
+                if (!items.length) throw new Error("至少选择一条送货明细");
+                const {data} = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items });
+                if (data.warnings?.some(w => w.code === "OVER_DELIVERY")) this.showToast("警告：实际发货数超过订单可送数量，系统已按工厂实际情况放行");
+                await this.loadDeliveries();
+              }
+              if (this.modal.type === "statement") {
+                const ids = this.pendingStatements.filter(row => this.statementForm.selected[row.return_receipt_item_id]).map(row => row.return_receipt_item_id);
+                if (!ids.length) throw new Error("至少选择一条待对账明细");
+                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, return_receipt_item_ids:ids });
+                await this.loadFinance();
+              }
+              if (this.modal.type === "password") {
+                if (this.passwordForm.new_password !== this.passwordForm.confirm_password) throw new Error("两次输入的新密码不一致");
+                const { data } = await axios.put("/api/auth/password", {
+                  current_password:this.passwordForm.current_password,
+                  new_password:this.passwordForm.new_password
+                });
+                this.user = data.user;
+                this.modal.force = false;
+              }
+              if (this.modal.type === "resetPassword") {
+                if (this.resetPasswordForm.new_password !== this.resetPasswordForm.confirm_password) throw new Error("两次输入的临时密码不一致");
+                await axios.put(`/api/auth/users/${encodeURIComponent(this.resetPasswordForm.username)}/reset-password`, {
+                  new_password:this.resetPasswordForm.new_password
+                });
+                await this.loadSystem();
+              }
+              this.closeModal(); this.showToast("保存成功");
+            } catch (error) {
+              const message = this.modal?.type === "order"
+                ? this.normalizeOrderSaveError(error)
+                : this.modal?.type === "requisition"
+                  ? (this.normalizeValidationErrors(error, {
+                      "items.0.requisition_qty": "第1条实际报料数",
+                      "items.0.cardboard_len": "第1条纸板长",
+                      "items.0.cardboard_width": "第1条纸板宽",
+                      requisition_qty: "实际报料数",
+                      cardboard_len: "纸板长",
+                      cardboard_width: "纸板宽"
+                    }) || this.errorMessage(error))
+                  : this.errorMessage(error);
+              this.showToast(message, true);
+            }
+            finally { this.loading = false; }
+          },
+          async dispatchDelivery(row) {
+            if (!confirm(`确认发货并打印 ${row.delivery_number} 吗？`)) return;
+            const printWindow = window.open("about:blank", "_blank");
+            try {
+              await axios.put(`/api/deliveries/${row.id}/dispatch`);
+              await axios.put(`/api/deliveries/${row.id}/printed`);
+              if (printWindow) printWindow.location = `/delivery-print.html?id=${row.id}`;
+              await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
+              this.showToast("发货成功，打印页已打开");
+            }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          printDelivery(row) { window.open(`/delivery-print.html?id=${row.id}`, "_blank"); },
+          exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
+          async registerInvoice(row) {
+            const invoiceNumber = prompt("请输入发票号码");
+            if (!invoiceNumber) return;
+            const remaining = Number(row.total_receivable) - Number(row.invoiced_amount);
+            const amount = prompt("请输入本次开票金额", remaining.toFixed(2));
+            if (amount === null) return;
+            try {
+              await axios.post("/api/finance/invoices", { statement_id:row.id, invoice_number:invoiceNumber, invoice_date:today(), invoice_amount:amount });
+              await this.loadFinance(); this.showToast("开票登记成功");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async settle(row) {
+            const remaining = Number(row.total_receivable) - Number(row.settled_amount);
+            const amount = prompt("请输入本次收款金额", remaining.toFixed(2));
+            if (amount === null) return;
+            try {
+              await axios.put(`/api/finance/statements/${row.id}/settle`, { amount, settlement_date:today(), account:"" });
+              await Promise.all([this.loadFinance(),this.loadKpi()]); this.showToast("收款核销成功");
+            } catch (error) {
+              const validation = this.normalizeValidationErrors(error, {
+                amount: "本次收款金额",
+                settlement_date: "收款日期",
+                account: "收款账户"
+              });
+              this.showToast(validation || this.errorMessage(error), true);
+            }
+          },
+          async createBackup() {
+            this.loading = true;
+            try { const {data}=await axios.post("/api/system/backups"); await this.loadBackups(); this.showToast(`备份成功：${data.filename}`); }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading=false; }
+          }
+        }
+      });
+      app.component("page-head", { props:["title","desc"], template:`<div class="page-head"><div><h2>{{title}}</h2><p>{{desc}}</p></div></div>` });
+      app.component("data-panel", { props:["empty"], template:`<div class="panel"><div v-if="empty" class="empty">当前没有符合条件的数据</div><div v-else class="table-wrap"><slot></slot></div></div>` });
+      app.component("pager", {
+        props: ["page", "total", "pageSize"],
+        emits: ["change"],
+        computed: {
+          pages() { return Math.max(1, Math.ceil(Number(this.total || 0) / Number(this.pageSize || 50))); }
+        },
+        template: `<div v-if="total > pageSize" class="pager">
+          <span>共 {{ total }} 条，第 {{ page }} / {{ pages }} 页</span>
+          <button class="btn small" :disabled="page <= 1" @click="$emit('change', page - 1)">上一页</button>
+          <button class="btn small" :disabled="page >= pages" @click="$emit('change', page + 1)">下一页</button>
+        </div>`
+      });
+      app.component("status-tag", {
+        props:["value"],
+        template:`<span :class="['status',$root.statusTone(value)]">{{$root.statusText(value)}}</span>`
+      });
+      app.component("search-select", {
+        props: {
+          modelValue: [String,Number], options: {type:Array,default:()=>[]},
+          labelKey: {type:String,default:"label"}, valueKey: {type:String,default:"value"},
+          placeholder: {type:String,default:"输入搜索"}, allowEmpty: {type:Boolean,default:false},
+          disabled: {type:Boolean,default:false}
+        },
+        emits:["update:modelValue","change","search"],
+        data() { return { query:"", open:false, timer:null }; },
+        computed: {
+          selectedLabel() {
+            const row=this.options.find(item=>String(item[this.valueKey])===String(this.modelValue));
+            return row?.[this.labelKey] || "";
+          },
+          filtered() {
+            const query=this.normalize(this.query);
+            if (!query) return this.options.slice(0,50);
+            return this.options.filter(row=>this.searchText(row).includes(query)).slice(0,50);
+          }
+        },
+        watch: {
+          modelValue() { if (!this.open) this.query=this.selectedLabel; },
+          disabled(value) { if (value) this.open = false; }
+        },
+        mounted() { this.query=this.selectedLabel; },
+        methods: {
+          normalize(value) { return String(value || "").trim().toLowerCase().replace(/\s+/g,""); },
+          initials(value) {
+            try { return window.pinyinPro?.pinyin(String(value||""),{pattern:"first",toneType:"none",type:"array"}).join("").toLowerCase() || ""; }
+            catch (_) { return ""; }
+          },
+          searchText(row) {
+            const text=Object.values(row).filter(v=>["string","number"].includes(typeof v)).join(" ");
+            return this.normalize(text)+this.initials(text);
+          },
+          onInput() {
+            if (this.disabled) return;
+            this.open=true; clearTimeout(this.timer);
+            this.timer=setTimeout(()=>this.$emit("search",this.query),220);
+          },
+          choose(row) {
+            if (this.disabled) return;
+            const value=row[this.valueKey]; this.query=row[this.labelKey]; this.open=false;
+            this.$emit("update:modelValue",value); this.$emit("change",value);
+          },
+          clear() {
+            if (this.disabled) return;
+            this.query=""; this.open=false; this.$emit("update:modelValue","");
+            this.$emit("change","");
+          }
+        },
+        template:`<div class="search-select">
+          <input class="input" v-model="query" :disabled="disabled" :placeholder="placeholder" @focus="!disabled && (open = true)" @input="onInput" @keydown.esc="open=false" />
+          <div v-if="open" class="search-select-list">
+            <button v-if="allowEmpty" type="button" class="search-select-option muted" @mousedown.prevent="clear">全部 / 清空</button>
+            <button v-for="row in filtered" :key="row[valueKey]" type="button" class="search-select-option" @mousedown.prevent="choose(row)">{{ row[labelKey] }}</button>
+            <div v-if="!filtered.length" class="empty" style="padding:14px">没有匹配项</div>
+          </div>
+        </div>`
+      });
+      app.mount("#app");
+    </script>
+  </body>
+</html>

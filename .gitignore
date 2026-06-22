@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.test-tmp/
+
+# Generated locally; never commit application secrets.
+data/session_secret.key
+.env
+.env.test
+logs/
+import_requisition_report.log
+.server.pid
+
+# Business data — never commit to version control.
+*.xlsx
+*.xls
+customer_file_summary.json
+*.jpg
+*.png
+
+# QA / screenshot artefacts.
+qa-screenshots/
+qa_screenshots/
+migration-reports/
+migration-workfiles/
+
+# Runtime / tool state.
+.superpowers/
+
+# Database files (can be hundreds of MB; never commit).
+data/

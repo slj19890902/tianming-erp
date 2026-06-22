@@ -1,13 +1,23 @@
-# 三级纸箱厂极简 ERP
+# 天明纸箱厂 ERP
 
-## 当前目录结构
+轻量级纸箱厂生产管理系统，基于 FastAPI + SQLite，支持订单、送货、采购、财务等核心业务流程。
+
+## 目录结构
 
 ```text
-纸箱厂erp软件搭建/
-├─ main.py              # FastAPI 入口；启动时自动创建 SQLite 表
+├─ main.py              # FastAPI 入口（启动时自动建表）
 ├─ requirements.txt     # 后端依赖
-├─ README.md
-└─ data/                # 首次运行后自动创建，存放 SQLite 数据库
+├─ app/
+│  ├─ api/              # 路由层：auth、orders、deliveries、finance 等
+│  ├─ models/           # SQLAlchemy ORM 模型
+│  └─ services/         # 业务逻辑（PDF、Excel、对账等）
+├─ alembic/             # 数据库迁移脚本
+├─ tests/               # pytest 测试套件（按阶段组织）
+├─ scripts/             # 数据导入 / 维护脚本
+├─ docs/                # 设计文档与迁移计划
+├─ tm_frontend/         # Vue 3 前端（Vite）
+├─ static/              # 打包后的前端静态文件
+└─ deployment/          # 部署配置与启动脚本
 ```
 
 ## 本地运行
@@ -17,43 +27,26 @@ pip install -r requirements.txt
 python main.py
 ```
 
-启动后终端会显示局域网访问地址和二维码。
+启动后终端显示局域网访问地址和二维码。
 
-## 默认登录
+## 默认账号
 
-```text
-老板端：boss / 123456
-车间端：workshop / 123456
-```
+| 角色 | 用户名 | 密码 |
+|------|--------|------|
+| 老板 | boss | 123456 |
+| 车间 | workshop | 123456 |
 
-## PyInstaller 打包
-
-Windows 下需要把 `static` 文件夹一起打进 exe：
+## 打包（Windows EXE）
 
 ```powershell
 pyinstaller --onefile --name carton-erp --add-data "static;static" main.py
 ```
 
-打包后的数据库会自动创建在 exe 同级的 `data/carton_erp.sqlite3`。
+数据库自动创建在 exe 同级的 `data/carton_erp.sqlite3`。
 
-## 后续规划目录
+## 运行测试
 
-```text
-backend/
-├─ api/                 # 登录、订单、送货、财务等 API
-├─ services/            # PDF、Excel、对账、利润计算
-├─ repositories/        # SQLite 数据访问层
-└─ security/            # 登录、RBAC、密码哈希
-
-frontend/
-├─ index.html
-├─ assets/
-└─ src/                 # Vue 页面和组件
-
-storage/
-├─ uploads/             # 图纸、刀模图、回单照片
-├─ pdf/                 # 报价单、报材料单、送货单
-└─ exports/             # 对账单和毛利表 Excel
+```powershell
+pip install -r requirements-dev.txt
+pytest tests/
 ```
-
-当前先保持 `main.py` 单入口，方便 PyInstaller 打包；业务代码变多后再按上面的结构拆分。

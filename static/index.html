@@ -163,8 +163,32 @@
         background: #f8fbff;
       }
       .order-group-detail-card table th { position: static; background: #eef4fa; }
-      .sub-order-number { font-weight: 700; color: #0f4f86; }
-      .main-order-number { color: var(--muted); font-size: 12px; }
+      .sub-order-number { font-size: 11px; color: #94a3b8; font-weight: 600; }
+      .main-order-number { color: var(--muted); font-size: 11px; }
+      /* Compact order filter */
+      .order-filter-compact { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .order-status-tabs { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+      .status-tab-btn {
+        min-height:28px; padding:3px 12px;
+        border:1px solid var(--line-strong); border-radius:14px;
+        background:#fff; color:var(--muted); font-size:12px; cursor:pointer; white-space:nowrap;
+      }
+      .status-tab-btn.active { background:var(--primary); border-color:var(--primary); color:#fff; }
+      .status-tab-btn:hover:not(.active) { background:#f1f5f9; }
+      .order-filter-advanced {
+        display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+        margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);
+      }
+      .sys-num { font-size:11px; color:#94a3b8; font-weight:400; }
+      /* Danger zone */
+      .danger-zone {
+        margin-top:16px; padding:10px 12px;
+        border:1px dashed var(--red); border-radius:6px; background:#fff8f8;
+      }
+      .danger-zone-head {
+        display:flex; align-items:center; justify-content:space-between; cursor:pointer;
+      }
+      .danger-zone-head strong { color:var(--red); font-size:12px; }
       .cell-right { text-align: right; }
       .cell-actions { white-space: nowrap; }
       .filterbar .input, .filterbar .select { width: auto; min-width: 170px; }
@@ -415,19 +439,31 @@
                   </div>
                 </div>
                 <div class="order-filter-card">
-                  <div class="order-filter-grid">
-                    <input class="input search-keyword" v-model.trim="filters.orderKeyword" placeholder="搜索客户名称、客户单号、系统单号、明细单号、产品" @keyup.enter="pages.orders=1; loadOrders()" />
+                  <div class="order-filter-compact">
+                    <input class="input" style="flex:1;min-width:220px;max-width:440px"
+                           v-model.trim="filters.orderKeyword"
+                           placeholder="搜索客户 / 客户单号 / 产品 / 规格 / 存货编码 / 系统单号 / 明细单号"
+                           @keyup.enter="pages.orders=1; loadOrders()" />
+                    <div class="order-status-tabs">
+                      <button v-for="tab in orderStatusTabs" :key="tab.value"
+                              :class="['status-tab-btn', {active: filters.orderStatusTab === tab.value}]"
+                              @click="filters.orderStatusTab=tab.value; pages.orders=1; loadOrders()">{{ tab.label }}</button>
+                    </div>
+                    <button class="btn" @click="pages.orders=1; loadOrders()">搜索</button>
+                    <button class="btn" @click="resetOrderFilters()">清空</button>
+                    <button class="btn small muted" @click="showAdvancedFilter=!showAdvancedFilter">
+                      {{ showAdvancedFilter ? '收起' : '高级筛选' }} ▾
+                    </button>
+                  </div>
+                  <div v-if="showAdvancedFilter" class="order-filter-advanced">
                     <search-select v-model="filters.orderCustomer" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户筛选" :allow-empty="true" @change="pages.orders=1; loadOrders()"></search-select>
-                    <input class="input" type="date" v-model="filters.orderDateFrom" @change="pages.orders=1; loadOrders()" />
-                    <input class="input" type="date" v-model="filters.orderDateTo" @change="pages.orders=1; loadOrders()" />
-                    <select class="select" v-model="filters.orderStatus" @change="pages.orders=1; loadOrders()">
+                    <input class="input" style="width:130px" type="date" v-model="filters.orderDateFrom" @change="pages.orders=1; loadOrders()" />
+                    <span class="muted">至</span>
+                    <input class="input" style="width:130px" type="date" v-model="filters.orderDateTo" @change="pages.orders=1; loadOrders()" />
+                    <select class="select" style="min-width:130px" v-model="filters.orderStatus" @change="filters.orderStatusTab=''; pages.orders=1; loadOrders()">
                       <option value="">全部状态</option>
                       <option v-for="status in orderStatusOptions" :key="status" :value="status">{{ statusText(status) }}</option>
                     </select>
-                    <div class="toolbar-group">
-                      <button class="btn" @click="pages.orders=1; loadOrders()">搜索</button>
-                      <button class="btn" @click="resetOrderFilters()">清空筛选</button>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -547,7 +583,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 12 : 13"><div class="order-detail-box"><table><thead><tr><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td>{{ item.snapshot_material || "-" }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><button v-if="canSales" class="btn small danger" @click="deleteOrderItem(row,item)">删除</button></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 12 : 13"><div class="order-detail-box"><table><thead><tr><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td>{{ item.snapshot_material || "-" }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -734,8 +770,8 @@
               </div>
               <div v-if="!orderForm.customer_id" class="status orange" style="margin:10px 0">请先选择客户，再选择常用箱并填写数量。</div>
               <div v-else class="form-grid" style="margin-bottom:10px">
-                <div class="field"><label>主系统单号预览</label><div>{{ orderNumberPreview || "-" }}</div></div>
-                <div class="field wide"><label>明细系统单号预览</label><div>{{ orderForm.items.map((item, index) => itemOrderNumberPreview(index)).join(" / ") }}</div></div>
+                <div class="field"><label class="sys-num">主系统单号预览</label><div class="sys-num">{{ orderNumberPreview || "-" }}</div></div>
+                <div class="field wide"><label class="sys-num">明细系统单号预览</label><div class="sys-num">{{ orderForm.items.map((item, index) => itemOrderNumberPreview(index)).join(" / ") }}</div></div>
               </div>
               <table class="line-items"><thead><tr><th>历史模板搜索</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格尺寸</th><th>数量</th><th class="sensitive-price">单价</th><th></th></tr></thead><tbody>
                 <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" :value="displayMaterialText(item.material)" @input="item.material=$event.target.value" /></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" @blur="item.unit_price=money(item.unit_price)" v-model="item.unit_price" /></td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
@@ -745,20 +781,32 @@
             </div>
             <div v-else-if="modal.type === 'orderEdit'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><div>{{ orderEditForm.customer_name || "-" }}</div></div>
+                <div class="field"><label>客户</label><div><strong>{{ orderEditForm.customer_name || "-" }}</strong></div></div>
                 <div class="field"><label>客户订单号</label><input class="input" v-model.trim="orderEditForm.customer_po" /></div>
-                <div class="field"><label>主系统单号</label><div>{{ orderEditForm.order_number || "-" }}</div></div>
+                <div class="field"><label class="sys-num">主系统单号</label><div class="sys-num">{{ orderEditForm.order_number || "-" }}</div></div>
                 <div class="field"><label>下单日期</label><div>{{ orderEditForm.order_date || "-" }}</div></div>
                 <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderEditForm.delivery_date" /></div>
                 <div class="field wide"><label>备注</label><input class="input" v-model.trim="orderEditForm.remark" /></div>
               </div>
             </div>
-            <div v-else-if="modal.type === 'orderItem'" class="form-grid">
-              <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div><div class="field"><label>名称</label><input class="input" v-model.trim="orderItemForm.product_name" /></div><div class="field"><label>材质</label><input class="input" v-model.trim="orderItemForm.material" /></div><div class="field"><label>规格</label><input class="input" v-model.trim="orderItemForm.specification" /></div><div class="field"><label>数量</label><input class="input" type="number" min="1" v-model.number="orderItemForm.quantity" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>单价</label><input class="input" type="number" step="0.01" v-model="orderItemForm.unit_price" /></div>
+            <div v-else-if="modal.type === 'orderItem'">
+              <div class="form-grid">
+                <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div><div class="field"><label>名称</label><input class="input" v-model.trim="orderItemForm.product_name" /></div><div class="field"><label>材质</label><input class="input" v-model.trim="orderItemForm.material" /></div><div class="field"><label>规格</label><input class="input" v-model.trim="orderItemForm.specification" /></div><div class="field"><label>数量</label><input class="input" type="number" min="1" v-model.number="orderItemForm.quantity" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>单价</label><input class="input" type="number" step="0.01" v-model="orderItemForm.unit_price" /></div>
+              </div>
+              <div v-if="canSales" class="danger-zone">
+                <div class="danger-zone-head" @click="showOrderItemDanger=!showOrderItemDanger">
+                  <strong>⚠ 危险操作</strong>
+                  <button type="button" class="btn small">{{ showOrderItemDanger ? '收起' : '展开' }}</button>
+                </div>
+                <div v-if="showOrderItemDanger" style="margin-top:10px;display:flex;align-items:center;gap:10px">
+                  <button class="btn small danger" @click="deleteCurrentOrderItem()">删除此明细</button>
+                  <span class="muted" style="font-size:12px">删除后不可恢复，请谨慎操作</span>
+                </div>
+              </div>
             </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <div class="form-grid">
-                <div class="field"><label>系统单号</label><div>{{ displayOrderNumber(orderDetail) }}</div></div>
+                <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ displayOrderNumber(orderDetail) }}</div></div>
                 <div class="field"><label>客户</label><div>{{ orderDetail.customer_name }}</div></div>
                 <div class="field"><label>客户单号</label><div>{{ orderDetail.customer_po || "-" }}</div></div>
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
@@ -887,7 +935,17 @@
             productTab: "products", modal: null,
             selectedProductCustomer: null, productCustomerSearch: "",
             productTrashOpen: false, productTrashItems: [],
-            filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"", orderView:"customer_po" },
+            filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"", orderStatusTab:"", orderView:"customer_po" },
+            orderStatusTabs: [
+              { label: "全部", value: "" },
+              { label: "未完成", value: "active" },
+              { label: "未送货", value: "pending_delivery" },
+              { label: "已完成", value: "delivered" },
+              { label: "死单/结档", value: "cancelled" },
+            ],
+            showAdvancedFilter: false,
+            showOrderItemDanger: false,
+            orderItemOrder: null,
             customerForm: blankCustomer(), productForm: blankProduct(),
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), remark: "", items: [] },
@@ -1129,6 +1187,8 @@
             this.filters.orderDateFrom = "";
             this.filters.orderDateTo = "";
             this.filters.orderStatus = "";
+            this.filters.orderStatusTab = "";
+            this.showAdvancedFilter = false;
             this.pages.orders = 1;
             this.loadOrders();
           },
@@ -1270,7 +1330,12 @@
             if (this.filters.orderCustomer) params.customer_id = this.filters.orderCustomer;
             if (this.filters.orderDateFrom) params.date_from = this.filters.orderDateFrom;
             if (this.filters.orderDateTo) params.date_to = this.filters.orderDateTo;
-            if (this.filters.orderStatus) params.status = this.filters.orderStatus;
+            const tab = this.filters.orderStatusTab;
+            if (tab && tab !== "active") {
+              params.status = tab;
+            } else if (!tab && this.filters.orderStatus) {
+              params.status = this.filters.orderStatus;
+            }
             if (this.filters.orderKeyword) {
               params.keyword = this.filters.orderKeyword;
               params.customer_name = this.filters.orderKeyword;
@@ -1603,12 +1668,21 @@
             this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
           },
           openOrderItem(order, item) {
+            this.orderItemOrder = order;
+            this.showOrderItemDanger = false;
             this.orderItemForm = {
               id:item.id, order_number:this.displayOrderNumber(order), product_code:item.snapshot_product_code || "",
               product_name:item.snapshot_product_name || "", material:item.display_material || this.displayMaterialText(item.snapshot_material) || "",
               specification:item.snapshot_spec || "", quantity:item.quantity, unit_price:this.money(item.unit_price)
             };
             this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
+          },
+          async deleteCurrentOrderItem() {
+            const order = this.orderItemOrder;
+            const item = { id: this.orderItemForm.id, snapshot_product_name: this.orderItemForm.product_name };
+            if (!order || !item.id) return;
+            await this.deleteOrderItem(order, item);
+            this.closeModal();
           },
           async deleteOrderItem(order, item) {
             if (!confirm(`确认删除 ${this.displayOrderNumber(order)} 中的“${item.snapshot_product_name}”吗？`)) return;

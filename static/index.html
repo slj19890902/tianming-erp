@@ -795,10 +795,10 @@
                 </div>
                 <div v-if="showOrderEditDanger" style="margin-top:10px">
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-                    <button class="btn small danger" @click="cancelOrderGroup()">标记死单 / 作废</button>
-                    <button class="btn small danger" @click="deleteOrderGroup()">删除此订单组</button>
+                    <button class="btn small danger" disabled>标记死单 / 作废</button>
+                    <button class="btn small danger" disabled>删除此订单组</button>
                   </div>
-                  <div class="muted" style="font-size:11px;margin-top:6px">以上操作不可撤销，执行前会弹出二次确认</div>
+                  <div class="muted" style="font-size:11px;margin-top:6px">后端接口未接入，暂不可用（待工厂电脑添加 cancel / delete 路由后生效）</div>
                 </div>
               </div>
             </div>
@@ -1698,29 +1698,6 @@
             if (!order || !item.id) return;
             await this.deleteOrderItem(order, item);
             this.closeModal();
-          },
-          async cancelOrderGroup() {
-            const ids = this.orderEditForm.order_ids;
-            if (!ids?.length) return;
-            if (!confirm(`确认将此订单组（共 ${ids.length} 张）标记为死单 / 作废吗？此操作不可撤销。`)) return;
-            try {
-              await Promise.all(ids.map(id => axios.put(`/api/orders/${id}/cancel`)));
-              await this.loadOrders();
-              this.closeModal();
-              this.showToast("已标记为死单 / 作废");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-          },
-          async deleteOrderGroup() {
-            const ids = this.orderEditForm.order_ids;
-            if (!ids?.length) return;
-            if (!confirm(`确认删除此订单组（共 ${ids.length} 张）？所有明细将永久删除，不可恢复。`)) return;
-            if (!confirm("再次确认：真的要删除整个订单组吗？")) return;
-            try {
-              await Promise.all(ids.map(id => axios.delete(`/api/orders/${id}`)));
-              await this.loadOrders();
-              this.closeModal();
-              this.showToast("订单组已删除");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async deleteOrderItem(order, item) {
             if (!confirm(`确认删除 ${this.displayOrderNumber(order)} 中的“${item.snapshot_product_name}”吗？`)) return;

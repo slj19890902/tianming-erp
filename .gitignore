@@ -3,11 +3,15 @@ __pycache__/
 .pytest_cache/
 .venv/
 .test-tmp/
+node_modules/
 
-# Generated locally; never commit application secrets.
-data/session_secret.key
+# Secrets and environment config — never commit.
 .env
-.env.test
+.env.*
+*.key
+*.bak
+
+# Logs and runtime state.
 logs/
 import_requisition_report.log
 .server.pid
@@ -15,9 +19,15 @@ import_requisition_report.log
 # Business data — never commit to version control.
 *.xlsx
 *.xls
+*.pdf
 customer_file_summary.json
+
+# Images / binary uploads.
 *.jpg
+*.jpeg
 *.png
+*.webp
+static/uploads/
 
 # QA / screenshot artefacts.
 qa-screenshots/

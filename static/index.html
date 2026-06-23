@@ -549,10 +549,6 @@
                                     <td class="toolbar-group">
                                       <button class="btn small" @click="openOrderDetail(row)">详情</button>
                                       <button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button>
-                                      <button v-if="canAdmin && !row.is_history_order" class="btn small danger" @click="rollbackOrderWorkflow(row)">撤回到未报料</button>
-                                      <button v-if="canSales" class="btn small" @click="changeOrderStatus(row,'closed')">已结档</button>
-                                      <button v-if="canSales" class="btn small danger" @click="changeOrderStatus(row,'dead')">死单</button>
-                                      <button v-if="canSales" class="btn small danger" @click="deleteWholeOrder(row)">删除订单</button>
                                     </td>
                                   </tr>
                                 </template>
@@ -829,10 +825,12 @@
                 </div>
                 <div v-if="showOrderEditDanger" style="margin-top:10px">
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-                    <button class="btn small danger" disabled>标记死单 / 作废</button>
-                    <button class="btn small danger" disabled>删除此订单组</button>
+                    <button v-if="canAdmin" class="btn small danger" @click="dangerRollbackOrderGroup()">撤回到未报料</button>
+                    <button class="btn small" @click="dangerChangeOrderGroupStatus('closed')">已结档</button>
+                    <button class="btn small danger" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
+                    <button class="btn small danger" @click="dangerDeleteOrderGroup()">删除此订单组</button>
                   </div>
-                  <div class="muted" style="font-size:11px;margin-top:6px">后端接口未接入，暂不可用（待后续添加 cancel / delete 路由后生效）</div>
+                  <div class="muted" style="font-size:11px;margin-top:6px">以上操作不可逆，均会要求填写原因或二次确认。撤回会删除关联送货/对账/开票/收款记录。</div>
                 </div>
               </div>
             </div>
@@ -1006,6 +1004,7 @@
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), remark: "", items: [] },
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
+            orderEditGroup: null,
             orderNumberPreview: "",
             orderImportBatch: { files: [], status: "idle" },
             orderImportDrafts: [],
@@ -1812,8 +1811,27 @@
               delivery_date: first.delivery_date || "",
               remark: first.remark || "",
             };
+            this.orderEditGroup = group;
             this.showOrderEditDanger = false;
             this.modal = { type:"orderEdit", title:`编辑客户订单组 ${group.customer_po || first.order_number}` };
+          },
+          async dangerRollbackOrderGroup() {
+            const orders = (this.orderEditGroup?.orders || []).filter(o => !o.is_history_order);
+            if (!orders.length) { this.showToast("无可撤回的订单（历史归档订单不可撤回）", true); return; }
+            for (const order of orders) { await this.rollbackOrderWorkflow(order); }
+            this.closeModal();
+          },
+          async dangerChangeOrderGroupStatus(status) {
+            const orders = this.orderEditGroup?.orders || [];
+            if (!orders.length) return;
+            for (const order of orders) { await this.changeOrderStatus(order, status); }
+            this.closeModal();
+          },
+          async dangerDeleteOrderGroup() {
+            const orders = this.orderEditGroup?.orders || [];
+            if (!orders.length) return;
+            for (const order of orders) { await this.deleteWholeOrder(order); }
+            this.closeModal();
           },
           async handleOrderCustomerChange() {
             if (!this.orderForm.items.length) this.addOrderItem();

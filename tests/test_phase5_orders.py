@@ -876,3 +876,114 @@ def test_invalid_later_row_rolls_back_auto_created_products(order_api_app) -> No
             is None
         )
         assert session.scalar(select(func.count()).select_from(Product)) == 2
+
+
+def _create_order(client: TestClient, *, customer_po: str, order_date: str) -> dict:
+    payload = _payload()
+    payload["customer_po"] = customer_po
+    payload["order_date"] = order_date
+    response = client.post("/api/orders", json=payload)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_back_dated_pdf_order_surfaces_at_top_of_business(order_api_app) -> None:
+    # Real bug: a PDF-imported order is back-dated to the document date, so the
+    # order_date-DESC sort buried it below newer-dated rows and the user thought
+    # it "disappeared" from 日常订单. Business must sort by creation time so the
+    # just-saved order — even when back-dated — shows at the top.
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        first = _create_order(client, customer_po="PO-RECENT", order_date="2026-06-13")
+        # saved AFTER the first one, but back-dated to an earlier document date
+        back_dated = _create_order(
+            client, customer_po="PO-PDF-OLD", order_date="2026-05-01"
+        )
+        business = client.get("/api/orders", params={"status": "business"})
+
+    assert business.status_code == 200, business.text
+    data = business.json()
+    ids = [row["id"] for row in data["items"]]
+    assert back_dated["id"] in ids, "back-dated PDF order must appear in business"
+    assert first["id"] in ids
+    # the most recently saved order ranks first despite its older order_date
+    assert data["items"][0]["id"] == back_dated["id"]
+
+
+def test_dead_order_is_excluded_from_business(order_api_app) -> None:
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = _create_order(
+            client, customer_po="PO-DEAD", order_date="2026-06-13"
+        )
+        marked = client.put(
+            f"/api/orders/{created['id']}/status",
+            json={"status": "dead", "remark": "客户取消"},
+        )
+        assert marked.status_code == 200, marked.text
+        business = client.get("/api/orders", params={"status": "business"})
+
+    assert business.status_code == 200
+    ids = [row["id"] for row in business.json()["items"]]
+    assert created["id"] not in ids
+
+
+def test_closed_order_is_excluded_from_business(order_api_app) -> None:
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = _create_order(
+            client, customer_po="PO-CLOSED", order_date="2026-06-13"
+        )
+        marked = client.put(
+            f"/api/orders/{created['id']}/status",
+            json={"status": "closed", "remark": "已结档归档"},
+        )
+        assert marked.status_code == 200, marked.text
+        business = client.get("/api/orders", params={"status": "business"})
+
+    assert business.status_code == 200
+    ids = [row["id"] for row in business.json()["items"]]
+    assert created["id"] not in ids
+
+
+def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> None:
+    from datetime import datetime
+
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        legacy = Order(
+            order_number="RUIDA-90001",
+            customer_id=1,
+            customer_po="LEGACY-PO",
+            order_date=date.fromisoformat("2020-01-02"),
+            delivery_date=date.fromisoformat("2020-01-10"),
+            status="pending_production",
+            payment_status="paid",
+            total_amount=Decimal("100.00"),
+            created_at=datetime(2026, 6, 20, 5, 0, 0),
+        )
+        session.add(legacy)
+        session.commit()
+        legacy_id = legacy.id
+
+    with TestClient(app) as client:
+        _login(client)
+        active = _create_order(
+            client, customer_po="PO-ACTIVE", order_date="2026-06-13"
+        )
+        business = client.get("/api/orders", params={"status": "business"})
+        history = client.get("/api/orders", params={"status": "history"})
+
+    # The response order_number is display-masked, so assert on stable ids.
+    business_ids = [row["id"] for row in business.json()["items"]]
+    history_ids = [row["id"] for row in history.json()["items"]]
+    # active order is in business, legacy RUIDA order is NOT
+    assert active["id"] in business_ids
+    assert legacy_id not in business_ids
+    # the legacy RUIDA order only shows under the explicit history view
+    assert legacy_id in history_ids

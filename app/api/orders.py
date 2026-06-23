@@ -81,6 +81,15 @@ FINAL_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled", 
 
 _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
 
+# Terminal / archived statuses that should NOT appear in the day-to-day
+# "business" (日常订单) view. Active orders — including freshly saved PDF
+# imports that are still pending_production / awaiting requisition — stay in
+# business. "completed" is intentionally kept (see
+# test_business_orders_show_completed_but_badge_counts_only_undelivered): a
+# finished-but-not-yet-archived order is still part of daily work, while the
+# unfinished badge only counts undelivered rows.
+_BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
+
 
 class OrderItemCreate(BaseModel):
     product_id: int | None = None
@@ -343,7 +352,10 @@ def list_orders(
 
     history_condition = Order.order_number.like("RUIDA-%")
     if status_filter == "business":
-        ids_query = ids_query.where(~history_condition)
+        ids_query = ids_query.where(
+            ~history_condition,
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+        )
     elif status_filter == "history":
         ids_query = ids_query.where(history_condition)
     elif status_filter == "unfinished":
@@ -392,7 +404,15 @@ def list_orders(
             )
         )
 
-    ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
+    # History (RUIDA legacy) keeps chronological order_date ordering. All other
+    # views — especially "business" — sort by creation time so a freshly saved
+    # order surfaces at the top even when its order_date is back-dated to the
+    # source document date (e.g. PDF imports), instead of being buried below
+    # newer-dated rows where users assume it "disappeared".
+    if status_filter == "history":
+        ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
+    else:
+        ids_query = ids_query.order_by(Order.created_at.desc(), Order.id.desc())
     total = db.scalar(select(func.count()).select_from(ids_query.subquery())) or 0
     page_ids = list(
         db.scalars(ids_query.offset((page - 1) * page_size).limit(page_size)).all()

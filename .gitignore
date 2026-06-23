@@ -46,6 +46,11 @@ customer_file_summary.json
 *.jpg
 *.jpeg
 *.webp
+
+# Exception: application UI assets (brand logo / favicon) are code, not data.
+!static/assets/
+!static/assets/logo.png
+!static/assets/logo.ico
 qa-screenshots/
 qa_screenshots/
 migration-reports/

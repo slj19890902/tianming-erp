@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>纸箱厂 ERP</title>
+    <title>天明包装ERP</title>
+    <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.26.0/dist/index.js"></script>
@@ -95,9 +96,9 @@
         background: linear-gradient(180deg, #fff, #edf4fb);
       }
       .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 800; }
-      .brand-mark {
-        width: 28px; height: 28px; display: grid; place-items: center;
-        border-radius: 5px; color: #fff; background: var(--primary);
+      .brand-logo {
+        width: 36px; height: 36px; border-radius: 6px; object-fit: contain;
+        flex: 0 0 auto; display: block;
       }
       .top-actions { display: flex; align-items: center; gap: 8px; }
       .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 0; }
@@ -297,7 +298,7 @@
     <div id="app" v-cloak>
       <div v-if="!user" class="login-shell">
         <form class="login-card" @submit.prevent="login">
-          <h1>纸箱厂 ERP</h1>
+          <h1><img src="/static/assets/logo.png" alt="天明包装ERP" style="width:40px;height:40px;vertical-align:middle;margin-right:8px;object-fit:contain" />天明包装ERP</h1>
           <p>订单、来料、送货、回单、对账、开票与收款闭环</p>
           <div class="field"><label>用户名</label><input class="input" v-model.trim="loginForm.username" autocomplete="username" /></div>
           <div class="field"><label>密码</label><input class="input" v-model="loginForm.password" type="password" autocomplete="current-password" /></div>
@@ -310,7 +311,7 @@
 
       <div v-else :class="['app-shell', `role-${user.role}`]">
         <header class="topbar">
-          <div class="brand"><span class="brand-mark">ERP</span><span>三级纸箱厂 ERP</span></div>
+          <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
             <span>{{ user.real_name || user.username }}</span>
             <span class="status blue">{{ roleLabel(user.role) }}</span>
@@ -1040,13 +1041,13 @@
           menus() {
             const items = [
               { key: "dashboard", label: "首页仪表盘" },
-              { key: "customers", label: "客户管理" },
-              { key: "products", label: "常用箱与材质" },
               { key: "orders", label: "订单管理", count: this.ordersUnfinishedTotal },
               { key: "requisition", label: "报料管理", count: this.requisitionPending.length },
               { key: "incoming", label: "仓库来料入库", count: this.incomingPending.length },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
+              { key: "customers", label: "客户管理" },
+              { key: "products", label: "常用箱与材质" },
               { key: "system", label: "系统备份" }
             ];
             const allowed = roleMenus[this.user?.role] || [];

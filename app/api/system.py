@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -20,12 +21,20 @@ from app.core.database import (
 from app.models.audit import OperationLog
 from app.models.user import User
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 admin_only = RoleChecker(["admin"])
 
+# 始终保留最新 N 个备份，不允许删除
+BACKUP_KEEP_COUNT = 5
+
 
 class RestoreRequest(BaseModel):
+    filename: str
+
+
+class DeleteRequest(BaseModel):
     filename: str
 
 
@@ -119,6 +128,35 @@ def _write_restore_audit(
         audit_engine.dispose()
 
 
+def _list_backup_files(backup_dir: Path) -> list[Path]:
+    """按修改时间降序返回备份目录下所有 .sqlite3 文件。"""
+    return sorted(
+        (
+            path
+            for path in backup_dir.iterdir()
+            if path.is_file() and path.suffix.lower() == ".sqlite3"
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _backup_location_type(backup_dir: Path) -> str:
+    """判断备份目录类型：nas（UNC 路径）或 local。"""
+    path_str = str(backup_dir)
+    if path_str.startswith("\\\\") or path_str.startswith("//"):
+        return "nas"
+    return "local"
+
+
+def _is_live_db(path: Path, database_path: Path) -> bool:
+    """判断文件路径是否与正在运行的数据库相同。"""
+    try:
+        return path.resolve() == database_path.resolve()
+    except OSError:
+        return False
+
+
 @router.get("/backups")
 def list_backups(
     _user: User = Depends(admin_only),
@@ -132,33 +170,47 @@ def list_backups(
                 status_code=503,
                 detail="NAS 备份盘当前不可达",
             )
-        return {"items": []}
-    try:
-        files = sorted(
-            (
-                path
-                for path in backup_dir.iterdir()
-                if path.is_file() and path.suffix.lower() == ".sqlite3"
-            ),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
         return {
-            "items": [
+            "items": [],
+            "backup_dir": str(backup_dir),
+            "location_type": _backup_location_type(backup_dir),
+            "total_count": 0,
+            "total_size": 0,
+            "protected_count": 0,
+            "deletable_count": 0,
+        }
+    try:
+        files = _list_backup_files(backup_dir)
+        items = []
+        for index, path in enumerate(files):
+            stat = path.stat()
+            is_protected = index < BACKUP_KEEP_COUNT
+            items.append(
                 {
                     "filename": path.name,
                     "created_at": datetime.fromtimestamp(
-                        path.stat().st_mtime
+                        stat.st_mtime
                     ).isoformat(timespec="seconds"),
-                    "size": path.stat().st_size,
+                    "size": stat.st_size,
+                    "is_protected": is_protected,
                 }
-                for path in files
-            ]
+            )
+        total_size = sum(item["size"] for item in items)
+        protected_count = min(len(items), BACKUP_KEEP_COUNT)
+        deletable_count = max(0, len(items) - BACKUP_KEEP_COUNT)
+        return {
+            "items": items,
+            "backup_dir": str(backup_dir),
+            "location_type": _backup_location_type(backup_dir),
+            "total_count": len(items),
+            "total_size": total_size,
+            "protected_count": protected_count,
+            "deletable_count": deletable_count,
         }
     except OSError as error:
         raise HTTPException(
             status_code=503,
-            detail="无法访问 NAS 备份目录",
+            detail="无法访问备份目录",
         ) from error
 
 
@@ -182,6 +234,174 @@ def create_backup(
         "sha256": result.sha256,
         "integrity_check": result.integrity_check,
     }
+
+
+@router.get("/backups/cleanup-preview")
+def cleanup_preview(
+    _user: User = Depends(admin_only),
+) -> dict:
+    """预览哪些备份会被清理（不执行删除）。"""
+    current = load_settings()
+    backup_dir = current.backup_dir
+    if not backup_dir.exists():
+        raise HTTPException(status_code=503, detail="备份目录不可达")
+    try:
+        files = _list_backup_files(backup_dir)
+    except OSError as error:
+        raise HTTPException(status_code=503, detail="无法访问备份目录") from error
+
+    will_keep = []
+    will_delete = []
+    for index, path in enumerate(files):
+        stat = path.stat()
+        entry = {
+            "filename": path.name,
+            "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(
+                timespec="seconds"
+            ),
+            "size": stat.st_size,
+        }
+        if index < BACKUP_KEEP_COUNT:
+            will_keep.append(entry)
+        else:
+            will_delete.append(entry)
+
+    freed_size = sum(item["size"] for item in will_delete)
+    return {
+        "will_keep": will_keep,
+        "will_delete": will_delete,
+        "freed_size": freed_size,
+        "deletable_count": len(will_delete),
+    }
+
+
+@router.post("/backups/cleanup")
+def cleanup_backups(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """一键清理旧备份，保留最新 BACKUP_KEEP_COUNT 个。"""
+    current = load_settings()
+    backup_dir = current.backup_dir
+    if not backup_dir.exists():
+        raise HTTPException(status_code=503, detail="备份目录不可达")
+    try:
+        files = _list_backup_files(backup_dir)
+    except OSError as error:
+        raise HTTPException(status_code=503, detail="无法访问备份目录") from error
+
+    to_delete = files[BACKUP_KEEP_COUNT:]
+    deleted_files: list[str] = []
+    freed_size = 0
+    errors: list[str] = []
+
+    for path in to_delete:
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            freed_size += size
+            deleted_files.append(path.name)
+            logger.info("备份已删除: %s，释放 %d 字节", path.name, size)
+        except OSError as exc:
+            errors.append(f"{path.name}: {exc}")
+            logger.warning("删除备份失败: %s — %s", path.name, exc)
+
+    # 审计日志
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="CLEANUP_BACKUPS",
+            resource="System",
+            details=json.dumps(
+                {
+                    "deleted_files": deleted_files,
+                    "freed_size": freed_size,
+                    "errors": errors,
+                },
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=user.username,
+            role=user.role,
+            entity_type="system",
+            description=f"管理员批量清理旧备份，共删除 {len(deleted_files)} 个",
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+
+    return {
+        "deleted": deleted_files,
+        "freed_size": freed_size,
+        "errors": errors,
+    }
+
+
+@router.delete("/backups/{filename}")
+def delete_backup(
+    filename: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """删除单个备份文件（禁止删除受保护的最新 BACKUP_KEEP_COUNT 个）。"""
+    current = load_settings()
+    backup_dir = current.backup_dir
+
+    # 路径安全校验优先（返回 400，与目录是否存在无关）
+    target = _safe_backup_path(backup_dir, filename)
+
+    if not backup_dir.exists():
+        raise HTTPException(status_code=503, detail="备份目录不可达")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="备份文件不存在")
+
+    # 禁止删除正在使用的数据库文件
+    if _is_live_db(target, current.database_path):
+        raise HTTPException(status_code=409, detail="不能删除正在使用的数据库文件")
+
+    # 确认文件是否在保护范围内（最新 BACKUP_KEEP_COUNT 个）
+    try:
+        files = _list_backup_files(backup_dir)
+    except OSError as error:
+        raise HTTPException(status_code=503, detail="无法访问备份目录") from error
+
+    protected_names = {path.name for path in files[:BACKUP_KEEP_COUNT]}
+    if filename in protected_names:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该备份在最新 {BACKUP_KEEP_COUNT} 个受保护备份中，不允许删除",
+        )
+
+    try:
+        freed_size = target.stat().st_size
+        target.unlink()
+        logger.info("备份已删除: %s，释放 %d 字节（操作人: %s）", filename, freed_size, user.username)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="删除文件失败") from exc
+
+    # 审计日志
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="DELETE_BACKUP",
+            resource="System",
+            details=json.dumps(
+                {"filename": filename, "freed_size": freed_size},
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=user.username,
+            role=user.role,
+            entity_type="system",
+            description=f"管理员删除备份文件 {filename}",
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+
+    return {"deleted": filename, "freed_size": freed_size}
 
 
 @router.post("/backups/restore")

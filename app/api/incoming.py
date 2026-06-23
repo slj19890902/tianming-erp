@@ -228,6 +228,17 @@ def recently_received_items(
     return {"items": _rows(db, received_since=_utc_now() - timedelta(hours=24))}
 
 
+@router.get("/history")
+def history_received_items(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """返回全部历史入库记录（不限时间）。"""
+    # received_since=epoch_start 表示"从最早时间起"即不过滤
+    epoch_start = datetime(2000, 1, 1)
+    return {"items": _rows(db, received_since=epoch_start)}
+
+
 def _lan_ip() -> str:
     connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:

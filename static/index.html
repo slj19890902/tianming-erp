@@ -641,10 +641,11 @@
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:incomingTab==='pending'}]" @click="incomingTab='pending'">待入库 {{ incomingPending.length }}</button>
                   <button :class="['btn',{primary:incomingTab==='received'}]" @click="incomingTab='received'">今日已入库 {{ incomingReceived.length }}</button>
+                  <button :class="['btn',{primary:incomingTab==='history'}]" @click="incomingTab='history'; loadIncomingHistory()">历史入库</button>
                 </div>
                 <button class="btn" @click="loadIncoming()">刷新</button>
               </div>
-              <data-panel :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length">
+              <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length">
                 <table>
                   <thead><tr><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>报料日期</th><th>PDF图纸</th><th>操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.item_id">
@@ -657,6 +658,27 @@
                   </tr></tbody>
                 </table>
               </data-panel>
+              <div v-else>
+                <div class="status orange" style="display:block;margin:8px 0">历史入库：显示全部已入库记录。仅管理员可执行撤销入库（订单已发货则禁止撤销）。</div>
+                <data-panel :empty="!incomingHistory.length">
+                  <table>
+                    <thead><tr><th>入库时间</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>操作</th></tr></thead>
+                    <tbody><tr v-for="row in incomingHistory" :key="row.item_id">
+                      <td>{{ row.material_received_at ? formatDateTime(row.material_received_at) : "-" }}</td>
+                      <td>{{ row.display_order_number || row.order_number || "-" }}</td>
+                      <td>{{ row.customer_name }}</td>
+                      <td>{{ row.product_code || "-" }}</td>
+                      <td>{{ row.product_name }}</td>
+                      <td>{{ row.material || "-" }}</td>
+                      <td><strong>{{ row.incoming_quantity }}</strong></td>
+                      <td>
+                        <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销入库</button>
+                        <span v-else class="muted">-</span>
+                      </td>
+                    </tr></tbody>
+                  </table>
+                </data-panel>
+              </div>
             </template>
 
             <template v-else-if="activePage === 'deliveries'">
@@ -693,9 +715,55 @@
                 <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in systemUsers" :key="row.id"><td>{{ row.username }}</td><td>{{ row.real_name }}</td><td>{{ roleLabel(row.role) }}</td><td>{{ row.must_change_password ? "是" : "否" }}</td><td><button class="btn small danger" @click="openResetPassword(row)">重置密码</button></td></tr></tbody></table></div>
               </div>
-              <div class="section-title">NAS 备份</div>
-              <div class="toolbar"><button class="btn primary" @click="createBackup">立即备份到 NAS</button><button class="btn" @click="loadBackups">刷新列表</button></div>
-              <data-panel :empty="!backups.length"><table><thead><tr><th>文件名</th><th>创建时间</th><th>大小</th></tr></thead><tbody><tr v-for="row in backups" :key="row.filename"><td>{{ row.filename }}</td><td>{{ row.created_at }}</td><td>{{ fileSize(row.size) }}</td></tr></tbody></table></data-panel>
+              <div class="section-title">数据备份</div>
+              <div class="panel" style="margin-bottom:10px;padding:12px 16px">
+                <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
+                  <span><strong>备份位置：</strong>{{ backupStats.location_type === 'nas' ? 'NAS 网络存储' : '本地磁盘' }}</span>
+                  <span class="muted">{{ backupStats.backup_dir || '-' }}</span>
+                  <span><strong>共 {{ backupStats.total_count || 0 }} 个</strong>，占用 {{ fileSize(backupStats.total_size || 0) }}</span>
+                  <span>受保护 <strong>{{ backupStats.protected_count || 0 }}</strong> 个 · 可清理 <strong style="color:#dc2626">{{ backupStats.deletable_count || 0 }}</strong> 个</span>
+                </div>
+              </div>
+              <div class="toolbar">
+                <button class="btn primary" @click="createBackup" :disabled="loading">立即备份</button>
+                <button class="btn" @click="loadBackups">刷新列表</button>
+                <button v-if="(backupStats.deletable_count || 0) > 0" class="btn danger" @click="previewCleanup">一键清理旧备份…</button>
+              </div>
+              <data-panel :empty="!backups.length">
+                <table><thead><tr><th>文件名</th><th>创建时间</th><th>大小</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in backups" :key="row.filename">
+                  <td style="font-size:12px;word-break:break-all">{{ row.filename }}</td>
+                  <td>{{ row.created_at }}</td>
+                  <td>{{ fileSize(row.size) }}</td>
+                  <td><span :class="row.is_protected ? 'status green' : 'status'">{{ row.is_protected ? '已保护' : '可删除' }}</span></td>
+                  <td>
+                    <button v-if="row.is_protected" class="btn small" disabled title="最新5个备份受保护">已保护</button>
+                    <button v-else class="btn small danger" @click="deleteBackup(row)">删除</button>
+                  </td>
+                </tr></tbody></table>
+              </data-panel>
+              <!-- 清理预览弹层 -->
+              <div v-if="showCleanupPreview" class="modal-mask" @click.self="showCleanupPreview=false">
+                <div class="modal" style="max-width:700px">
+                  <div class="modal-head"><strong>清理旧备份 — 预览</strong><button class="btn small" @click="showCleanupPreview=false">关闭</button></div>
+                  <div class="modal-body">
+                    <div v-if="backupCleanupPreview" style="margin-bottom:12px">
+                      <div class="status orange" style="display:block;margin-bottom:10px">将删除 {{ backupCleanupPreview.deletable_count }} 个旧备份，释放约 {{ fileSize(backupCleanupPreview.freed_size) }}。以下 {{ backupCleanupPreview.will_keep.length }} 个备份将被保留：</div>
+                      <table style="margin-bottom:12px"><thead><tr><th>保留（最新5个）</th><th>创建时间</th><th>大小</th></tr></thead>
+                        <tbody><tr v-for="f in backupCleanupPreview.will_keep" :key="f.filename"><td style="font-size:12px">{{ f.filename }}</td><td>{{ f.created_at }}</td><td>{{ fileSize(f.size) }}</td></tr></tbody>
+                      </table>
+                      <div style="color:#dc2626;margin-bottom:6px">以下 {{ backupCleanupPreview.will_delete.length }} 个备份将被永久删除：</div>
+                      <table><thead><tr><th>删除</th><th>创建时间</th><th>大小</th></tr></thead>
+                        <tbody><tr v-for="f in backupCleanupPreview.will_delete" :key="f.filename" style="color:#dc2626"><td style="font-size:12px">{{ f.filename }}</td><td>{{ f.created_at }}</td><td>{{ fileSize(f.size) }}</td></tr></tbody>
+                      </table>
+                    </div>
+                    <div class="toolbar-group" style="justify-content:flex-end">
+                      <button class="btn" @click="showCleanupPreview=false">取消</button>
+                      <button class="btn danger" @click="confirmCleanup" :disabled="loading">确认删除旧备份</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </template>
           </main>
         </div>
@@ -976,9 +1044,11 @@
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
-            pendingStatements: [], backups: [], systemUsers: [], expandedOrders: {},
+            pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
+            systemUsers: [], expandedOrders: {},
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
-            incomingTab: "pending", incomingPending: [], incomingReceived: [],
+            incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
+            productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
@@ -1156,6 +1226,13 @@
           window.erpCheckingSession = true;
           await this.checkSession();
           window.erpCheckingSession = false;
+          // ESC 关闭弹层（含防呆检查）
+          document.addEventListener("keydown", (e) => {
+            if (e.key !== "Escape") return;
+            if (!this.modal || this.isForcedPassword) return;
+            if (this.modal.type === "order" || this.modal.type === "orderEdit") return;
+            this.closeModal();
+          });
         },
         methods: {
           roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",workshop:"车间"})[role] || role; },
@@ -1461,9 +1538,22 @@
             if (!reason?.trim()) return;
             try {
               await axios.put(`/api/incoming/revert/${row.item_id}`,{reason:reason.trim()});
-              await Promise.all([this.loadIncoming(),this.loadKpi()]);
+              if (this.incomingTab === 'history') {
+                await Promise.all([this.loadIncomingHistory(), this.loadKpi()]);
+              } else {
+                await Promise.all([this.loadIncoming(), this.loadKpi()]);
+              }
               this.showToast("已撤回来料入库");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async loadIncomingHistory() {
+            try {
+              const { data } = await axios.get("/api/incoming/history");
+              this.incomingHistory = (data.items || []).map(row => ({
+                ...row,
+                incoming_quantity: Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)
+              }));
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async loadDeliveries() {
             const [list, pending] = await Promise.all([
@@ -1481,7 +1571,18 @@
             this.statements = statements.data.items; this.statementsTotal = statements.data.total;
             this.invoices = invoices.data.items; this.invoicesTotal = invoices.data.total;
           },
-          async loadBackups() { this.backups = (await axios.get("/api/system/backups")).data.items; },
+          async loadBackups() {
+            const { data } = await axios.get("/api/system/backups");
+            this.backups = data.items || [];
+            this.backupStats = {
+              backup_dir: data.backup_dir,
+              location_type: data.location_type,
+              total_count: data.total_count || 0,
+              total_size: data.total_size || 0,
+              protected_count: data.protected_count || 0,
+              deletable_count: data.deletable_count || 0,
+            };
+          },
           async loadSystem() {
             const [backups, users] = await Promise.all([
               axios.get("/api/system/backups"),
@@ -1511,7 +1612,26 @@
             if (row?.id) detail = (await axios.get(`/api/master/products/${row.id}`)).data;
             this.productForm = detail ? { ...blankProduct(), ...JSON.parse(JSON.stringify(detail)) } : { ...blankProduct(), customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null, drawings:[] };
             this.drawingFile = null;
+            // 拍快照用于检测未保存更改
+            this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
             this.modal = { type:"product", title: row ? "编辑产品" : "新增产品" };
+          },
+          _productFormSaveFields() {
+            const f = this.productForm;
+            return {
+              customer_id: f.customer_id, product_code: f.product_code,
+              customer_material_code: f.customer_material_code, product_name: f.product_name,
+              material_id: f.material_id, box_category: f.box_category,
+              length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
+              print_content: f.print_content, production_process: f.production_process,
+              sale_unit_price: f.sale_unit_price, remark: f.remark,
+            };
+          },
+          _productFormDirty() {
+            if (this.modal?.type !== "product") return false;
+            if (this.productFormSnapshot === null) return false;
+            if (this.drawingFile !== null) return true;
+            return JSON.stringify(this._productFormSaveFields()) !== this.productFormSnapshot;
           },
           async deleteProductDrawing(drawing) {
             if (!confirm("确定删除该版本图纸吗？")) return;
@@ -1996,6 +2116,7 @@
           },
           onModalMaskClick() {
             if (this.modal?.type === "order" || this.modal?.type === "orderEdit") return;
+            if (this._productFormDirty()) return; // 有未保存更改，禁止点遮罩关闭
             this.closeModal();
           },
           async cancelRequisition(row) {
@@ -2037,7 +2158,14 @@
             this.pendingStatements = (await axios.get("/api/finance/pending_statements", { params:{ customer_id:this.statementForm.customer_id } })).data.items
               .filter(row => String(row.actual_received_date).startsWith(this.statementForm.statement_month));
           },
-          closeModal() { if (!this.isForcedPassword) this.modal = null; },
+          closeModal() {
+            if (this.isForcedPassword) return;
+            if (this._productFormDirty()) {
+              if (!confirm("表单有未保存的修改，确定要关闭吗？")) return;
+            }
+            this.modal = null;
+            this.productFormSnapshot = null;
+          },
           async saveModal() {
             this.loading = true;
             try {
@@ -2211,6 +2339,38 @@
             try { const {data}=await axios.post("/api/system/backups"); await this.loadBackups(); this.showToast(`备份成功：${data.filename}`); }
             catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading=false; }
+          },
+          async deleteBackup(row) {
+            if (!confirm(`确认删除备份文件：\n${row.filename}\n此操作不可恢复！`)) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.delete(`/api/system/backups/${encodeURIComponent(row.filename)}`);
+              await this.loadBackups();
+              this.showToast(`已删除 ${data.deleted}，释放 ${this.fileSize(data.freed_size)}`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async previewCleanup() {
+            this.loading = true;
+            try {
+              const { data } = await axios.get("/api/system/backups/cleanup-preview");
+              this.backupCleanupPreview = data;
+              this.showCleanupPreview = true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async confirmCleanup() {
+            if (!confirm(`确认删除 ${this.backupCleanupPreview?.deletable_count || 0} 个旧备份？此操作不可恢复！`)) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post("/api/system/backups/cleanup");
+              this.showCleanupPreview = false;
+              await this.loadBackups();
+              const freed = this.fileSize(data.freed_size || 0);
+              const msg = `已清理 ${data.deleted?.length || 0} 个备份，释放 ${freed}`;
+              this.showToast(data.errors?.length ? `${msg}（${data.errors.length} 个失败）` : msg);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
           }
         }
       });

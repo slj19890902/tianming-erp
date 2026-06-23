@@ -186,6 +186,161 @@ def test_restore_rejects_unsafe_backup_filename(
     assert response.status_code == 400
 
 
+def _plant_fake_backups(backup_dir: Path, count: int) -> list[str]:
+    """在备份目录直接创建 count 个哑备份文件（绕过 backup_to_nas 自动清理）。"""
+    import time
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    names = []
+    for i in range(count):
+        name = f"fake_backup_{i:04d}.sqlite3"
+        path = backup_dir / name
+        # 写入最小合法 SQLite 文件头（16 KB 零填充即可被统计大小）
+        path.write_bytes(b"\x53\x51\x4c\x69\x74\x65\x20\x66\x6f\x72\x6d\x61\x74\x20\x33\x00" + b"\x00" * 1000)
+        # 确保每个文件 mtime 递增，排序稳定
+        mtime = 1_000_000 + i
+        import os
+        os.utime(path, (mtime, mtime))
+        names.append(name)
+    return names
+
+
+def test_list_backups_returns_stats_and_protection_flags(system_api_app) -> None:
+    """list_backups 包含统计字段，文件按修改时间最新排列，前5个标记 is_protected=True。"""
+    app, _, backup_dir = system_api_app
+    _plant_fake_backups(backup_dir, 6)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        listed = client.get("/api/system/backups")
+
+    assert listed.status_code == 200, listed.text
+    data = listed.json()
+    assert data["total_count"] == 6
+    assert data["protected_count"] == 5
+    assert data["deletable_count"] == 1
+    assert data["total_size"] > 0
+    assert data["location_type"] in ("local", "nas")
+    items = data["items"]
+    assert len(items) == 6
+    # 前5受保护，第6个可删除
+    for item in items[:5]:
+        assert item["is_protected"] is True
+    assert items[5]["is_protected"] is False
+
+
+def test_delete_single_backup_succeeds_for_deletable_file(system_api_app) -> None:
+    """可以删除超出保护范围的备份，返回 freed_size，列表缩短。"""
+    app, _, backup_dir = system_api_app
+    _plant_fake_backups(backup_dir, 6)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        listed = client.get("/api/system/backups").json()
+        deletable = next(f for f in listed["items"] if not f["is_protected"])
+        deleted = client.delete(f"/api/system/backups/{deletable['filename']}")
+        after = client.get("/api/system/backups").json()
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] == deletable["filename"]
+    assert deleted.json()["freed_size"] > 0
+    assert after["total_count"] == 5
+
+
+def test_delete_protected_backup_is_rejected(system_api_app) -> None:
+    """尝试删除受保护（最新5个之内）的备份，返回 409。"""
+    app, _, backup_dir = system_api_app
+    _plant_fake_backups(backup_dir, 3)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        listed = client.get("/api/system/backups").json()
+        protected_name = listed["items"][0]["filename"]
+        response = client.delete(f"/api/system/backups/{protected_name}")
+
+    assert response.status_code == 409
+    assert "保护" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [r"C:\absolute.sqlite3", "not-a-db.txt"],
+)
+def test_delete_rejects_unsafe_filenames(system_api_app, filename: str) -> None:
+    """绝对路径、非 .sqlite3 扩展名均返回 400。"""
+    app, _, _ = system_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.delete(f"/api/system/backups/{filename}")
+
+    assert response.status_code == 400
+
+
+def test_delete_rejects_path_traversal(system_api_app) -> None:
+    """路径遍历（../ 前缀）被 HTTP 层或后端拒绝，访问无效（返回 400 或 404）。"""
+    app, _, _ = system_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        # HTTP 层可能在路由前规范化路径，导致 404；后端校验返回 400；均可接受
+        response = client.delete("/api/system/backups/../evil.sqlite3")
+    assert response.status_code in (400, 404)
+
+
+def test_cleanup_preview_shows_correct_split(system_api_app) -> None:
+    """cleanup-preview 返回 will_keep（最新5个）和 will_delete（其余）。"""
+    app, _, backup_dir = system_api_app
+    _plant_fake_backups(backup_dir, 7)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        preview = client.get("/api/system/backups/cleanup-preview")
+
+    assert preview.status_code == 200, preview.text
+    data = preview.json()
+    assert len(data["will_keep"]) == 5
+    assert len(data["will_delete"]) == 2
+    assert data["deletable_count"] == 2
+    assert data["freed_size"] > 0
+
+
+def test_cleanup_bulk_deletes_old_backups_and_logs_audit(system_api_app) -> None:
+    """POST /backups/cleanup 删除旧备份，保留最新5个，写入审计日志。"""
+    app, database_path, backup_dir = system_api_app
+    _plant_fake_backups(backup_dir, 8)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        before = client.get("/api/system/backups").json()
+        assert before["total_count"] == 8
+
+        cleaned = client.post("/api/system/backups/cleanup")
+        after = client.get("/api/system/backups").json()
+
+    assert cleaned.status_code == 200, cleaned.text
+    result = cleaned.json()
+    assert len(result["deleted"]) == 3
+    assert result["freed_size"] > 0
+    assert result["errors"] == []
+    assert after["total_count"] == 5
+    # 审计日志已写入
+    with sqlite3.connect(database_path) as connection:
+        action = connection.execute(
+            "SELECT action FROM operation_logs WHERE action='CLEANUP_BACKUPS' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert action == ("CLEANUP_BACKUPS",)
+
+
+def test_delete_backup_writes_audit_log(system_api_app) -> None:
+    """DELETE /backups/{filename} 写入 DELETE_BACKUP 审计记录。"""
+    app, database_path, backup_dir = system_api_app
+    _plant_fake_backups(backup_dir, 6)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        listed = client.get("/api/system/backups").json()
+        deletable = next(f for f in listed["items"] if not f["is_protected"])
+        client.delete(f"/api/system/backups/{deletable['filename']}")
+    with sqlite3.connect(database_path) as connection:
+        action = connection.execute(
+            "SELECT action FROM operation_logs WHERE action='DELETE_BACKUP' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert action == ("DELETE_BACKUP",)
+
+
 def test_wildcard_and_public_cors_origins_are_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

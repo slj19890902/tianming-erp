@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>送货单打印</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #eef1f4;
+      color: #111;
+      font-family: "Microsoft YaHei", "SimSun", sans-serif;
+    }
+    .toolbar {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      padding: 16px;
+    }
+    .toolbar button, .toolbar a {
+      min-width: 120px;
+      border: 0;
+      border-radius: 6px;
+      padding: 11px 20px;
+      background: #1d4ed8;
+      color: #fff;
+      cursor: pointer;
+      font-size: 16px;
+      text-align: center;
+      text-decoration: none;
+    }
+    .sheet {
+      width: 210mm;
+      min-height: 140mm;
+      margin: 0 auto 24px;
+      padding: 10mm 12mm;
+      background: #fff;
+      box-shadow: 0 2px 14px rgba(0,0,0,.12);
+    }
+    .company {
+      margin: 0;
+      text-align: center;
+      font-family: "SimSun", serif;
+      font-size: 26px;
+      letter-spacing: 3px;
+    }
+    .document-title {
+      margin: 4px 0 7px;
+      text-align: center;
+      font-family: "SimSun", serif;
+      font-size: 22px;
+      letter-spacing: 10px;
+    }
+    .factory-address {
+      padding-bottom: 7px;
+      border-bottom: 2px solid #111;
+      text-align: center;
+      font-size: 12px;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: 1.35fr 1fr;
+      gap: 3px 28px;
+      padding: 8px 0;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .meta-row {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      min-width: 0;
+    }
+    .meta-value {
+      min-height: 22px;
+      border-bottom: 1px solid #555;
+      overflow-wrap: anywhere;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+    th, td {
+      height: 31px;
+      border: 1px solid #111;
+      padding: 4px 6px;
+      text-align: center;
+      vertical-align: middle;
+      overflow-wrap: anywhere;
+    }
+    th { font-weight: 700; }
+    .description { text-align: left; }
+    .total {
+      padding: 9px 2px 6px;
+      text-align: right;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .copies {
+      padding: 5px 0;
+      border-top: 1px solid #111;
+      border-bottom: 1px solid #111;
+      text-align: center;
+      font-size: 13px;
+      word-spacing: 14px;
+    }
+    .signatures {
+      display: grid;
+      grid-template-columns: 1fr 1.5fr 1fr;
+      gap: 22px;
+      padding-top: 16px;
+      font-size: 13px;
+    }
+    .signature-line {
+      display: inline-block;
+      width: calc(100% - 70px);
+      min-width: 80px;
+      border-bottom: 1px solid #111;
+    }
+    .opened-at {
+      margin-top: 17px;
+      text-align: right;
+      font-size: 12px;
+    }
+    .error {
+      margin: 30px auto;
+      max-width: 700px;
+      padding: 24px;
+      border: 1px solid #dc2626;
+      background: #fff;
+      color: #991b1b;
+      text-align: center;
+    }
+    @page {
+      size: A4 landscape;
+      margin: 8mm;
+    }
+    @media print {
+      body { background: #fff; }
+      .no-print { display: none !important; }
+      .sheet {
+        width: auto;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <button id="printButton" type="button">确认打印</button>
+    <a href="/" aria-label="返回系统">返回系统</a>
+  </div>
+
+  <div id="errorBox" class="error" hidden></div>
+
+  <main id="sheet" class="sheet" hidden>
+    <h1 class="company">苏州天明包装有限公司</h1>
+    <h2 class="document-title">送货单</h2>
+    <div class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
+
+    <section class="meta">
+      <div class="meta-row"><span>客户名称：</span><span id="customerName" class="meta-value"></span></div>
+      <div class="meta-row"><span>送货单号：</span><span id="deliveryNumber" class="meta-value"></span></div>
+      <div class="meta-row"><span>联系电话：</span><span id="customerPhone" class="meta-value"></span></div>
+      <div class="meta-row"><span>送货日期：</span><span id="deliveryDate" class="meta-value"></span></div>
+      <div class="meta-row"><span>客户地址：</span><span id="customerAddress" class="meta-value"></span></div>
+      <div class="meta-row"><span>车牌号码：</span><span id="vehicleNumber" class="meta-value"></span></div>
+    </section>
+
+    <table>
+      <colgroup>
+        <col style="width:18%">
+        <col style="width:43%">
+        <col style="width:11%">
+        <col style="width:11%">
+        <col style="width:17%">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>客户单号</th>
+          <th>款号</th>
+          <th>单位(PCS)</th>
+          <th>数量</th>
+          <th>备注</th>
+        </tr>
+      </thead>
+      <tbody id="itemRows"></tbody>
+    </table>
+
+    <div class="total">送货总量：<span id="totalQuantity"></span></div>
+    <div class="copies">白联:存档　红联:客户　黄联:回单</div>
+    <section class="signatures">
+      <div>送货人：<span class="signature-line"></span></div>
+      <div>收货单位(签章)：<span class="signature-line"></span></div>
+      <div>经手人：<span class="signature-line"></span></div>
+    </section>
+    <div class="opened-at">开单时间：<span id="createdAt"></span></div>
+  </main>
+
+  <script>
+    const escapeHtml = (value) => String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+    function showError(message) {
+      document.getElementById("errorBox").textContent = message;
+      document.getElementById("errorBox").hidden = false;
+      document.getElementById("sheet").hidden = true;
+    }
+
+    async function loadDelivery() {
+      const id = new URLSearchParams(window.location.search).get("id");
+      if (!id || !/^\d+$/.test(id)) {
+        showError("缺少有效的送货单 ID。");
+        return;
+      }
+      try {
+        const response = await fetch(`/api/deliveries/${id}/print`, {
+          credentials: "same-origin",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) {
+          throw new Error("登录已失效，请返回系统登录后重新打印。");
+        }
+        if (!response.ok) {
+          throw new Error(data.detail || "读取送货单失败。");
+        }
+        document.getElementById("customerName").textContent = data.customer.name || "";
+        document.getElementById("customerPhone").textContent = data.customer.phone || "";
+        document.getElementById("customerAddress").textContent = data.customer.address || "";
+        document.getElementById("deliveryNumber").textContent = data.delivery_number || "";
+        document.getElementById("deliveryDate").textContent = data.delivery_date || "";
+        document.getElementById("vehicleNumber").textContent = data.vehicle_number || "";
+        document.getElementById("totalQuantity").textContent = data.total_quantity ?? 0;
+        document.getElementById("createdAt").textContent = data.created_at
+          ? new Date(`${data.created_at}Z`).toLocaleString("zh-CN", { hour12: false })
+          : "";
+        document.getElementById("itemRows").innerHTML = data.items.map((item) => {
+          const description = item.product_code || "";
+          return `<tr>
+            <td>${escapeHtml(item.customer_po)}</td>
+            <td class="description">${escapeHtml(description)}</td>
+            <td>${escapeHtml(item.unit)}</td>
+            <td>${escapeHtml(item.quantity)}</td>
+            <td>${escapeHtml(item.remarks)}</td>
+          </tr>`;
+        }).join("");
+        document.getElementById("sheet").hidden = false;
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    document.getElementById("printButton").addEventListener("click", () => window.print());
+    loadDelivery();
+  </script>
+</body>
+</html>

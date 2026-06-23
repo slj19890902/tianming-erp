@@ -1,0 +1,88 @@
+:root {
+  font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+  font-size: 18px;
+  color: #111827;
+  background: #d7e3f1;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1180px;
+}
+
+body.mobile-wms-mode {
+  min-width: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.tm-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(#edf5ff, #c8dcf2);
+  border: 1px solid #8ea9c5;
+}
+
+.tm-card {
+  background: #fff;
+  border: 1px solid #8fa8c4;
+  box-shadow: 0 2px 8px rgba(31, 41, 55, 0.12);
+}
+
+.tm-section-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f2e53;
+}
+
+.tm-muted {
+  color: #5b6472;
+}
+
+.tm-status-ok {
+  color: #0f7a32;
+  font-weight: 800;
+}
+
+.tm-status-warn {
+  color: #b45309;
+  font-weight: 800;
+}
+
+@media print {
+  body {
+    background: #fff;
+    min-width: 0;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

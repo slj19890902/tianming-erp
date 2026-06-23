@@ -1,0 +1,53 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.test-tmp/
+
+# Generated locally; never commit application secrets.
+data/session_secret.key
+.env
+logs/
+import_requisition_report.log
+
+# Factory production data NEVER goes to GitHub — local only.
+data/
+*.sqlite3
+*.sqlite3.*
+*.sqlite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.server.pid
+
+# Secrets / env / keys — never commit.
+.env.*
+*.key
+*.bak
+docs/migration_reports/config_backups/
+
+# Backups, uploads, logs — local only.
+backups/
+data/backups/
+static/uploads/
+.superpowers/
+*.log
+.claude/settings.local.json
+
+# Local business-data summaries (contain real customer file names / paths).
+customer_file_summary.json
+
+# Bulky binary inputs / artifacts — keep out of GitHub.
+*.xlsx
+*.xls
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+qa-screenshots/
+qa_screenshots/
+migration-reports/
+migration-workfiles/
+reference_screenshots_contact_sheet.jpg

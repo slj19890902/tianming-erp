@@ -1,0 +1,1661 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>客户管理 - 三级纸箱厂 ERP</title>
+    <style>
+      :root {
+        --bg: #edf2f6;
+        --surface: #ffffff;
+        --surface-soft: #f7f9fb;
+        --line: #d7e0e8;
+        --line-strong: #bcc9d5;
+        --text: #17212b;
+        --muted: #617182;
+        --primary: #176aa6;
+        --primary-dark: #0e4d7a;
+        --green: #19723a;
+        --green-soft: #e8f5ec;
+        --orange: #a84b0f;
+        --orange-soft: #fff2e6;
+        --red: #b42318;
+        --red-soft: #fff0ee;
+        --shadow: 0 10px 28px rgba(33, 51, 68, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: 52px 1fr;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 16px;
+        background: #fff;
+        border-bottom: 1px solid var(--line-strong);
+      }
+
+      .brand,
+      .top-actions,
+      .toolbar,
+      .toolbar-group,
+      .filter-actions,
+      .pagination,
+      .pagination-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        background: var(--primary);
+        border-radius: 5px;
+        font-weight: 800;
+      }
+
+      .brand strong {
+        font-size: 16px;
+      }
+
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 210px minmax(0, 1fr);
+      }
+
+      .sidebar {
+        padding: 12px 9px;
+        background: #f8fafb;
+        border-right: 1px solid var(--line-strong);
+      }
+
+      .nav-title {
+        padding: 8px 10px 5px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .nav-link {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        min-height: 36px;
+        padding: 7px 10px;
+        margin-bottom: 3px;
+        color: #2f4050;
+        text-decoration: none;
+        border: 1px solid transparent;
+        border-radius: 4px;
+      }
+
+      .nav-link:hover {
+        background: #edf4f9;
+      }
+
+      .nav-link.active {
+        color: var(--primary-dark);
+        background: #dceefa;
+        border-color: #9fc9e6;
+        font-weight: 700;
+      }
+
+      .main {
+        min-width: 0;
+        padding: 14px;
+      }
+
+      .page-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 3px;
+        font-size: 21px;
+      }
+
+      .page-head p,
+      .muted {
+        color: var(--muted);
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(130px, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .summary-item {
+        min-height: 78px;
+        padding: 11px 12px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+
+      .summary-item span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .summary-item strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 23px;
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+
+      .filters {
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) 180px auto;
+        gap: 10px;
+        align-items: end;
+        padding: 11px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface-soft);
+      }
+
+      .field label {
+        display: block;
+        margin-bottom: 4px;
+        color: #405262;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .input,
+      .select,
+      .textarea {
+        width: 100%;
+        min-height: 35px;
+        padding: 7px 9px;
+        color: var(--text);
+        background: #fff;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        outline: none;
+      }
+
+      .textarea {
+        min-height: 76px;
+        resize: vertical;
+      }
+
+      .input:focus,
+      .select:focus,
+      .textarea:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(23, 106, 166, 0.12);
+      }
+
+      .toolbar {
+        justify-content: space-between;
+        min-height: 50px;
+        padding: 8px 11px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .btn {
+        min-height: 34px;
+        padding: 6px 11px;
+        color: #263746;
+        background: #fff;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+      }
+
+      .btn:hover {
+        background: #f1f5f8;
+      }
+
+      .btn.primary {
+        color: #fff;
+        background: var(--primary);
+        border-color: var(--primary);
+      }
+
+      .btn.primary:hover {
+        background: var(--primary-dark);
+      }
+
+      .btn.danger {
+        color: var(--red);
+        border-color: #e4aaa5;
+      }
+
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .table-scroll {
+        overflow: auto;
+      }
+
+      table {
+        width: 100%;
+        min-width: 1180px;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      th,
+      td {
+        padding: 9px 8px;
+        border-bottom: 1px solid #e4eaf0;
+        text-align: left;
+        vertical-align: middle;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        color: #3c4d5d;
+        background: #f2f6f9;
+        font-size: 12px;
+      }
+
+      tbody tr {
+        cursor: pointer;
+      }
+
+      tbody tr:hover {
+        background: #f3f8fc;
+      }
+
+      tbody tr.selected {
+        background: #e4f2fb;
+        box-shadow: inset 3px 0 0 var(--primary);
+      }
+
+      .cell-main {
+        display: block;
+        font-weight: 700;
+      }
+
+      .cell-sub {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 23px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .status.active {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .status.inactive {
+        color: #5f6872;
+        background: #e8ebee;
+      }
+
+      .pagination {
+        justify-content: space-between;
+        min-height: 48px;
+        padding: 8px 11px;
+        background: #fafcfd;
+      }
+
+      .empty,
+      .loading {
+        padding: 40px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .drawer-mask,
+      .modal-mask {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        background: rgba(20, 31, 42, 0.38);
+      }
+
+      .drawer {
+        position: absolute;
+        inset: 0 0 0 auto;
+        width: min(660px, 94vw);
+        display: grid;
+        grid-template-rows: auto 1fr;
+        background: #fff;
+        box-shadow: -12px 0 30px rgba(25, 39, 52, 0.18);
+      }
+
+      .drawer-head,
+      .modal-head,
+      .modal-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px;
+        background: #f7f9fb;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .drawer-head h2,
+      .modal-head h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .drawer-body {
+        overflow: auto;
+        padding: 14px;
+      }
+
+      .detail-section {
+        padding: 0 0 16px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .detail-section h3 {
+        margin-bottom: 9px;
+        font-size: 14px;
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px 14px;
+      }
+
+      .detail-item {
+        min-width: 0;
+      }
+
+      .detail-item label {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .detail-item strong,
+      .detail-item span {
+        display: block;
+        overflow-wrap: anywhere;
+      }
+
+      .detail-metrics {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 7px;
+      }
+
+      .detail-metric {
+        padding: 9px;
+        text-align: center;
+        background: var(--surface-soft);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+      }
+
+      .detail-metric strong {
+        display: block;
+        font-size: 18px;
+      }
+
+      .product-table {
+        min-width: 700px;
+      }
+
+      .modal-mask {
+        display: grid;
+        place-items: center;
+        z-index: 40;
+        padding: 20px;
+      }
+
+      .modal {
+        width: min(900px, 96vw);
+        max-height: 92vh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        overflow: hidden;
+        background: #fff;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        box-shadow: var(--shadow);
+      }
+
+      .modal.order-modal {
+        width: min(1180px, 97vw);
+      }
+
+      .modal-body {
+        overflow: auto;
+        padding: 14px;
+      }
+
+      .modal-foot {
+        justify-content: flex-end;
+        border-top: 1px solid var(--line);
+        border-bottom: 0;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(220px, 1fr));
+        gap: 11px 14px;
+      }
+
+      .field.full {
+        grid-column: 1 / -1;
+      }
+
+      .required::after {
+        content: " *";
+        color: var(--red);
+      }
+
+      .order-layout {
+        display: grid;
+        grid-template-columns: minmax(390px, 0.9fr) minmax(480px, 1.1fr);
+        gap: 14px;
+      }
+
+      .order-pane {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        overflow: hidden;
+      }
+
+      .order-pane-head {
+        padding: 10px;
+        background: var(--surface-soft);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .order-pane-head h3 {
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+
+      .product-picker {
+        max-height: 560px;
+        overflow: auto;
+      }
+
+      .product-option {
+        width: 100%;
+        padding: 9px 10px;
+        text-align: left;
+        background: #fff;
+        border: 0;
+        border-bottom: 1px solid #e6ebef;
+      }
+
+      .product-option:hover,
+      .product-option.selected {
+        background: #e8f3fa;
+      }
+
+      .product-option strong {
+        display: block;
+        color: #18364d;
+      }
+
+      .product-option span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .order-form-wrap {
+        padding: 12px;
+      }
+
+      .toast {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 60;
+        max-width: 420px;
+        padding: 10px 14px;
+        color: #fff;
+        background: #17212b;
+        border-radius: 5px;
+        box-shadow: var(--shadow);
+      }
+
+      .toast.error {
+        background: var(--red);
+      }
+
+      @media (max-width: 900px) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          display: none;
+        }
+
+        .summary-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .filters {
+          grid-template-columns: 1fr;
+        }
+
+        .page-head,
+        .toolbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .topbar .top-actions {
+          display: none;
+        }
+
+        .form-grid,
+        .detail-grid,
+        .order-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media print {
+        .topbar,
+        .sidebar,
+        .page-head,
+        .summary-grid,
+        .filters,
+        .toolbar,
+        .pagination,
+        .drawer-mask,
+        .modal-mask,
+        .toast {
+          display: none !important;
+        }
+
+        .workspace {
+          display: block;
+        }
+
+        .main {
+          padding: 0;
+        }
+
+        .panel {
+          border: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">箱</span>
+          <strong>三级纸箱厂 ERP</strong>
+          <span class="muted">客户管理</span>
+        </div>
+        <div class="top-actions">
+          <button class="btn" id="topRefresh">刷新</button>
+          <button class="btn" id="topExport">导出 CSV</button>
+          <button class="btn" id="topPrint">打印</button>
+          <a class="btn" href="/" style="text-decoration:none">返回系统</a>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="nav-title">工作台</div>
+          <a class="nav-link" href="/">首页仪表盘</a>
+          <div class="nav-title">业务管理</div>
+          <a class="nav-link" href="/">订单管理</a>
+          <a class="nav-link" href="/">报料管理</a>
+          <a class="nav-link" href="/">送货管理</a>
+          <a class="nav-link" href="/">回单确认</a>
+          <div class="nav-title">基础资料</div>
+          <a class="nav-link active" href="/customers">客户管理</a>
+          <a class="nav-link" href="/">产品资料</a>
+          <div class="nav-title">财务</div>
+          <a class="nav-link" href="/">月结对账</a>
+          <a class="nav-link" href="/">开票管理</a>
+        </aside>
+
+        <main class="main">
+          <section class="page-head">
+            <div>
+              <h1>客户管理</h1>
+              <p>客户资料、关联产品和历史业务数据</p>
+            </div>
+            <button class="btn primary" id="headAdd">新增客户</button>
+          </section>
+
+          <section class="summary-grid">
+            <div class="summary-item"><span>客户总数</span><strong id="summaryTotal">-</strong></div>
+            <div class="summary-item"><span>正常合作</span><strong id="summaryActive">-</strong></div>
+            <div class="summary-item"><span>已停用</span><strong id="summaryInactive">-</strong></div>
+            <div class="summary-item"><span>缺少联系人</span><strong id="summaryMissingContact">-</strong></div>
+            <div class="summary-item"><span>缺少联系电话</span><strong id="summaryMissingPhone">-</strong></div>
+          </section>
+
+          <section class="panel">
+            <div class="filters">
+              <div class="field">
+                <label for="keyword">关键词</label>
+                <input class="input" id="keyword" placeholder="客户名称、编号、联系人、电话或地址" />
+              </div>
+              <div class="field">
+                <label for="statusFilter">客户状态</label>
+                <select class="select" id="statusFilter">
+                  <option value="">全部状态</option>
+                  <option value="active">正常合作</option>
+                  <option value="inactive">已停用</option>
+                </select>
+              </div>
+              <div class="filter-actions">
+                <button class="btn primary" id="searchBtn">查询</button>
+                <button class="btn" id="resetBtn">重置</button>
+              </div>
+            </div>
+
+            <div class="toolbar">
+              <div class="toolbar-group">
+                <button class="btn primary" id="addBtn">新增客户</button>
+                <button class="btn" id="editBtn" disabled>编辑</button>
+                <button class="btn" id="detailBtn" disabled>查看详情</button>
+                <button class="btn danger" id="statusBtn" disabled>停用</button>
+              </div>
+              <div class="toolbar-group">
+                <button class="btn" id="exportBtn">导出当前结果</button>
+                <button class="btn" id="printBtn">打印列表</button>
+                <button class="btn" id="refreshBtn">刷新</button>
+              </div>
+            </div>
+
+            <div class="table-scroll">
+              <table>
+                <colgroup>
+                  <col style="width:62px" />
+                  <col style="width:105px" />
+                  <col style="width:260px" />
+                  <col style="width:100px" />
+                  <col style="width:160px" />
+                  <col style="width:280px" />
+                  <col style="width:95px" />
+                  <col style="width:78px" />
+                  <col style="width:82px" />
+                  <col style="width:82px" />
+                  <col style="width:78px" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>客户编号</th>
+                    <th>客户名称</th>
+                    <th>联系人</th>
+                    <th>联系电话</th>
+                    <th>送货地址</th>
+                    <th>账期</th>
+                    <th>产品数</th>
+                    <th>历史订单</th>
+                    <th>文件数</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="customerRows"></tbody>
+              </table>
+              <div class="loading" id="loadingState">正在读取客户数据...</div>
+            </div>
+
+            <div class="pagination">
+              <span id="pageInfo">共 0 条</span>
+              <div class="pagination-actions">
+                <select class="select" id="pageSize" style="width:110px">
+                  <option value="20">20 条/页</option>
+                  <option value="50">50 条/页</option>
+                  <option value="100">100 条/页</option>
+                </select>
+                <button class="btn" id="prevPage">上一页</button>
+                <span id="pageNumber">1 / 1</span>
+                <button class="btn" id="nextPage">下一页</button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div class="drawer-mask" id="drawerMask" hidden>
+      <aside class="drawer">
+        <div class="drawer-head">
+          <h2 id="drawerTitle">客户详情</h2>
+          <div class="toolbar-group">
+            <button class="btn primary" id="drawerNewOrder" hidden>新增订单</button>
+            <button class="btn" id="closeDrawer">关闭</button>
+          </div>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+      </aside>
+    </div>
+
+    <div class="modal-mask" id="modalMask" hidden>
+      <section class="modal">
+        <div class="modal-head">
+          <h2 id="modalTitle">新增客户</h2>
+          <button class="btn" id="closeModal">关闭</button>
+        </div>
+        <form id="customerForm" class="modal-body">
+          <input type="hidden" id="customerId" />
+          <div class="form-grid">
+            <div class="field">
+              <label for="customerCode">客户编号</label>
+              <input class="input" id="customerCode" maxlength="50" />
+            </div>
+            <div class="field">
+              <label class="required" for="customerName">客户名称</label>
+              <input class="input" id="customerName" maxlength="200" required />
+            </div>
+            <div class="field">
+              <label for="contactPerson">联系人</label>
+              <input class="input" id="contactPerson" maxlength="100" />
+            </div>
+            <div class="field">
+              <label for="phone">联系电话</label>
+              <input class="input" id="phone" maxlength="100" />
+            </div>
+            <div class="field full">
+              <label for="address">送货地址</label>
+              <input class="input" id="address" maxlength="300" />
+            </div>
+            <div class="field">
+              <label for="creditTerms">账期</label>
+              <select class="select" id="creditTerms">
+                <option value="">未设置</option>
+                <option>现结</option>
+                <option>月结30天</option>
+                <option>月结45天</option>
+                <option>月结60天</option>
+                <option>月结90天</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="taxRate">默认税率</label>
+              <select class="select" id="taxRate">
+                <option value="0">0%</option>
+                <option value="0.01">1%</option>
+                <option value="0.03">3%</option>
+                <option value="0.06">6%</option>
+                <option value="0.09">9%</option>
+                <option value="0.13">13%</option>
+              </select>
+            </div>
+            <div class="field full">
+              <label for="invoiceTitle">开票名称</label>
+              <input class="input" id="invoiceTitle" maxlength="200" />
+            </div>
+            <div class="field">
+              <label for="taxNo">纳税人识别号</label>
+              <input class="input" id="taxNo" maxlength="100" />
+            </div>
+            <div class="field">
+              <label for="bankAccount">开户行及账号</label>
+              <input class="input" id="bankAccount" maxlength="300" />
+            </div>
+            <div class="field">
+              <label for="customerStatus">客户状态</label>
+              <select class="select" id="customerStatus">
+                <option value="active">正常合作</option>
+                <option value="inactive">已停用</option>
+              </select>
+            </div>
+            <div class="field full">
+              <label for="remark">备注</label>
+              <textarea class="textarea" id="remark"></textarea>
+            </div>
+          </div>
+        </form>
+        <div class="modal-foot">
+          <button class="btn" id="cancelModal">取消</button>
+          <button class="btn primary" id="saveCustomer">保存客户资料</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-mask" id="orderModalMask" hidden>
+      <section class="modal order-modal">
+        <div class="modal-head">
+          <div>
+            <h2>新增订单</h2>
+            <span class="muted" id="orderCustomerName"></span>
+          </div>
+          <button class="btn" id="closeOrderModal">关闭</button>
+        </div>
+        <div class="modal-body">
+          <div class="order-layout">
+            <section class="order-pane">
+              <div class="order-pane-head">
+                <h3>客户常用箱 / 历史款号</h3>
+                <div class="toolbar-group">
+                  <input class="input" id="productKeyword" placeholder="搜索品号、产品名称、材质" />
+                  <button class="btn primary" id="searchProducts">搜索</button>
+                  <button class="btn" id="clearProduct">新款</button>
+                </div>
+              </div>
+              <div class="product-picker" id="productPicker">
+                <div class="loading">正在读取常用箱...</div>
+              </div>
+            </section>
+
+            <section class="order-pane">
+              <div class="order-pane-head">
+                <h3>本次订单内容</h3>
+                <span class="muted">选择常用箱后自动带出，所有字段均可针对本次订单修改</span>
+              </div>
+              <form class="order-form-wrap" id="orderForm">
+                <input type="hidden" id="orderCustomerId" />
+                <input type="hidden" id="orderProductArchiveId" />
+                <div class="form-grid">
+                  <div class="field">
+                    <label class="required" for="orderCustomerPo">客户订单号</label>
+                    <input class="input" id="orderCustomerPo" required />
+                  </div>
+                  <div class="field">
+                    <label class="required" for="orderStyleNo">品号 / 款号</label>
+                    <input class="input" id="orderStyleNo" required />
+                  </div>
+                  <div class="field full">
+                    <label for="orderProductName">产品名称</label>
+                    <input class="input" id="orderProductName" />
+                  </div>
+                  <div class="field">
+                    <label for="orderLength">长（mm）</label>
+                    <input class="input" id="orderLength" type="number" step="0.1" />
+                  </div>
+                  <div class="field">
+                    <label for="orderWidth">宽（mm）</label>
+                    <input class="input" id="orderWidth" type="number" step="0.1" />
+                  </div>
+                  <div class="field">
+                    <label for="orderHeight">高（mm）</label>
+                    <input class="input" id="orderHeight" type="number" step="0.1" />
+                  </div>
+                  <div class="field">
+                    <label for="orderUnit">单位</label>
+                    <select class="select" id="orderUnit">
+                      <option>只</option>
+                      <option>个</option>
+                      <option>片</option>
+                      <option>套</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="orderMaterial">材质</label>
+                    <input class="input" id="orderMaterial" />
+                  </div>
+                  <div class="field">
+                    <label for="orderFlute">楞型</label>
+                    <select class="select" id="orderFlute">
+                      <option value="">未设置</option>
+                      <option>B楞</option>
+                      <option>C楞</option>
+                      <option>E楞</option>
+                      <option>BC楞</option>
+                      <option>BE楞</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label class="required" for="orderQuantity">订单数量</label>
+                    <input class="input" id="orderQuantity" type="number" min="1" step="1" required />
+                  </div>
+                  <div class="field">
+                    <label class="required" for="orderPrice">含税单价</label>
+                    <input class="input" id="orderPrice" type="number" min="0" step="0.0001" required />
+                  </div>
+                  <div class="field">
+                    <label for="orderDeliveryDate">交货日期</label>
+                    <input class="input" id="orderDeliveryDate" type="date" />
+                  </div>
+                  <div class="field full">
+                    <label for="orderProcessNote">工艺要求</label>
+                    <input class="input" id="orderProcessNote" />
+                  </div>
+                  <div class="field full">
+                    <label for="orderRemark">订单备注</label>
+                    <textarea class="textarea" id="orderRemark"></textarea>
+                  </div>
+                </div>
+              </form>
+            </section>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="cancelOrderModal">取消</button>
+          <button class="btn primary" id="saveOrder">保存订单</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script>
+      const state = {
+        items: [],
+        selected: null,
+        page: 1,
+        pageSize: 20,
+        pages: 1,
+        total: 0,
+        keyword: "",
+        status: "",
+        loading: false,
+        detailCustomer: null,
+        orderProducts: [],
+        selectedProduct: null,
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function cleanPhone(value) {
+        return String(value || "")
+          .replace(/\s*,\s*\/\s*,?\s*/g, " / ")
+          .replace(/\s*,\s*$/g, "")
+          .trim();
+      }
+
+      function taxText(value) {
+        return `${Math.round(Number(value || 0) * 100)}%`;
+      }
+
+      function statusText(value) {
+        return value === "inactive" ? "已停用" : "正常";
+      }
+
+      function showToast(message, isError = false) {
+        const toast = $("toast");
+        toast.textContent = message;
+        toast.className = `toast${isError ? " error" : ""}`;
+        toast.hidden = false;
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => {
+          toast.hidden = true;
+        }, 3000);
+      }
+
+      async function api(url, options = {}) {
+        const response = await fetch(url, {
+          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+          ...options,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(data.detail || data.message || "请求失败");
+          error.data = data;
+          throw error;
+        }
+        return data;
+      }
+
+      function updateActions() {
+        const selected = state.selected;
+        $("editBtn").disabled = !selected;
+        $("detailBtn").disabled = !selected;
+        $("statusBtn").disabled = !selected;
+        $("statusBtn").textContent = selected?.status === "inactive" ? "启用" : "停用";
+      }
+
+      function renderRows() {
+        const tbody = $("customerRows");
+        $("loadingState").hidden = true;
+        if (!state.items.length) {
+          tbody.innerHTML = '<tr><td colspan="11" class="empty">没有符合条件的客户</td></tr>';
+          return;
+        }
+        tbody.innerHTML = state.items
+          .map(
+            (row) => `
+              <tr data-id="${row.id}" class="${state.selected?.id === row.id ? "selected" : ""}">
+                <td>${row.id}</td>
+                <td>${escapeHtml(row.customer_code || "-")}</td>
+                <td title="${escapeHtml(row.name)}">
+                  <span class="cell-main">${escapeHtml(row.name)}</span>
+                  <span class="cell-sub">${escapeHtml(row.invoice_title || "")}</span>
+                </td>
+                <td>${escapeHtml(row.contact_person || "-")}</td>
+                <td title="${escapeHtml(cleanPhone(row.phone))}">${escapeHtml(cleanPhone(row.phone) || "-")}</td>
+                <td title="${escapeHtml(row.address || "")}">${escapeHtml(row.address || "-")}</td>
+                <td>${escapeHtml(row.credit_terms || "-")}</td>
+                <td>${Number(row.product_count || 0).toLocaleString("zh-CN")}</td>
+                <td>${Number(row.history_order_count || 0).toLocaleString("zh-CN")}</td>
+                <td>${Number(row.file_count || 0).toLocaleString("zh-CN")}</td>
+                <td><span class="status ${row.status}">${statusText(row.status)}</span></td>
+              </tr>
+            `
+          )
+          .join("");
+        tbody.querySelectorAll("tr[data-id]").forEach((tr) => {
+          tr.addEventListener("click", () => selectCustomer(Number(tr.dataset.id)));
+          tr.addEventListener("dblclick", () => openDetail(Number(tr.dataset.id)));
+        });
+      }
+
+      function renderPagination(pagination) {
+        state.page = pagination.page;
+        state.pageSize = pagination.page_size;
+        state.pages = pagination.pages;
+        state.total = pagination.total;
+        const start = state.total ? (state.page - 1) * state.pageSize + 1 : 0;
+        const end = Math.min(state.page * state.pageSize, state.total);
+        $("pageInfo").textContent = `共 ${state.total} 条，当前显示 ${start}-${end}`;
+        $("pageNumber").textContent = `${state.page} / ${state.pages}`;
+        $("prevPage").disabled = state.page <= 1;
+        $("nextPage").disabled = state.page >= state.pages;
+        $("pageSize").value = String(state.pageSize);
+      }
+
+      function renderSummary(summary) {
+        $("summaryTotal").textContent = Number(summary.total || 0).toLocaleString("zh-CN");
+        $("summaryActive").textContent = Number(summary.active || 0).toLocaleString("zh-CN");
+        $("summaryInactive").textContent = Number(summary.inactive || 0).toLocaleString("zh-CN");
+        $("summaryMissingContact").textContent = Number(summary.missing_contact || 0).toLocaleString("zh-CN");
+        $("summaryMissingPhone").textContent = Number(summary.missing_phone || 0).toLocaleString("zh-CN");
+      }
+
+      async function loadCustomers(resetSelection = false) {
+        state.loading = true;
+        $("loadingState").hidden = false;
+        $("loadingState").textContent = "正在读取客户数据...";
+        $("customerRows").innerHTML = "";
+        try {
+          const params = new URLSearchParams({
+            keyword: state.keyword,
+            status: state.status,
+            page: String(state.page),
+            page_size: String(state.pageSize),
+          });
+          const data = await api(`/api/customer-management?${params}`);
+          state.items = data.items || [];
+          if (resetSelection || !state.items.some((item) => item.id === state.selected?.id)) {
+            state.selected = null;
+          }
+          renderRows();
+          renderPagination(data.pagination);
+          renderSummary(data.summary);
+          updateActions();
+        } catch (error) {
+          $("loadingState").hidden = false;
+          $("loadingState").textContent = `读取失败：${error.message}`;
+          showToast(error.message, true);
+        } finally {
+          state.loading = false;
+        }
+      }
+
+      function selectCustomer(id) {
+        state.selected = state.items.find((item) => item.id === id) || null;
+        renderRows();
+        updateActions();
+      }
+
+      function resetForm() {
+        $("customerForm").reset();
+        $("customerId").value = "";
+        $("taxRate").value = "0.13";
+        $("customerStatus").value = "active";
+      }
+
+      function openForm(customer = null) {
+        resetForm();
+        $("modalTitle").textContent = customer ? "编辑客户" : "新增客户";
+        if (customer) {
+          $("customerId").value = customer.id;
+          $("customerCode").value = customer.customer_code || "";
+          $("customerName").value = customer.name || "";
+          $("contactPerson").value = customer.contact_person || "";
+          $("phone").value = cleanPhone(customer.phone);
+          $("address").value = customer.address || "";
+          $("creditTerms").value = customer.credit_terms || "";
+          $("taxRate").value = String(Number(customer.default_tax_rate ?? 0.13));
+          $("invoiceTitle").value = customer.invoice_title || "";
+          $("taxNo").value = customer.tax_no || "";
+          $("bankAccount").value = customer.bank_account || "";
+          $("customerStatus").value = customer.status || "active";
+          $("remark").value = customer.remark || "";
+        }
+        $("modalMask").hidden = false;
+        setTimeout(() => $("customerName").focus(), 0);
+      }
+
+      function closeForm() {
+        $("modalMask").hidden = true;
+      }
+
+      function formPayload() {
+        return {
+          customer_code: $("customerCode").value.trim() || null,
+          name: $("customerName").value.trim(),
+          contact_person: $("contactPerson").value.trim() || null,
+          phone: $("phone").value.trim() || null,
+          address: $("address").value.trim() || null,
+          credit_terms: $("creditTerms").value || null,
+          default_tax_rate: Number($("taxRate").value || 0),
+          invoice_title: $("invoiceTitle").value.trim() || null,
+          tax_no: $("taxNo").value.trim() || null,
+          bank_account: $("bankAccount").value.trim() || null,
+          remark: $("remark").value.trim() || null,
+          status: $("customerStatus").value,
+        };
+      }
+
+      async function saveCustomer() {
+        const id = Number($("customerId").value || 0);
+        const payload = formPayload();
+        if (!payload.name) {
+          showToast("客户名称不能为空", true);
+          $("customerName").focus();
+          return;
+        }
+        $("saveCustomer").disabled = true;
+        try {
+          const data = await api(
+            id ? `/api/customer-management/${id}` : "/api/customer-management",
+            {
+              method: id ? "PUT" : "POST",
+              body: JSON.stringify(payload),
+            }
+          );
+          closeForm();
+          await loadCustomers(true);
+          state.selected = data.customer;
+          updateActions();
+          showToast(id ? "客户资料已更新" : "客户已新增");
+        } catch (error) {
+          showToast(error.message, true);
+        } finally {
+          $("saveCustomer").disabled = false;
+        }
+      }
+
+      async function changeStatus() {
+        if (!state.selected) return;
+        const nextStatus = state.selected.status === "inactive" ? "active" : "inactive";
+        const actionText = nextStatus === "active" ? "启用" : "停用";
+        if (!window.confirm(`确认${actionText}客户“${state.selected.name}”吗？`)) return;
+        try {
+          await api(`/api/customer-management/${state.selected.id}/status?status=${nextStatus}`, {
+            method: "POST",
+          });
+          await loadCustomers(true);
+          showToast(`客户已${actionText}`);
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }
+
+      function setSelectValue(selectId, value) {
+        const select = $(selectId);
+        const normalized = String(value || "");
+        if (normalized && !Array.from(select.options).some((option) => option.value === normalized)) {
+          select.add(new Option(normalized, normalized));
+        }
+        select.value = normalized;
+      }
+
+      function resetOrderFields(keepCustomer = true) {
+        const customerId = keepCustomer ? $("orderCustomerId").value : "";
+        const customerName = keepCustomer ? $("orderCustomerName").textContent : "";
+        $("orderForm").reset();
+        $("orderCustomerId").value = customerId;
+        $("orderCustomerName").textContent = customerName;
+        $("orderProductArchiveId").value = "";
+        $("orderUnit").value = "只";
+        $("orderDeliveryDate").value = new Date().toISOString().slice(0, 10);
+        state.selectedProduct = null;
+        renderOrderProducts();
+      }
+
+      async function loadOrderProducts() {
+        const customerId = Number($("orderCustomerId").value || 0);
+        if (!customerId) return;
+        $("productPicker").innerHTML = '<div class="loading">正在读取常用箱...</div>';
+        try {
+          const params = new URLSearchParams({
+            keyword: $("productKeyword").value.trim(),
+            sort: "frequent",
+            limit: "100",
+          });
+          const data = await api(`/api/customer-management/${customerId}/products?${params}`);
+          state.orderProducts = data.items || [];
+          renderOrderProducts();
+        } catch (error) {
+          $("productPicker").innerHTML = `<div class="empty">读取失败：${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      function renderOrderProducts() {
+        const picker = $("productPicker");
+        if (!state.orderProducts.length) {
+          picker.innerHTML = '<div class="empty">没有匹配的历史款号，可点击“新款”直接填写</div>';
+          return;
+        }
+        picker.innerHTML = state.orderProducts
+          .map((product, index) => {
+            const spec = [product.length_mm, product.width_mm, product.height_mm]
+              .filter((value) => value !== null && value !== undefined && value !== "")
+              .join("×");
+            return `
+              <button type="button" class="product-option ${state.selectedProduct === product ? "selected" : ""}" data-product-index="${index}">
+                <strong>${escapeHtml(product.product_code || product.style_no || "未命名款号")} · ${escapeHtml(product.display_product_name || product.product_name || "品名待确认")}</strong>
+                <span>规格：${escapeHtml(product.specification || (spec ? `${spec}mm` : "待确认"))}${product.feature_note ? ` · ${escapeHtml(product.feature_note)}` : ""}</span>
+                <span>材质：${escapeHtml(product.material || "未记录")} / 单价 ${product.sale_unit_price ?? "-"}</span>
+                <span>历史使用 ${Number(product.order_count || 0).toLocaleString("zh-CN")} 次，累计 ${Number(product.total_quantity || 0).toLocaleString("zh-CN")} ${escapeHtml(product.unit || "只")}</span>
+              </button>
+            `;
+          })
+          .join("");
+        picker.querySelectorAll("[data-product-index]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const product = state.orderProducts[Number(button.dataset.productIndex)];
+            if (product) selectOrderProduct(product);
+          });
+        });
+      }
+
+      function selectOrderProduct(product) {
+        state.selectedProduct = product;
+        $("orderProductArchiveId").value = product.product_archive_id || "";
+        $("orderStyleNo").value = product.product_code || product.style_no || "";
+        $("orderProductName").value = product.display_product_name || product.product_name || "";
+        $("orderLength").value = product.length_mm ?? "";
+        $("orderWidth").value = product.width_mm ?? "";
+        $("orderHeight").value = product.height_mm ?? "";
+        $("orderMaterial").value = product.material || "";
+        setSelectValue("orderFlute", product.flute_type || "");
+        setSelectValue("orderUnit", product.unit || "只");
+        $("orderPrice").value = product.sale_unit_price ?? "";
+        $("orderProcessNote").value = product.process_note || "";
+        renderOrderProducts();
+      }
+
+      async function openOrderForm(customer = state.detailCustomer || state.selected) {
+        if (!customer) {
+          showToast("请先选择客户", true);
+          return;
+        }
+        if (customer.status === "inactive") {
+          showToast("已停用客户不能新增订单", true);
+          return;
+        }
+        $("orderCustomerId").value = customer.id;
+        $("orderCustomerName").textContent = customer.name;
+        $("productKeyword").value = "";
+        state.orderProducts = [];
+        resetOrderFields(true);
+        $("orderModalMask").hidden = false;
+        await loadOrderProducts();
+      }
+
+      function closeOrderForm() {
+        $("orderModalMask").hidden = true;
+        state.orderProducts = [];
+        state.selectedProduct = null;
+      }
+
+      function optionalNumber(id) {
+        const value = $(id).value;
+        return value === "" ? null : Number(value);
+      }
+
+      function orderPayload(warningConfirmed = false) {
+        return {
+          customer_id: Number($("orderCustomerId").value),
+          product_archive_id: Number($("orderProductArchiveId").value) || null,
+          customer_po: $("orderCustomerPo").value.trim() || null,
+          style_no: $("orderStyleNo").value.trim(),
+          product_name: $("orderProductName").value.trim() || null,
+          unit: $("orderUnit").value || "只",
+          length_mm: optionalNumber("orderLength"),
+          width_mm: optionalNumber("orderWidth"),
+          height_mm: optionalNumber("orderHeight"),
+          material: $("orderMaterial").value.trim() || null,
+          flute_type: $("orderFlute").value || null,
+          process_note: $("orderProcessNote").value.trim() || null,
+          order_quantity: Number($("orderQuantity").value || 0),
+          sale_unit_price: Number($("orderPrice").value || 0),
+          cost_unit_price: Number(state.selectedProduct?.cost_unit_price || 0),
+          delivery_due_date: $("orderDeliveryDate").value || null,
+          remark: $("orderRemark").value.trim() || null,
+          warning_confirmed: warningConfirmed,
+        };
+      }
+
+      async function submitOrder(payload) {
+        const response = await fetch("/api/orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 409 && data.code === "ORDER_HISTORY_CONFLICT") {
+          const differences = (data.differences || [])
+            .map((item) => `${item.label}：历史 ${item.old_value ?? "空"}，本次 ${item.new_value ?? "空"}`)
+            .join("\n");
+          if (window.confirm(`本次订单与历史档案有差异：\n\n${differences}\n\n确认按本次填写内容生成订单吗？`)) {
+            return submitOrder({ ...payload, warning_confirmed: true });
+          }
+          return null;
+        }
+        if (!response.ok) {
+          throw new Error(data.detail || data.message || "保存订单失败");
+        }
+        return data.order;
+      }
+
+      async function saveOrderRecord() {
+        const payload = orderPayload();
+        if (!payload.customer_po) {
+          showToast("客户订单号不能为空", true);
+          $("orderCustomerPo").focus();
+          return;
+        }
+        if (!payload.style_no) {
+          showToast("品号或款号不能为空", true);
+          $("orderStyleNo").focus();
+          return;
+        }
+        if (payload.order_quantity <= 0) {
+          showToast("订单数量必须大于 0", true);
+          $("orderQuantity").focus();
+          return;
+        }
+        $("saveOrder").disabled = true;
+        try {
+          const order = await submitOrder(payload);
+          if (!order) return;
+          closeOrderForm();
+          showToast(`订单 ${order.order_no} 已生成，当前状态：待报料`);
+          if (state.detailCustomer) {
+            await openDetail(state.detailCustomer.id);
+          }
+        } catch (error) {
+          showToast(error.message, true);
+        } finally {
+          $("saveOrder").disabled = false;
+        }
+      }
+
+      function detailValue(label, value) {
+        return `
+          <div class="detail-item">
+            <label>${escapeHtml(label)}</label>
+            <strong>${escapeHtml(value || "-")}</strong>
+          </div>
+        `;
+      }
+
+      async function openDetail(id = state.selected?.id) {
+        if (!id) return;
+        $("drawerMask").hidden = false;
+        $("drawerNewOrder").hidden = true;
+        state.detailCustomer = null;
+        $("drawerTitle").textContent = "客户详情";
+        $("drawerBody").innerHTML = '<div class="loading">正在读取客户详情...</div>';
+        try {
+          const data = await api(`/api/customer-management/${id}`);
+          const customer = data.customer;
+          const products = data.products || [];
+          state.detailCustomer = customer;
+          $("drawerNewOrder").hidden = customer.status !== "active";
+          $("drawerTitle").textContent = customer.name;
+          $("drawerBody").innerHTML = `
+            <section class="detail-section">
+              <div class="detail-metrics">
+                <div class="detail-metric"><strong>${customer.product_count || 0}</strong><span>产品档案</span></div>
+                <div class="detail-metric"><strong>${customer.order_count || 0}</strong><span>新系统订单</span></div>
+                <div class="detail-metric"><strong>${customer.history_order_count || 0}</strong><span>历史订单</span></div>
+                <div class="detail-metric"><strong>${customer.file_count || 0}</strong><span>关联文件</span></div>
+              </div>
+            </section>
+            <section class="detail-section">
+              <h3>基础资料</h3>
+              <div class="detail-grid">
+                ${detailValue("客户编号", customer.customer_code)}
+                ${detailValue("客户状态", statusText(customer.status))}
+                ${detailValue("联系人", customer.contact_person)}
+                ${detailValue("联系电话", cleanPhone(customer.phone))}
+                ${detailValue("账期", customer.credit_terms)}
+                ${detailValue("默认税率", taxText(customer.default_tax_rate))}
+                ${detailValue("送货地址", customer.address)}
+                ${detailValue("开票名称", customer.invoice_title)}
+                ${detailValue("纳税人识别号", customer.tax_no)}
+                ${detailValue("开户行及账号", customer.bank_account)}
+              </div>
+            </section>
+            <section class="detail-section">
+              <h3>备注</h3>
+              <div>${escapeHtml(customer.remark || "无")}</div>
+            </section>
+            <section class="detail-section">
+              <h3>最近产品档案</h3>
+              <div class="table-scroll">
+                <table class="product-table">
+                  <thead><tr><th>品号</th><th>产品名称</th><th>规格</th><th>材质</th><th>楞型</th><th>单价</th></tr></thead>
+                  <tbody>
+                    ${
+                      products.length
+                        ? products
+                            .map((product) => {
+                              const spec = [product.length_mm, product.width_mm, product.height_mm]
+                                .filter((value) => value !== null && value !== undefined && value !== "")
+                                .join("×");
+                              return `<tr>
+                                <td>${escapeHtml(product.style_no || "-")}</td>
+                                <td>${escapeHtml(product.product_name || "-")}</td>
+                                <td>${escapeHtml(spec ? `${spec}mm` : "-")}</td>
+                                <td>${escapeHtml(product.material || "-")}</td>
+                                <td>${escapeHtml(product.flute_type || "-")}</td>
+                                <td>${product.last_sale_unit_price ?? "-"}</td>
+                              </tr>`;
+                            })
+                            .join("")
+                        : '<tr><td colspan="6" class="empty">暂无产品档案</td></tr>'
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          `;
+        } catch (error) {
+          $("drawerBody").innerHTML = `<div class="empty">读取失败：${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      function closeDetail() {
+        $("drawerMask").hidden = true;
+        state.detailCustomer = null;
+        $("drawerNewOrder").hidden = true;
+      }
+
+      function exportCsv() {
+        if (!state.items.length) {
+          showToast("当前没有可导出的数据", true);
+          return;
+        }
+        const headers = ["ID", "客户编号", "客户名称", "联系人", "联系电话", "送货地址", "账期", "税率", "产品数", "历史订单数", "文件数", "状态"];
+        const rows = state.items.map((row) => [
+          row.id,
+          row.customer_code || "",
+          row.name,
+          row.contact_person || "",
+          cleanPhone(row.phone),
+          row.address || "",
+          row.credit_terms || "",
+          taxText(row.default_tax_rate),
+          row.product_count || 0,
+          row.history_order_count || 0,
+          row.file_count || 0,
+          statusText(row.status),
+        ]);
+        const csv = [headers, ...rows]
+          .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
+          .join("\r\n");
+        const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `客户资料_${new Date().toISOString().slice(0, 10)}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function bindEvents() {
+        ["headAdd", "addBtn"].forEach((id) => $(id).addEventListener("click", () => openForm()));
+        $("editBtn").addEventListener("click", () => state.selected && openForm(state.selected));
+        $("detailBtn").addEventListener("click", () => openDetail());
+        $("statusBtn").addEventListener("click", changeStatus);
+        $("drawerNewOrder").addEventListener("click", () => openOrderForm());
+        ["refreshBtn", "topRefresh"].forEach((id) => $(id).addEventListener("click", () => loadCustomers()));
+        ["exportBtn", "topExport"].forEach((id) => $(id).addEventListener("click", exportCsv));
+        ["printBtn", "topPrint"].forEach((id) => $(id).addEventListener("click", () => window.print()));
+        $("searchBtn").addEventListener("click", () => {
+          state.keyword = $("keyword").value.trim();
+          state.status = $("statusFilter").value;
+          state.page = 1;
+          loadCustomers(true);
+        });
+        $("keyword").addEventListener("keydown", (event) => {
+          if (event.key === "Enter") $("searchBtn").click();
+        });
+        $("resetBtn").addEventListener("click", () => {
+          $("keyword").value = "";
+          $("statusFilter").value = "";
+          state.keyword = "";
+          state.status = "";
+          state.page = 1;
+          loadCustomers(true);
+        });
+        $("pageSize").addEventListener("change", () => {
+          state.pageSize = Number($("pageSize").value);
+          state.page = 1;
+          loadCustomers(true);
+        });
+        $("prevPage").addEventListener("click", () => {
+          if (state.page > 1) {
+            state.page -= 1;
+            loadCustomers(true);
+          }
+        });
+        $("nextPage").addEventListener("click", () => {
+          if (state.page < state.pages) {
+            state.page += 1;
+            loadCustomers(true);
+          }
+        });
+        ["closeModal", "cancelModal"].forEach((id) => $(id).addEventListener("click", closeForm));
+        $("saveCustomer").addEventListener("click", saveCustomer);
+        $("closeDrawer").addEventListener("click", closeDetail);
+        ["closeOrderModal", "cancelOrderModal"].forEach((id) => $(id).addEventListener("click", closeOrderForm));
+        $("searchProducts").addEventListener("click", loadOrderProducts);
+        $("productKeyword").addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            loadOrderProducts();
+          }
+        });
+        $("clearProduct").addEventListener("click", () => resetOrderFields(true));
+        $("saveOrder").addEventListener("click", saveOrderRecord);
+        $("modalMask").addEventListener("click", (event) => {
+          if (event.target === $("modalMask")) closeForm();
+        });
+        $("drawerMask").addEventListener("click", (event) => {
+          if (event.target === $("drawerMask")) closeDetail();
+        });
+        $("orderModalMask").addEventListener("click", (event) => {
+          if (event.target === $("orderModalMask")) closeOrderForm();
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            closeForm();
+            closeDetail();
+            closeOrderForm();
+          }
+        });
+      }
+
+      bindEvents();
+      loadCustomers();
+    </script>
+  </body>
+</html>

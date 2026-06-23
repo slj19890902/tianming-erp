@@ -1,0 +1,19 @@
+services:
+  tm-postgres:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    container_name: tm-postgres
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: tm_erp_test
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tm_erp_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

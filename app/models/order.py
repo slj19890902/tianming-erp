@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models import Base
+
+if TYPE_CHECKING:
+    from app.models.product import Product
+
+
+class OrderDailySequence(Base):
+    __tablename__ = "order_daily_sequences"
+
+    sequence_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    last_value: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class Order(Base):
+    __tablename__ = "sales_orders"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ("
+            "'pending_confirmation', 'pending_production', 'production', "
+            "'pending_delivery', 'partially_delivered', 'pending_reconciliation', "
+            "'pending_invoice', 'pending_payment', 'delivered', 'completed', "
+            "'archived', 'closed', 'dead', 'cancelled'"
+            ")",
+            name="ck_sales_orders_status",
+        ),
+        CheckConstraint(
+            "payment_status IN ('unpaid', 'paid')",
+            name="ck_sales_orders_payment_status",
+        ),
+        UniqueConstraint("order_number", name="uq_sales_orders_order_number"),
+        Index("ix_sales_orders_customer_id", "customer_id"),
+        Index("ix_sales_orders_customer_po", "customer_po"),
+        Index("ix_sales_orders_customer_po_group", "customer_id", "customer_po"),
+        Index("ix_sales_orders_order_date", "order_date"),
+        Index("ix_sales_orders_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_number: Mapped[str] = mapped_column(String(40), nullable=False)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    customer_po: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    order_date: Mapped[date] = mapped_column(Date, nullable=False)
+    delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="pending_production",
+        nullable=False,
+    )
+    payment_status: Mapped[str] = mapped_column(
+        String(20),
+        default="unpaid",
+        nullable=False,
+    )
+    total_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2),
+        default=Decimal("0"),
+        nullable=False,
+    )
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        onupdate=func.current_timestamp(),
+        nullable=True,
+    )
+
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="OrderItem.id",
+    )
+
+
+class OrderItem(Base):
+    __tablename__ = "sales_order_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_sales_order_items_quantity"),
+        CheckConstraint("unit_price >= 0", name="ck_sales_order_items_unit_price"),
+        CheckConstraint("subtotal >= 0", name="ck_sales_order_items_subtotal"),
+        CheckConstraint(
+            "material_status IN ('pending', 'received')",
+            name="ck_sales_order_items_material_status",
+        ),
+        Index("ix_sales_order_items_order_id", "order_id"),
+        Index("ix_sales_order_items_product_id", "product_id"),
+        Index("ux_sales_order_items_item_order_number", "item_order_number", unique=True),
+        Index("ix_sales_order_items_material_status", "material_status"),
+        Index("ix_sales_order_items_snapshot_product_code", "snapshot_product_code"),
+        Index("ix_sales_order_items_snapshot_product_name", "snapshot_product_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    item_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    item_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivered_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    is_force_closed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    material_status: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+        nullable=False,
+    )
+    material_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    material_received_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    snapshot_product_name: Mapped[str] = mapped_column(String(250), nullable=False)
+    snapshot_product_code: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+    snapshot_spec: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    snapshot_material: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    inventory_deducted_qty: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    requisition_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requisition_status: Mapped[str] = mapped_column(
+        String(30),
+        default="未报料",
+        nullable=False,
+        index=True,
+    )
+    special_process: Mapped[str] = mapped_column(
+        String(30),
+        default="无",
+        nullable=False,
+    )
+    requisition_spec: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+    cardboard_len: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+    cardboard_width: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+    requisition_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    supplier_delivery_time: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    supplier_order_number: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    requisition_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+
+    order: Mapped["Order"] = relationship(back_populates="items")
+    product: Mapped["Product"] = relationship()
+
+
+class OrderItemNumberSequence(Base):
+    __tablename__ = "order_item_number_sequences"
+
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_orders.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    last_item_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+        nullable=False,
+    )

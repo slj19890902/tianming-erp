@@ -33,6 +33,9 @@ async def phase2_lifespan(_: FastAPI):
     # Alembic and init_db.py own schema/user initialization from Phase 2 onward.
     current = load_settings()
     print(f"BoxERP database: {current.database_path}")
+    # 确保 PDF 训练样本存储目录存在（不进入 Git，.gitkeep 已追踪目录结构）
+    _pdf_dir = Path(__file__).resolve().parent.parent / "data" / "pdf_training_samples"
+    _pdf_dir.mkdir(parents=True, exist_ok=True)
     yield
 
 

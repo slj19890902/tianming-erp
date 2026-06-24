@@ -56,8 +56,9 @@ router = APIRouter()
 
 require_admin = RoleChecker(["admin"])
 
-# 训练样本本地存储目录
-_SAMPLE_DIR = Path("data") / "pdf_training_samples"
+# 训练样本本地存储目录（使用绝对路径，避免因启动目录不同而写错位置）
+# 本文件位于 app/api/pdf_training.py，parents[2] = 项目根目录
+_SAMPLE_DIR = Path(__file__).resolve().parents[2] / "data" / "pdf_training_samples"
 
 
 # ---------------------------------------------------------------------------

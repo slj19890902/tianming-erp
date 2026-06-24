@@ -69,12 +69,16 @@ def _now() -> datetime:
 
 
 def _log(db: Session, user: User, action: str, detail: str) -> None:
+    # action max 30 chars → use short verb; resource=entity; description=detail
+    short_action = action.split(".")[-1][:30]          # e.g. "create" / "upload" / "delete"
+    resource = action[:100]                             # full dotted path as resource
     db.add(
         OperationLog(
             user_id=user.id,
             username=user.username,
-            action=action,
-            detail=detail,
+            action=short_action,
+            resource=resource,
+            description=detail,
         )
     )
 

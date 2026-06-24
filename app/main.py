@@ -23,6 +23,7 @@ from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
 from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
+from app.api.pdf_training import router as pdf_training_router
 from app.api.system import router as system_router
 from app.core.config import load_settings
 
@@ -199,6 +200,12 @@ def create_app() -> FastAPI:
             system_router,
             prefix="/api/system",
             tags=["system"],
+        )
+    if not any(route.path == "/api/pdf-training/stats" for route in application.routes):
+        application.include_router(
+            pdf_training_router,
+            prefix="/api/pdf-training",
+            tags=["pdf-training"],
         )
 
     application.user_middleware = [

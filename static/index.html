@@ -386,6 +386,7 @@
       .muted { color: var(--muted); }
       .right { text-align: right; }
       .danger-text { color: var(--red); }
+      .stat-chip { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
       .sensitive-price { font-variant-numeric: tabular-nums; }
       .role-workshop .sensitive-price { display: none !important; }
 
@@ -1048,6 +1049,80 @@
                   <button class="btn" style="background:#d97706;color:#fff" @click="fixFluteConsistency" :disabled="loading">修复非法组合</button>
                 </div>
               </div>
+
+              <!-- ── PDF 识别训练库 (Phase 18) ── -->
+              <div class="section-title" style="margin-top:24px">PDF 订单识别训练库</div>
+              <div class="panel" style="margin-bottom:10px;padding:14px 18px">
+                <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+                  上传客户采购订单 PDF 样本，对比解析器输出与人工标注，持续追踪识别准确率。
+                  PDF 原文件存储在本地 <code>data/pdf_training_samples/</code>，不进入 Git 仓库。
+                </div>
+
+                <!-- 统计看板 -->
+                <div v-if="pdfTrainingStats" style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px">
+                  <div class="stat-chip">总样本 <strong>{{ pdfTrainingStats.sample_count }}</strong></div>
+                  <div class="stat-chip">已标注 <strong>{{ pdfTrainingStats.labeled_count }}</strong></div>
+                  <div class="stat-chip" v-if="pdfTrainingStats.avg_score!=null">
+                    平均评分 <strong :style="{color: pdfTrainingStats.avg_score>=0.9?'#16a34a':pdfTrainingStats.avg_score>=0.7?'#d97706':'#dc2626'}">
+                      {{ (pdfTrainingStats.avg_score*100).toFixed(1) }}%
+                    </strong>
+                  </div>
+                  <div class="stat-chip">高分≥90% <strong style="color:#16a34a">{{ pdfTrainingStats.high_count }}</strong></div>
+                  <div class="stat-chip">中分70-90% <strong style="color:#d97706">{{ pdfTrainingStats.mid_count }}</strong></div>
+                  <div class="stat-chip">低分&lt;70% <strong style="color:#dc2626">{{ pdfTrainingStats.low_count }}</strong></div>
+                </div>
+                <div v-if="pdfTrainingStats && pdfTrainingStats.top_error_fields.length" style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
+                  高频出错字段：
+                  <span v-for="([f,c]) in pdfTrainingStats.top_error_fields" :key="f" style="margin-right:10px">
+                    <code>{{ f }}</code> ×{{ c }}
+                  </span>
+                </div>
+
+                <div class="toolbar-group" style="margin-bottom:12px">
+                  <button class="btn" @click="loadPdfTrainingStats" :disabled="loading">刷新统计</button>
+                  <button class="btn" style="background:#2563eb;color:#fff" @click="openPdfUploadModal" :disabled="loading">上传 PDF 样本</button>
+                  <button class="btn" @click="loadPdfTrainingSamples" :disabled="loading">查看样本列表</button>
+                </div>
+
+                <!-- 样本列表 -->
+                <div v-if="pdfTrainingSamples.length" style="overflow-x:auto">
+                  <table class="data-table" style="font-size:12px;min-width:700px">
+                    <thead><tr>
+                      <th>ID</th><th>文件名</th><th>解析方式</th><th>状态</th>
+                      <th>评分</th><th>上传时间</th><th>操作</th>
+                    </tr></thead>
+                    <tbody>
+                      <tr v-for="s in pdfTrainingSamples" :key="s.id">
+                        <td>{{ s.id }}</td>
+                        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="s.file_name">{{ s.file_name }}</td>
+                        <td>{{ s.parse_method }}</td>
+                        <td>
+                          <span :style="{
+                            color: s.parse_status==='reviewed'?'#16a34a':s.parse_status==='labeled'?'#2563eb':'#6b7280',
+                            fontWeight: 600
+                          }">{{ {pending:'待标注',labeled:'已标注',reviewed:'已复核'}[s.parse_status] || s.parse_status }}</span>
+                        </td>
+                        <td>
+                          <span v-if="s.score!=null" :style="{color:s.score>=0.9?'#16a34a':s.score>=0.7?'#d97706':'#dc2626',fontWeight:600}">
+                            {{ (s.score*100).toFixed(1) }}%
+                          </span>
+                          <span v-else class="muted">-</span>
+                        </td>
+                        <td>{{ formatDateTime(s.created_at) }}</td>
+                        <td>
+                          <button class="btn small" @click="openPdfSampleDetail(s.id)">详情/标注</button>
+                          <button v-if="user.role==='admin'" class="btn small danger" style="margin-left:4px" @click="deletePdfSample(s.id)">删</button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+                    <button class="btn small" :disabled="pdfSamplePage<=1" @click="loadPdfTrainingSamples(pdfSamplePage-1)">上一页</button>
+                    <span style="font-size:13px">第 {{ pdfSamplePage }} 页</span>
+                    <button class="btn small" :disabled="pdfTrainingSamples.length<50" @click="loadPdfTrainingSamples(pdfSamplePage+1)">下一页</button>
+                  </div>
+                </div>
+              </div>
             </template>
           </main>
         </div>
@@ -1291,6 +1366,64 @@
               <div class="field"><label>确认临时密码</label><input class="input" type="password" autocomplete="new-password" v-model="resetPasswordForm.confirm_password" /></div>
               <div class="field wide muted">重置后，该账号下次登录必须修改密码。</div>
             </div>
+
+            <!-- PDF 训练样本上传 -->
+            <div v-else-if="modal.type === 'pdfUpload'" class="form-grid">
+              <div class="field wide">
+                <label>选择 PDF 文件</label>
+                <input class="input" type="file" accept="application/pdf,.pdf" @change="pdfUploadFile=$event.target.files[0]||null" />
+              </div>
+              <div class="field">
+                <label>批次（可选）</label>
+                <select class="select" v-model.number="pdfUploadBatchId">
+                  <option :value="null">不分批次</option>
+                  <option v-for="b in pdfTrainingBatches" :key="b.id" :value="b.id">{{ b.batch_name }}</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>保存 PDF 原文件到本地</label>
+                <select class="select" v-model="pdfUploadStore">
+                  <option :value="false">不保存（仅解析）</option>
+                  <option :value="true">保存到 data/pdf_training_samples/</option>
+                </select>
+              </div>
+              <div class="field wide"><label>备注</label><input class="input" v-model.trim="pdfUploadNotes" /></div>
+              <div class="field wide muted">上传后系统自动运行解析器并保存结果，供后续人工标注和评分。</div>
+            </div>
+
+            <!-- PDF 样本详情 + 标注 -->
+            <div v-else-if="modal.type === 'pdfSampleDetail' && pdfSampleDetail">
+              <div class="form-grid" style="margin-bottom:12px">
+                <div class="field"><label>文件名</label><div>{{ pdfSampleDetail.file_name }}</div></div>
+                <div class="field"><label>解析方式</label><div>{{ pdfSampleDetail.parse_method }}</div></div>
+                <div class="field"><label>状态</label>
+                  <div :style="{color:pdfSampleDetail.parse_status==='labeled'?'#2563eb':pdfSampleDetail.parse_status==='reviewed'?'#16a34a':'#6b7280',fontWeight:600}">
+                    {{ {pending:'待标注',labeled:'已标注',reviewed:'已复核'}[pdfSampleDetail.parse_status]||pdfSampleDetail.parse_status }}
+                  </div>
+                </div>
+                <div class="field"><label>评分</label>
+                  <div v-if="pdfSampleDetail.score!=null" :style="{color:pdfSampleDetail.score>=0.9?'#16a34a':pdfSampleDetail.score>=0.7?'#d97706':'#dc2626',fontWeight:700,fontSize:'18px'}">
+                    {{ (pdfSampleDetail.score*100).toFixed(1) }}%
+                  </div>
+                  <div v-else class="muted">未评分</div>
+                </div>
+                <div class="field wide">
+                  <label>解析器结果 JSON</label>
+                  <textarea class="textarea" readonly rows="5" style="font-family:monospace;font-size:11px">{{ pdfSampleDetail.parser_result_json ? JSON.stringify(JSON.parse(pdfSampleDetail.parser_result_json),null,2) : '（解析失败或无结果）' }}</textarea>
+                </div>
+                <div class="field wide">
+                  <label>人工标注 Ground Truth JSON</label>
+                  <textarea class="textarea" rows="8" style="font-family:monospace;font-size:11px" v-model="pdfGroundTruthEdit" placeholder='{"order_no":"THPO-xxx","customer_name":"xxx","order_date":"2024-01-15","items":[{"line_no":1,"product_code":"P001","quantity":100}]}'></textarea>
+                  <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">
+                    字段：order_no / customer_name / order_date / delivery_date / items[]{line_no, product_code, product_name, spec, quantity, unit, unit_price, amount}
+                  </div>
+                </div>
+              </div>
+              <div class="toolbar-group">
+                <button class="btn primary" :disabled="!pdfGroundTruthEdit || loading" @click="savePdfGroundTruth">保存标注 + 自动评分</button>
+                <button class="btn" :disabled="!pdfSampleDetail.ground_truth_json || loading" @click="rescorePdfSample">重新评分</button>
+              </div>
+            </div>
           </div>
           <div class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
@@ -1366,6 +1499,11 @@
             materialMappingFilterConf: '', materialMappingFilterStatus: '',
             materialMappingStats: {},
             versionInfo: {},
+            // Phase 18: PDF 训练库
+            pdfTrainingStats: null, pdfTrainingSamples: [], pdfSamplePage: 1,
+            pdfTrainingBatches: [],
+            pdfSampleDetail: null, pdfGroundTruthEdit: '',
+            pdfUploadFile: null, pdfUploadBatchId: null, pdfUploadStore: false, pdfUploadNotes: '',
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
@@ -1439,6 +1577,7 @@
             if (this.modal.type === "receipt") return this.canFinance;
             if (this.modal.type === "password") return true;
             if (this.modal.type === "resetPassword") return this.user?.role === "admin";
+            if (this.modal.type === "pdfUpload") return true;
             return false;
           },
           menus() {
@@ -2626,6 +2765,10 @@
                 });
                 await this.loadSystem();
               }
+              if (this.modal.type === "pdfUpload") {
+                await this.savePdfUpload();
+                return;
+              }
               this.closeModal(); this.showToast("保存成功");
             } catch (error) {
               const message = this.modal?.type === "order"
@@ -2827,6 +2970,106 @@
             try {
               const { data } = await axios.post('/api/system/flute-mapping/fix-consistency');
               this.showToast(`一致性修复完成：5层→3层 ${data.fixed_5layer_to_3} 个，3层双楞置空 ${data.fixed_3layer_to_null} 个`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+
+          // ── Phase 18: PDF 训练库 ──
+          async loadPdfTrainingStats() {
+            this.loading = true;
+            try {
+              const { data } = await axios.get('/api/pdf-training/stats');
+              this.pdfTrainingStats = data;
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async loadPdfTrainingSamples(page = 1) {
+            this.loading = true;
+            this.pdfSamplePage = page;
+            const offset = (page - 1) * 50;
+            try {
+              const { data } = await axios.get('/api/pdf-training/samples', { params: { limit: 50, offset } });
+              this.pdfTrainingSamples = data;
+              // 同时加载统计和批次
+              const [statsRes, batchRes] = await Promise.all([
+                axios.get('/api/pdf-training/stats'),
+                axios.get('/api/pdf-training/batches'),
+              ]);
+              this.pdfTrainingStats = statsRes.data;
+              this.pdfTrainingBatches = batchRes.data;
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          openPdfUploadModal() {
+            this.pdfUploadFile = null;
+            this.pdfUploadBatchId = null;
+            this.pdfUploadStore = false;
+            this.pdfUploadNotes = '';
+            this.modal = { type: 'pdfUpload', title: '上传 PDF 训练样本' };
+          },
+          async savePdfUpload() {
+            if (!this.pdfUploadFile) { this.showToast('请选择 PDF 文件', true); return; }
+            this.loading = true;
+            try {
+              const form = new FormData();
+              form.append('file', this.pdfUploadFile);
+              if (this.pdfUploadBatchId) form.append('batch_id', this.pdfUploadBatchId);
+              form.append('store_pdf', this.pdfUploadStore ? 'true' : 'false');
+              if (this.pdfUploadNotes) form.append('notes', this.pdfUploadNotes);
+              await axios.post('/api/pdf-training/samples/upload', form, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+              });
+              this.showToast('PDF 样本上传成功，解析已完成');
+              this.closeModal();
+              await this.loadPdfTrainingSamples(1);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async openPdfSampleDetail(sampleId) {
+            this.loading = true;
+            try {
+              const { data } = await axios.get(`/api/pdf-training/samples/${sampleId}`);
+              this.pdfSampleDetail = data;
+              this.pdfGroundTruthEdit = data.ground_truth_json
+                ? JSON.stringify(JSON.parse(data.ground_truth_json), null, 2)
+                : '';
+              this.modal = { type: 'pdfSampleDetail', title: `样本 #${sampleId} 详情与标注` };
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async savePdfGroundTruth() {
+            if (!this.pdfSampleDetail || !this.pdfGroundTruthEdit.trim()) return;
+            try { JSON.parse(this.pdfGroundTruthEdit); }
+            catch (e) { this.showToast('JSON 格式错误，请检查', true); return; }
+            this.loading = true;
+            try {
+              const { data } = await axios.put(
+                `/api/pdf-training/samples/${this.pdfSampleDetail.id}/ground-truth`,
+                { ground_truth_json: this.pdfGroundTruthEdit }
+              );
+              this.pdfSampleDetail = data;
+              this.showToast(`标注保存成功，评分：${(data.score * 100).toFixed(1)}%`);
+              await this.loadPdfTrainingSamples(this.pdfSamplePage);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async rescorePdfSample() {
+            if (!this.pdfSampleDetail) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post(`/api/pdf-training/samples/${this.pdfSampleDetail.id}/score`);
+              this.pdfSampleDetail = { ...this.pdfSampleDetail, score: data.overall_score };
+              this.showToast(`重新评分：${(data.overall_score * 100).toFixed(1)}%`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async deletePdfSample(sampleId) {
+            if (!confirm(`确认删除样本 #${sampleId}？此操作不可撤销。`)) return;
+            this.loading = true;
+            try {
+              await axios.delete(`/api/pdf-training/samples/${sampleId}`);
+              this.showToast('样本已删除');
+              await this.loadPdfTrainingSamples(this.pdfSamplePage);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },

@@ -29,6 +29,12 @@ from app.models.delivery import (  # noqa: E402,F401
     DeliveryItem,
 )
 from app.models.material_mapping import MaterialCodeMappingCandidate  # noqa: E402,F401
+from app.models.pdf_training import (  # noqa: E402,F401
+    PdfOrderTrainingBatch,
+    PdfOrderTrainingSample,
+    PdfOrderCustomerTemplate,
+    PdfOrderCorrectionLog,
+)
 from app.models.finance import (  # noqa: E402,F401
     Invoice,
     ReturnReceipt,

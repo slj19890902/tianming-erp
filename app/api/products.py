@@ -12,7 +12,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -75,6 +75,15 @@ class ProductPayload(BaseModel):
     flute_type: str | None = None
     layer_count: int | None = None
     surface_paper_type: str | None = None
+
+    @model_validator(mode="after")
+    def validate_flute_layer_consistency(self) -> "ProductPayload":
+        """拒绝非法楞型/层数组合（3层只能 A/B/E，5层只能 AB/BE）。"""
+        from app.services.flute_mapping import validate_flute_consistency
+        err = validate_flute_consistency(self.flute_type, self.layer_count)
+        if err:
+            raise ValueError(err)
+        return self
 
 
 class ProductDrawingResponse(BaseModel):

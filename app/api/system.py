@@ -905,3 +905,49 @@ def apply_flute_mapping(request: Request, db: Session = Depends(get_db)):
         "skipped_unrecognized": result.skipped_unrecognized,
         "changes": result.changes[:100],
     }
+
+
+@router.post(
+    "/flute-mapping/fix-consistency",
+    dependencies=[Depends(admin_only)],
+)
+def fix_flute_consistency(request: Request, db: Session = Depends(get_db)):
+    """
+    修复非法楞型/层数组合（admin only）：
+    - 5层 + A/B/E → layer_count 改为 3（单楞必然是三层）
+    - 3层 + AB/BE → flute_type 置 null（留人工确认）
+    调用前请先完成数据库备份。
+    """
+    from app.services.flute_mapping import apply_flute_consistency_fix
+
+    try:
+        result = apply_flute_consistency_fix(db)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"一致性修复失败: {exc}") from exc
+
+    db.add(
+        OperationLog(
+            user_id=getattr(request.state, "user_id", None),
+            action="flute_consistency_fix",
+            resource="products",
+            entity_type="products",
+            details=json.dumps(
+                {
+                    "fixed_5layer_to_3": result.fixed_5layer_to_3,
+                    "fixed_3layer_to_null": result.fixed_3layer_to_null,
+                    "sample_changes": result.changes[:20],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "fixed_5layer_to_3": result.fixed_5layer_to_3,
+        "fixed_3layer_to_null": result.fixed_3layer_to_null,
+        "changes": result.changes[:100],
+    }

@@ -99,7 +99,8 @@ class PdfOrderTrainingSample(Base):
             name="ck_pdf_sample_parse_status",
         ),
         CheckConstraint(
-            "parse_method IN ('text', 'ocr', 'failed', 'unknown')",
+            "parse_method IN ('text', 'ocr', 'failed', 'unknown', 'mixed', "
+            "'ocr_easyocr', 'ocr_tesseract', 'ocr_unavailable', 'ocr_failed')",
             name="ck_pdf_sample_parse_method",
         ),
     )
@@ -148,8 +149,11 @@ class PdfOrderTrainingSample(Base):
         String(20), nullable=False, default="unknown"
     )
 
-    # 原始提取文本（供调试，可选存储）
+    # 原始提取文本（PDF 文本层，供调试）
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # OCR 识别结果文本（Phase 19 新增；图片 PDF / 乱码 PDF 适用）
+    ocr_text_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(

@@ -1078,6 +1078,16 @@
                   </span>
                 </div>
 
+                <!-- OCR 状态提示 -->
+                <div v-if="pdfOcrStatus" style="margin-bottom:10px;font-size:12px;display:flex;align-items:center;gap:8px">
+                  <span :style="{
+                    display:'inline-block',padding:'2px 10px',borderRadius:'10px',fontSize:'11px',fontWeight:700,
+                    background: pdfOcrStatus.available ? '#d1fae5' : '#fee2e2',
+                    color: pdfOcrStatus.available ? '#065f46' : '#991b1b'
+                  }">OCR {{ pdfOcrStatus.available ? '✅ 可用' : '⚠️ 不可用' }}</span>
+                  <span style="color:var(--text-secondary)">{{ pdfOcrStatus.message }}</span>
+                </div>
+
                 <div class="toolbar-group" style="margin-bottom:12px">
                   <button class="btn" @click="loadPdfTrainingStats" :disabled="loading">刷新统计</button>
                   <button class="btn" style="background:#2563eb;color:#fff" @click="openPdfUploadModal" :disabled="loading">上传 PDF 样本</button>
@@ -1095,7 +1105,19 @@
                       <tr v-for="s in pdfTrainingSamples" :key="s.id">
                         <td>{{ s.id }}</td>
                         <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="s.file_name">{{ s.file_name }}</td>
-                        <td>{{ s.parse_method }}</td>
+                        <td>
+                          <span :style="{
+                            display:'inline-block',padding:'1px 7px',borderRadius:'10px',fontSize:'11px',fontWeight:600,
+                            background: s.parse_method==='text'?'#dbeafe':
+                                        s.parse_method==='ocr_easyocr'||s.parse_method==='ocr_tesseract'||s.parse_method==='ocr'?'#fef3c7':
+                                        s.parse_method==='mixed'?'#d1fae5':
+                                        s.parse_method==='ocr_unavailable'||s.parse_method==='ocr_failed'||s.parse_method==='failed'?'#fee2e2':'#f3f4f6',
+                            color: s.parse_method==='text'?'#1d4ed8':
+                                   s.parse_method==='ocr_easyocr'||s.parse_method==='ocr_tesseract'||s.parse_method==='ocr'?'#92400e':
+                                   s.parse_method==='mixed'?'#065f46':
+                                   s.parse_method==='ocr_unavailable'||s.parse_method==='ocr_failed'||s.parse_method==='failed'?'#991b1b':'#374151'
+                          }">{{ s.parse_method || '-' }}</span>
+                        </td>
                         <td>
                           <span :style="{
                             color: s.parse_status==='reviewed'?'#16a34a':s.parse_status==='labeled'?'#2563eb':'#6b7280',
@@ -1407,10 +1429,92 @@
                   </div>
                   <div v-else class="muted">未评分</div>
                 </div>
+                <!-- 解析方式说明 -->
+                <div class="field wide">
+                  <label>识别来源</label>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span :style="{
+                      display:'inline-block',padding:'2px 10px',borderRadius:'12px',fontSize:'12px',fontWeight:700,
+                      background: pdfSampleDetail.parse_method==='text'?'#dbeafe':
+                                  pdfSampleDetail.parse_method==='ocr_easyocr'||pdfSampleDetail.parse_method==='ocr_tesseract'||pdfSampleDetail.parse_method==='ocr'?'#fef3c7':
+                                  pdfSampleDetail.parse_method==='mixed'?'#d1fae5':
+                                  pdfSampleDetail.parse_method==='ocr_unavailable'||pdfSampleDetail.parse_method==='ocr_failed'||pdfSampleDetail.parse_method==='failed'?'#fee2e2':'#f3f4f6',
+                      color: pdfSampleDetail.parse_method==='text'?'#1d4ed8':
+                             pdfSampleDetail.parse_method==='ocr_easyocr'||pdfSampleDetail.parse_method==='ocr_tesseract'||pdfSampleDetail.parse_method==='ocr'?'#92400e':
+                             pdfSampleDetail.parse_method==='mixed'?'#065f46':
+                             pdfSampleDetail.parse_method==='ocr_unavailable'||pdfSampleDetail.parse_method==='ocr_failed'||pdfSampleDetail.parse_method==='failed'?'#991b1b':'#374151'
+                    }">{{ pdfSampleDetail.parse_method || '-' }}</span>
+                    <span style="font-size:12px;color:var(--text-secondary)">
+                      <template v-if="pdfSampleDetail.parse_method==='text'">✅ PDF 文本层提取成功</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='ocr_easyocr'">🔍 EasyOCR 识别（图片PDF / 乱码PDF）</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='ocr_tesseract'">🔍 Tesseract OCR 识别</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='ocr'">🔍 OCR 识别</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='mixed'">🔀 文本层+OCR 混合识别</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='ocr_unavailable'">⚠️ OCR 引擎未安装，无法识别图片PDF</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='ocr_failed'">❌ OCR 识别失败</template>
+                      <template v-else-if="pdfSampleDetail.parse_method==='failed'">❌ 解析失败</template>
+                      <template v-else>{{ pdfSampleDetail.parse_method }}</template>
+                    </span>
+                  </div>
+                </div>
+
+                <!-- PDF 提取文本 -->
+                <div class="field wide" v-if="pdfSampleDetail.extracted_text">
+                  <label>PDF 文本提取结果</label>
+                  <textarea class="textarea" readonly rows="4" style="font-family:monospace;font-size:11px;color:#374151">{{ pdfSampleDetail.extracted_text }}</textarea>
+                </div>
+
+                <!-- OCR 识别文本 -->
+                <div class="field wide" v-if="pdfSampleDetail.ocr_text_raw">
+                  <label>OCR 识别结果</label>
+                  <textarea class="textarea" readonly rows="4" style="font-family:monospace;font-size:11px;color:#92400e;background:#fffbeb">{{ pdfSampleDetail.ocr_text_raw }}</textarea>
+                  <div style="font-size:11px;color:var(--text-secondary);margin-top:3px">
+                    OCR 识别原文 — 用于解析的文本来源（EasyOCR 本地推断，不含置信度数值）
+                  </div>
+                </div>
+                <div class="field wide" v-else-if="['ocr_easyocr','ocr_tesseract','ocr','ocr_failed'].includes(pdfSampleDetail.parse_method)">
+                  <label>OCR 识别结果</label>
+                  <div class="muted" style="font-size:12px">
+                    <template v-if="pdfSampleDetail.parse_method==='ocr_failed'">❌ OCR 识别失败，无识别文本</template>
+                    <template v-else>（OCR 已运行，但识别文本未存储）</template>
+                  </div>
+                </div>
+
+                <!-- 解析器结果 JSON + 天华字段明细 -->
                 <div class="field wide">
                   <label>解析器结果 JSON</label>
                   <textarea class="textarea" readonly rows="5" style="font-family:monospace;font-size:11px">{{ pdfSampleDetail.parser_result_json ? JSON.stringify(JSON.parse(pdfSampleDetail.parser_result_json),null,2) : '（解析失败或无结果）' }}</textarea>
                 </div>
+
+                <!-- 天华字段明细表 -->
+                <div class="field wide" v-if="pdfSampleDetail.parser_result_json && pdfDetailItems.length">
+                  <label>明细行拆分（天华专项字段）</label>
+                  <div style="overflow-x:auto;margin-top:4px">
+                    <table class="data-table" style="font-size:11px;min-width:900px">
+                      <thead><tr>
+                        <th>行</th><th>料品编码</th><th>物料名称</th><th>天华型号</th>
+                        <th>尺寸规格</th><th>旧材质代码</th><th>楞型</th><th>层数</th>
+                        <th>面纸</th><th>数量</th><th>交期</th>
+                      </tr></thead>
+                      <tbody>
+                        <tr v-for="item in pdfDetailItems" :key="item.line_no">
+                          <td>{{ item.line_no }}</td>
+                          <td>{{ item.product_code || '-' }}</td>
+                          <td style="max-width:180px;white-space:normal">{{ item.display_product_name || item.product_name || '-' }}</td>
+                          <td><strong style="color:#1d4ed8">{{ item.customer_model || '-' }}</strong></td>
+                          <td style="white-space:nowrap">{{ item.size_spec || item.spec || '-' }}</td>
+                          <td style="font-family:monospace;color:#6b7280">{{ item.old_material_code || '-' }}</td>
+                          <td><span v-if="item.flute_type" style="font-weight:700;color:#7c3aed">{{ item.flute_type }}</span><span v-else>-</span></td>
+                          <td>{{ item.layer_count != null ? item.layer_count + '层' : '-' }}</td>
+                          <td>{{ item.surface_paper_type ? {white:'白底',kraft:'牛卡'}[item.surface_paper_type]||item.surface_paper_type : '-' }}</td>
+                          <td>{{ item.quantity != null ? item.quantity : '-' }}</td>
+                          <td style="white-space:nowrap">{{ item.delivery_date || '-' }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
                 <div class="field wide">
                   <label>人工标注 Ground Truth JSON</label>
                   <textarea class="textarea" rows="8" style="font-family:monospace;font-size:11px" v-model="pdfGroundTruthEdit" placeholder='{"order_no":"THPO-xxx","customer_name":"xxx","order_date":"2024-01-15","items":[{"line_no":1,"product_code":"P001","quantity":100}]}'></textarea>
@@ -1499,11 +1603,12 @@
             materialMappingFilterConf: '', materialMappingFilterStatus: '',
             materialMappingStats: {},
             versionInfo: {},
-            // Phase 18: PDF 训练库
+            // Phase 18/19: PDF 训练库
             pdfTrainingStats: null, pdfTrainingSamples: [], pdfSamplePage: 1,
             pdfTrainingBatches: [],
             pdfSampleDetail: null, pdfGroundTruthEdit: '',
             pdfUploadFile: null, pdfUploadBatchId: null, pdfUploadStore: false, pdfUploadNotes: '',
+            pdfOcrStatus: null,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
@@ -1550,6 +1655,17 @@
           };
         },
         computed: {
+          // 天华专项字段明细：从 pdfSampleDetail 的 parser_result_json 中提取 items
+          pdfDetailItems() {
+            if (!this.pdfSampleDetail?.parser_result_json) return [];
+            try {
+              const parsed = JSON.parse(this.pdfSampleDetail.parser_result_json);
+              const items = parsed.items || [];
+              // 只要有 customer_model / old_material_code / size_spec 等天华字段才显示
+              const hasTianhua = items.some(it => it.customer_model || it.old_material_code || it.size_spec);
+              return hasTianhua ? items : [];
+            } catch { return []; }
+          },
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
           productFluteLayerError() {
@@ -2975,11 +3091,19 @@
           },
 
           // ── Phase 18: PDF 训练库 ──
+          async loadPdfOcrStatus() {
+            try {
+              const { data } = await axios.get('/api/pdf-training/ocr-status');
+              this.pdfOcrStatus = data;
+            } catch { /* 非关键，静默失败 */ }
+          },
           async loadPdfTrainingStats() {
             this.loading = true;
             try {
               const { data } = await axios.get('/api/pdf-training/stats');
               this.pdfTrainingStats = data;
+              // 同时加载 OCR 状态（只加载一次）
+              if (!this.pdfOcrStatus) this.loadPdfOcrStatus();
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },

@@ -25,9 +25,10 @@ ITEM_RE = re.compile(
     r"(?P<unit_price>\d+(?:\.\d+)?)\s+(?P<amount>[\d,]+(?:\.\d+)?)\s+"
     r"(?P<delivery_date>20\d{2}[./]\d{2}[./]\d{2})$"
 )
+# 规格起始匹配 — 加 (?<!\() 防止误把名称末尾括号 (24*36) 当成规格起始
 SPEC_START_RE = re.compile(
-    r"(?=(?:\(?\d+(?:\.\d+)?(?:[\"”]|cm|mm|\*)|"
-    r"\d+(?:\.\d+)?\s*[×xX*]\s*\d+))",
+    r"(?<!\()(?=(?:\d+(?:\.\d+)?(?:cm|mm|\*)|"
+    r"\d+(?:\.\d+)?\s*[xX*]\s*\d+))",
     re.IGNORECASE,
 )
 DIMENSION_RE = re.compile(
@@ -35,6 +36,17 @@ DIMENSION_RE = re.compile(
     r"(?:\s*[×xX*]\s*\d+(?:\.\d+)?)?\s*(?:cm|mm)?)(?!\d)",
     re.IGNORECASE,
 )
+
+# 天华旧材质代码：如 W535A/AB、T5P/A、A535T/AB
+# 格式: 字母+数字+字母序列 / 楞型
+OLD_MATERIAL_CODE_RE = re.compile(
+    r"\b([A-Z]\d+[A-Z0-9]*/(?:AB|BE|A|B|E))\b",
+    re.IGNORECASE,
+)
+# 天华型号：THH10 / THB10 / THH8 / THB8 等
+TIANHUA_MODEL_RE = re.compile(r"\b(TH[HB]\d+)\b", re.IGNORECASE)
+# 天华 extra mark (单字母，如 R)
+EXTRA_MARK_RE = re.compile(r"\b([A-Z])\b(?!\d)")
 
 
 def file_sha256(content: bytes) -> str:
@@ -47,7 +59,7 @@ def extract_text_from_pdf_bytes(content: bytes) -> str:
 
 
 def _clean_line(value: str) -> str:
-    return re.sub(r"\s+", " ", value.replace("\u3000", " ")).strip()
+    return re.sub(r"\s+", " ", value.replace("　", " ")).strip()
 
 
 def _normalize_date(raw: str | None) -> str | None:
@@ -86,6 +98,18 @@ def _extract_customer_name(lines: list[str], customer_po: str) -> str | None:
     return None
 
 
+def _join_record_lines(lines: list[str]) -> str:
+    """合并明细行，修复跨行断号：如 '18.' + '5cm' → '18.5cm'。"""
+    parts: list[str] = []
+    for line in lines:
+        if parts and re.search(r"\d\.$", parts[-1]) and re.match(r"^\d", line):
+            # 上一行末尾是 "数字." 且本行以数字开头 → 属于同一个小数
+            parts[-1] = parts[-1] + line
+        else:
+            parts.append(line)
+    return " ".join(parts)
+
+
 def _split_records(lines: list[str]) -> list[list[str]]:
     records: list[list[str]] = []
     current: list[str] = []
@@ -111,16 +135,32 @@ def _split_records(lines: list[str]) -> list[list[str]]:
     return records
 
 
+def _find_spec_start_outside_parens(text: str) -> int | None:
+    """返回规格起始位置（跳过括号内的内容，如产品名称末尾的 (24*36)）。"""
+    depth = 0
+    for i, c in enumerate(text):
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and c.isdigit():
+            # 检查是否是尺寸规格起始
+            if re.match(r"\d+(?:\.\d+)?(?:cm|mm|[*xX])", text[i:], re.IGNORECASE):
+                return i
+    return None
+
+
 def _split_name_and_spec(first_body: str, full_body: str) -> tuple[str, str]:
-    match = SPEC_START_RE.search(first_body)
-    if match and match.start() > 0:
-        name = first_body[: match.start()].strip()
-        first_spec = first_body[match.start() :].strip()
-        remaining = full_body[len(first_body) :].strip()
+    # 使用括号深度感知的规格起始检测，避免把 (24*36) 里的数字误认为规格
+    pos = _find_spec_start_outside_parens(first_body)
+    if pos is not None and pos > 0:
+        name = first_body[:pos].strip()
+        first_spec = first_body[pos:].strip()
+        remaining = full_body[len(first_body):].strip()
         return name, _clean_line(f"{first_spec} {remaining}")
     parts = first_body.split(maxsplit=1)
     name = parts[0] if parts else first_body
-    spec = full_body[len(name) :].strip()
+    spec = full_body[len(name):].strip()
     return name, spec
 
 
@@ -135,13 +175,115 @@ def _extract_spec_dimensions(raw_spec: str) -> str:
     return re.sub(r"\s+", "", selected)
 
 
+# ---------------------------------------------------------------------------
+# 天华订单专项字段解析
+# ---------------------------------------------------------------------------
+
+_FLUTE_SUFFIX_MAP = {
+    "AB": ("AB", 5),
+    "BE": ("BE", 5),
+    "A":  ("A",  3),
+    "B":  ("B",  3),
+    "E":  ("E",  3),
+}
+
+def _parse_old_material_code(code: str | None) -> dict:
+    """解析旧材质代码，返回 flute_type / layer_count / surface_paper_type。
+
+    示例：
+      W535A/AB → flute_type="AB", layer_count=5, surface_paper_type="white"
+      T5P/A    → flute_type="A",  layer_count=3, surface_paper_type=None
+      A535T/AB → flute_type="AB", layer_count=5, surface_paper_type=None
+    """
+    if not code:
+        return {}
+    m = re.search(r"/([A-Z]+)$", code.upper())
+    if not m:
+        return {}
+    suffix = m.group(1)
+    if suffix not in _FLUTE_SUFFIX_MAP:
+        return {}
+    flute_type, layer_count = _FLUTE_SUFFIX_MAP[suffix]
+    surface = "white" if re.match(r"^W", code, re.IGNORECASE) else None
+    return {
+        "flute_type": flute_type,
+        "layer_count": layer_count,
+        "surface_paper_type": surface,
+    }
+
+
+def _is_tianhua_customer(customer_name: str | None) -> bool:
+    """判断是否是天华系客户。"""
+    if not customer_name:
+        return False
+    markers = ("天华", "canmax", "tianhua", "THPO")
+    return any(m.lower() in customer_name.lower() for m in markers)
+
+
+def _enrich_tianhua_item(item: dict, spec_raw: str) -> dict:
+    """
+    从规格型号原文中提取天华专属字段：
+      - customer_material_code (= product_code for 天华)
+      - customer_model         (THH10 / THB10 / THH8 / THB8)
+      - old_material_code      (W535A/AB / T5P/A 等)
+      - size_spec              (尺寸规格描述)
+      - extra_mark             (R 等标记)
+      - display_product_name   (product_name + customer_model)
+      - flute_type / layer_count / surface_paper_type  (从旧材质代码推断)
+    """
+    enriched = dict(item)
+
+    # customer_material_code = 天华料品编码 (= product_code)
+    enriched["customer_material_code"] = item.get("product_code", "")
+
+    # 天华型号
+    th_match = TIANHUA_MODEL_RE.search(spec_raw)
+    enriched["customer_model"] = th_match.group(1).upper() if th_match else ""
+
+    # 旧材质代码
+    mat_match = OLD_MATERIAL_CODE_RE.search(spec_raw)
+    old_mat = mat_match.group(1).upper() if mat_match else ""
+    enriched["old_material_code"] = old_mat
+
+    # 楞型推断
+    mat_info = _parse_old_material_code(old_mat)
+    enriched.update(mat_info)
+
+    # size_spec：取第一行中的尺寸描述（去掉材质代码和型号后的文字）
+    # 原文可能是：'95.5*63.5*18.5cm 5盒/箱 W535A/AB THH10 R'
+    size_text = spec_raw
+    if old_mat:
+        size_text = size_text.replace(old_mat, "")
+    if enriched["customer_model"]:
+        size_text = size_text.replace(enriched["customer_model"], "")
+    # 去掉 extra_mark（独立单字母）
+    extra_candidates = EXTRA_MARK_RE.findall(size_text)
+    extra_mark = extra_candidates[-1] if extra_candidates else ""
+    if extra_mark:
+        size_text = re.sub(r"\b" + extra_mark + r"\b", "", size_text)
+    enriched["extra_mark"] = extra_mark
+    enriched["size_spec"] = _clean_line(size_text)
+
+    # display_product_name
+    pname = item.get("product_name", "")
+    model = enriched["customer_model"]
+    enriched["display_product_name"] = f"{pname} {model}".strip() if model else pname
+
+    return enriched
+
+
 def _parse_record(record_lines: list[str]) -> dict | None:
-    joined = " ".join(record_lines)
+    # 修复跨行断号（如 "18." + "5cm" → "18.5cm"）
+    joined = _join_record_lines(record_lines)
     match = ITEM_RE.match(joined)
     if not match:
         return None
     first_body = re.sub(r"^\d+\s+\S+\s+", "", record_lines[0], count=1)
-    raw_name, raw_spec = _split_name_and_spec(first_body, match.group("body"))
+    body = match.group("body")  # 已合并的完整 body（去掉行号+料号+单位+数量+金额+日期）
+    raw_name, raw_spec = _split_name_and_spec(first_body, body)
+    # raw_spec_for_enrichment: body 里名称之后的部分，只包含规格信息（不含数量/金额列）
+    name_len = len(first_body) if body.startswith(first_body) else len(raw_name)
+    raw_spec_for_enrichment = body[name_len:].strip() if len(body) > name_len else raw_spec
     raw_spec = _extract_spec_dimensions(raw_spec)
     code = match.group("product_code")
     return {
@@ -149,6 +291,7 @@ def _parse_record(record_lines: list[str]) -> dict | None:
         "raw_product_code": code,
         "raw_product_name": raw_name,
         "raw_spec_model": raw_spec,
+        "raw_spec_for_enrichment": raw_spec_for_enrichment,
         # Compatibility aliases for the existing order form.
         "product_code": code,
         "product_name": raw_name,
@@ -176,17 +319,30 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
     if not order_match:
         raise ValueError("未识别到采购订单号")
     customer_po = order_match.group(1).upper()
-    items = [item for record in _split_records(lines) if (item := _parse_record(record))]
-    if not items:
+    items_raw = [item for record in _split_records(lines) if (item := _parse_record(record))]
+    if not items_raw:
         raise ValueError("未识别到订单明细")
+
+    # 提取客户名
+    customer_name = _extract_customer_name(lines, customer_po)
+    is_tianhua = _is_tianhua_customer(customer_name) or customer_po.startswith("THPO") or customer_po.startswith("PO20")
+
+    # 天华专属字段补全
+    items: list[dict] = []
+    for item in items_raw:
+        spec_raw = item.pop("raw_spec_for_enrichment", item.get("raw_spec_model", ""))
+        if is_tianhua:
+            item = _enrich_tianhua_item(item, spec_raw)
+        items.append(item)
+
     dates = [item["delivery_date"] for item in items if item["delivery_date"]]
     order_dates = [_normalize_date(line) for line in lines]
     order_date = next((value for value in order_dates if value), None)
     return {
         "source_name": source_name or "uploaded.pdf",
         "source_type": "purchase_order_pdf",
-        "customer_name_raw": _extract_customer_name(lines, customer_po),
-        "customer_name": _extract_customer_name(lines, customer_po),
+        "customer_name_raw": customer_name,
+        "customer_name": customer_name,
         "customer_po": customer_po,
         "order_date": order_date,
         "delivery_date": dates[0] if dates else None,
@@ -196,6 +352,7 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
         "item_count": len(items),
         "items": items,
         "warnings": [],
+        "is_tianhua": is_tianhua,
     }
 
 

@@ -3,8 +3,8 @@ ERP 系统版本信息。
 每次发布更新此文件，不依赖数据库。
 """
 
-APP_VERSION = "v0.18.0"
-APP_VERSION_NAME = "楞型一致性修复 + PDF 识别训练库版"
+APP_VERSION = "v0.19.0"
+APP_VERSION_NAME = "天华模板优化 + PDF OCR 支持版"
 APP_BUILD_DATE = "2026-06-24"
 
 APP_CHANGELOG = [
@@ -17,4 +17,9 @@ APP_CHANGELOG = [
     "v0.18.0：PDF 解析评分服务（字段级准确率 0–1 分）",
     "v0.18.0：管理端 PDF 样本上传、标注、评分、纠错记录功能",
     "v0.18.0：客户级 PDF 解析模板表（为定制正则规则预留基础）",
+    "v0.18.1：修复 _SAMPLE_DIR 相对路径 + 启动时自动创建样本目录",
+    "v0.19.0：天华超净/天华新能源专项解析优化：括号内容保留、TH型号提取、旧材质代码拆分、楞型推断",
+    "v0.19.0：新增 PDF OCR 支持（PyMuPDF + EasyOCR）：图片扫描 PDF / 乱码字体 PDF",
+    "v0.19.0：OCR 优雅降级：未安装 OCR 引擎时标记 ocr_unavailable，不崩溃",
+    "v0.19.0：训练样本新增 ocr_text_raw 字段，记录 OCR 识别原文",
 ]

@@ -50,6 +50,7 @@ from app.services.order_pdf_import import (
     file_sha256,
     parse_purchase_order_text,
 )
+from app.services.pdf_ocr import ocr_available, ocr_engine_name, ocr_pdf_bytes, should_use_ocr
 from app.services.pdf_scoring import compute_stats, score_sample
 
 router = APIRouter()
@@ -124,6 +125,7 @@ class SampleDetail(SampleSummary):
     parser_result_json: str | None
     ground_truth_json: str | None
     extracted_text: str | None
+    ocr_text_raw: str | None
     notes: str | None
 
 
@@ -305,22 +307,49 @@ async def upload_sample(
             detail=f"该 PDF 已上传（样本 ID={existing.id}，文件 SHA256 重复）",
         )
 
-    # 解析
+    # ── 步骤1：PDF 文本提取 ──────────────────────────────────────────────
     extracted_text: str | None = None
     parser_result_json: str | None = None
+    parse_result: dict | None = None
     parse_method = "failed"
     try:
         extracted_text = extract_text_from_pdf_bytes(content)
         if extracted_text and extracted_text.strip():
-            parse_method = "text"
-            result = parse_purchase_order_text(extracted_text)
-            parser_result_json = json.dumps(result, ensure_ascii=False, default=str)
-        else:
-            parse_method = "failed"
+            try:
+                parse_result = parse_purchase_order_text(extracted_text)
+                parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
+                parse_method = "text"
+            except ValueError:
+                # 文本提取成功但解析失败（乱码 / 格式不符）
+                parse_method = "failed"
     except Exception:
         parse_method = "failed"
 
-    # 可选：落盘 PDF 原文件
+    # ── 步骤2：OCR 兜底（图片 PDF / 乱码 PDF）─────────────────────────
+    ocr_text_raw: str | None = None
+    if should_use_ocr(extracted_text, parse_result):
+        ocr_text, ocr_method = ocr_pdf_bytes(content)
+        if ocr_text and ocr_method not in ("ocr_unavailable", "ocr_failed"):
+            ocr_text_raw = ocr_text
+            # 尝试用 OCR 文本重新解析
+            if parse_result is None or not parse_result.get("items"):
+                try:
+                    ocr_parse = parse_purchase_order_text(ocr_text)
+                    parser_result_json = json.dumps(ocr_parse, ensure_ascii=False, default=str)
+                    parse_result = ocr_parse
+                    # 如果原文本解析也部分成功，标记为 mixed；否则纯 OCR
+                    parse_method = "mixed" if extracted_text and extracted_text.strip() else ocr_method
+                except ValueError:
+                    parse_method = ocr_method  # OCR 了但仍解析失败
+            else:
+                # 已有文本解析结果，仅保存 OCR 文本供参考
+                parse_method = "mixed"
+        elif ocr_method == "ocr_unavailable":
+            # OCR 引擎未配置，记录但不覆盖现有方法
+            if parse_method == "failed":
+                parse_method = "ocr_unavailable"
+
+    # ── 步骤3：落盘 PDF 原文件 ─────────────────────────────────────────
     file_path: str | None = None
     if store_pdf:
         _SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
@@ -337,6 +366,7 @@ async def upload_sample(
         file_path=file_path,
         parser_result_json=parser_result_json,
         extracted_text=extracted_text,
+        ocr_text_raw=ocr_text_raw,
         parse_method=parse_method,
         parse_status="pending",
         notes=notes,
@@ -620,6 +650,23 @@ def delete_template(
     _log(db, user, "pdf_training.template.delete", f"删除模板 {template_id}: {tmpl.template_name}")
     db.delete(tmpl)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# OCR 状态
+# ---------------------------------------------------------------------------
+
+@router.get("/ocr-status")
+def get_ocr_status(_user: User = Depends(get_current_user)):
+    """返回当前服务器 OCR 能力状态。"""
+    return {
+        "available": ocr_available(),
+        "engine": ocr_engine_name(),
+        "message": (
+            "OCR 就绪" if ocr_available()
+            else "OCR 未配置：请安装 pymupdf + easyocr 或 tesseract"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

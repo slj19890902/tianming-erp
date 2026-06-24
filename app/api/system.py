@@ -795,6 +795,19 @@ def apply_customer_codes(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/version")
+def get_version():
+    """返回当前 ERP 系统版本信息（无需登录）。"""
+    from app.version import APP_BUILD_DATE, APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
+
+    return {
+        "version": APP_VERSION,
+        "version_name": APP_VERSION_NAME,
+        "build_date": APP_BUILD_DATE,
+        "changelog": APP_CHANGELOG,
+    }
+
+
 @router.get(
     "/material-mapping/preview-customer-codes",
     dependencies=[Depends(admin_only)],
@@ -810,4 +823,85 @@ def preview_customer_codes(db: Session = Depends(get_db)):
         "skipped": preview.skipped,
         "samples_update": preview.samples_update,
         "samples_skip": preview.samples_skip[:20],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: 楞型批量识别端点
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/flute-mapping/preview",
+    dependencies=[Depends(admin_only)],
+)
+def preview_flute_mapping(db: Session = Depends(get_db)):
+    """只读预览：显示当前所有有效产品的楞型识别结果（不写库）。"""
+    from app.services.flute_mapping import preview_flute_mapping as _preview
+
+    preview = _preview(db)
+    return {
+        "total_products": preview.total_products,
+        "will_update": preview.will_update,
+        "already_set": preview.already_set,
+        "unrecognized": preview.unrecognized,
+        "rows": [
+            {
+                "product_id": r.product_id,
+                "product_code": r.product_code,
+                "product_name": r.product_name,
+                "current_flute_type": r.current_flute_type,
+                "proposed_flute_type": r.proposed_flute_type,
+                "proposed_layer_count": r.proposed_layer_count,
+                "source": r.source,
+                "legacy_flute_text": r.legacy_flute_text,
+            }
+            for r in preview.rows[:200]  # 最多返回前200行
+        ],
+    }
+
+
+@router.post(
+    "/flute-mapping/apply",
+    dependencies=[Depends(admin_only)],
+)
+def apply_flute_mapping(request: Request, db: Session = Depends(get_db)):
+    """
+    批量写入楞型（admin only）。
+    只更新 flute_type 为 NULL 的有效产品，不覆盖已有值。
+    调用前必须已完成数据库备份。
+    """
+    from app.services.flute_mapping import apply_flute_mapping as _apply
+
+    try:
+        result = _apply(db)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"楞型写入失败: {exc}") from exc
+
+    db.add(
+        OperationLog(
+            user_id=getattr(request.state, "user_id", None),
+            action="flute_mapping_apply",
+            resource="products",
+            entity_type="products",
+            details=json.dumps(
+                {
+                    "updated": result.updated,
+                    "skipped_already_set": result.skipped_already_set,
+                    "skipped_unrecognized": result.skipped_unrecognized,
+                    "sample_changes": result.changes[:20],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "updated": result.updated,
+        "skipped_already_set": result.skipped_already_set,
+        "skipped_unrecognized": result.skipped_unrecognized,
+        "changes": result.changes[:100],
     }

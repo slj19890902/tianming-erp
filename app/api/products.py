@@ -71,6 +71,10 @@ class ProductPayload(BaseModel):
     die_cut_path: str | None = None
     remark: str | None = None
     is_active: bool = True
+    # Phase 17: 楞型字段
+    flute_type: str | None = None
+    layer_count: int | None = None
+    surface_paper_type: str | None = None
 
 
 class ProductDrawingResponse(BaseModel):

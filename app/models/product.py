@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -112,6 +113,12 @@ class Product(Base):
     legacy_customer_material_code: Mapped[str | None] = mapped_column(
         String(150), nullable=True
     )
+    # Phase 17: 楞型相关字段（直接存储，不依赖 material_id）
+    flute_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    surface_paper_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 楞型批量识别前的原始文本快照
+    legacy_flute_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime,

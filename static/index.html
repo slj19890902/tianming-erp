@@ -576,7 +576,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质（克重）</th><th>楞型</th><th>状态</th><th>图纸版本</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.customer_material_code || row.product_code) }}</strong></td><td>{{ plainProductText(row.product_name) }}</td><td>{{ spec(row) }}</td><td>{{ materialDisplay(row.material_id, row.legacy_material_text) }}</td><td>{{ materialFlute(row.material_id) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td>{{ drawingVersionText(row) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质（克重）</th><th>楞型</th><th>状态</th><th>图纸版本</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.customer_material_code || row.product_code) }}</strong></td><td>{{ plainProductText(row.product_name) }}</td><td>{{ spec(row) }}</td><td>{{ materialDisplay(row.material_id, row.legacy_material_text) }}</td><td>{{ row.flute_type || materialFlute(row.material_id) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td>{{ drawingVersionText(row) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -611,7 +611,17 @@
                     <div class="order-status-tabs">
                       <button v-for="tab in orderStatusTabs" :key="tab.value"
                               :class="['status-tab-btn', {active: filters.orderStatus === tab.value}]"
-                              @click="filters.orderStatus=tab.value; pages.orders=1; loadOrders()">{{ tab.label }}</button>
+                              @click="filters.orderStatus=tab.value; pages.orders=1; loadOrders(); showOrderMoreMenu=false">{{ tab.label }}</button>
+                      <div style="position:relative;display:inline-block">
+                        <button :class="['status-tab-btn', {active: orderStatusMoreTabs.some(t=>t.value===filters.orderStatus)}]"
+                                @click.stop="showOrderMoreMenu=!showOrderMoreMenu">更多 ▾</button>
+                        <div v-if="showOrderMoreMenu" style="position:absolute;top:100%;left:0;z-index:200;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.1);min-width:90px;padding:4px 0" @click.stop>
+                          <button v-for="tab in orderStatusMoreTabs" :key="tab.value"
+                                  :class="['status-tab-btn', {active: filters.orderStatus === tab.value}]"
+                                  style="display:block;width:100%;text-align:left;border-radius:0;padding:6px 14px"
+                                  @click="filters.orderStatus=tab.value; pages.orders=1; loadOrders(); showOrderMoreMenu=false">{{ tab.label }}</button>
+                        </div>
+                      </div>
                     </div>
                     <button class="btn" @click="pages.orders=1; loadOrders()">搜索</button>
                     <button class="btn" @click="resetOrderFilters()">清空</button>
@@ -877,6 +887,17 @@
                 <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in systemUsers" :key="row.id"><td>{{ row.username }}</td><td>{{ row.real_name }}</td><td>{{ roleLabel(row.role) }}</td><td>{{ row.must_change_password ? "是" : "否" }}</td><td><button class="btn small danger" @click="openResetPassword(row)">重置密码</button></td></tr></tbody></table></div>
               </div>
+              <div class="section-title">系统版本</div>
+              <div class="panel" style="margin-bottom:10px;padding:14px 18px">
+                <div style="display:flex;flex-wrap:wrap;gap:12px 28px;align-items:baseline;font-size:14px">
+                  <span style="font-size:18px;font-weight:700;color:var(--primary)">{{ versionInfo.version || '-' }}</span>
+                  <span style="font-weight:600">{{ versionInfo.version_name || '' }}</span>
+                  <span class="muted">发布日期：{{ versionInfo.build_date || '-' }}</span>
+                </div>
+                <ul v-if="(versionInfo.changelog||[]).length" style="margin:10px 0 0 0;padding-left:18px;font-size:13px;color:var(--text-secondary)">
+                  <li v-for="item in versionInfo.changelog" :key="item">{{ item }}</li>
+                </ul>
+              </div>
               <div class="section-title">数据备份</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
@@ -1011,6 +1032,19 @@
                   <button class="btn small" :disabled="materialMappingItems.length<50" @click="loadMaterialMapping(materialMappingPage+1)">下一页</button>
                 </div>
               </data-panel>
+
+              <!-- ── 楞型批量识别 ── -->
+              <div class="section-title" style="margin-top:24px">楞型批量识别（Phase 17）</div>
+              <div class="panel" style="margin-bottom:10px;padding:14px 18px">
+                <div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">
+                  根据产品关联材质（flute_type）或材质文本（克重段数、后缀规则）自动识别楞型，写入 products.flute_type / layer_count。
+                  仅更新 flute_type 为空的有效产品，不覆盖已有值。<strong style="color:#dc2626">写入前请先完成数据库备份！</strong>
+                </div>
+                <div class="toolbar-group">
+                  <button class="btn" @click="previewFluteMapping" :disabled="loading">预览识别结果</button>
+                  <button class="btn" style="background:#16a34a;color:#fff" @click="applyFluteMapping" :disabled="loading">执行楞型写入</button>
+                </div>
+              </div>
             </template>
           </main>
         </div>
@@ -1038,6 +1072,8 @@
               <div class="field"><label>客户料号</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
               <div class="field"><label>材质</label><select class="select" v-model="productForm.material_id"><option :value="null">未指定</option><option v-for="m in materials" :value="m.id">{{ m.code }}</option></select></div>
+              <div class="field"><label>楞型</label><select class="select" v-model="productForm.flute_type"><option :value="null">未设置</option><option value="AB">AB（五层）</option><option value="A">A（三层）</option><option value="B">B（三层）</option><option value="E">E（三层）</option><option value="BE">BE（五层）</option></select></div>
+              <div class="field"><label>层数</label><input class="input" type="number" min="1" max="9" placeholder="3 或 5" v-model.number="productForm.layer_count" /></div>
               <div class="field"><label>箱型</label><select class="select" v-model="productForm.box_category"><option value="normal">普通箱</option><option value="die_cut">模切箱</option></select></div>
               <div class="field"><label>长(mm)</label><input class="input" type="number" v-model="productForm.length_mm" /></div>
               <div class="field"><label>宽(mm)</label><input class="input" type="number" v-model="productForm.width_mm" /></div>
@@ -1276,7 +1312,8 @@
         production_process: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, drawings: [],
-        remark: "", is_active: true
+        remark: "", is_active: true,
+        flute_type: null, layer_count: null, surface_paper_type: null
       });
       const blankMaterial = () => ({
         id:null, code:"", paper_composition:"", layer_count:5, flute_type:"AB",
@@ -1296,6 +1333,7 @@
             materialMappingItems: [], materialMappingTotal: 0, materialMappingPage: 1,
             materialMappingFilterConf: '', materialMappingFilterStatus: '',
             materialMappingStats: {},
+            versionInfo: {},
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
@@ -1310,13 +1348,16 @@
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"business", orderView:"customer_po" },
             orderStatusTabs: [
               { label: "日常订单", value: "business" },
-              { label: "历史订单", value: "history" },
-              { label: "未送货", value: "unfinished" },
-              { label: "待确认", value: "pending_confirmation" },
-              { label: "待生产", value: "pending_production" },
+              { label: "待处理", value: "pending_confirmation" },
               { label: "生产中", value: "production" },
               { label: "待送货", value: "pending_delivery" },
+              { label: "已完成", value: "history" },
             ],
+            orderStatusMoreTabs: [
+              { label: "未送货", value: "unfinished" },
+              { label: "待生产", value: "pending_production" },
+            ],
+            showOrderMoreMenu: false,
             showAdvancedFilter: false,
             showOrderItemDanger: false,
             showOrderEditDanger: false,
@@ -1849,12 +1890,14 @@
             };
           },
           async loadSystem() {
-            const [backups, users] = await Promise.all([
+            const [backups, users, version] = await Promise.all([
               axios.get("/api/system/backups"),
-              axios.get("/api/auth/users")
+              axios.get("/api/auth/users"),
+              axios.get("/api/system/version"),
             ]);
             this.backups = backups.data.items;
             this.systemUsers = users.data.items;
+            this.versionInfo = version.data;
             await this.loadMaterialMapping(1);
           },
           forgotPassword() {
@@ -2696,6 +2739,24 @@
             try {
               const { data } = await axios.post('/api/system/material-mapping/apply-customer-codes');
               this.showToast(`已更新 ${data.updated} 个产品料号，跳过 ${data.skipped} 个`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async previewFluteMapping() {
+            this.loading = true;
+            try {
+              const { data } = await axios.get('/api/system/flute-mapping/preview');
+              const msg = `楞型识别预览：将更新 ${data.will_update} 个，已有 ${data.already_set} 个，无法识别 ${data.unrecognized} 个（共 ${data.total_products} 个产品）`;
+              alert(msg);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async applyFluteMapping() {
+            if (!confirm('批量写入楞型：根据关联材质或材质文本识别楞型，写入 products.flute_type / layer_count。\n仅更新尚未设置楞型的产品，已有值不覆盖。\n\n请确认已提前完成数据库备份！')) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post('/api/system/flute-mapping/apply');
+              this.showToast(`楞型写入完成：已更新 ${data.updated} 个，跳过已有 ${data.skipped_already_set} 个，无法识别 ${data.skipped_unrecognized} 个`);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },

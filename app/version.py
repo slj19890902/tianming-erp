@@ -3,8 +3,8 @@ ERP 系统版本信息。
 每次发布更新此文件，不依赖数据库。
 """
 
-APP_VERSION = "v0.19.0"
-APP_VERSION_NAME = "天华模板优化 + PDF OCR 支持版"
+APP_VERSION = "v0.19.1"
+APP_VERSION_NAME = "天华 PDF 解析整改 + TH型号全链路 + 多客户基础识别版"
 APP_BUILD_DATE = "2026-06-24"
 
 APP_CHANGELOG = [
@@ -22,4 +22,20 @@ APP_CHANGELOG = [
     "v0.19.0：新增 PDF OCR 支持（PyMuPDF + EasyOCR）：图片扫描 PDF / 乱码字体 PDF",
     "v0.19.0：OCR 优雅降级：未安装 OCR 引擎时标记 ocr_unavailable，不崩溃",
     "v0.19.0：训练样本新增 ocr_text_raw 字段，记录 OCR 识别原文",
+    # v0.19.1 整改
+    "v0.19.1：修复多行品名 bug（行号+料品编码单独一行时品名正确合并）",
+    "v0.19.1：修复垫板 size_spec 为空 bug（name_len 计算改用 raw_name 长度）",
+    "v0.19.1：修复斜杠规格截断（115*67*2.5/2.8cm 完整保留）",
+    "v0.19.1：size_spec 清除包装注记（5盒/箱、3本/盒 等不污染规格字段）",
+    "v0.19.1：修复 PO2026060079 额外列（番号/销售订单号）导致的列偏移",
+    "v0.19.1：ORDER_NO_RE 扩展支持思迈尔 P-XXXXXXX(-N) 格式",
+    "v0.19.1：客户类型识别扩展（天华超净/新能源/思迈尔/天明/未知）",
+    "v0.19.1：思迈尔已识别但无模板，明确返回 missing_customer_template 状态",
+    "v0.19.1：图片型 PDF 和天明 PDF 明确分类标记，不静默失败",
+    "v0.19.1：DB 新增 sales_order_items.snapshot_customer_model TEXT NULL",
+    "v0.19.1：TH型号全链路：解析→草稿→新建订单→DB→订单详情",
+    "v0.19.1：前端草稿表格新增客户型号列（天华显示 TH型号）",
+    "v0.19.1：前端订单详情显示客户型号",
+    "v0.19.1：PDF 样本详情显示字段质量警告（品名误识别/规格为空/规格截断/包装注记污染）",
+    "v0.19.1：明细质量自动检查 _check_item_warnings（管理端提示）",
 ]

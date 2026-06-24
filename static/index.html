@@ -758,7 +758,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 12 : 13"><div class="order-detail-box"><table><thead><tr><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td>{{ item.snapshot_material || "-" }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>存货编码</th><th>名称</th><th>客户型号</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td><span v-if="item.snapshot_customer_model" style="color:#1d4ed8;font-weight:600">{{ item.snapshot_customer_model }}</span><span v-else class="muted">-</span></td><td>{{ item.snapshot_material || "-" }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -1252,13 +1252,20 @@
                   <div v-for="(warning, index) in draft.warnings" :key="index">{{ warning }}</div>
                 </div>
                 <table v-if="draft.items?.length">
-                  <thead><tr><th>行号</th><th>存货编码</th><th>物料名称</th><th>规格型号</th><th>产品候选</th><th>材质候选</th><th>数量</th><th class="sensitive-price">客户单价</th><th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th></tr></thead>
+                  <thead><tr><th>行号</th><th>存货编码</th><th>物料名称</th><th>规格型号</th><th>{{ draft.is_tianhua ? 'TH型号' : '客户型号' }}</th><th>产品候选</th><th>材质候选</th><th>数量</th><th class="sensitive-price">客户单价</th><th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th></tr></thead>
                   <tbody>
                     <tr v-for="item in draft.items" :key="item.line_no" :class="{'is-new-product-row': item.is_new_product}">
                       <td>{{ item.line_no }}</td>
                       <td><input class="input compact-input" v-model.trim="item.raw_product_code" :readonly="!item.is_new_product" :title="item.is_new_product ? '新产品存货编码（可编辑）' : ''" /></td>
-                      <td><input class="input" v-model.trim="item.raw_product_name" :readonly="!item.is_new_product" /></td>
-                      <td><input class="input spec-input" v-model.trim="item.raw_spec_model" :readonly="!item.is_new_product" /></td>
+                      <td>
+                        <input class="input" v-model.trim="item.raw_product_name" :readonly="!item.is_new_product" />
+                        <span v-if="item.raw_product_name && /^\d{1,3}$/.test(item.raw_product_name.trim())" title="物料名称疑似识别为行号，可能是多行品名 bug" style="color:#dc2626;font-size:11px;display:block">⚠ 品名疑似行号</span>
+                      </td>
+                      <td>
+                        <input class="input spec-input" v-model.trim="item.raw_spec_model" :readonly="!item.is_new_product" />
+                        <span v-if="!item.raw_spec_model && item.old_material_code" title="规格型号为空，但存在材质代码，可能丢失了尺寸信息" style="color:#d97706;font-size:11px;display:block">⚠ 规格为空</span>
+                      </td>
+                      <td><span style="color:#1d4ed8;font-weight:600">{{ item.customer_model || '-' }}</span></td>
                       <td><select class="select" v-model="item.matched_product_id" @change="selectImportProduct(item)" :disabled="item.is_new_product"><option :value="null">待匹配产品</option><option v-for="p in item.product_candidates" :value="p.id">{{ p.product_code }} / {{ p.product_name }}</option></select><label style="display:block;margin-top:4px;font-size:12px"><input type="checkbox" v-model="item.is_new_product" @change="toggleNewProduct(item)" /> 新产品(系统新建)</label></td>
                       <td><select class="select" v-model="item.matched_material_id" @change="recalculateImportCost(item)"><option :value="null">待匹配材质</option><option v-for="m in item.material_candidates" :value="m.id">{{ m.code }}</option></select></td>
                       <td><input class="input compact-input" type="number" min="1" v-model.number="item.quantity" /></td>
@@ -1342,7 +1349,7 @@
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
               <div class="section-title">只读订单详情</div>
-              <table><thead><tr><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>数量</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in orderDetail.items" :key="item.id"><td>{{ item.snapshot_product_code }}</td><td>{{ item.snapshot_product_name }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.display_material || displayMaterialText(item.snapshot_material) || "-" }}</td><td>{{ item.quantity }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td></tr></tbody></table>
+              <table><thead><tr><th>存货编码</th><th>产品名称</th><th>客户型号</th><th>规格</th><th>材质</th><th>数量</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in orderDetail.items" :key="item.id"><td>{{ item.snapshot_product_code }}</td><td>{{ item.snapshot_product_name }}</td><td><span v-if="item.snapshot_customer_model" style="color:#1d4ed8;font-weight:600">{{ item.snapshot_customer_model }}</span><span v-else class="muted">-</span></td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.display_material || displayMaterialText(item.snapshot_material) || "-" }}</td><td>{{ item.quantity }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'mobileEntry'" style="text-align:center">
               <p style="margin-top:0">手机与本电脑连接同一局域网后，使用微信或相机扫描二维码。</p>
@@ -1486,29 +1493,69 @@
                   <textarea class="textarea" readonly rows="5" style="font-family:monospace;font-size:11px">{{ pdfSampleDetail.parser_result_json ? JSON.stringify(JSON.parse(pdfSampleDetail.parser_result_json),null,2) : '（解析失败或无结果）' }}</textarea>
                 </div>
 
-                <!-- 天华字段明细表 -->
+                <!-- PDF 分类标签 + 不支持格式说明 -->
+                <div class="field wide" v-if="pdfSampleDetail.parser_result_json && pdfParsedResult">
+                  <label>PDF 分类 / 解析状态</label>
+                  <div style="margin-top:4px">
+                    <span :style="{
+                      display:'inline-block', padding:'3px 10px', borderRadius:'4px', fontSize:'12px', fontWeight:600,
+                      background: {'recognized':'#dcfce7','needs_confirmation':'#fef9c3','missing_customer_template':'#fef3c7','unsupported_format':'#fee2e2','ocr_required':'#e0f2fe','ocr_unavailable':'#fee2e2','image_pdf':'#e0f2fe','tianming_direction':'#f3e8ff','failed':'#fee2e2'}[pdfParsedResult.recognition_status || pdfParsedResult.parse_status] || '#f1f5f9',
+                      color: {'recognized':'#15803d','missing_customer_template':'#92400e','unsupported_format':'#b91c1c','ocr_required':'#0369a1','ocr_unavailable':'#b91c1c','image_pdf':'#0369a1','tianming_direction':'#6b21a8','failed':'#b91c1c'}[pdfParsedResult.recognition_status || pdfParsedResult.parse_status] || '#475569'
+                    }">
+                      {{ {recognized:'✅ 已识别',needs_confirmation:'🟡 需人工确认',missing_customer_template:'🟠 已识别客户，暂无解析模板',unsupported_format:'🔴 暂不支持的格式',ocr_required:'🔵 需要 OCR（引擎已安装）',ocr_unavailable:'🔴 需要 OCR（引擎未安装）',image_pdf:'🔵 图片型 PDF，需要 OCR',tianming_direction:'🟣 疑似销售方向 / 待人工确认',failed:'🔴 解析失败'}[pdfParsedResult.recognition_status || pdfParsedResult.parse_status] || (pdfParsedResult.recognition_status || pdfParsedResult.parse_status || '未知') }}
+                    </span>
+                    <div v-if="pdfParsedResult.message" style="font-size:12px;color:#92400e;margin-top:6px;background:#fef3c7;padding:6px 10px;border-radius:4px">
+                      {{ pdfParsedResult.message }}
+                    </div>
+                    <div v-if="pdfParsedResult.customer_type" style="font-size:12px;color:#6b7280;margin-top:4px">
+                      识别客户类型：{{ {tianhua_chao:'天华超净（苏州天华超净有限公司）',tianhua_energy:'天华新能源（苏州天华新能源科技股份有限公司）',simair:'思迈尔（苏州思迈尔电子设备有限公司）',tianming:'天明（疑似销售方向）',unknown:'未识别'}[pdfParsedResult.customer_type] || pdfParsedResult.customer_type }}
+                    </div>
+                    <div v-if="pdfParsedResult.is_image_pdf" style="font-size:12px;color:#0369a1;margin-top:4px">
+                      📷 图片型 PDF &nbsp;｜ OCR 引擎：{{ pdfParsedResult.ocr_available ? '✅ 已安装' : '❌ 未安装' }} &nbsp;｜ 当前版本暂未接入图片型 PDF 订单解析
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 天华字段明细表 + 字段质量警告 -->
                 <div class="field wide" v-if="pdfSampleDetail.parser_result_json && pdfDetailItems.length">
                   <label>明细行拆分（天华专项字段）</label>
+                  <!-- 字段质量警告汇总 -->
+                  <div v-if="pdfItemWarnings.length" style="background:#fef3c7;border:1px solid #fbbf24;border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px">
+                    <strong style="color:#92400e">⚠ 解析质量警告（共 {{ pdfItemWarnings.length }} 条）</strong>
+                    <ul style="margin:4px 0 0 16px;padding:0">
+                      <li v-for="(w, i) in pdfItemWarnings" :key="i" style="color:#92400e;margin-top:2px">{{ w }}</li>
+                    </ul>
+                  </div>
                   <div style="overflow-x:auto;margin-top:4px">
                     <table class="data-table" style="font-size:11px;min-width:900px">
                       <thead><tr>
                         <th>行</th><th>料品编码</th><th>物料名称</th><th>天华型号</th>
                         <th>尺寸规格</th><th>旧材质代码</th><th>楞型</th><th>层数</th>
-                        <th>面纸</th><th>数量</th><th>交期</th>
+                        <th>面纸</th><th>数量</th><th>交期</th><th>警告</th>
                       </tr></thead>
                       <tbody>
-                        <tr v-for="item in pdfDetailItems" :key="item.line_no">
+                        <tr v-for="item in pdfDetailItems" :key="item.line_no" :style="pdfItemRowWarnings[item.line_no]?.length ? {background:'#fffbeb'} : {}">
                           <td>{{ item.line_no }}</td>
                           <td>{{ item.product_code || '-' }}</td>
-                          <td style="max-width:180px;white-space:normal">{{ item.display_product_name || item.product_name || '-' }}</td>
+                          <td style="max-width:180px;white-space:normal">
+                            {{ item.display_product_name || item.product_name || '-' }}
+                            <span v-if="item.product_name && /^\d{1,3}$/.test((item.product_name||'').trim())" style="color:#dc2626;display:block;font-size:10px">⚠ 疑似行号</span>
+                          </td>
                           <td><strong style="color:#1d4ed8">{{ item.customer_model || '-' }}</strong></td>
-                          <td style="white-space:nowrap">{{ item.size_spec || item.spec || '-' }}</td>
+                          <td style="white-space:nowrap">
+                            {{ item.size_spec || item.spec || '-' }}
+                            <span v-if="!item.size_spec && item.old_material_code" style="color:#d97706;display:block;font-size:10px">⚠ 规格为空</span>
+                          </td>
                           <td style="font-family:monospace;color:#6b7280">{{ item.old_material_code || '-' }}</td>
                           <td><span v-if="item.flute_type" style="font-weight:700;color:#7c3aed">{{ item.flute_type }}</span><span v-else>-</span></td>
                           <td>{{ item.layer_count != null ? item.layer_count + '层' : '-' }}</td>
                           <td>{{ item.surface_paper_type ? {white:'白底',kraft:'牛卡'}[item.surface_paper_type]||item.surface_paper_type : '-' }}</td>
                           <td>{{ item.quantity != null ? item.quantity : '-' }}</td>
                           <td style="white-space:nowrap">{{ item.delivery_date || '-' }}</td>
+                          <td style="max-width:160px;white-space:normal;font-size:10px;color:#92400e">
+                            <span v-if="pdfItemRowWarnings[item.line_no]?.length">{{ pdfItemRowWarnings[item.line_no].join('；') }}</span>
+                            <span v-else style="color:#6b7280">✓</span>
+                          </td>
                         </tr>
                       </tbody>
                     </table>
@@ -1661,10 +1708,31 @@
             try {
               const parsed = JSON.parse(this.pdfSampleDetail.parser_result_json);
               const items = parsed.items || [];
-              // 只要有 customer_model / old_material_code / size_spec 等天华字段才显示
               const hasTianhua = items.some(it => it.customer_model || it.old_material_code || it.size_spec);
               return hasTianhua ? items : [];
             } catch { return []; }
+          },
+          pdfParsedResult() {
+            if (!this.pdfSampleDetail?.parser_result_json) return null;
+            try { return JSON.parse(this.pdfSampleDetail.parser_result_json); } catch { return null; }
+          },
+          pdfItemWarnings() {
+            // 从解析结果的 warnings 字段（后端已生成的明细质量警告）
+            if (!this.pdfParsedResult) return [];
+            return this.pdfParsedResult.warnings || [];
+          },
+          pdfItemRowWarnings() {
+            // 按行号索引警告，供每行单独标记
+            const map = {};
+            for (const w of this.pdfItemWarnings) {
+              const m = w.match(/^第(\d+)行/);
+              if (m) {
+                const ln = parseInt(m[1]);
+                if (!map[ln]) map[ln] = [];
+                map[ln].push(w.replace(/^第\d+行：/, ''));
+              }
+            }
+            return map;
           },
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
@@ -2477,6 +2545,7 @@
                 material_id: item.matched_material_id || null,
                 material: (item.material_candidates || []).find(row => row.id === item.matched_material_id)?.code || "",
                 specification: item.raw_spec_model || "",
+                customer_model: item.customer_model || "",  // v0.19.1: TH型号/客户型号
                 quantity: Number(item.quantity || 0) || null,
                 unit_price: item.unit_price || "",
                 cost_status:item.cost_status || "pending", estimated_cost:item.estimated_cost || null,
@@ -2509,7 +2578,9 @@
                       product_code:item.raw_product_code,
                       product_name:item.raw_product_name,
                       material:(item.material_candidates || []).find(row => row.id === item.matched_material_id)?.code || null,
-                      specification:item.raw_spec_model, quantity:Number(item.quantity), unit_price:item.unit_price
+                      specification:item.raw_spec_model,
+                      customer_model:item.customer_model || null,  // v0.19.1
+                      quantity:Number(item.quantity), unit_price:item.unit_price
                     }))
                   });
                   succeeded.push(draft.source_name || "草稿");

@@ -99,6 +99,7 @@ class OrderItemCreate(BaseModel):
     product_name: str | None = None
     material: str | None = None
     specification: str | None = None
+    customer_model: str | None = None  # v0.19.1: TH型号 / 客户型号
     is_new_product: bool = False
     material_id: int | None = None
 
@@ -278,6 +279,7 @@ def _order_response(
                 "snapshot_product_name": item.snapshot_product_name,
                 "snapshot_spec": item.snapshot_spec,
                 "snapshot_material": item.snapshot_material,
+                "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
                 "display_material": _display_material(item.snapshot_material),
                 "inventory_deducted_qty": item.inventory_deducted_qty,
                 "requisition_qty": item.requisition_qty,
@@ -1105,6 +1107,9 @@ def create_order(
                         else product.legacy_material_text
                     )
                 ),
+                snapshot_customer_model=(
+                    (item_payload.customer_model or "").strip() or None
+                ),  # v0.19.1: TH型号 / 客户型号
                 requisition_status="未报料",
             )
             db.add(item)
@@ -1226,6 +1231,7 @@ def update_order_item(
         "snapshot_product_name": item.snapshot_product_name,
         "snapshot_material": item.snapshot_material,
         "snapshot_spec": item.snapshot_spec,
+        "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
     }
 
 

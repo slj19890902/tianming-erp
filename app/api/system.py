@@ -451,3 +451,363 @@ def restore_backup(
         "pre_restore_backup": result.emergency_backup.name,
         "integrity_check": result.integrity_check,
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# 材质代码映射候选表 API
+# ─────────────────────────────────────────────────────────────
+
+class ReviewStatusUpdate(BaseModel):
+    review_status: str          # pending / approved / rejected
+    review_note: str | None = None
+
+
+@router.get("/material-mapping/stats", dependencies=[Depends(admin_only)])
+def material_mapping_stats(db: Session = Depends(get_db)):
+    """汇总材质映射候选表统计数据。"""
+    from app.models.material_mapping import MaterialCodeMappingCandidate
+    from app.models.product import Product
+    from sqlalchemy import func as sqlfunc, select
+
+    total = db.scalar(
+        select(sqlfunc.count()).select_from(MaterialCodeMappingCandidate)
+    ) or 0
+
+    rows = db.execute(
+        select(
+            MaterialCodeMappingCandidate.confidence_level,
+            MaterialCodeMappingCandidate.review_status,
+            sqlfunc.count().label("cnt"),
+        ).group_by(
+            MaterialCodeMappingCandidate.confidence_level,
+            MaterialCodeMappingCandidate.review_status,
+        )
+    ).fetchall()
+
+    by_confidence: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    for row in rows:
+        by_confidence[row.confidence_level] = (
+            by_confidence.get(row.confidence_level, 0) + row.cnt
+        )
+        by_status[row.review_status] = (
+            by_status.get(row.review_status, 0) + row.cnt
+        )
+
+    # 命中产品数：products.legacy_material_text 中可匹配到 old_code 的数量
+    products_affected = db.scalar(
+        select(sqlfunc.count()).select_from(Product).where(
+            Product.deleted_at.is_(None),
+            Product.material_id.is_(None),
+            Product.legacy_material_text.isnot(None),
+        )
+    ) or 0
+
+    return {
+        "total": total,
+        "by_confidence": by_confidence,
+        "by_status": by_status,
+        "products_pending_material": products_affected,
+    }
+
+
+@router.get("/material-mapping", dependencies=[Depends(admin_only)])
+def list_material_mapping(
+    confidence_level: str | None = None,
+    review_status: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+):
+    """分页列出材质映射候选记录，支持按可信度和审批状态过滤。"""
+    from app.models.material_mapping import MaterialCodeMappingCandidate
+    from app.models.product import Product
+    from sqlalchemy import select, func as sqlfunc
+
+    q = select(MaterialCodeMappingCandidate)
+    if confidence_level:
+        q = q.where(MaterialCodeMappingCandidate.confidence_level == confidence_level)
+    if review_status:
+        q = q.where(MaterialCodeMappingCandidate.review_status == review_status)
+
+    total = db.scalar(
+        select(sqlfunc.count()).select_from(q.subquery())
+    ) or 0
+
+    offset = (page - 1) * page_size
+    candidates = db.scalars(
+        q.order_by(
+            MaterialCodeMappingCandidate.confidence_level,
+            MaterialCodeMappingCandidate.old_code,
+        ).offset(offset).limit(page_size)
+    ).all()
+
+    # 计算每条候选的命中产品数（products with legacy_material_text containing old_code）
+    # 批量查询：取这批 old_codes，统计每个匹配到的产品数
+    old_codes = [c.old_code for c in candidates]
+    hit_counts: dict[str, int] = {}
+    if old_codes:
+        products_with_legacy = db.scalars(
+            select(Product).where(
+                Product.deleted_at.is_(None),
+                Product.legacy_material_text.isnot(None),
+            )
+        ).all()
+        import re
+        for p in products_with_legacy:
+            legacy = p.legacy_material_text or ""
+            # 去掉前缀数字
+            stripped = re.sub(r"^\d+\s+", "", legacy).strip()
+            for oc in old_codes:
+                if oc == stripped or oc == legacy.strip():
+                    hit_counts[oc] = hit_counts.get(oc, 0) + 1
+
+    items = []
+    for c in candidates:
+        items.append({
+            "id": c.id,
+            "old_code": c.old_code,
+            "new_code": c.new_code,
+            "old_supplier": c.old_supplier,
+            "new_supplier": c.new_supplier,
+            "layer_count": c.layer_count,
+            "weight_structure": c.weight_structure,
+            "new_price": float(c.new_price) if c.new_price is not None else None,
+            "old_price": float(c.old_price) if c.old_price is not None else None,
+            "confidence_label": c.confidence_label,
+            "confidence_level": c.confidence_level,
+            "review_status": c.review_status,
+            "review_note": c.review_note,
+            "source_file": c.source_file,
+            "source_row_number": c.source_row_number,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "hit_count": hit_counts.get(c.old_code, 0),
+        })
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+
+
+@router.put(
+    "/material-mapping/{candidate_id}/status",
+    dependencies=[Depends(admin_only)],
+)
+def update_mapping_status(
+    candidate_id: int,
+    body: ReviewStatusUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """更新候选记录的审批状态。"""
+    from app.models.material_mapping import MaterialCodeMappingCandidate
+    from sqlalchemy import select
+
+    valid_statuses = {"pending", "approved", "rejected"}
+    if body.review_status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效状态，必须是 {sorted(valid_statuses)} 之一",
+        )
+
+    cand = db.scalar(
+        select(MaterialCodeMappingCandidate).where(
+            MaterialCodeMappingCandidate.id == candidate_id
+        )
+    )
+    if cand is None:
+        raise HTTPException(status_code=404, detail="候选记录不存在")
+
+    old_status = cand.review_status
+    cand.review_status = body.review_status
+    if body.review_note is not None:
+        cand.review_note = body.review_note
+
+    db.add(
+        OperationLog(
+            user_id=getattr(request.state, "user_id", None),
+            action="material_mapping_review",
+            resource="material_mapping",
+            entity_type="material_code_mapping_candidates",
+            entity_id=candidate_id,
+            details=json.dumps(
+                {
+                    "old_status": old_status,
+                    "new_status": body.review_status,
+                    "note": body.review_note,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    return {"ok": True, "id": candidate_id, "review_status": cand.review_status}
+
+
+@router.post("/material-mapping/import-csv", dependencies=[Depends(admin_only)])
+def import_mapping_csv(request: Request, db: Session = Depends(get_db)):
+    """从本地 data/material_code_mapping.csv 导入材质映射候选数据。"""
+    from app.services.material_mapping import import_csv_to_candidates
+    from pathlib import Path as _Path
+
+    settings = load_settings()
+    csv_path = _Path(settings.database_path).parent / "material_code_mapping.csv"
+    if not csv_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"CSV 文件不存在: {csv_path}",
+        )
+
+    try:
+        stats = import_csv_to_candidates(
+            db,
+            csv_path,
+            source_file_name=csv_path.name,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"导入失败: {exc}") from exc
+
+    db.add(
+        OperationLog(
+            user_id=getattr(request.state, "user_id", None),
+            action="material_mapping_csv_import",
+            resource="material_mapping",
+            entity_type="material_code_mapping_candidates",
+            details=json.dumps(
+                {
+                    "total": stats.total,
+                    "high": stats.high,
+                    "mid": stats.mid,
+                    "low": stats.low,
+                    "conflicts": stats.conflicts,
+                    "csv_path": str(csv_path),
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "total": stats.total,
+        "high": stats.high,
+        "mid": stats.mid,
+        "low": stats.low,
+        "conflicts": stats.conflicts,
+        "empty_old": stats.empty_old,
+        "empty_new": stats.empty_new,
+    }
+
+
+@router.post(
+    "/material-mapping/apply-high-confidence",
+    dependencies=[Depends(admin_only)],
+)
+def apply_high_confidence_mapping(request: Request, db: Session = Depends(get_db)):
+    """对高可信候选自动写入 products.material_id（dry_run 参数为 true 时只预览）。"""
+    from app.services.material_mapping import apply_high_confidence_material_mapping
+    from pathlib import Path as _Path
+
+    settings = load_settings()
+    csv_path = _Path(settings.database_path).parent / "material_code_mapping.csv"
+
+    try:
+        result = apply_high_confidence_material_mapping(db, csv_path)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"写入失败: {exc}") from exc
+
+    db.add(
+        OperationLog(
+            user_id=getattr(request.state, "user_id", None),
+            action="material_mapping_apply_high_confidence",
+            resource="material_mapping",
+            entity_type="products",
+            details=json.dumps(
+                {
+                    "products_updated": result.products_updated,
+                    "materials_created": result.materials_created,
+                    "materials_reused": result.materials_reused,
+                    "skipped_no_match": result.skipped_no_match,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "products_updated": result.products_updated,
+        "materials_created": result.materials_created,
+        "materials_reused": result.materials_reused,
+        "skipped_no_match": result.skipped_no_match,
+        "skipped_already_set": result.skipped_already_set,
+        "changes": result.changes[:100],  # 最多返回前100条
+    }
+
+
+@router.post(
+    "/material-mapping/apply-customer-codes",
+    dependencies=[Depends(admin_only)],
+)
+def apply_customer_codes(request: Request, db: Session = Depends(get_db)):
+    """批量规范客户料号（从品名中提取，写入 customer_material_code）。"""
+    from app.services.material_mapping import apply_customer_code_updates
+
+    try:
+        result = apply_customer_code_updates(db)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"写入失败: {exc}") from exc
+
+    db.add(
+        OperationLog(
+            user_id=getattr(request.state, "user_id", None),
+            action="customer_code_batch_update",
+            resource="material_mapping",
+            entity_type="products",
+            details=json.dumps(
+                {
+                    "updated": result.updated,
+                    "skipped": result.skipped,
+                    "sample_changes": result.changes[:20],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "updated": result.updated,
+        "skipped": result.skipped,
+        "changes": result.changes[:100],
+    }
+
+
+@router.get(
+    "/material-mapping/preview-customer-codes",
+    dependencies=[Depends(admin_only)],
+)
+def preview_customer_codes(db: Session = Depends(get_db)):
+    """只读预览客户料号规范化结果（不写库）。"""
+    from app.services.material_mapping import preview_customer_code_updates
+
+    preview = preview_customer_code_updates(db)
+    return {
+        "total": preview.total,
+        "will_update": preview.will_update,
+        "skipped": preview.skipped,
+        "samples_update": preview.samples_update,
+        "samples_skip": preview.samples_skip[:20],
+    }

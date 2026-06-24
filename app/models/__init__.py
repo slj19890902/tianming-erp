@@ -28,6 +28,7 @@ from app.models.delivery import (  # noqa: E402,F401
     DeliveryDailySequence,
     DeliveryItem,
 )
+from app.models.material_mapping import MaterialCodeMappingCandidate  # noqa: E402,F401
 from app.models.finance import (  # noqa: E402,F401
     Invoice,
     ReturnReceipt,

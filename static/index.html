@@ -764,6 +764,91 @@
                   </div>
                 </div>
               </div>
+
+              <!-- ── 材质映射审批 ── -->
+              <div class="section-title" style="margin-top:24px">材质映射审批</div>
+              <!-- 汇总统计 -->
+              <div class="panel" style="margin-bottom:10px;padding:12px 16px">
+                <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:14px;align-items:center">
+                  <span><strong>候选总数：</strong>{{ materialMappingStats.total || 0 }}</span>
+                  <span>高可信 <strong style="color:#16a34a">{{ (materialMappingStats.by_confidence||{})['高可信'] || 0 }}</strong></span>
+                  <span>中可信 <strong style="color:#d97706">{{ (materialMappingStats.by_confidence||{})['中可信'] || 0 }}</strong></span>
+                  <span>低可信 <strong style="color:#dc2626">{{ (materialMappingStats.by_confidence||{})['低可信'] || 0 }}</strong></span>
+                  <span class="muted">|</span>
+                  <span>待审 <strong>{{ (materialMappingStats.by_status||{})['pending'] || 0 }}</strong></span>
+                  <span>已通过 <strong style="color:#16a34a">{{ (materialMappingStats.by_status||{})['approved'] || 0 }}</strong></span>
+                  <span>已拒绝 <strong style="color:#dc2626">{{ (materialMappingStats.by_status||{})['rejected'] || 0 }}</strong></span>
+                  <span class="muted">|</span>
+                  <span>待关联产品 <strong>{{ materialMappingStats.products_pending_material || 0 }}</strong></span>
+                </div>
+              </div>
+              <!-- 工具栏 -->
+              <div class="toolbar">
+                <button class="btn primary" @click="importMappingCsv" :disabled="loading">从 CSV 重新导入</button>
+                <button class="btn" @click="loadMaterialMapping(1)">刷新</button>
+                <button class="btn" style="background:#16a34a;color:#fff" @click="applyHighConfidence" :disabled="loading">执行高可信写入</button>
+                <button class="btn" @click="applyCustomerCodes" :disabled="loading">规范客户料号</button>
+                <select v-model="materialMappingFilterConf" @change="loadMaterialMapping(1)" style="height:32px;padding:0 8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px">
+                  <option value="">全部可信度</option>
+                  <option value="高可信">高可信</option>
+                  <option value="中可信">中可信</option>
+                  <option value="低可信">低可信</option>
+                </select>
+                <select v-model="materialMappingFilterStatus" @change="loadMaterialMapping(1)" style="height:32px;padding:0 8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px">
+                  <option value="">全部状态</option>
+                  <option value="pending">待审</option>
+                  <option value="approved">已通过</option>
+                  <option value="rejected">已拒绝</option>
+                </select>
+              </div>
+              <data-panel :empty="!materialMappingItems.length">
+                <div style="font-size:12px;color:#6b7280;margin-bottom:6px">共 {{ materialMappingTotal }} 条，第 {{ materialMappingPage }} 页</div>
+                <table style="font-size:13px">
+                  <thead><tr>
+                    <th>旧代码</th><th>新代码（嘉林亿）</th><th>原供应商</th>
+                    <th>层数</th><th>克重结构</th><th>旧价</th><th>新价</th>
+                    <th>可信度</th><th>命中产品</th><th>状态</th><th>操作</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="row in materialMappingItems" :key="row.id">
+                      <td style="font-weight:600">{{ row.old_code }}</td>
+                      <td style="color:#16a34a;font-weight:600">{{ row.new_code || '—' }}</td>
+                      <td>{{ row.old_supplier || '—' }}</td>
+                      <td>{{ row.layer_count || '—' }}</td>
+                      <td style="font-size:11px;max-width:160px;word-break:break-all">{{ row.weight_structure || '—' }}</td>
+                      <td>{{ row.old_price != null ? row.old_price.toFixed(4) : '—' }}</td>
+                      <td>{{ row.new_price != null ? row.new_price.toFixed(4) : '—' }}</td>
+                      <td>
+                        <span :class="row.confidence_level==='高可信'?'status green':row.confidence_level==='中可信'?'status orange':'status red'"
+                          :title="row.confidence_label">{{ row.confidence_level }}</span>
+                      </td>
+                      <td style="text-align:center">
+                        <span v-if="row.hit_count>0" class="status green">{{ row.hit_count }}</span>
+                        <span v-else class="muted">0</span>
+                      </td>
+                      <td>
+                        <span :class="row.review_status==='approved'?'status green':row.review_status==='rejected'?'status red':'status'">
+                          {{ row.review_status==='approved'?'已通过':row.review_status==='rejected'?'已拒绝':'待审' }}
+                        </span>
+                        <div v-if="row.review_note" style="font-size:11px;color:#6b7280">{{ row.review_note }}</div>
+                      </td>
+                      <td style="white-space:nowrap">
+                        <button v-if="row.review_status!=='approved'" class="btn small" style="background:#16a34a;color:#fff;margin-right:4px"
+                          @click="updateMappingStatus(row,'approved')">通过</button>
+                        <button v-if="row.review_status!=='rejected'" class="btn small danger"
+                          @click="updateMappingStatus(row,'rejected')">拒绝</button>
+                        <button v-if="row.review_status!=='pending'" class="btn small"
+                          @click="updateMappingStatus(row,'pending')">重置</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="toolbar" style="margin-top:8px">
+                  <button class="btn small" :disabled="materialMappingPage<=1" @click="loadMaterialMapping(materialMappingPage-1)">上一页</button>
+                  <span style="font-size:13px;padding:0 8px">第 {{ materialMappingPage }} 页</span>
+                  <button class="btn small" :disabled="materialMappingItems.length<50" @click="loadMaterialMapping(materialMappingPage+1)">下一页</button>
+                </div>
+              </data-panel>
             </template>
           </main>
         </div>
@@ -1046,6 +1131,9 @@
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
             pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
+            materialMappingItems: [], materialMappingTotal: 0, materialMappingPage: 1,
+            materialMappingFilterConf: '', materialMappingFilterStatus: '',
+            materialMappingStats: {},
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
@@ -1590,6 +1678,7 @@
             ]);
             this.backups = backups.data.items;
             this.systemUsers = users.data.items;
+            await this.loadMaterialMapping(1);
           },
           forgotPassword() {
             this.loginError = "请联系管理员在“系统设置 → 用户与密码”中重置。系统不会通过匿名页面直接修改密码。";
@@ -2371,7 +2460,68 @@
               this.showToast(data.errors?.length ? `${msg}（${data.errors.length} 个失败）` : msg);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
-          }
+          },
+          async loadMaterialMapping(page) {
+            this.materialMappingPage = page || 1;
+            try {
+              const params = { page: this.materialMappingPage, page_size: 50 };
+              if (this.materialMappingFilterConf) params.confidence_level = this.materialMappingFilterConf;
+              if (this.materialMappingFilterStatus) params.review_status = this.materialMappingFilterStatus;
+              const [listRes, statsRes] = await Promise.all([
+                axios.get('/api/system/material-mapping', { params }),
+                axios.get('/api/system/material-mapping/stats'),
+              ]);
+              this.materialMappingItems = listRes.data.items || [];
+              this.materialMappingTotal = listRes.data.total || 0;
+              this.materialMappingStats = statsRes.data || {};
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async updateMappingStatus(row, newStatus) {
+            let note = '';
+            if (newStatus === 'rejected') {
+              note = prompt('拒绝原因（可选）：') || '';
+              if (note === null) return; // cancelled
+            }
+            try {
+              await axios.put(`/api/system/material-mapping/${row.id}/status`, {
+                review_status: newStatus,
+                review_note: note || null,
+              });
+              row.review_status = newStatus;
+              if (note) row.review_note = note;
+              await axios.get('/api/system/material-mapping/stats').then(r => { this.materialMappingStats = r.data; });
+              this.showToast(`已${newStatus==='approved'?'通过':newStatus==='rejected'?'拒绝':'重置'}`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async importMappingCsv() {
+            if (!confirm('将从服务器 data/material_code_mapping.csv 重新导入候选数据，已有同文件的记录会被覆盖，确认？')) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post('/api/system/material-mapping/import-csv');
+              this.showToast(`导入完成：总${data.total} / 高可信${data.high} / 中可信${data.mid} / 低可信${data.low}`);
+              await this.loadMaterialMapping(1);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async applyHighConfidence() {
+            if (!confirm('对高可信候选自动写入 products.material_id（仅 material_id 为空的产品），确认？')) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post('/api/system/material-mapping/apply-high-confidence');
+              this.showToast(`已更新 ${data.products_updated} 个产品，新建材质 ${data.materials_created} 个，复用 ${data.materials_reused} 个`);
+              await this.loadMaterialMapping(1);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async applyCustomerCodes() {
+            if (!confirm('批量规范客户料号：从品名中提取并写入 customer_material_code，旧值存入 legacy 字段，确认？')) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post('/api/system/material-mapping/apply-customer-codes');
+              this.showToast(`已更新 ${data.updated} 个产品料号，跳过 ${data.skipped} 个`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
         }
       });
       app.component("page-head", { props:["title","desc"], template:`<div class="page-head"><div><h2>{{title}}</h2><p>{{desc}}</p></div></div>` });

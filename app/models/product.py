@@ -108,6 +108,10 @@ class Product(Base):
     )
     die_cut_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 批量规范客户料号前的旧值快照（可追溯，不得删除）
+    legacy_customer_material_code: Mapped[str | None] = mapped_column(
+        String(150), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime,

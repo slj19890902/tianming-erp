@@ -245,12 +245,16 @@
           : "";
         document.getElementById("itemRows").innerHTML = data.items.map((item) => {
           const description = item.product_code || "";
+          const remarkParts = [];
+          if (item.production_notes) remarkParts.push(item.production_notes);
+          if (item.remarks) remarkParts.push(item.remarks);
+          const remarkText = remarkParts.join("；");
           return `<tr>
             <td>${escapeHtml(item.customer_po)}</td>
             <td class="description">${escapeHtml(description)}</td>
             <td>${escapeHtml(item.unit)}</td>
             <td>${escapeHtml(item.quantity)}</td>
-            <td>${escapeHtml(item.remarks)}</td>
+            <td>${escapeHtml(remarkText)}</td>
           </tr>`;
         }).join("");
         document.getElementById("sheet").hidden = false;

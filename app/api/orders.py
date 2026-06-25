@@ -41,6 +41,8 @@ from app.services.order_numbering import (
     reserve_next_order_number,
 )
 from app.services.order_pdf_import import (
+    PARSE_STATUS_LABELS,
+    PdfParseError,
     calculate_draft_cost,
     extract_text_from_pdf_bytes,
     file_sha256,
@@ -100,6 +102,7 @@ class OrderItemCreate(BaseModel):
     material: str | None = None
     specification: str | None = None
     customer_model: str | None = None  # v0.19.1: TH型号 / 客户型号
+    production_notes: str | None = None  # v0.19.2-A: 生产/印刷/打勾/摆放/日文警示等行级说明
     is_new_product: bool = False
     material_id: int | None = None
 
@@ -122,6 +125,7 @@ class OrderItemUpdate(BaseModel):
     product_name: str
     material: str | None = None
     specification: str | None = None
+    production_notes: str | None = None  # v0.19.2-A
 
 
 class OrderCreate(BaseModel):
@@ -280,6 +284,7 @@ def _order_response(
                 "snapshot_spec": item.snapshot_spec,
                 "snapshot_material": item.snapshot_material,
                 "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
+                "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
                 "display_material": _display_material(item.snapshot_material),
                 "inventory_deducted_qty": item.inventory_deducted_qty,
                 "requisition_qty": item.requisition_qty,
@@ -496,6 +501,26 @@ def get_order_number_preview(
     }
 
 
+def _pdf_failure_draft(
+    filename: str,
+    error: PdfParseError,
+    digest: str | None = None,
+) -> dict:
+    """v0.19.2-A A-5: 把结构化解析失败转成前端可显示的草稿（含具体失败原因）。"""
+    label = PARSE_STATUS_LABELS.get(error.parse_status, "解析失败")
+    return {
+        "source_name": filename,
+        "file_hash": digest,
+        "recognition_status": "failed",
+        "parse_status": error.parse_status,
+        "parse_status_label": label,
+        "message": error.message,
+        "duplicate_status": None,
+        "items": [],
+        "warnings": [f"{label}：{error.message}"],
+    }
+
+
 @router.post("/pdf-preview")
 async def preview_order_pdf(
     file: UploadFile = File(...),
@@ -513,6 +538,8 @@ async def preview_order_pdf(
         draft = parse_purchase_order_text(text, source_name=filename)
         draft["file_hash"] = file_sha256(content)
         return match_import_draft(db, draft)
+    except PdfParseError as error:
+        return _pdf_failure_draft(filename, error, digest=file_sha256(content))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -556,6 +583,8 @@ async def preview_order_pdf_batch(
             draft = parse_purchase_order_text(text, source_name=filename)
             draft["file_hash"] = digest
             drafts.append(match_import_draft(db, draft))
+        except PdfParseError as error:
+            drafts.append(_pdf_failure_draft(filename, error, digest=digest))
         except ValueError as error:
             drafts.append(
                 {
@@ -1110,6 +1139,9 @@ def create_order(
                 snapshot_customer_model=(
                     (item_payload.customer_model or "").strip() or None
                 ),  # v0.19.1: TH型号 / 客户型号
+                snapshot_production_notes=(
+                    (item_payload.production_notes or "").strip() or None
+                ),  # v0.19.2-A: 生产/印刷说明
                 requisition_status="未报料",
             )
             db.add(item)
@@ -1199,6 +1231,10 @@ def update_order_item(
     item.snapshot_product_name = payload.product_name.strip()
     item.snapshot_material = (payload.material or "").strip() or None
     item.snapshot_spec = (payload.specification or "").strip() or None
+    if payload.production_notes is not None:
+        item.snapshot_production_notes = (
+            payload.production_notes.strip() or None
+        )
     _refresh_total(db, order)
     db.add(
         OperationLog(
@@ -1232,6 +1268,7 @@ def update_order_item(
         "snapshot_material": item.snapshot_material,
         "snapshot_spec": item.snapshot_spec,
         "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
+        "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
     }
 
 

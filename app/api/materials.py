@@ -15,6 +15,7 @@ from app.api.deps import RoleChecker, get_db
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.material import Material
 from app.models.user import User
+from app.services.flute_mapping import validate_flute_consistency
 
 
 router = APIRouter()
@@ -27,7 +28,7 @@ class MaterialPayload(BaseModel):
     code: str = Field(min_length=1, max_length=100)
     paper_composition: str | None = None
     layer_count: int | None = Field(default=None, ge=1)
-    flute_type: Literal["AB", "BE", "B", "E"] = "AB"
+    flute_type: Literal["AB", "BE", "A", "B", "E"] = "AB"
     basis_weight_description: str | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
     price_unit: str | None = None
@@ -72,6 +73,20 @@ WORKSHOP_FIELDS = (
 )
 
 
+def _validate_layer_flute(layer_count: int | None, flute_type: str | None) -> None:
+    """v0.19.2-B B-5: 校验层数 × 楞型合法性。
+
+    复用 flute_mapping.validate_flute_consistency：
+      合法 3+A/B/E、5+AB/BE；非法 3+AB/BE、5+A/B/E。
+    七层暂无规则：拒绝并提示待维护（不允许乱填七层楞型组合）。
+    """
+    if layer_count == 7:
+        raise HTTPException(status_code=400, detail="七层楞型规则待维护，暂不支持新增/编辑七层材质。")
+    error = validate_flute_consistency(flute_type, layer_count)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+
 def _material_or_404(db: Session, material_id: int) -> Material:
     material = db.get(Material, material_id)
     if material is None:
@@ -90,12 +105,24 @@ def _response(material: Material, user: User) -> dict:
 def list_materials(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=200),
+    layer_count: int | None = Query(default=None, ge=1),
+    flute_type: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    total = db.scalar(select(func.count(Material.id))) or 0
+    # v0.19.2-B: 支持按层数（三/五/七层）与楞型过滤
+    filters = []
+    if layer_count is not None:
+        filters.append(Material.layer_count == layer_count)
+    if flute_type:
+        filters.append(Material.flute_type == flute_type)
+
+    total = db.scalar(
+        select(func.count(Material.id)).where(*filters)
+    ) or 0
     items = db.scalars(
         select(Material)
+        .where(*filters)
         .order_by(Material.code)
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -123,6 +150,7 @@ def create_material(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    _validate_layer_flute(payload.layer_count, payload.flute_type)
     data = payload.model_dump()
     data["code"] = clean_code(payload.code)
     data["basis_weight_description"] = normalize_basis_weight(
@@ -156,6 +184,7 @@ def update_material(
     user: User = Depends(can_write),
 ) -> dict:
     material = _material_or_404(db, material_id)
+    _validate_layer_flute(payload.layer_count, payload.flute_type)
     before = MaterialResponse.model_validate(material).model_dump()
     for key, value in payload.model_dump().items():
         setattr(material, key, value)

@@ -218,7 +218,7 @@ class TestF5ExtraColumns(unittest.TestCase):
             "1 001 20001234 普通纸箱 120*80*60cm 只 500 5.0000 2,500.00 S001 2026/08/01",
             "合计 2,500.00",
         ]
-        _, has_extra = _split_records(lines)
+        _, has_extra, _ = _split_records(lines)
         self.assertTrue(has_extra, "含'番号'的表头应被识别为 has_extra_columns=True")
 
     def test_normal_header_no_extra_columns(self):
@@ -228,7 +228,7 @@ class TestF5ExtraColumns(unittest.TestCase):
             "1 20001234 普通纸箱 120*80*60cm 只 500 5.0000 2,500.00 2026/08/01",
             "合计",
         ]
-        _, has_extra = _split_records(lines)
+        _, has_extra, _ = _split_records(lines)
         self.assertFalse(has_extra, "标准表头不应标记 has_extra_columns")
 
     def test_extra_column_record_parsed(self):

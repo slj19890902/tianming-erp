@@ -568,8 +568,12 @@ def print_batch(
     batch = db.get(Requisition, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="报料单不存在")
-    rows = db.scalars(
-        select(RequisitionItem)
+    rows = db.execute(
+        select(
+            RequisitionItem,
+            OrderItem.snapshot_production_notes.label("production_notes"),
+        )
+        .outerjoin(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
         .where(
             RequisitionItem.requisition_id == batch.id,
             RequisitionItem.status == "有效",
@@ -591,8 +595,9 @@ def print_batch(
                 ),
                 "quantity": row.requisition_qty,
                 "special_process": row.special_process,
+                "production_notes": production_notes,
             }
-            for row in rows
+            for row, production_notes in rows
         ],
-        "total_quantity": sum(row.requisition_qty for row in rows),
+        "total_quantity": sum(row.requisition_qty for row, _ in rows),
     }

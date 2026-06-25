@@ -103,6 +103,7 @@ def _pending_query():
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
             OrderItem.snapshot_material.label("material"),
+            OrderItem.snapshot_production_notes.label("production_notes"),
             OrderItem.quantity,
             OrderItem.delivered_quantity,
             (
@@ -154,6 +155,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
+            OrderItem.snapshot_production_notes.label("production_notes"),
         )
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .join(Order, Order.id == OrderItem.order_id)
@@ -592,6 +594,7 @@ def get_delivery_print_data(
             OrderItem.snapshot_spec.label("specification"),
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.remarks,
+            OrderItem.snapshot_production_notes.label("production_notes"),
         )
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .join(Order, Order.id == OrderItem.order_id)
@@ -622,6 +625,7 @@ def get_delivery_print_data(
                 "unit": "PCS",
                 "quantity": row.quantity,
                 "remarks": row.remarks,
+                "production_notes": row.production_notes,
             }
             for row in rows
         ],

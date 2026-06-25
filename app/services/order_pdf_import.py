@@ -16,6 +16,18 @@ from app.models.product import Product
 from app.services.pricing import PricingError, calculate_price
 
 
+class PdfParseError(ValueError):
+    """PDF 解析失败，携带结构化失败原因码（parse_status）。
+
+    继承 ValueError 以兼容既有 `except ValueError` 调用点。
+    """
+
+    def __init__(self, message: str, parse_status: str = "failed") -> None:
+        super().__init__(message)
+        self.message = message
+        self.parse_status = parse_status
+
+
 # ---------------------------------------------------------------------------
 # 正则表达式
 # ---------------------------------------------------------------------------
@@ -288,19 +300,22 @@ def _join_record_lines(lines: list[str]) -> str:
     return " ".join(parts)
 
 
-def _split_records(lines: list[str]) -> tuple[list[list[str]], bool]:
+def _split_records(lines: list[str]) -> tuple[list[list[str]], bool, bool]:
     """
     拆分明细行。
-    返回 (records, has_extra_columns)。
+    返回 (records, has_extra_columns, header_found)。
     has_extra_columns=True 表示表头有额外列（番号/销售订单号）。
+    header_found=True 表示找到了明细表头行。
     """
     records: list[list[str]] = []
     current: list[str] = []
     in_table = False
     has_extra_columns = False
+    header_found = False
     for line in lines:
         if "行号" in line and ("料品编码" in line or "物料编码" in line) and "交货日期" in line:
             in_table = True
+            header_found = True
             # v0.19.1 F-5: 检测额外列
             if "番号" in line or "销售订单号" in line:
                 has_extra_columns = True
@@ -319,16 +334,21 @@ def _split_records(lines: list[str]) -> tuple[list[list[str]], bool]:
             current.append(line)
     if current and current not in records:
         records.append(current)
-    return records, has_extra_columns
+    return records, has_extra_columns, header_found
 
 
 def _find_spec_start_outside_parens(text: str) -> int | None:
-    """返回规格起始位置（跳过括号内的内容）。"""
+    """返回规格起始位置（跳过括号内的内容）。
+
+    v0.19.2-A A-1: 同时识别半角 ()、全角 （）。天华 PDF 物料名称内常带
+    全角括号尺寸标注（如 白底黑字内箱（18"*36"）），括号内的数字不得被
+    当成规格起点，否则物料名称会被截断、括号内容被错误切入规格型号。
+    """
     depth = 0
     for i, c in enumerate(text):
-        if c == "(":
+        if c in ("(", "（"):
             depth += 1
-        elif c == ")":
+        elif c in (")", "）"):
             depth = max(0, depth - 1)
         elif depth == 0 and c.isdigit():
             if re.match(r"\d+(?:\.\d+)?(?:cm|mm|[*xX])", text[i:], re.IGNORECASE):
@@ -395,6 +415,51 @@ def _parse_old_material_code(code: str | None) -> dict:
     }
 
 
+# 中日文/全角符号检测（用于判定是否为有生产价值的说明）
+_CJK_JP_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿　-〿＀-￯]")
+
+
+def _extract_production_notes(
+    spec_raw: str,
+    size_spec: str,
+    old_mat: str,
+    customer_model: str,
+) -> str:
+    """
+    v0.19.2-A: 从规格型号原文中抽出"生产/印刷/打勾/摆放/日文警示"等说明。
+
+    规则：
+      1. 移除已分类内容：尺寸、旧材质代码、TH型号、包装注记。
+      2. 移除与中日文不相邻的纯 ASCII / 数字 / 符号噪声。
+      3. 仅当残留文本包含中文/日文假名/全角符号时才视为有效说明，否则返回空串。
+    不丢弃无法归类但有业务价值的中/日文文本。
+    """
+    if not spec_raw:
+        return ""
+    notes = spec_raw
+    # 移除尺寸（含斜杠厚度）
+    for match in DIMENSION_RE.finditer(spec_raw):
+        notes = notes.replace(match.group(1), " ")
+    if size_spec:
+        notes = notes.replace(size_spec, " ")
+    if old_mat:
+        notes = notes.replace(old_mat, " ")
+    if customer_model:
+        notes = re.sub(re.escape(customer_model), " ", notes, flags=re.IGNORECASE)
+    # 移除包装注记（不展示）
+    notes = PACKAGING_ANNOTATION_RE.sub(" ", notes)
+    # 移除与中日文不相邻的 ASCII/数字/英文标点噪声
+    notes = re.sub(
+        r"(?<![぀-ヿ一-鿿])[A-Za-z0-9/().,*×xX\-]+(?![぀-ヿ一-鿿])",
+        " ",
+        notes,
+    )
+    notes = re.sub(r"\s+", " ", notes).strip(" ，,、.。/\\-*×xX")
+    if not notes or not _CJK_JP_RE.search(notes):
+        return ""
+    return notes
+
+
 def _enrich_tianhua_item(item: dict, spec_raw: str) -> dict:
     """
     从规格型号原文中提取天华专属字段。
@@ -414,24 +479,34 @@ def _enrich_tianhua_item(item: dict, spec_raw: str) -> dict:
     mat_info = _parse_old_material_code(old_mat)
     enriched.update(mat_info)
 
-    # size_spec：去掉材质代码、型号、extra_mark 后的纯尺寸描述
+    # v0.19.2-A A-2/A-3: size_spec 只保留纯尺寸（含 2.5/2.8cm 斜杠厚度，不截断）
+    enriched["size_spec"] = _extract_spec_dimensions(spec_raw)
+    enriched["specification"] = enriched["size_spec"]
+    enriched["raw_spec_model"] = enriched["size_spec"]
+
+    # extra_mark：去掉尺寸/材质/型号后残留的单字母标记（如 R）
     size_text = spec_raw
     if old_mat:
-        size_text = size_text.replace(old_mat, "")
+        size_text = size_text.replace(old_mat, " ")
     if enriched["customer_model"]:
-        size_text = size_text.replace(enriched["customer_model"], "")
+        size_text = size_text.replace(enriched["customer_model"], " ")
+    for dim in DIMENSION_RE.findall(spec_raw):
+        size_text = size_text.replace(dim if isinstance(dim, str) else dim[0], " ")
     extra_candidates = EXTRA_MARK_RE.findall(size_text)
     extra_mark = extra_candidates[-1] if extra_candidates else ""
-    if extra_mark:
-        size_text = re.sub(r"\b" + extra_mark + r"\b", "", size_text)
     enriched["extra_mark"] = extra_mark
 
-    # v0.19.1 F-4: 从 size_text 中移除包装注记
-    packaging_notes = PACKAGING_ANNOTATION_RE.findall(size_text)
+    # v0.19.1 F-4 / v0.19.2-A 问题7: 包装注记（5盒/箱 等）仅内部识别，丢弃，不展示
+    packaging_notes = PACKAGING_ANNOTATION_RE.findall(spec_raw)
     enriched["packaging_note"] = packaging_notes[0] if packaging_notes else ""
-    size_text = PACKAGING_ANNOTATION_RE.sub("", size_text)
 
-    enriched["size_spec"] = _clean_line(size_text)
+    # v0.19.2-A A-3/问题4: 规格栏里无法归类但有生产价值的中/日文说明 → production_notes
+    enriched["production_notes"] = _extract_production_notes(
+        spec_raw,
+        size_spec=enriched["size_spec"],
+        old_mat=old_mat,
+        customer_model=enriched["customer_model"],
+    )
 
     pname = item.get("product_name", "")
     model = enriched["customer_model"]
@@ -505,6 +580,7 @@ def _parse_record(record_lines: list[str], has_extra_columns: bool = False) -> d
         "amount": _decimal_to_str(match.group("amount"), "0.00"),
         "delivery_date": _normalize_date(match.group("delivery_date")),
         "raw_lines": record_lines,
+        "production_notes": "",
         "matched_product_id": None,
         "matched_material_id": None,
         "match_status": "unmatched",
@@ -562,6 +638,10 @@ PARSE_STATUS_LABELS = {
     "recognized":           "已识别",
     "needs_confirmation":   "需人工确认",
     "unsupported_format":   "暂不支持的格式",
+    "customer_not_recognized": "客户未识别",
+    "order_no_not_recognized": "订单号未识别",
+    "header_not_recognized":   "明细表头未识别",
+    "items_not_split":         "明细无法切行",
     "missing_customer_template": "已识别客户，但当前版本暂未建立该客户解析模板",
     "ocr_required":         "需要 OCR，当前版本暂未完整接入",
     "ocr_unavailable":      "需要 OCR，但 OCR 引擎未安装",
@@ -645,10 +725,14 @@ def _classify_pdf(
 def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict:
     lines = [_clean_line(line) for line in text.splitlines() if _clean_line(line)]
     if not lines:
-        raise ValueError("文件中未提取到可识别文字")
+        # 无可提取文字：通常是图片型/字体未映射，需 OCR
+        raise PdfParseError(
+            "文件中未提取到可识别文字，可能是图片型 PDF，需要 OCR。",
+            "ocr_required" if ocr_available() else "ocr_unavailable",
+        )
     order_match = ORDER_NO_RE.search(text)
     if not order_match:
-        raise ValueError("未识别到采购订单号")
+        raise PdfParseError("未识别到采购订单号。", "order_no_not_recognized")
     customer_po = order_match.group(1).upper()
 
     # 提取客户名
@@ -678,16 +762,47 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
             "is_tianhua": False,
         }
 
-    records, has_extra_columns = _split_records(lines)
+    # 天明：疑似销售方向文件，明确返回状态，不纳入采购订单解析
+    if customer_type == "tianming":
+        return {
+            "source_name": source_name or "uploaded.pdf",
+            "source_type": "purchase_order_pdf",
+            "customer_name_raw": customer_name,
+            "customer_name": customer_name,
+            "customer_type": customer_type,
+            "customer_po": customer_po,
+            "order_date": None,
+            "delivery_date": None,
+            "recognition_status": "tianming_direction",
+            "parse_status": "tianming_direction",
+            "message": "疑似销售方向文件（发往天明），待人工确认，暂不纳入采购订单解析。",
+            "duplicate_status": None,
+            "duplicate_reason": None,
+            "item_count": 0,
+            "items": [],
+            "warnings": ["疑似销售方向文件（发往天明），待人工确认。"],
+            "is_tianhua": False,
+        }
+
+    # 其他未识别客户：明确失败原因，不静默
+    if customer_type == "unknown" and not customer_name:
+        raise PdfParseError(
+            "未识别到客户，请按客户模板维护后再导入。",
+            "customer_not_recognized",
+        )
+
+    records, has_extra_columns, header_found = _split_records(lines)
+    if not header_found:
+        raise PdfParseError("未识别到订单明细表头。", "header_not_recognized")
     if not records:
-        raise ValueError("未识别到订单明细")
+        raise PdfParseError("识别到表头但无法切分出订单明细行。", "items_not_split")
     items_raw = [
         item
         for record in records
         if (item := _parse_record(record, has_extra_columns=has_extra_columns))
     ]
     if not items_raw:
-        raise ValueError("未识别到订单明细")
+        raise PdfParseError("识别到表头但无法切分出订单明细行。", "items_not_split")
 
     # 天华专属字段补全
     items: list[dict] = []

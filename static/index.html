@@ -582,18 +582,83 @@
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
               <data-panel v-else-if="productTab === 'materials'" :empty="false">
+                <!-- 供应商筛选（第一级：在层数按钮上方） -->
+                <div class="toolbar" style="margin-bottom:4px">
+                  <div class="order-status-tabs">
+                    <button :class="['status-tab-btn', {active: !materialSupplierFilter}]"
+                            @click="materialSupplierFilter=''; materialLayerFilter=0; loadMaterials()">全部供应商</button>
+                    <button v-for="sup in materialSuppliers" :key="sup"
+                            :class="['status-tab-btn', {active: materialSupplierFilter === sup}]"
+                            @click="materialSupplierFilter=sup; materialLayerFilter=0; loadMaterials()">{{ sup }}</button>
+                  </div>
+                </div>
+                <!-- 层数筛选（第二级）+ 操作按钮 -->
                 <div class="toolbar">
                   <div class="order-status-tabs">
                     <button v-for="tab in materialLayerTabs" :key="tab.value"
                             :class="['status-tab-btn', {active: materialLayerFilter === tab.value}]"
                             @click="materialLayerFilter=tab.value; loadMaterials()">{{ tab.label }}</button>
                   </div>
-                  <button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button>
+                  <div class="toolbar-group">
+                    <button class="btn" @click="buildCompareGroups(); showCompareModal=true">比价</button>
+                    <button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button>
+                  </div>
                 </div>
                 <div v-if="!materials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
-                <table v-else><thead><tr><th>材质代码</th><th>配纸</th><th>层数</th><th>楞型</th><th>克重说明</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in materials" :key="row.id"><td>{{ materialBaseCode(row) }}</td><td>{{ row.paper_composition || "-" }}</td><td>{{ row.layer_count || "-" }}</td><td>{{ row.flute_type || "-" }}<span v-if="materialFluteAbnormal(row)" class="muted" style="color:#b91c1c"> (历史异常值)</span></td><td>{{ row.basis_weight_description || "-" }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.quote_price) }}</td><td class="toolbar-group"><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td></tr></tbody></table>
+                <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示 -->
+                <table v-else><thead><tr><th>材质代码</th><th>供应商</th><th>层数</th><th>楞型</th><th>克重说明</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in materials" :key="row.id">
+                  <td :title="row.code">{{ materialBaseCode(row) }}</td>
+                  <td>{{ row.supplier_name || "-" }}</td>
+                  <td>{{ row.layer_count ? row.layer_count+'层' : "-" }}</td>
+                  <td>{{ row.flute_type || "-" }}</td>
+                  <td>{{ row.basis_weight_description || "-" }}</td>
+                  <td v-if="!isWorkshop" class="sensitive-price">{{ money(row.quote_price) }}</td>
+                  <td>{{ row.quote_date || "-" }}</td>
+                  <td class="toolbar-group"><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
+                </tr></tbody></table>
               </data-panel>
+
+              <!-- 比价弹窗 -->
+              <div v-if="showCompareModal" class="modal-backdrop" @click.self="showCompareModal=false">
+                <div class="modal" style="max-width:900px;max-height:80vh;overflow-y:auto">
+                  <div class="modal-header"><h3>材质比价</h3><button class="btn small" @click="showCompareModal=false">关闭</button></div>
+                  <div style="padding:12px">
+                    <p style="color:#666;font-size:13px">⚠️ 比价分组依据：层数 + 克重结构 + 纸种类别 + 等级 + 来源。特殊材质（俄卡/美卡/进口木浆/白卡等）标注"仅供参考"，不可直接换算。</p>
+                    <div v-for="(group, gi) in compareGroups" :key="gi" style="margin-bottom:20px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+                      <div :style="{background: group.status==='可比价'?'#f0fdf4':group.status==='仅供参考'?'#fffbeb':group.status==='材质类别不同'?'#fff7ed':'#f5f5f5', padding:'8px 12px', fontWeight:600, fontSize:'13px'}">
+                        {{ group.label }}
+                        <span :style="{marginLeft:'12px', padding:'2px 8px', borderRadius:'4px', fontSize:'12px',
+                          background: group.status==='可比价'?'#bbf7d0':group.status==='仅供参考'?'#fef08a':group.status==='材质类别不同'?'#fed7aa':'#e5e7eb',
+                          color: group.status==='可比价'?'#166534':group.status==='仅供参考'?'#854d0e':group.status==='材质类别不同'?'#9a3412':'#374151'}">
+                          {{ group.status }}
+                        </span>
+                        <span v-if="group.crossClassWarning" style="margin-left:8px;color:#b45309;font-size:12px">⚠️ 克重相同但纸种/等级不同，仅供参考，不能直接比价</span>
+                      </div>
+                      <div v-if="group.rows.length === 1" style="padding:8px 12px;color:#6b7280;font-size:13px">暂无其他供应商报价</div>
+                      <table v-else style="width:100%;font-size:13px">
+                        <thead><tr style="background:#f9fafb"><th style="padding:6px 10px;text-align:left">材质代码</th><th>供应商</th><th>层数</th><th>楞型</th><th>纸种类别</th><th>等级</th><th>国产/进口</th><th>是否特殊</th><th class="sensitive-price">报价(元/㎡)</th><th>报价日期</th><th>比价状态</th></tr></thead>
+                        <tbody>
+                          <tr v-for="(r, ri) in group.rows" :key="ri" :style="{background: ri===0 && group.status==='可比价' ?'#f0fdf4':''}">
+                            <td style="padding:5px 10px" :title="r.code">{{ materialBaseCode(r) }}</td>
+                            <td style="padding:5px 10px">{{ r.supplier_name||"-" }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ r.layer_count ? r.layer_count+'层' : "-" }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ r.flute_type||"-" }}</td>
+                            <td style="padding:5px 10px">{{ group.ptype }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ group.grade }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ group.origin }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ group.special ? '⚠️ 是' : '否' }}</td>
+                            <td style="padding:5px 10px;text-align:right" class="sensitive-price">{{ money(r.quote_price) }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ r.quote_date||"-" }}</td>
+                            <td style="padding:5px 10px;text-align:center">{{ group.status }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div v-if="!compareGroups.length" class="muted" style="text-align:center;padding:20px">请先加载材质数据</div>
+                  </div>
+                </div>
+              </div>
             </template>
 
             <template v-else-if="activePage === 'orders'">
@@ -1659,6 +1724,10 @@
               { value: 5, label: "五层" },
               { value: 7, label: "七层" }
             ],
+            materialSupplierFilter: "",
+            materialSuppliers: [],
+            showCompareModal: false,
+            compareGroups: [],
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
             pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
@@ -2190,7 +2259,73 @@
           async loadMaterials() {
             const params = { page_size: 200 };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
-            this.materials = (await axios.get("/api/master/materials", { params })).data.items;
+            if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
+            const res = await axios.get("/api/master/materials", { params });
+            this.materials = res.data.items;
+            // 维护供应商下拉列表（从全量数据中提取，仅首次或无筛选时刷新）
+            if (!this.materialSupplierFilter && !this.materialLayerFilter) {
+              const all = (await axios.get("/api/master/materials", { params: { page_size: 500 } })).data.items;
+              const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))].sort();
+              this.materialSuppliers = names;
+            }
+          },
+          buildCompareGroups() {
+            // 比价分组：layer_count + basis_weight_description + 材质类别
+            // 材质类别从 basis_weight_description/paper_composition 推断
+            function classifyMaterial(row) {
+              const desc = (row.basis_weight_description || "") + " " + (row.paper_composition || "");
+              let origin = "未知", ptype = "其他", grade = "未知", special = false, reason = "";
+              if (/进口/.test(desc)) origin = "进口"; else if (/国产/.test(desc)) origin = "国产";
+              if (/俄卡|仿俄/.test(desc)) { ptype = "牛卡"; special = true; reason = "俄卡/仿俄卡"; }
+              else if (/美卡/.test(desc)) { ptype = "牛卡"; special = true; reason = "美卡"; }
+              else if (/白牛/.test(desc)) { ptype = "白牛卡"; special = true; reason = "白牛卡"; }
+              else if (/白卡/.test(desc)) { ptype = "白卡"; special = true; reason = "白卡"; }
+              else if (/木浆/.test(desc)) { ptype = "牛卡"; special = true; reason = "进口木浆牛卡"; }
+              else if (/牛卡/.test(desc)) ptype = "牛卡";
+              else if (/高强/.test(desc)) ptype = "高强芯";
+              else if (/芯纸/.test(desc)) ptype = "芯纸";
+              else if (/高瓦|施胶/.test(desc)) ptype = "高强瓦";
+              else if (/普瓦/.test(desc)) ptype = "普瓦";
+              if (/AAA/.test(desc)) { grade = "AAA"; special = true; reason += " AAA级"; }
+              else if (/AA级/.test(desc)) grade = "AA";
+              else if (/A级/.test(desc)) grade = "A";
+              else if (/B级/.test(desc)) grade = "B";
+              return { origin, ptype, grade, special, reason: reason.trim() || (special ? "特殊材质" : "") };
+            }
+            function compareKey(row) {
+              const c = classifyMaterial(row);
+              return `${row.layer_count||""}|${row.basis_weight_description||""}|${c.ptype}|${c.grade}|${c.origin}`;
+            }
+            const all = this.materials;
+            const map = {};
+            all.forEach(row => {
+              const key = compareKey(row);
+              if (!map[key]) map[key] = { key, rows: [], sample: classifyMaterial(row) };
+              map[key].rows.push(row);
+            });
+            // 跨类别冲突检测（同克重但类别不同）
+            const byWeight = {};
+            all.forEach(row => {
+              const wk = `${row.layer_count||""}|${row.basis_weight_description||""}`;
+              if (!byWeight[wk]) byWeight[wk] = new Set();
+              byWeight[wk].add(classifyMaterial(row).ptype + "|" + classifyMaterial(row).origin);
+            });
+            this.compareGroups = Object.values(map).map(g => {
+              const wk = `${g.rows[0].layer_count||""}|${g.rows[0].sample.ptype}`;
+              const weightKey = `${g.rows[0].layer_count||""}|${g.rows[0].basis_weight_description||""}`;
+              const crossClass = byWeight[weightKey] && byWeight[weightKey].size > 1;
+              let status = "可比价";
+              if (g.sample.special) status = "仅供参考";
+              if (crossClass && !g.sample.special) status = "材质类别不同";
+              if (!g.sample.ptype || g.sample.ptype === "其他") status = "待人工确认";
+              return {
+                label: `${g.rows[0].layer_count||"?"}层 | ${g.rows[0].basis_weight_description||"?克重"} | ${g.sample.ptype} | ${g.sample.grade} | ${g.sample.origin}`,
+                rows: g.rows.sort((a, b) => (a.quote_price || 0) - (b.quote_price || 0)),
+                status,
+                crossClassWarning: crossClass,
+                ...g.sample
+              };
+            }).sort((a, b) => a.label.localeCompare(b.label));
           },
           materialBaseCode(row) {
             if (row.paper_composition) return row.paper_composition;

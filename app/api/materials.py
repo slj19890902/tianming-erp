@@ -107,15 +107,19 @@ def list_materials(
     page_size: int = Query(default=100, ge=1, le=200),
     layer_count: int | None = Query(default=None, ge=1),
     flute_type: str | None = Query(default=None),
+    supplier_name: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     # v0.19.2-B: 支持按层数（三/五/七层）与楞型过滤
+    # Hotfix-2: 新增 supplier_name 过滤（精确匹配）
     filters = []
     if layer_count is not None:
         filters.append(Material.layer_count == layer_count)
     if flute_type:
         filters.append(Material.flute_type == flute_type)
+    if supplier_name:
+        filters.append(Material.supplier_name == supplier_name)
 
     total = db.scalar(
         select(func.count(Material.id)).where(*filters)

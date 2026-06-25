@@ -48,7 +48,8 @@ def test_parse_purchase_order_text_extracts_header_and_lines() -> None:
     assert draft["delivery_date"] == "2026-06-25"
     assert draft["item_count"] == 3
     assert draft["items"][0]["product_code"] == "21312009"
-    assert draft["items"][0]["raw_product_name"] == "中性内箱"
+    # Hotfix-2: 修复后括号内容保留，品名包含完整括号描述
+    assert "中性内箱" in draft["items"][0]["raw_product_name"]
     # v0.19.1 F-3: 斜杠规格不截断，116*68*1.8/2.1cm 应完整保留
     assert draft["items"][0]["raw_spec_model"] == "116*68*1.8/2.1cm"
     assert draft["items"][0]["quantity"] == 25

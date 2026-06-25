@@ -290,13 +290,26 @@ def _extract_customer_name(lines: list[str], customer_po: str) -> str | None:
 
 
 def _join_record_lines(lines: list[str]) -> str:
-    """合并明细行，修复跨行断号：如 '18.' + '5cm' → '18.5cm'。"""
+    """合并明细行，修复跨行断号。
+
+    已处理场景：
+      '18.' + '5cm'   → '18.5cm'   （行尾数字+点，下行以数字开头）
+    Hotfix-2 新增：
+      '2.3/2' + '.6cm' → '2.3/2.6cm' （斜杠厚度跨行断开，行尾数字，下行以 .数字 开头）
+    """
     parts: list[str] = []
     for line in lines:
-        if parts and re.search(r"\d\.$", parts[-1]) and re.match(r"^\d", line):
-            parts[-1] = parts[-1] + line
-        else:
-            parts.append(line)
+        if parts:
+            prev = parts[-1]
+            # 原有：行尾 "\d." + 下行 "\d..." → 直接拼接
+            if re.search(r"\d\.$", prev) and re.match(r"^\d", line):
+                parts[-1] = prev + line
+                continue
+            # Hotfix-2：行尾 "\d" + 下行 "\.数字..." → 直接拼接（斜杠规格跨行）
+            if re.search(r"\d$", prev) and re.match(r"^\.\d", line):
+                parts[-1] = prev + line
+                continue
+        parts.append(line)
     return " ".join(parts)
 
 
@@ -363,9 +376,11 @@ def _split_name_and_spec(first_body: str, full_body: str) -> tuple[str, str]:
         first_spec = first_body[pos:].strip()
         remaining = full_body[len(first_body):].strip()
         return name, _clean_line(f"{first_spec} {remaining}")
-    parts = first_body.split(maxsplit=1)
-    name = parts[0] if parts else first_body
-    spec = full_body[len(name):].strip()
+    # Hotfix-2 修复：当 first_body 中未找到规格起点时，整个 first_body 即为品名。
+    # 原来用 split(maxsplit=1) 取第一个 token，会在括号内空格处截断品名（如
+    # "白底黑字内箱（18 "*36"）" 会被截为 "白底黑字内箱（18"），丢失括号内容）。
+    name = first_body.strip()
+    spec = full_body[len(first_body):].strip()
     return name, spec
 
 

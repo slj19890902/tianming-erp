@@ -749,20 +749,36 @@ def seed_default_users(conn: sqlite3.Connection) -> None:
         ("boss", password_hash("123456"), "boss", "老板端"),
         ("workshop", password_hash("123456"), "workshop", "车间端"),
     ]
+    # The live DB may use the app-overlay schema, which diverges from the legacy
+    # users DDL: it adds a NOT NULL real_name column and a role CHECK that only
+    # allows admin/finance/sales/workshop (no 'boss'). Introspect the actual table
+    # so seeding adapts instead of crashing on boot.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    has_real_name = "real_name" in columns
     for username, hashed, role, display_name in default_users:
-        conn.execute(
-            """
-            INSERT INTO users (username, password_hash, role, display_name)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(username) DO UPDATE SET
-                password_hash = excluded.password_hash,
-                role = excluded.role,
-                display_name = excluded.display_name,
-                is_active = 1,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (username, hashed, role, display_name),
+        cols = ["username", "password_hash", "role", "display_name"]
+        vals = [username, hashed, role, display_name]
+        if has_real_name:
+            cols.append("real_name")
+            vals.append(display_name)
+        placeholders = ", ".join("?" for _ in cols)
+        update_cols = [c for c in cols if c != "username"]
+        update_clause = ", ".join(f"{c} = excluded.{c}" for c in update_cols)
+        sql = (
+            f"INSERT INTO users ({', '.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT(username) DO UPDATE SET {update_clause}, "
+            "is_active = 1, updated_at = CURRENT_TIMESTAMP"
         )
+        # Use a savepoint so a default user the live schema rejects (e.g. the
+        # legacy 'boss' role, which the migrated CHECK constraint forbids) is
+        # skipped cleanly without aborting the whole boot transaction.
+        conn.execute("SAVEPOINT seed_user")
+        try:
+            conn.execute(sql, vals)
+        except sqlite3.IntegrityError:
+            conn.execute("ROLLBACK TO seed_user")
+        finally:
+            conn.execute("RELEASE seed_user")
 
 
 class LoginRequest(BaseModel):
@@ -823,14 +839,18 @@ def find_active_user(username: str) -> sqlite3.Row | None:
 
 def write_login_log(user: sqlite3.Row) -> None:
     with get_db_connection() as conn:
+        cols = ["user_id", "username", "role", "action", "entity_type", "entity_id", "description"]
+        vals = [user["id"], user["username"], user["role"], "login", "user", user["id"], "用户登录"]
+        # The app-overlay schema adds a NOT NULL `resource` column the legacy
+        # insert never supplied; provide it when present so login logging works.
+        table_cols = {row["name"] for row in conn.execute("PRAGMA table_info(operation_logs)")}
+        if "resource" in table_cols:
+            cols.append("resource")
+            vals.append("user")
+        placeholders = ", ".join("?" for _ in cols)
         conn.execute(
-        """
-            INSERT INTO operation_logs (
-                user_id, username, role, action, entity_type, entity_id, description
-            )
-            VALUES (?, ?, ?, 'login', 'user', ?, '用户登录')
-            """,
-            (user["id"], user["username"], user["role"], user["id"]),
+            f"INSERT INTO operation_logs ({', '.join(cols)}) VALUES ({placeholders})",
+            vals,
         )
         conn.commit()
 

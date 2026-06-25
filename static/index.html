@@ -2376,11 +2376,17 @@
             for (let i = 0; i < order.length; i++) if (name.includes(order[i])) return i;
             return order.length;
           },
-          // 组合楞匹配：flute_type "BE" 同时命中 B 瓦与 E 瓦 tab；五层 AB/BE 精确匹配
+          // 组合楞匹配（含特价单组合楞）：
+          //   三层 tab B/E/A：flute "B"/"E"/"A" 精确，或特价单组合 "B/E" 同时命中 B 与 E。
+          //   五层 tab AB/BE：flute "AB"/"BE"，或组合 "AB/BE"（含 BA/EB）同时命中 AB 与 BE。
+          //   注意：三层 "B/E" 不是五层 "BE"，靠层数过滤 + 此处精确判断隔离，绝不串层。
           fluteMatches(fluteType, tab) {
-            const ft = fluteType || "";
-            if (tab === "AB" || tab === "BE") return ft === tab;
-            return ft.includes(tab);
+            const ft = (fluteType || "").toUpperCase().replace(/\s/g, "");
+            const set = ft.split("/").filter(Boolean);  // "AB/BE" -> ["AB","BE"]
+            if (tab === "AB") return set.includes("AB") || set.includes("BA");
+            if (tab === "BE") return set.includes("BE") || set.includes("EB");
+            // 三层 B / E / A：组合 "B/E" 拆分后精确命中
+            return set.includes(tab);
           },
           onMaterialLayerChange(value) {
             this.materialLayerFilter = value;

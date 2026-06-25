@@ -597,43 +597,33 @@
                   <div class="order-status-tabs">
                     <button v-for="tab in materialLayerTabs" :key="tab.value"
                             :class="['status-tab-btn', {active: materialLayerFilter === tab.value}]"
-                            @click="onMaterialLayerChange(tab.value)">{{ tab.label }}</button>
+                            @click="onMaterialLayerFilter(tab.value)">{{ tab.label }}</button>
                   </div>
                 </div>
-                <!-- 楞型筛选（第三级）+ 排序 + 操作按钮 -->
+                <!-- 排序 + 操作按钮（材质字典不再按楞型筛选，楞型只在常用箱/订单选择） -->
                 <div class="toolbar">
                   <div class="order-status-tabs">
-                    <template v-if="materialLayerFilter===7">
-                      <span class="muted" style="padding:6px 8px">七层楞型规则待维护</span>
-                    </template>
-                    <template v-else>
-                      <button v-for="ft in materialFluteTabs" :key="ft.value"
-                              :class="['status-tab-btn', {active: materialFluteFilter === ft.value}]"
-                              @click="materialFluteFilter=ft.value">{{ ft.label }}</button>
-                    </template>
-                  </div>
-                  <div class="order-status-tabs" style="margin-left:12px">
                     <button v-for="st in materialSortTabs" :key="st.value"
                             :class="['status-tab-btn', {active: materialSort === st.value}]"
                             @click="materialSort=st.value; loadMaterials()">{{ st.label }}</button>
                   </div>
                   <div class="toolbar-group">
                     <button class="btn" @click="buildCompareGroups(); showCompareModal=true">比价</button>
+                    <button v-if="canAdmin" class="btn" @click="openPriceAdjust()">供应商调价</button>
                     <button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button>
                   </div>
                 </div>
                 <div v-if="!displayedMaterials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
                 <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示；新增"克重结构"列 -->
-                <table v-else><thead><tr><th>材质代码</th><th>供应商</th><th>层数</th><th>楞型</th><th>克重结构</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
+                <table v-else><thead><tr><th>供应商</th><th>层数</th><th>材质代码</th><th>克重结构</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in displayedMaterials" :key="row.id">
-                  <td :title="row.code">{{ materialBaseCode(row) }}</td>
                   <td>{{ row.supplier_name || "-" }}</td>
                   <td>{{ row.layer_count ? row.layer_count+'层' : "-" }}</td>
-                  <td>{{ row.flute_type || "-" }}</td>
+                  <td :title="row.code">{{ materialBaseCode(row) }}</td>
                   <td>{{ materialWeightStructure(row) }}</td>
                   <td v-if="!isWorkshop" class="sensitive-price">{{ money(row.quote_price) }}</td>
                   <td>{{ row.quote_date || "-" }}</td>
-                  <td class="toolbar-group"><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
+                  <td class="toolbar-group"><button class="btn small" @click="openPriceHistory(row)">价格历史</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
                 </tr></tbody></table>
               </data-panel>
 
@@ -674,6 +664,71 @@
                       </table>
                     </div>
                     <div v-if="!compareGroups.length" class="muted" style="text-align:center;padding:20px">请先加载材质数据</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 供应商统一调价弹窗 -->
+              <div v-if="showPriceAdjustModal" class="modal-backdrop" @click.self="showPriceAdjustModal=false">
+                <div class="modal" style="max-width:760px;max-height:84vh;overflow-y:auto">
+                  <div class="modal-header"><h3>供应商统一调价</h3><button class="btn small" @click="showPriceAdjustModal=false">关闭</button></div>
+                  <div style="padding:12px">
+                    <div class="form-grid">
+                      <div class="field"><label>供应商</label>
+                        <select class="select" v-model="priceAdjustForm.supplier_name">
+                          <option v-for="s in priceAdjustSuppliers" :key="s" :value="s">{{ s }}</option>
+                        </select>
+                      </div>
+                      <div class="field"><label>调价幅度（如 +5% / -10% / 5 / -3）</label>
+                        <input class="input" v-model.trim="priceAdjustForm.adjust_percent" placeholder="+5% 或 -10% 或 5" /></div>
+                      <div class="field"><label>生效日期</label><input class="input" type="date" v-model="priceAdjustForm.effective_date" /></div>
+                      <div class="field wide"><label>备注</label><input class="input" v-model.trim="priceAdjustForm.remark" /></div>
+                    </div>
+                    <div class="toolbar-group" style="margin:10px 0">
+                      <button class="btn" :disabled="priceAdjustLoading" @click="previewPriceAdjust()">预览调价</button>
+                      <button class="btn success" :disabled="!priceAdjustPreview || priceAdjustLoading" @click="applyPriceAdjust()">确认应用调价</button>
+                    </div>
+                    <div v-if="priceAdjustError" style="color:#dc2626;font-size:13px">{{ priceAdjustError }}</div>
+                    <div v-if="priceAdjustPreview" style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px">
+                      <div style="font-size:13px;margin-bottom:6px">
+                        供应商 <strong>{{ priceAdjustPreview.supplier_name }}</strong>｜幅度 <strong>{{ priceAdjustPreview.adjust_percent }}%</strong>｜影响材质 <strong>{{ priceAdjustPreview.affected_count }}</strong> 条<br>
+                        旧最低/最高：{{ priceAdjustPreview.old_min }} / {{ priceAdjustPreview.old_max }}　→　新最低/最高：{{ priceAdjustPreview.new_min }} / {{ priceAdjustPreview.new_max }}
+                      </div>
+                      <table style="width:100%;font-size:12px"><thead><tr style="background:#f9fafb"><th style="text-align:left;padding:4px 8px">材质代码</th><th>旧报价</th><th>新报价</th><th>涨跌</th><th>旧报价日期</th><th>新报价日期</th></tr></thead>
+                        <tbody><tr v-for="d in priceAdjustPreview.details" :key="d.material_id">
+                          <td style="padding:4px 8px">{{ d.material_code }}</td>
+                          <td style="text-align:right">{{ d.old_price }}</td>
+                          <td style="text-align:right">{{ d.new_price }}</td>
+                          <td style="text-align:right" :style="{color: d.delta>=0?'#16a34a':'#dc2626'}">{{ d.delta }}</td>
+                          <td style="text-align:center">{{ d.old_quote_date || "-" }}</td>
+                          <td style="text-align:center">{{ d.new_quote_date || "-" }}</td>
+                        </tr></tbody></table>
+                      <div class="muted" style="font-size:11px;margin-top:4px">仅显示前 10 条；确认应用前会自动备份数据库并写入价格历史。</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 材质价格历史弹窗 -->
+              <div v-if="showPriceHistoryModal" class="modal-backdrop" @click.self="showPriceHistoryModal=false">
+                <div class="modal" style="max-width:680px;max-height:84vh;overflow-y:auto">
+                  <div class="modal-header"><h3>价格历史 · {{ priceHistory.material_code }}</h3><button class="btn small" @click="showPriceHistoryModal=false">关闭</button></div>
+                  <div style="padding:12px">
+                    <div style="font-size:13px;margin-bottom:8px">供应商 {{ priceHistory.supplier_name || "-" }}｜当前报价 {{ priceHistory.current_price ?? "-" }}</div>
+                    <svg v-if="priceHistoryPoints.length>1" :width="priceHistoryChart.w" :height="priceHistoryChart.h" style="border:1px solid #eee;background:#fafafa">
+                      <polyline :points="priceHistoryPolyline" fill="none" stroke="#2563eb" stroke-width="2" />
+                      <circle v-for="(p,i) in priceHistoryPoints" :key="i" :cx="p.x" :cy="p.y" r="3" fill="#2563eb" />
+                    </svg>
+                    <div v-if="!(priceHistory.items||[]).length" class="muted" style="padding:14px;text-align:center">暂无调价历史</div>
+                    <table v-else style="width:100%;font-size:12px;margin-top:8px"><thead><tr style="background:#f9fafb"><th>日期</th><th>旧报价</th><th>新报价</th><th>幅度</th><th>操作人</th><th>备注</th></tr></thead>
+                      <tbody><tr v-for="h in priceHistory.items" :key="h.id">
+                        <td style="text-align:center">{{ h.effective_date || (h.created_at||'').slice(0,10) }}</td>
+                        <td style="text-align:right">{{ h.old_price }}</td>
+                        <td style="text-align:right">{{ h.new_price }}</td>
+                        <td style="text-align:right">{{ h.adjust_percent }}%</td>
+                        <td style="text-align:center">{{ h.operator || "-" }}</td>
+                        <td>{{ h.adjust_reason || "-" }}</td>
+                      </tr></tbody></table>
                   </div>
                 </div>
               </div>
@@ -1262,21 +1317,23 @@
               <div class="field"><label>品号</label><input class="input" v-model.trim="productForm.product_code" /></div>
               <div class="field"><label>客户料号</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
+              <!-- 材质选择顺序：材质供应商 → 层数 → 楞型 → 材质代码 -->
               <div class="field"><label>材质供应商</label>
                 <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
                   <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ opt }}</option>
                 </select>
               </div>
-              <div class="field"><label>材质（代码｜供应商｜克重｜报价）</label>
-                <search-select v-model="productForm.material_id"
-                  :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
-                  label-key="_label" value-key="id" :allow-empty="true"
-                  placeholder="输入代码/供应商/克重/报价搜索"></search-select>
-                <div class="muted" style="font-size:12px">先选层数+楞型，再搜索选择；只输入文字不选中无效。</div>
+              <div class="field">
+                <label>层数</label>
+                <select class="select" v-model.number="productForm.layer_count" @change="onProductLayerChange">
+                  <option :value="null">未设置</option>
+                  <option :value="3">3层（单楞）</option>
+                  <option :value="5">5层（双楞）</option>
+                </select>
               </div>
               <div class="field">
                 <label>楞型</label>
-                <select class="select" v-model="productForm.flute_type" @change="onProductFluteChange">
+                <select class="select" v-model="productForm.flute_type" @change="onProductFluteChange" :disabled="productForm.layer_count===7">
                   <option :value="null">未设置</option>
                   <template v-if="productForm.layer_count===5">
                     <option value="AB">AB（五层双楞）</option>
@@ -1295,15 +1352,16 @@
                     <option value="E">E瓦（三层）</option>
                   </template>
                 </select>
+                <div v-if="productForm.layer_count===7" class="muted" style="font-size:12px">七层楞型规则待维护</div>
                 <div v-if="productFluteLayerError" style="color:#dc2626;font-size:12px;margin-top:4px">{{ productFluteLayerError }}</div>
               </div>
-              <div class="field">
-                <label>层数</label>
-                <select class="select" v-model.number="productForm.layer_count" @change="onProductLayerChange">
-                  <option :value="null">未设置</option>
-                  <option :value="3">3层（单楞）</option>
-                  <option :value="5">5层（双楞）</option>
-                </select>
+              <div class="field"><label>材质（代码｜供应商｜克重｜报价）</label>
+                <search-select v-model="productForm.material_id"
+                  :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
+                  label-key="_label" value-key="id" :allow-empty="true"
+                  placeholder="输入代码/供应商/克重/报价搜索"></search-select>
+                <div class="muted" style="font-size:12px">材质代码只按供应商+层数过滤；楞型仅保存不影响代码列表。只输入文字不选中无效。</div>
+                <div v-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
               </div>
               <div class="field"><label>箱型</label><select class="select" v-model="productForm.box_category"><option value="normal">普通箱</option><option value="die_cut">模切箱</option></select></div>
               <div class="field"><label>长(mm)</label><input class="input" type="number" v-model="productForm.length_mm" /></div>
@@ -1768,6 +1826,12 @@
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
             pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
+            // v0.19.2-B 供应商调价 + 价格历史
+            showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
+            priceAdjustForm: { supplier_name: "苏州嘉林亿", adjust_percent: "", effective_date: "", remark: "" },
+            priceAdjustPreview: null,
+            showPriceHistoryModal: false, priceHistory: { material_code: "", items: [] },
+            productBoardCost: null,
             materialMappingItems: [], materialMappingTotal: 0, materialMappingPage: 1,
             materialMappingFilterConf: '', materialMappingFilterStatus: '',
             materialMappingStats: {},
@@ -1844,9 +1908,37 @@
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
-            const ft = this.materialFluteFilter;
-            if (!ft || this.materialLayerFilter === 7) return this.materials;
-            return this.materials.filter(m => this.fluteMatches(m.flute_type, ft));
+            // 材质字典不再按楞型拆分/过滤：直接展示当前供应商+层数下的全部材质。
+            return this.materials;
+          },
+          // 供应商调价可选供应商（标准名）
+          priceAdjustSuppliers() {
+            const std = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
+            const extra = (this.materialSuppliers || []).filter(s => !std.includes(s));
+            return [...std, ...extra];
+          },
+          // 常用箱纸板成本参考文本（实时计算，不保存）
+          productBoardCostText() {
+            const c = this.productBoardCost;
+            if (c == null) return "";
+            return `¥${Number(c).toFixed(2)}（展开面积 × 当前材质平方报价，仅纸板成本）`;
+          },
+          // 价格历史折线图坐标
+          priceHistoryChart() { return { w: 600, h: 180, pad: 30 }; },
+          priceHistoryPoints() {
+            const items = this.priceHistory.items || [];
+            const vals = items.map(h => h.new_price).filter(v => v != null);
+            if (vals.length < 2) return [];
+            const { w, h, pad } = this.priceHistoryChart;
+            const min = Math.min(...vals), max = Math.max(...vals);
+            const span = (max - min) || 1;
+            return vals.map((v, i) => ({
+              x: pad + (w - 2 * pad) * (vals.length === 1 ? 0 : i / (vals.length - 1)),
+              y: h - pad - (h - 2 * pad) * ((v - min) / span)
+            }));
+          },
+          priceHistoryPolyline() {
+            return this.priceHistoryPoints.map(p => `${p.x},${p.y}`).join(" ");
           },
           // 天华专项字段明细：从 pdfSampleDetail 的 parser_result_json 中提取 items
           pdfDetailItems() {
@@ -2017,6 +2109,14 @@
           allRequisitionSelected() { return this.requisitionPending.length > 0 && this.requisitionPending.every(row => this.requisitionSelected[row.item_id]); },
           allDeliverySelected() { return this.deliveryOptions.length > 0 && this.deliveryOptions.every(row => this.deliveryForm.selected[row.item_id]); },
           allStatementSelected() { return this.pendingStatements.length > 0 && this.pendingStatements.every(row => this.statementForm.selected[row.return_receipt_item_id]); }
+        },
+        watch: {
+          // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
+          "productForm.material_id"() { this.refreshProductBoardCost(); },
+          "productForm.box_category"() { this.refreshProductBoardCost(); },
+          "productForm.length_mm"() { this.refreshProductBoardCost(); },
+          "productForm.width_mm"() { this.refreshProductBoardCost(); },
+          "productForm.height_mm"() { this.refreshProductBoardCost(); }
         },
         async mounted() {
           window.erpAuthRequired = () => {
@@ -2388,7 +2488,7 @@
             // 三层 B / E / A：组合 "B/E" 拆分后精确命中
             return set.includes(tab);
           },
-          onMaterialLayerChange(value) {
+          onMaterialLayerFilter(value) {
             this.materialLayerFilter = value;
             // 切层默认楞型：三层→B，五层→AB，七层→无
             if (value === 5) this.materialFluteFilter = "AB";
@@ -2398,6 +2498,11 @@
           },
           // 克重结构展示：'150g/100g/100g' → '150 / 100 / 100'
           materialWeightStructure(row) {
+            // 克重结构列：优先显示逐层纸种明细（paper_composition，如
+            // "C=80g 国产A级牛卡 | 4=100g ... | C=80g ..."），无纸种明细再
+            // fallback 显示纯克重（80 / 100 / 80）。
+            const paper = (row.paper_composition || "").trim();
+            if (paper) return paper;
             const desc = row.basis_weight_description || "";
             const nums = desc.match(/\d+(?:\.\d+)?/g);
             return nums && nums.length ? nums.join(" / ") : "-";
@@ -2458,7 +2563,9 @@
                 }
               }
               if (layerCount && m.layer_count !== layerCount) return false;
-              if (fluteType && !this.fluteMatches(m.flute_type, fluteType)) return false;
+              // 材质主数据不按楞型拆分：材质代码只按 供应商 + 层数 过滤。
+              // 楞型（A/B/E、AB/BE）仅保存到常用箱/订单，不参与材质主数据过滤。
+              // 这样三层选 A瓦 时材质代码下拉不会变空（历史 bug 修复）。
               return true;
             });
             rows = this.sortMaterialRows(rows);
@@ -2496,6 +2603,74 @@
           validateSelectedMaterial(materialId) {
             const source = this.allMaterials.length ? this.allMaterials : this.materials;
             return materialId != null && source.some(m => m.id === materialId);
+          },
+          // ===== v0.19.2-B 供应商调价 =====
+          openPriceAdjust() {
+            this.priceAdjustError = "";
+            this.priceAdjustPreview = null;
+            this.priceAdjustForm = {
+              supplier_name: this.materialSupplierFilter || this.priceAdjustSuppliers[0] || "苏州嘉林亿",
+              adjust_percent: "", effective_date: new Date().toISOString().slice(0, 10), remark: ""
+            };
+            this.showPriceAdjustModal = true;
+          },
+          async previewPriceAdjust() {
+            this.priceAdjustError = ""; this.priceAdjustPreview = null; this.priceAdjustLoading = true;
+            try {
+              const body = { ...this.priceAdjustForm };
+              if (!body.effective_date) delete body.effective_date;
+              const { data } = await axios.post("/api/master/materials/price-adjustments/preview", body);
+              this.priceAdjustPreview = data;
+            } catch (e) {
+              this.priceAdjustError = e.response?.data?.detail || "预览失败";
+            } finally { this.priceAdjustLoading = false; }
+          },
+          async applyPriceAdjust() {
+            if (!this.priceAdjustPreview) return;
+            if (!confirm(`确认对 ${this.priceAdjustForm.supplier_name} 应用调价 ${this.priceAdjustForm.adjust_percent}？将先备份数据库并写入价格历史。`)) return;
+            this.priceAdjustError = ""; this.priceAdjustLoading = true;
+            try {
+              const body = { ...this.priceAdjustForm };
+              if (!body.effective_date) delete body.effective_date;
+              const { data } = await axios.post("/api/master/materials/price-adjustments/apply", body);
+              alert(`调价完成：影响 ${data.affected_count} 条，批次 #${data.batch_id}。`);
+              this.showPriceAdjustModal = false;
+              this.allMaterials = []; this.materialSuppliers = [];
+              await this.loadMaterials();
+            } catch (e) {
+              this.priceAdjustError = e.response?.data?.detail || "应用调价失败";
+            } finally { this.priceAdjustLoading = false; }
+          },
+          async openPriceHistory(row) {
+            this.priceHistory = { material_code: row.code, items: [] };
+            this.showPriceHistoryModal = true;
+            try {
+              const { data } = await axios.get(`/api/master/materials/${row.id}/price-history`);
+              this.priceHistory = data;
+            } catch (e) {
+              this.priceHistory = { material_code: row.code, supplier_name: row.supplier_name, items: [] };
+            }
+          },
+          // 常用箱纸板成本参考：实时按当前材质平方报价 + 箱型尺寸计算（不保存）
+          async refreshProductBoardCost() {
+            this.productBoardCost = null;
+            const f = this.productForm || {};
+            const src = this.allMaterials.length ? this.allMaterials : this.materials;
+            const mat = src.find(m => m.id === f.material_id);
+            if (!mat || mat.quote_price == null) return;
+            const cat = f.box_category || "normal";
+            const body = { box_category: cat, board_square_price: Number(mat.quote_price) };
+            if (cat === "normal") {
+              if (!f.length_mm || !f.width_mm || !f.height_mm) return;
+              body.length_mm = Number(f.length_mm); body.width_mm = Number(f.width_mm); body.height_mm = Number(f.height_mm);
+            } else if (cat === "die_cut") {
+              if (!f.length_mm || !f.width_mm) return;
+              body.unfolded_length_mm = Number(f.length_mm); body.unfolded_width_mm = Number(f.width_mm);
+            } else { return; }
+            try {
+              const { data } = await axios.post("/api/master/materials/board-cost", body);
+              if (data.supported) this.productBoardCost = data.board_cost;
+            } catch (e) { this.productBoardCost = null; }
           },
           buildCompareGroups() {
             // 比价分组：layer_count + basis_weight_description + 材质类别
@@ -2556,7 +2731,8 @@
             }).sort((a, b) => a.label.localeCompare(b.label));
           },
           materialBaseCode(row) {
-            if (row.paper_composition) return row.paper_composition;
+            // 材质代码列只显示真实代码（如 C4C / D4B / A414B），
+            // 绝不显示纸种明细（paper_composition）。去掉特价单后缀 -B/E、-AB/EB。
             const code = row.code || "";
             return code.includes("-") ? code.split("-")[0] : code;
           },

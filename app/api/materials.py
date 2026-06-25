@@ -14,8 +14,14 @@ from sqlalchemy.orm import Session
 from app.api.deps import RoleChecker, get_db
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.material import Material
+from app.models.material_price_history import (
+    MaterialPriceAdjustmentBatch,
+    MaterialPriceHistory,
+)
 from app.models.user import User
+from app.services import material_price_adjust as price_adjust
 from app.services.flute_mapping import validate_flute_consistency
+from app.services.pricing import PricingError, calculate_price
 
 
 router = APIRouter()
@@ -219,6 +225,122 @@ def list_materials(
     }
 
 
+class PriceAdjustRequest(BaseModel):
+    supplier_name: str = Field(min_length=1)
+    adjust_percent: str = Field(min_length=1)
+    effective_date: date | None = None
+    remark: str | None = None
+
+
+class BoardCostRequest(BaseModel):
+    box_category: Literal["normal", "die_cut"] = "normal"
+    board_square_price: Decimal
+    length_mm: Decimal | None = None
+    width_mm: Decimal | None = None
+    height_mm: Decimal | None = None
+    unfolded_length_mm: Decimal | None = None
+    unfolded_width_mm: Decimal | None = None
+
+
+@router.post("/price-adjustments/preview")
+def preview_price_adjustment(
+    payload: PriceAdjustRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    """供应商调价 dry-run 预览：只读，绝不写库。"""
+    try:
+        return price_adjust.preview(
+            db,
+            supplier_name=payload.supplier_name,
+            adjust_percent_raw=payload.adjust_percent,
+            effective_date=payload.effective_date,
+        )
+    except price_adjust.PriceAdjustError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/price-adjustments/apply")
+def apply_price_adjustment(
+    payload: PriceAdjustRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    """供应商调价应用：先备份数据库，再写 materials + 批次 + 历史。"""
+    try:
+        return price_adjust.apply(
+            db,
+            supplier_name=payload.supplier_name,
+            adjust_percent_raw=payload.adjust_percent,
+            effective_date=payload.effective_date,
+            remark=payload.remark,
+            operator=user.username,
+        )
+    except price_adjust.PriceAdjustError as error:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/price-adjustments")
+def list_price_adjustment_batches(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    rows = list(
+        db.scalars(
+            select(MaterialPriceAdjustmentBatch).order_by(
+                MaterialPriceAdjustmentBatch.created_at.desc()
+            )
+        ).all()
+    )
+    return {
+        "items": [
+            {
+                "id": b.id,
+                "supplier_name": b.supplier_name,
+                "adjust_percent": float(b.adjust_percent) if b.adjust_percent is not None else None,
+                "effective_date": b.effective_date.isoformat() if b.effective_date else None,
+                "affected_count": b.affected_count,
+                "remark": b.remark,
+                "operator": b.operator,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+            }
+            for b in rows
+        ]
+    }
+
+
+@router.post("/board-cost")
+def board_cost_reference(
+    payload: BoardCostRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """纸板成本参考 = 展开面积 × 材质平方报价（复用 pricing.calculate_price）。
+
+    仅支持 普通箱(normal)/A1 与 模切箱(die_cut)；其它箱型返回 supported=False。
+    成本只含纸板，不含人工/损耗/印刷/模切/利润/税费。
+    """
+    try:
+        result = calculate_price(
+            box_category=payload.box_category,
+            board_square_price=payload.board_square_price,
+            length_mm=payload.length_mm,
+            width_mm=payload.width_mm,
+            height_mm=payload.height_mm,
+            unfolded_length_mm=payload.unfolded_length_mm,
+            unfolded_width_mm=payload.unfolded_width_mm,
+        )
+    except PricingError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {
+        "supported": True,
+        "box_category": payload.box_category,
+        "area_m2": float(result.area_m2),
+        "board_cost": float(result.unit_price),
+    }
+
+
 @router.get("/{material_id}")
 def get_material(
     material_id: int,
@@ -226,6 +348,42 @@ def get_material(
     user: User = Depends(can_read),
 ) -> dict:
     return _response(_material_or_404(db, material_id), user)
+
+
+@router.get("/{material_id}/price-history")
+def get_material_price_history(
+    material_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    material = _material_or_404(db, material_id)
+    rows = list(
+        db.scalars(
+            select(MaterialPriceHistory)
+            .where(MaterialPriceHistory.material_id == material_id)
+            .order_by(MaterialPriceHistory.created_at.asc())
+        ).all()
+    )
+    return {
+        "material_id": material_id,
+        "material_code": material.code,
+        "supplier_name": material.supplier_name,
+        "current_price": float(material.quote_price) if material.quote_price is not None else None,
+        "items": [
+            {
+                "id": h.id,
+                "old_price": float(h.old_price) if h.old_price is not None else None,
+                "new_price": float(h.new_price) if h.new_price is not None else None,
+                "adjust_percent": float(h.adjust_percent) if h.adjust_percent is not None else None,
+                "effective_date": h.effective_date.isoformat() if h.effective_date else None,
+                "adjust_reason": h.adjust_reason,
+                "operator": h.operator,
+                "batch_id": h.batch_id,
+                "created_at": h.created_at.isoformat() if h.created_at else None,
+            }
+            for h in rows
+        ],
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

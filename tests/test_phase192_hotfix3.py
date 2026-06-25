@@ -339,6 +339,111 @@ class TestKeywordSearch:
 
 
 # ===========================================================================
+# 材质分页加载（page_size<=200 保护，修复 "Input should be <= 200" 422）
+# ===========================================================================
+
+class TestMaterialPageSizeGuardFrontend:
+    """LIMIT-FE: 前端不再请求 page_size>200。"""
+
+    INDEX = r"static/index.html"
+
+    @pytest.fixture(scope="class")
+    def html(self):
+        return open(self.INDEX, encoding="utf-8").read()
+
+    def test_no_oversized_page_size(self, html):
+        assert "page_size: 1000" not in html
+        assert "page_size: 500" not in html
+        assert "page_size:1000" not in html
+        assert "page_size:500" not in html
+
+    def test_uses_paginated_helper(self, html):
+        assert "fetchAllMaterials" in html
+        assert "PAGE_SIZE = 200" in html
+
+    def test_loadmaterials_calls_helper(self, html):
+        assert "this.fetchAllMaterials(" in html
+
+
+class TestMaterialPageSizeGuardApi:
+    """LIMIT-API: 后端 page_size 上限 200，分页可取全部。"""
+
+    def _client_with_n(self, n):
+        import pathlib
+        import tempfile
+        tmp = pathlib.Path(tempfile.mkdtemp()) / f"lim_{n}.sqlite3"
+        engine = create_sqlite_engine(tmp)
+        from app.models import Base
+        Base.metadata.create_all(engine)
+        SessionLocal = sessionmaker(
+            bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
+        )
+        with SessionLocal() as db:
+            db.add(User(
+                username="admin", password_hash=hash_password("x"), role="admin",
+                real_name="管理员", must_change_password=False, is_active=True,
+            ))
+            db.add_all([
+                Material(code=f"M{i:04d}", supplier_name="苏州嘉林亿",
+                         layer_count=3, flute_type="B", quote_price=1.0 + i / 100,
+                         basis_weight_description="100g/100g/100g")
+                for i in range(n)
+            ])
+            db.commit()
+        app = FastAPI()
+        cache = {}
+
+        def odb():
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        def ouser():
+            if not cache:
+                with SessionLocal() as db:
+                    cache["u"] = db.query(User).filter_by(username="admin").first()
+            return cache["u"]
+
+        app.dependency_overrides[get_db] = odb
+        app.dependency_overrides[get_current_user] = ouser
+        from app.api.materials import router
+        app.include_router(router, prefix="/api/master/materials")
+        return TestClient(app)
+
+    def test_page_size_over_200_rejected(self):
+        client = self._client_with_n(5)
+        r = client.get("/api/master/materials?page_size=1000")
+        assert r.status_code == 422, "page_size>200 应被后端拒绝（合理保护，不放宽到 9999）"
+
+    def test_page_size_200_ok(self):
+        client = self._client_with_n(5)
+        r = client.get("/api/master/materials?page_size=200")
+        assert r.status_code == 200
+
+    def test_paginate_over_200_materials(self):
+        """材质总数 250 时，按 page_size=200 翻页应取回全部 250 条。"""
+        n = 250
+        client = self._client_with_n(n)
+        collected = []
+        page = 1
+        while True:
+            r = client.get(f"/api/master/materials?page={page}&page_size=200")
+            assert r.status_code == 200
+            data = r.json()
+            items = data["items"]
+            collected.extend(items)
+            assert len(items) <= 200, "单页不得超过 200"
+            if len(items) < 200 or len(collected) >= data["total"]:
+                break
+            page += 1
+        assert data["total"] == n
+        assert len(collected) == n
+        assert len({c["code"] for c in collected}) == n, "翻页应无重复/缺漏"
+
+
+# ===========================================================================
 # 新版 xlsx 审计报告产物
 # ===========================================================================
 

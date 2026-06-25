@@ -2340,15 +2340,31 @@
             const { data } = await axios.get("/api/master/products", { params });
             this.products = data.items; this.productsTotal = data.total;
           },
+          // 分页拉取材质：后端限制 page_size<=200，因此用 page 翻页拉全部，
+          // 单次 limit 永不超过 200，避免一次性全量导致 422（Input should be <= 200）。
+          async fetchAllMaterials(baseParams) {
+            const PAGE_SIZE = 200;  // 后端硬上限，禁止超过
+            let page = 1;
+            const all = [];
+            while (true) {
+              const params = { ...baseParams, page, page_size: PAGE_SIZE };
+              const data = (await axios.get("/api/master/materials", { params })).data;
+              const items = data.items || [];
+              all.push(...items);
+              const total = data.total != null ? data.total : all.length;
+              if (items.length < PAGE_SIZE || all.length >= total) break;
+              page += 1;
+            }
+            return all;
+          },
           async loadMaterials() {
-            const params = { page_size: 500, sort: this.materialSort };
+            const params = { sort: this.materialSort };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
-            const res = await axios.get("/api/master/materials", { params });
-            this.materials = res.data.items;
+            this.materials = await this.fetchAllMaterials(params);
             // 维护全量材质（供所有材质选择器复用）+ 供应商下拉列表
             if (!this.allMaterials.length || !this.materialSuppliers.length) {
-              const all = (await axios.get("/api/master/materials", { params: { page_size: 1000, sort: "common" } })).data.items;
+              const all = await this.fetchAllMaterials({ sort: "common" });
               this.allMaterials = all;
               const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))];
               this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));

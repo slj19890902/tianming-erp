@@ -586,33 +586,51 @@
                 <div class="toolbar" style="margin-bottom:4px">
                   <div class="order-status-tabs">
                     <button :class="['status-tab-btn', {active: !materialSupplierFilter}]"
-                            @click="materialSupplierFilter=''; materialLayerFilter=0; loadMaterials()">全部供应商</button>
+                            @click="materialSupplierFilter=''; loadMaterials()">全部供应商</button>
                     <button v-for="sup in materialSuppliers" :key="sup"
                             :class="['status-tab-btn', {active: materialSupplierFilter === sup}]"
-                            @click="materialSupplierFilter=sup; materialLayerFilter=0; loadMaterials()">{{ sup }}</button>
+                            @click="materialSupplierFilter=sup; loadMaterials()">{{ sup }}</button>
                   </div>
                 </div>
-                <!-- 层数筛选（第二级）+ 操作按钮 -->
-                <div class="toolbar">
+                <!-- 层数筛选（第二级） -->
+                <div class="toolbar" style="margin-bottom:4px">
                   <div class="order-status-tabs">
                     <button v-for="tab in materialLayerTabs" :key="tab.value"
                             :class="['status-tab-btn', {active: materialLayerFilter === tab.value}]"
-                            @click="materialLayerFilter=tab.value; loadMaterials()">{{ tab.label }}</button>
+                            @click="onMaterialLayerChange(tab.value)">{{ tab.label }}</button>
+                  </div>
+                </div>
+                <!-- 楞型筛选（第三级）+ 排序 + 操作按钮 -->
+                <div class="toolbar">
+                  <div class="order-status-tabs">
+                    <template v-if="materialLayerFilter===7">
+                      <span class="muted" style="padding:6px 8px">七层楞型规则待维护</span>
+                    </template>
+                    <template v-else>
+                      <button v-for="ft in materialFluteTabs" :key="ft.value"
+                              :class="['status-tab-btn', {active: materialFluteFilter === ft.value}]"
+                              @click="materialFluteFilter=ft.value">{{ ft.label }}</button>
+                    </template>
+                  </div>
+                  <div class="order-status-tabs" style="margin-left:12px">
+                    <button v-for="st in materialSortTabs" :key="st.value"
+                            :class="['status-tab-btn', {active: materialSort === st.value}]"
+                            @click="materialSort=st.value; loadMaterials()">{{ st.label }}</button>
                   </div>
                   <div class="toolbar-group">
                     <button class="btn" @click="buildCompareGroups(); showCompareModal=true">比价</button>
                     <button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button>
                   </div>
                 </div>
-                <div v-if="!materials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
-                <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示 -->
-                <table v-else><thead><tr><th>材质代码</th><th>供应商</th><th>层数</th><th>楞型</th><th>克重说明</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in materials" :key="row.id">
+                <div v-if="!displayedMaterials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
+                <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示；新增"克重结构"列 -->
+                <table v-else><thead><tr><th>材质代码</th><th>供应商</th><th>层数</th><th>楞型</th><th>克重结构</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in displayedMaterials" :key="row.id">
                   <td :title="row.code">{{ materialBaseCode(row) }}</td>
                   <td>{{ row.supplier_name || "-" }}</td>
                   <td>{{ row.layer_count ? row.layer_count+'层' : "-" }}</td>
                   <td>{{ row.flute_type || "-" }}</td>
-                  <td>{{ row.basis_weight_description || "-" }}</td>
+                  <td>{{ materialWeightStructure(row) }}</td>
                   <td v-if="!isWorkshop" class="sensitive-price">{{ money(row.quote_price) }}</td>
                   <td>{{ row.quote_date || "-" }}</td>
                   <td class="toolbar-group"><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
@@ -1366,7 +1384,7 @@
                 <div class="field wide"><label class="sys-num">明细系统单号预览</label><div class="sys-num">{{ orderForm.items.map((item, index) => itemOrderNumberPreview(index)).join(" / ") }}</div></div>
               </div>
               <table class="line-items"><thead><tr><th>历史模板搜索</th><th>存货编码</th><th>名称</th><th>层数</th><th>楞型</th><th>材质</th><th>规格型号</th><th>数量</th><th class="sensitive-price">客户单价</th><th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th><th></th></tr></thead><tbody>
-                <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="待匹配产品 / 编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)"><option :value="null">全部</option><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)"><option :value="null">全部</option><option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item.material_id" @change="selectOrderMaterial(index)"><option :value="null">待匹配材质</option><option v-for="m in orderItemMaterialOptions(item)" :value="m.id">{{ displayMaterialText(m.code) }}</option></select></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td><td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td><td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
+                <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="待匹配产品 / 编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)"><option :value="null">全部</option><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)"><option :value="null">全部</option><option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item.material_id" @change="selectOrderMaterial(index)"><option :value="null">待匹配材质</option><option v-for="m in orderItemMaterialOptions(item)" :value="m.id">{{ materialOptionLabel(m) }}</option></select></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td><td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td><td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
               </tbody></table>
               <button class="btn" style="margin-top:8px" @click="addOrderItem">增加明细</button>
               <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><input class="input" v-model.trim="orderForm.remark" /></div>
@@ -1717,12 +1735,18 @@
             user: null, loading: false, loginError: "", activePage: "dashboard",
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
-            materialLayerFilter: 0,
+            materialLayerFilter: 3,
             materialLayerTabs: [
-              { value: 0, label: "全部" },
               { value: 3, label: "三层" },
               { value: 5, label: "五层" },
               { value: 7, label: "七层" }
+            ],
+            materialFluteFilter: "B",
+            materialSort: "common",
+            materialSortTabs: [
+              { value: "common", label: "常用优先" },
+              { value: "weight", label: "克重从低到高" },
+              { value: "price", label: "价格从低到高" }
             ],
             materialSupplierFilter: "",
             materialSuppliers: [],
@@ -1793,6 +1817,19 @@
             if (lc === 5) return ["AB", "BE"];
             if (lc === 7) return [];
             return ["AB", "BE", "A", "B", "E"];
+          },
+          // 楞型筛选 tab：三层 B/E/A；五层 AB/BE；七层无
+          materialFluteTabs() {
+            if (this.materialLayerFilter === 5) {
+              return [{ value: "AB", label: "AB瓦" }, { value: "BE", label: "BE瓦" }];
+            }
+            return [{ value: "B", label: "B瓦" }, { value: "E", label: "E瓦" }, { value: "A", label: "A瓦" }];
+          },
+          // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
+          displayedMaterials() {
+            const ft = this.materialFluteFilter;
+            if (!ft || this.materialLayerFilter === 7) return this.materials;
+            return this.materials.filter(m => this.fluteMatches(m.flute_type, ft));
           },
           // 天华专项字段明细：从 pdfSampleDetail 的 parser_result_json 中提取 items
           pdfDetailItems() {
@@ -2257,17 +2294,52 @@
             this.products = data.items; this.productsTotal = data.total;
           },
           async loadMaterials() {
-            const params = { page_size: 200 };
+            const params = { page_size: 500, sort: this.materialSort };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
             const res = await axios.get("/api/master/materials", { params });
             this.materials = res.data.items;
-            // 维护供应商下拉列表（从全量数据中提取，仅首次或无筛选时刷新）
-            if (!this.materialSupplierFilter && !this.materialLayerFilter) {
-              const all = (await axios.get("/api/master/materials", { params: { page_size: 500 } })).data.items;
-              const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))].sort();
-              this.materialSuppliers = names;
+            // 维护供应商下拉列表（从全量数据中提取，按固定供应商顺序）
+            if (!this.materialSuppliers.length) {
+              const all = (await axios.get("/api/master/materials", { params: { page_size: 1000, sort: "common" } })).data.items;
+              const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))];
+              this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));
             }
+          },
+          supplierRank(name) {
+            const order = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
+            if (!name) return order.length + 1;
+            for (let i = 0; i < order.length; i++) if (name.includes(order[i])) return i;
+            return order.length;
+          },
+          // 组合楞匹配：flute_type "BE" 同时命中 B 瓦与 E 瓦 tab；五层 AB/BE 精确匹配
+          fluteMatches(fluteType, tab) {
+            const ft = fluteType || "";
+            if (tab === "AB" || tab === "BE") return ft === tab;
+            return ft.includes(tab);
+          },
+          onMaterialLayerChange(value) {
+            this.materialLayerFilter = value;
+            // 切层默认楞型：三层→B，五层→AB，七层→无
+            if (value === 5) this.materialFluteFilter = "AB";
+            else if (value === 7) this.materialFluteFilter = "";
+            else this.materialFluteFilter = "B";
+            this.loadMaterials();
+          },
+          // 克重结构展示：'150g/100g/100g' → '150 / 100 / 100'
+          materialWeightStructure(row) {
+            const desc = row.basis_weight_description || "";
+            const nums = desc.match(/\d+(?:\.\d+)?/g);
+            return nums && nums.length ? nums.join(" / ") : "-";
+          },
+          // 订单材质下拉显示：'D4B  嘉林亿  130/100/100  ¥1.21'
+          materialOptionLabel(m) {
+            const code = this.materialBaseCode(m);
+            const sup = (m.supplier_name || "").replace(/(苏州|昆山|包装科技有限公司|包装|有限公司|科技)/g, "") || "-";
+            const w = (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g);
+            const weight = w && w.length ? w.join("/") : "";
+            const price = (m.quote_price != null && !this.isWorkshop) ? `  ¥${m.quote_price}` : "";
+            return `${code}  ${sup}  ${weight}${price}`.trim();
           },
           buildCompareGroups() {
             // 比价分组：layer_count + basis_weight_description + 材质类别
@@ -2881,10 +2953,19 @@
             return ["AB", "BE", "A", "B", "E"];
           },
           orderItemMaterialOptions(item) {
-            return this.materials.filter(m => {
+            const rows = this.materials.filter(m => {
               if (item._layer_filter && m.layer_count !== item._layer_filter) return false;
-              if (item._flute_filter && m.flute_type !== item._flute_filter) return false;
+              if (item._flute_filter && !this.fluteMatches(m.flute_type, item._flute_filter)) return false;
               return true;
+            });
+            // 排序：供应商顺序 → 克重结构升序 → 价格 → 材质代码（与材质字典一致，非代码字母序）
+            const weights = m => (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+            const cmpArr = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const d = (a[i] ?? Infinity) - (b[i] ?? Infinity); if (d) return d; } return 0; };
+            return rows.slice().sort((a, b) => {
+              const sr = this.supplierRank(a.supplier_name) - this.supplierRank(b.supplier_name); if (sr) return sr;
+              const wc = cmpArr(weights(a), weights(b)); if (wc) return wc;
+              const pc = (a.quote_price ?? Infinity) - (b.quote_price ?? Infinity); if (pc) return pc;
+              return (a.code || "").localeCompare(b.code || "");
             });
           },
           onOrderItemLayerChange(index) {

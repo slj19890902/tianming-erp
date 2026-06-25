@@ -472,3 +472,121 @@ class TestAuditH1XlsxRead:
         assert "R=17000" in content
         assert "嘉林亿" in content
         assert "特殊材质" in content
+
+
+# ===========================================================================
+# 材质字典排序/楞型筛选测试（v0.19.2-B 排序优化）
+# ===========================================================================
+
+from app.api.materials import (
+    _sort_materials,
+    _supplier_rank,
+    _flute_rank,
+    _parse_layer_weights,
+)
+
+
+def _mat(code, supplier, layer, flute, weight, price):
+    return Material(
+        code=code,
+        supplier_name=supplier,
+        layer_count=layer,
+        flute_type=flute,
+        basis_weight_description=weight,
+        quote_price=price,
+    )
+
+
+class TestMatSortHelpers:
+    """排序辅助函数：供应商顺序 / 楞型顺序 / 逐层克重解析。"""
+
+    def test_supplier_rank_fixed_order(self):
+        assert _supplier_rank("苏州嘉林亿包装科技有限公司") == 0
+        assert _supplier_rank("昆山鸣朋纸业") == 1
+        assert _supplier_rank("苏州佳丰") == 2
+        # 其他供应商排在三家之后
+        assert _supplier_rank("某未知供应商") == 3
+        # 空值排最后
+        assert _supplier_rank(None) > 3
+
+    def test_flute_rank_three_layer_b_e_a(self):
+        assert _flute_rank(3, "B") < _flute_rank(3, "E") < _flute_rank(3, "A")
+        # 组合楞 BE 取最靠前者（B），与 B 同级
+        assert _flute_rank(3, "BE") == _flute_rank(3, "B")
+
+    def test_flute_rank_five_layer_ab_be(self):
+        assert _flute_rank(5, "AB") < _flute_rank(5, "BE")
+
+    def test_parse_layer_weights(self):
+        assert _parse_layer_weights("150g/100g/100g") == (150.0, 100.0, 100.0)
+        assert _parse_layer_weights("130 / 100 / 60 / 100 / 100") == (130.0, 100.0, 60.0, 100.0, 100.0)
+        assert _parse_layer_weights("") == ()
+        assert _parse_layer_weights(None) == ()
+
+
+class TestMatSortLogic:
+    """排序结果：common / weight / price 三种顺序。"""
+
+    def _rows(self):
+        # 同层（三层），跨供应商、跨克重、跨价格
+        return [
+            _mat("A4B", "苏州佳丰", 3, "B", "150g/100g/100g", 1.50),
+            _mat("B3B", "昆山鸣朋", 3, "B", "100g/100g/100g", 1.30),
+            _mat("C3C", "苏州嘉林亿包装科技有限公司", 3, "B", "80g/80g/80g", 1.00),
+            _mat("D6D", "苏州嘉林亿包装科技有限公司", 3, "B", "150g/130g/150g", 1.80),
+            _mat("Z9Z", "其他厂", 3, "B", "120g/100g/100g", 1.20),
+        ]
+
+    def test_common_supplier_first(self):
+        ordered = _sort_materials(self._rows(), "common")
+        suppliers = [_supplier_rank(m.supplier_name) for m in ordered]
+        assert suppliers == sorted(suppliers), "common 应先按供应商固定顺序"
+        # 嘉林亿两条排最前
+        assert ordered[0].supplier_name.startswith("苏州嘉林亿")
+        assert ordered[1].supplier_name.startswith("苏州嘉林亿")
+
+    def test_common_within_supplier_weight_asc(self):
+        ordered = _sort_materials(self._rows(), "common")
+        jl = [m for m in ordered if m.supplier_name.startswith("苏州嘉林亿")]
+        assert [m.code for m in jl] == ["C3C", "D6D"], "嘉林亿内部应按逐层克重升序"
+
+    def test_weight_sort_global_ascending(self):
+        ordered = _sort_materials(self._rows(), "weight")
+        firsts = [_parse_layer_weights(m.basis_weight_description)[0] for m in ordered]
+        assert firsts == sorted(firsts), "weight 排序应全局按面纸克重升序"
+        assert ordered[0].code == "C3C"
+
+    def test_price_sort_ascending(self):
+        ordered = _sort_materials(self._rows(), "price")
+        prices = [float(m.quote_price) for m in ordered]
+        assert prices == sorted(prices), "price 排序应按平方报价升序"
+        assert ordered[0].code == "C3C"
+
+    def test_not_alphabetical_by_code(self):
+        ordered = _sort_materials(self._rows(), "common")
+        codes = [m.code for m in ordered]
+        assert codes != sorted(codes), "排序不应退化为材质代码字母序"
+
+
+class TestMatApiSort:
+    """API 层 sort 参数：default=common，不破坏旧调用。"""
+
+    def test_default_sort_is_common(self, mat_client):
+        r = mat_client.get("/api/master/materials?layer_count=3")
+        assert r.status_code == 200
+        # 默认不报错，返回三层数据
+        assert all(i["layer_count"] == 3 for i in r.json()["items"])
+
+    def test_sort_price_param_accepted(self, mat_client):
+        r = mat_client.get("/api/master/materials?sort=price")
+        assert r.status_code == 200
+        prices = [i["quote_price"] for i in r.json()["items"] if i["quote_price"] is not None]
+        assert prices == sorted(prices), "sort=price 应按报价升序"
+
+    def test_sort_weight_param_accepted(self, mat_client):
+        r = mat_client.get("/api/master/materials?sort=weight")
+        assert r.status_code == 200
+
+    def test_invalid_sort_rejected(self, mat_client):
+        r = mat_client.get("/api/master/materials?sort=bogus")
+        assert r.status_code == 422, "非法 sort 值应被 Literal 校验拒绝"

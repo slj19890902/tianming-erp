@@ -73,6 +73,69 @@ WORKSHOP_FIELDS = (
 )
 
 
+# v0.19.2-B 排序：供应商固定顺序 + 楞型顺序 + 逐层克重升序 + 平方报价 + 材质代码
+SUPPLIER_ORDER = ("苏州嘉林亿", "昆山鸣朋", "苏州佳丰")
+FLUTE_ORDER_3 = {"B": 0, "E": 1, "A": 2}
+FLUTE_ORDER_5 = {"AB": 0, "BE": 1}
+
+
+def _supplier_rank(name: str | None) -> int:
+    """按固定供应商顺序排名；未匹配（其他供应商）排在最后。"""
+    if not name:
+        return len(SUPPLIER_ORDER) + 1
+    for index, key in enumerate(SUPPLIER_ORDER):
+        if key in name:
+            return index
+    return len(SUPPLIER_ORDER)
+
+
+def _flute_rank(layer_count: int | None, flute_type: str | None) -> int:
+    ft = flute_type or ""
+    if layer_count == 5:
+        return FLUTE_ORDER_5.get(ft, len(FLUTE_ORDER_5))
+    # 三层及其他：按 B→E→A；组合楞（如 BE）取其中最靠前者
+    ranks = [FLUTE_ORDER_3[ch] for ch in ("B", "E", "A") if ch in ft]
+    return min(ranks) if ranks else len(FLUTE_ORDER_3)
+
+
+def _parse_layer_weights(description: str | None) -> tuple[float, ...]:
+    """从 basis_weight_description（如 '150g/100g/100g'）解析逐层克重。"""
+    if not description:
+        return ()
+    numbers = re.findall(r"\d+(?:\.\d+)?", description)
+    return tuple(float(n) for n in numbers)
+
+
+def _sort_materials(materials: list[Material], sort: str) -> list[Material]:
+    """统一排序逻辑，前后端一致。
+
+    - common（常用优先）: 供应商顺序 → 楞型顺序 → 逐层克重升序 → 平方报价 → 材质代码
+    - weight（克重从低到高）: 逐层克重升序 → 平方报价 → 供应商顺序 → 材质代码
+    - price（价格从低到高）: 平方报价升序 → 供应商顺序 → 逐层克重 → 材质代码
+    """
+    big = float("inf")
+
+    def price_of(m: Material) -> float:
+        return float(m.quote_price) if m.quote_price is not None else big
+
+    def weights_of(m: Material) -> tuple[float, ...]:
+        return _parse_layer_weights(m.basis_weight_description) or (big,)
+
+    if sort == "weight":
+        key = lambda m: (weights_of(m), price_of(m), _supplier_rank(m.supplier_name), m.code or "")
+    elif sort == "price":
+        key = lambda m: (price_of(m), _supplier_rank(m.supplier_name), weights_of(m), m.code or "")
+    else:  # common
+        key = lambda m: (
+            _supplier_rank(m.supplier_name),
+            _flute_rank(m.layer_count, m.flute_type),
+            weights_of(m),
+            price_of(m),
+            m.code or "",
+        )
+    return sorted(materials, key=key)
+
+
 def _validate_layer_flute(layer_count: int | None, flute_type: str | None) -> None:
     """v0.19.2-B B-5: 校验层数 × 楞型合法性。
 
@@ -108,11 +171,13 @@ def list_materials(
     layer_count: int | None = Query(default=None, ge=1),
     flute_type: str | None = Query(default=None),
     supplier_name: str | None = Query(default=None),
+    sort: Literal["common", "weight", "price"] = Query(default="common"),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     # v0.19.2-B: 支持按层数（三/五/七层）与楞型过滤
     # Hotfix-2: 新增 supplier_name 过滤（精确匹配）
+    # v0.19.2-B 排序: sort=common|weight|price，默认 common（常用优先）
     filters = []
     if layer_count is not None:
         filters.append(Material.layer_count == layer_count)
@@ -124,13 +189,12 @@ def list_materials(
     total = db.scalar(
         select(func.count(Material.id)).where(*filters)
     ) or 0
-    items = db.scalars(
-        select(Material)
-        .where(*filters)
-        .order_by(Material.code)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    # 逐层克重排序需解析文本字段，因此在 Python 层统一排序后再分页，保证稳定一致
+    all_rows = db.scalars(
+        select(Material).where(*filters)
     ).all()
+    ordered = _sort_materials(list(all_rows), sort)
+    items = ordered[(page - 1) * page_size : (page - 1) * page_size + page_size]
     return {
         "total": total,
         "page": page,

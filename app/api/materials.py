@@ -106,6 +106,20 @@ def _parse_layer_weights(description: str | None) -> tuple[float, ...]:
     return tuple(float(n) for n in numbers)
 
 
+def _material_search_haystack(m: Material) -> str:
+    """构建材质搜索匹配串：代码 + 供应商 + 克重结构 + 报价。"""
+    weights = "/".join(str(int(w)) if w == int(w) else str(w) for w in _parse_layer_weights(m.basis_weight_description))
+    parts = [
+        m.code or "",
+        m.supplier_name or "",
+        m.basis_weight_description or "",
+        weights,
+        "" if m.quote_price is None else str(m.quote_price),
+        m.paper_composition or "",
+    ]
+    return " ".join(parts).lower().replace(" ", "")
+
+
 def _sort_materials(materials: list[Material], sort: str) -> list[Material]:
     """统一排序逻辑，前后端一致。
 
@@ -172,12 +186,15 @@ def list_materials(
     flute_type: str | None = Query(default=None),
     supplier_name: str | None = Query(default=None),
     sort: Literal["common", "weight", "price"] = Query(default="common"),
+    keyword: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     # v0.19.2-B: 支持按层数（三/五/七层）与楞型过滤
     # Hotfix-2: 新增 supplier_name 过滤（精确匹配）
     # v0.19.2-B 排序: sort=common|weight|price，默认 common（常用优先）
+    # v0.19.2 下一轮: keyword 关键字搜索（代码/供应商/克重结构/纸种说明/报价），
+    #   语义上「先经过 supplier+layer+flute 过滤，再按关键字匹配」。
     filters = []
     if layer_count is not None:
         filters.append(Material.layer_count == layer_count)
@@ -186,14 +203,13 @@ def list_materials(
     if supplier_name:
         filters.append(Material.supplier_name == supplier_name)
 
-    total = db.scalar(
-        select(func.count(Material.id)).where(*filters)
-    ) or 0
     # 逐层克重排序需解析文本字段，因此在 Python 层统一排序后再分页，保证稳定一致
-    all_rows = db.scalars(
-        select(Material).where(*filters)
-    ).all()
-    ordered = _sort_materials(list(all_rows), sort)
+    all_rows = list(db.scalars(select(Material).where(*filters)).all())
+    if keyword:
+        kw = keyword.strip().lower().replace(" ", "")
+        all_rows = [m for m in all_rows if kw in _material_search_haystack(m)]
+    total = len(all_rows)
+    ordered = _sort_materials(all_rows, sort)
     items = ordered[(page - 1) * page_size : (page - 1) * page_size + page_size]
     return {
         "total": total,

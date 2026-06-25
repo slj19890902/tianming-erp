@@ -13,6 +13,7 @@ from app.models.customer import Customer
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.api.materials import _parse_layer_weights
 from app.services.pricing import PricingError, calculate_price
 
 
@@ -68,9 +69,10 @@ DIMENSION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# 天华旧材质代码：W535A/AB、T5P/A、A535T/AB
+# 天华旧材质代码：W535A/AB、T5P/A、A535T/AB；
+# v0.19.2: 兼容数字开头代码（如 9CCC9/AB），要求至少含一个字母以排除纯尺寸比值。
 OLD_MATERIAL_CODE_RE = re.compile(
-    r"\b([A-Z]\d+[A-Z0-9]*/(?:AB|BE|A|B|E))\b",
+    r"\b([0-9A-Z]*[A-Z][0-9A-Z]*/(?:AB|BE|A|B|E))\b",
     re.IGNORECASE,
 )
 # 天华型号：THH10 / THB10 / THH8 / THB8
@@ -336,9 +338,14 @@ def _split_records(lines: list[str]) -> tuple[list[list[str]], bool, bool]:
         if not in_table:
             continue
         if line.startswith("合计"):
+            # v0.19.2 多页修复：'合计' 是每页页脚（多页 PDF 每页都重复打印同一
+            # 合计行），不能据此终止解析，否则第 2~N 页明细会全部丢失。
+            # 改为：结束当前记录并退出表格态，等待下一页 '行号...' 表头重新激活。
             if current:
                 records.append(current)
-            break
+                current = []
+            in_table = False
+            continue
         if ROW_START_RE.match(line):
             if current:
                 records.append(current)
@@ -376,9 +383,15 @@ def _split_name_and_spec(first_body: str, full_body: str) -> tuple[str, str]:
         first_spec = first_body[pos:].strip()
         remaining = full_body[len(first_body):].strip()
         return name, _clean_line(f"{first_spec} {remaining}")
-    # Hotfix-2 修复：当 first_body 中未找到规格起点时，整个 first_body 即为品名。
-    # 原来用 split(maxsplit=1) 取第一个 token，会在括号内空格处截断品名（如
-    # "白底黑字内箱（18 "*36"）" 会被截为 "白底黑字内箱（18"），丢失括号内容）。
+    # v0.19.2 多页修复：first_body（仅第一物理行）未找到规格起点时，品名可能跨行，
+    # 且括号尺寸标注（如 （18”*36”））常单独成行。改为在完整 body 上做括号感知的
+    # 规格定位，使 "白底黑字内箱" + "（18”*36”）" 合并为完整品名，规格从 93.5*... 起。
+    pos_full = _find_spec_start_outside_parens(full_body)
+    if pos_full is not None and pos_full > 0:
+        name = re.sub(r"\s+", "", full_body[:pos_full].strip())
+        spec = full_body[pos_full:].strip()
+        return name, spec
+    # 整个 first_body 即为品名（无规格，如垫板）。
     name = first_body.strip()
     spec = full_body[len(first_body):].strip()
     return name, spec
@@ -469,7 +482,9 @@ def _extract_production_notes(
         " ",
         notes,
     )
-    notes = re.sub(r"\s+", " ", notes).strip(" ，,、.。/\\-*×xX")
+    # v0.19.2: 残留为纯中/日文警示语，PDF 换行产生的空格需全部去除，
+    # 否则 '在白色处 打钩' 无法与期望 '在白色处打钩' 匹配。
+    notes = re.sub(r"\s+", "", notes).strip("，,、.。/\\-*×xX")
     if not notes or not _CJK_JP_RE.search(notes):
         return ""
     return notes
@@ -568,14 +583,13 @@ def _parse_record(record_lines: list[str], has_extra_columns: bool = False) -> d
 
     if first_body:
         raw_name, raw_spec = _split_name_and_spec(first_body, body)
-        # F-2 修复：始终用 raw_name 的长度切割，不用 first_body 的长度
-        name_len = len(raw_name)
-        raw_spec_for_enrichment = body[name_len:].strip() if len(body) > name_len else raw_spec
     else:
         # F-1: 品名从 body 中解析（body 已经是完整的 product_name + spec 合并串）
         raw_name, raw_spec = _split_name_and_spec(body, body)
-        name_len = len(raw_name)
-        raw_spec_for_enrichment = body[name_len:].strip() if len(body) > name_len else raw_spec
+    # v0.19.2: 直接使用 _split_name_and_spec 返回的完整规格串做富化；不再用
+    # body[len(raw_name):] 切割——品名空格归一化后长度与 body 不再对齐，
+    # 旧切法会把品名尾部括号 '）' 误并入规格/生产说明。
+    raw_spec_for_enrichment = raw_spec
 
     raw_spec = _extract_spec_dimensions(raw_spec)
     code = match.group("product_code")
@@ -942,6 +956,68 @@ def _cost_reference(product: Product, material: Material | None = None) -> dict:
     return {"cost_status": "pending", "estimated_cost": None}
 
 
+def _material_label(material: Material | None) -> str:
+    """材质展示：代码｜供应商｜克重结构｜平方报价。"""
+    if material is None:
+        return ""
+    code = re.sub(r"^\s*\d+\s+", "", material.code or "").strip()
+    weights = _parse_layer_weights(material.basis_weight_description)
+    weight_text = "/".join(
+        str(int(w)) if w == int(w) else str(w) for w in weights
+    ) if weights else "-"
+    price = f"¥{material.quote_price}" if material.quote_price is not None else "-"
+    return f"{code}｜{material.supplier_name or '-'}｜{weight_text}｜{price}"
+
+
+def _apply_standard_product(item: dict, product: Product) -> None:
+    """v0.19.2 六/七：匹配到常用箱（标准产品资料）后，标准字段以常用箱为准，
+    订单事实字段（数量/交期/客户单价/客户单号/料号/TH型号/本次备注）仍以 PDF 为准。
+
+    不反向修改常用箱；仅在草稿上覆盖展示，并生成对比信息供草稿页显示。
+    """
+    material = product.material
+    pdf_name = item.get("raw_product_name") or item.get("product_name") or ""
+    pdf_size = item.get("size_spec") or item.get("raw_spec_model") or ""
+    pdf_material_code = item.get("old_material_code") or ""
+    std_size = _product_spec(product) or ""
+
+    # 标准字段：常用箱优先
+    if product.product_name:
+        item["product_name"] = product.product_name
+    if std_size:
+        item["specification"] = std_size
+        item["size_spec"] = std_size
+    if product.material_id is not None:
+        item["matched_material_id"] = product.material_id
+    if material is not None:
+        item["flute_type"] = material.flute_type or item.get("flute_type")
+        item["layer_count"] = material.layer_count or item.get("layer_count")
+        item["material_supplier_name"] = material.supplier_name
+        item["material_weight_structure"] = "/".join(
+            str(int(w)) if w == int(w) else str(w)
+            for w in _parse_layer_weights(material.basis_weight_description)
+        )
+    if product.production_process:
+        item["production_process"] = product.production_process
+    if product.print_content:
+        item["print_content"] = product.print_content
+
+    # 对比信息（草稿页展示「已匹配常用箱 / 使用常用箱资料」）
+    item["standard_match"] = {
+        "matched": True,
+        "product_id": product.id,
+        "applied": "standard",
+        "pdf_product_name": pdf_name,
+        "standard_product_name": product.product_name,
+        "pdf_size": pdf_size,
+        "standard_size": std_size,
+        "size_differs": bool(std_size and pdf_size and _normalized_text(std_size) != _normalized_text(pdf_size)),
+        "pdf_material_code": pdf_material_code,
+        "standard_material_label": _material_label(material),
+        "material_differs": bool(material and pdf_material_code),
+    }
+
+
 def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> dict:
     products = (
         db.scalars(
@@ -980,6 +1056,12 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         item["matched_material_id"] = selected.material_id if selected else None
         item["material_candidates"] = material_candidates
         item.update(_cost_reference(selected) if selected else {"cost_status": "pending", "estimated_cost": None})
+        # v0.19.2 六/七：唯一命中常用箱 → 标准字段以常用箱为准（不覆盖 PDF 订单事实字段）
+        if selected is not None:
+            _apply_standard_product(item, selected)
+        else:
+            item["standard_match"] = {"matched": False}
+        # 客户单价仍以 PDF 为准；仅当 PDF 未识别到单价时回退常用箱默认价
         if selected and not item.get("unit_price") and selected.sale_unit_price is not None:
             item["unit_price"] = str(selected.sale_unit_price)
         matched_items.append(item)

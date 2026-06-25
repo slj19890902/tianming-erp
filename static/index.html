@@ -577,7 +577,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质（克重）</th><th>楞型</th><th>状态</th><th>图纸版本</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.customer_material_code || row.product_code) }}</strong></td><td>{{ plainProductText(row.product_name) }}</td><td>{{ spec(row) }}</td><td>{{ materialDisplay(row.material_id, row.legacy_material_text) }}</td><td>{{ row.flute_type || materialFlute(row.material_id) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td>{{ drawingVersionText(row) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th>客户料号</th><th>产品名称</th><th>规格</th><th>供应商 / 材质</th><th>层数 / 楞型</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>图纸</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td>{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td>{{ spec(row) }}</td><td><div :class="{muted: productMaterialCell(row).muted}">{{ productMaterialCell(row).line1 }}</div><div class="muted" style="font-size:12px" v-if="productMaterialCell(row).line2">{{ productMaterialCell(row).line2 }}</div></td><td>{{ productLayerFluteText(row) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td>{{ productDrawingText(row) }}</td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -1262,7 +1262,18 @@
               <div class="field"><label>品号</label><input class="input" v-model.trim="productForm.product_code" /></div>
               <div class="field"><label>客户料号</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
-              <div class="field"><label>材质</label><select class="select" v-model="productForm.material_id"><option :value="null">未指定</option><option v-for="m in materials" :value="m.id">{{ m.code }}</option></select></div>
+              <div class="field"><label>材质供应商</label>
+                <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
+                  <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+              </div>
+              <div class="field"><label>材质（代码｜供应商｜克重｜报价）</label>
+                <search-select v-model="productForm.material_id"
+                  :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
+                  label-key="_label" value-key="id" :allow-empty="true"
+                  placeholder="输入代码/供应商/克重/报价搜索"></search-select>
+                <div class="muted" style="font-size:12px">先选层数+楞型，再搜索选择；只输入文字不选中无效。</div>
+              </div>
               <div class="field">
                 <label>楞型</label>
                 <select class="select" v-model="productForm.flute_type" @change="onProductFluteChange">
@@ -1384,7 +1395,7 @@
                 <div class="field wide"><label class="sys-num">明细系统单号预览</label><div class="sys-num">{{ orderForm.items.map((item, index) => itemOrderNumberPreview(index)).join(" / ") }}</div></div>
               </div>
               <table class="line-items"><thead><tr><th>历史模板搜索</th><th>存货编码</th><th>名称</th><th>层数</th><th>楞型</th><th>材质</th><th>规格型号</th><th>数量</th><th class="sensitive-price">客户单价</th><th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th><th></th></tr></thead><tbody>
-                <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="待匹配产品 / 编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)"><option :value="null">全部</option><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)"><option :value="null">全部</option><option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item.material_id" @change="selectOrderMaterial(index)"><option :value="null">待匹配材质</option><option v-for="m in orderItemMaterialOptions(item)" :value="m.id">{{ materialOptionLabel(m) }}</option></select></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td><td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td><td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
+                <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="待匹配产品 / 编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)"><option :value="null">全部</option><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)"><option :value="null">全部</option><option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option></select></td><td><search-select :disabled="!orderForm.customer_id" v-model="item.material_id" :options="orderItemMaterialSelectOptions(item)" label-key="_label" value-key="id" :allow-empty="true" placeholder="搜索材质" @change="selectOrderMaterial(index)"></search-select></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td><td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td><td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
               </tbody></table>
               <button class="btn" style="margin-top:8px" @click="addOrderItem">增加明细</button>
               <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><input class="input" v-model.trim="orderForm.remark" /></div>
@@ -1721,7 +1732,8 @@
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, drawings: [],
         remark: "", is_active: true,
-        flute_type: null, layer_count: null, surface_paper_type: null
+        flute_type: null, layer_count: null, surface_paper_type: null,
+        _material_supplier: "全部供应商"
       });
       const blankMaterial = () => ({
         id:null, code:"", paper_composition:"", layer_count:5, flute_type:"AB",
@@ -1742,6 +1754,7 @@
               { value: 7, label: "七层" }
             ],
             materialFluteFilter: "B",
+            allMaterials: [],
             materialSort: "common",
             materialSortTabs: [
               { value: "common", label: "常用优先" },
@@ -1824,6 +1837,10 @@
               return [{ value: "AB", label: "AB瓦" }, { value: "BE", label: "BE瓦" }];
             }
             return [{ value: "B", label: "B瓦" }, { value: "E", label: "E瓦" }, { value: "A", label: "A瓦" }];
+          },
+          // 材质选择器供应商下拉固定选项
+          materialSupplierSelectOptions() {
+            return ["全部供应商", "苏州嘉林亿", "昆山鸣朋", "苏州佳丰", "其他供应商"];
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
@@ -2050,6 +2067,36 @@
             return `${this.displayMaterialText(row.code)}${row.basis_weight_description ? ` (${row.basis_weight_description})` : ""}`;
           },
           materialFlute(id) { return this.materials.find(row=>row.id===id)?.flute_type || "-"; },
+          _findMaterial(id) {
+            const src = this.allMaterials.length ? this.allMaterials : this.materials;
+            return src.find(m => m.id === id) || null;
+          },
+          // 产品列表「供应商 / 材质」单元格：两行 代码｜供应商 / 克重结构
+          productMaterialCell(row) {
+            const m = this._findMaterial(row.material_id);
+            if (m) {
+              return { line1: `${this.materialBaseCode(m)}｜${m.supplier_name || "-"}`, line2: this.materialWeightStructure(m), muted: false };
+            }
+            const legacy = String(row.legacy_material_text || "").trim();
+            if (legacy) {
+              const nums = legacy.match(/\d+(?:\.\d+)?/g);
+              return { line1: "未指定材质", line2: nums && nums.length ? `历史克重：${nums.join("/")}` : `历史：${legacy}`, muted: true };
+            }
+            return { line1: "未指定", line2: "", muted: true };
+          },
+          // 产品列表「层数 / 楞型」单元格
+          productLayerFluteText(row) {
+            const m = this._findMaterial(row.material_id);
+            const layer = row.layer_count || m?.layer_count;
+            const flute = row.flute_type || m?.flute_type;
+            if (!layer && !flute) return "-";
+            return `${layer ? layer + "层" : "?"} / ${flute || "?"}`;
+          },
+          // 产品列表「图纸」单元格：有图纸/无图纸
+          productDrawingText(row) {
+            const has = (row.drawings && row.drawings.length) || row.current_drawing_version || row.drawing_version;
+            return has ? "有图纸" : "无图纸";
+          },
           plainProductText(value) { return String(value || "-").trim() || "-"; },
           displayMaterialText(value) {
             const text = String(value || "").trim();
@@ -2299,9 +2346,10 @@
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
             const res = await axios.get("/api/master/materials", { params });
             this.materials = res.data.items;
-            // 维护供应商下拉列表（从全量数据中提取，按固定供应商顺序）
-            if (!this.materialSuppliers.length) {
+            // 维护全量材质（供所有材质选择器复用）+ 供应商下拉列表
+            if (!this.allMaterials.length || !this.materialSuppliers.length) {
               const all = (await axios.get("/api/master/materials", { params: { page_size: 1000, sort: "common" } })).data.items;
+              this.allMaterials = all;
               const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))];
               this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));
             }
@@ -2340,6 +2388,92 @@
             const weight = w && w.length ? w.join("/") : "";
             const price = (m.quote_price != null && !this.isWorkshop) ? `  ¥${m.quote_price}` : "";
             return `${code}  ${sup}  ${weight}${price}`.trim();
+          },
+          // ============ 统一材质选择器公共 helper（全项目复用） ============
+          // 楞型默认值：三层→B，五层→AB，七层→不允许
+          getDefaultFluteByLayer(layerCount) {
+            if (layerCount === 5) return "AB";
+            if (layerCount === 7) return null;
+            return "B";
+          },
+          // 楞型可选项：三层 B/E/A，五层 AB/BE，七层无
+          fluteOptionsByLayer(layerCount) {
+            if (layerCount === 3) return ["B", "E", "A"];
+            if (layerCount === 5) return ["AB", "BE"];
+            if (layerCount === 7) return [];
+            return ["B", "E", "A", "AB", "BE"];
+          },
+          // 统一展示格式：材质代码｜供应商｜克重结构｜平方报价
+          formatMaterialOption(m) {
+            if (!m) return "";
+            const code = this.materialBaseCode(m);
+            const sup = m.supplier_name || "-";
+            const w = (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g);
+            const weight = (w && w.length) ? w.join("/") : "-";
+            const price = (m.quote_price != null && !this.isWorkshop) ? `¥${m.quote_price}` : "-";
+            return `${code}｜${sup}｜${weight}｜${price}`;
+          },
+          // 排序：供应商顺序→克重结构升序→价格→代码（与材质字典一致）
+          sortMaterialRows(rows) {
+            const weights = m => (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+            const cmpArr = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const d = (a[i] ?? Infinity) - (b[i] ?? Infinity); if (d) return d; } return 0; };
+            return rows.slice().sort((a, b) => {
+              const sr = this.supplierRank(a.supplier_name) - this.supplierRank(b.supplier_name); if (sr) return sr;
+              const wc = cmpArr(weights(a), weights(b)); if (wc) return wc;
+              const pc = (a.quote_price ?? Infinity) - (b.quote_price ?? Infinity); if (pc) return pc;
+              return (a.code || "").localeCompare(b.code || "");
+            });
+          },
+          // 核心过滤：先 supplier+layer+flute，再 keyword 关键字（代码/供应商/克重/纸种/报价）
+          filteredMaterialOptions(supplierName, layerCount, fluteType, keyword) {
+            const source = this.allMaterials.length ? this.allMaterials : this.materials;
+            let rows = source.filter(m => {
+              if (supplierName && supplierName !== "全部供应商" && supplierName !== "") {
+                if (supplierName === "其他供应商") {
+                  if (this.supplierRank(m.supplier_name) < 3) return false;
+                } else if (!(m.supplier_name || "").includes(supplierName)) {
+                  return false;
+                }
+              }
+              if (layerCount && m.layer_count !== layerCount) return false;
+              if (fluteType && !this.fluteMatches(m.flute_type, fluteType)) return false;
+              return true;
+            });
+            rows = this.sortMaterialRows(rows);
+            if (keyword && String(keyword).trim()) {
+              const k = String(keyword).trim().toLowerCase().replace(/\s+/g, "");
+              rows = rows.filter(m => {
+                const hay = [
+                  m.code, m.supplier_name, m.basis_weight_description,
+                  this.materialWeightStructure(m), m.paper_composition,
+                  m.quote_price != null ? String(m.quote_price) : ""
+                ].join(" ").toLowerCase().replace(/\s+/g, "");
+                return hay.includes(k);
+              });
+            }
+            return rows;
+          },
+          // 构建 search-select 选项对象（含可搜索字段）
+          materialSelectOptions(supplierName, layerCount, fluteType) {
+            return this.filteredMaterialOptions(supplierName, layerCount, fluteType, "").map(m => ({
+              id: m.id,
+              _label: this.formatMaterialOption(m),
+              _code: m.code || "",
+              _supplier: m.supplier_name || "",
+              _weight: this.materialWeightStructure(m),
+              _price: m.quote_price != null ? String(m.quote_price) : ""
+            }));
+          },
+          // 选中材质若不在当前 supplier/layer/flute 过滤集中则清空
+          resetMaterialIfNotMatched(target, supplierName, layerCount, fluteType) {
+            if (!target || target.material_id == null) return;
+            const ok = this.filteredMaterialOptions(supplierName, layerCount, fluteType, "").some(m => m.id === target.material_id);
+            if (!ok) { target.material_id = null; if ("material" in target) target.material = ""; }
+          },
+          // 保存校验：必须选中有效 material_id，不能只输入文字
+          validateSelectedMaterial(materialId) {
+            const source = this.allMaterials.length ? this.allMaterials : this.materials;
+            return materialId != null && source.some(m => m.id === materialId);
           },
           buildCompareGroups() {
             // 比价分组：layer_count + basis_weight_description + 材质类别
@@ -2908,7 +3042,7 @@
           },
           addOrderItem() {
             const index = this.orderForm.items.length;
-            this.orderForm.items.push({ product_id:null, is_new_product:false, product_code:"", product_name:"", material_id:null, material:"", specification:"", production_notes:"", _layer_filter:null, _flute_filter:null, quantity:null, unit_price:"", cost_status:"pending", estimated_cost:null });
+            this.orderForm.items.push({ product_id:null, is_new_product:false, product_code:"", product_name:"", material_id:null, material:"", specification:"", production_notes:"", _layer_filter:null, _flute_filter:null, _material_supplier:"", quantity:null, unit_price:"", cost_status:"pending", estimated_cost:null });
             if (this.orderForm.customer_id) this.searchOrderProducts(index, "");
             if (this.modal?.type === "order") this.refreshOrderNumberPreview();
           },
@@ -2953,34 +3087,23 @@
             return ["AB", "BE", "A", "B", "E"];
           },
           orderItemMaterialOptions(item) {
-            const rows = this.materials.filter(m => {
-              if (item._layer_filter && m.layer_count !== item._layer_filter) return false;
-              if (item._flute_filter && !this.fluteMatches(m.flute_type, item._flute_filter)) return false;
-              return true;
-            });
-            // 排序：供应商顺序 → 克重结构升序 → 价格 → 材质代码（与材质字典一致，非代码字母序）
-            const weights = m => (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
-            const cmpArr = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const d = (a[i] ?? Infinity) - (b[i] ?? Infinity); if (d) return d; } return 0; };
-            return rows.slice().sort((a, b) => {
-              const sr = this.supplierRank(a.supplier_name) - this.supplierRank(b.supplier_name); if (sr) return sr;
-              const wc = cmpArr(weights(a), weights(b)); if (wc) return wc;
-              const pc = (a.quote_price ?? Infinity) - (b.quote_price ?? Infinity); if (pc) return pc;
-              return (a.code || "").localeCompare(b.code || "");
-            });
+            // 统一复用 filteredMaterialOptions（先 supplier+layer+flute 再排序）
+            return this.filteredMaterialOptions(item._material_supplier || "", item._layer_filter, item._flute_filter, "");
+          },
+          // search-select 选项对象（含可搜索字段）
+          orderItemMaterialSelectOptions(item) {
+            return this.materialSelectOptions(item._material_supplier || "", item._layer_filter, item._flute_filter);
           },
           onOrderItemLayerChange(index) {
             const item = this.orderForm.items[index];
-            const opts = this.orderItemFluteOptions(item);
-            if (item._flute_filter && !opts.includes(item._flute_filter)) item._flute_filter = null;
-            if (item.material_id && !this.orderItemMaterialOptions(item).some(m => m.id === item.material_id)) {
-              item.material_id = null; item.material = "";
-            }
+            // 切层默认楞型（三层B/五层AB/七层无），不匹配材质自动清空
+            if (item._layer_filter) item._flute_filter = this.getDefaultFluteByLayer(item._layer_filter);
+            else item._flute_filter = null;
+            this.resetMaterialIfNotMatched(item, item._material_supplier || "", item._layer_filter, item._flute_filter);
           },
           onOrderItemFluteChange(index) {
             const item = this.orderForm.items[index];
-            if (item.material_id && !this.orderItemMaterialOptions(item).some(m => m.id === item.material_id)) {
-              item.material_id = null; item.material = "";
-            }
+            this.resetMaterialIfNotMatched(item, item._material_supplier || "", item._layer_filter, item._flute_filter);
           },
           async recalculateOrderCost(index) {
             const item=this.orderForm.items[index];

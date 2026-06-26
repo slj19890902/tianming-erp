@@ -897,15 +897,14 @@
                         </td>
                       </tr>
                       <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
-                        <td :colspan="isWorkshop ? 9 : 10">
+                        <td :colspan="isWorkshop ? 8 : 9">
                           <div class="order-group-detail-card">
                             <table>
                               <thead>
                                 <tr>
                                   <th>明细系统单号</th>
-                                  <th>主系统单号</th>
-                                  <th>产品名称</th>
                                   <th>存货编码</th>
+                                  <th>产品名称</th>
                                   <th>规格</th>
                                   <th>材质</th>
                                   <th class="cell-right">数量</th>
@@ -919,9 +918,8 @@
                                 <template v-for="row in group.orders" :key="row.id">
                                   <tr v-for="item in row.items" :key="item.id">
                                     <td><span class="sub-order-number">{{ item.item_order_number || "-" }}</span></td>
-                                    <td><span class="main-order-number">{{ row.order_number }}</span></td>
-                                    <td>{{ plainProductText(item.snapshot_product_name) }}</td>
                                     <td>{{ plainProductText(item.snapshot_product_code) }}</td>
+                                    <td>{{ plainProductText(item.snapshot_product_name) }}</td>
                                     <td>{{ item.snapshot_spec || "-" }}</td>
                                     <td>{{ orderItemMaterialText(item) }}</td>
                                     <td class="cell-right">{{ item.quantity }}</td>
@@ -969,7 +967,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>存货编码</th><th>名称</th><th>客户型号</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td><span v-if="item.snapshot_customer_model" style="color:#1d4ed8;font-weight:600">{{ item.snapshot_customer_model }}</span><span v-else class="muted">-</span></td><td>{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>明细编号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td class="sys-num" style="font-size:11px">{{ item.item_order_number || "-" }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td style="white-space:nowrap;font-size:12px">{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -1513,12 +1511,84 @@
                 <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderForm.delivery_date" /></div>
               </div>
               <div v-if="!orderForm.customer_id" class="status orange" style="margin:10px 0">请先选择客户，再选择常用箱并填写数量。</div>
-              <div v-else class="form-grid" style="margin-bottom:10px">
-                <div class="field"><label class="sys-num">主系统单号预览</label><div class="sys-num">{{ orderNumberPreview || "-" }}</div></div>
-                <div class="field wide"><label class="sys-num">明细系统单号预览</label><div class="sys-num">{{ orderForm.items.map((item, index) => itemOrderNumberPreview(index)).join(" / ") }}</div></div>
+              <div v-else class="muted" style="font-size:12px;margin:6px 0 10px;color:#6b7280">
+                系统编号预览：<span class="sys-num" style="font-size:12px">{{ orderNumberPreview || "-" }}</span>
+                <span style="margin:0 6px">/</span>
+                <span class="sys-num" style="font-size:12px">{{ orderForm.items.map((item,index)=>itemOrderNumberPreview(index)).join(" · ") }}</span>
               </div>
-              <table class="line-items"><thead><tr><th>历史模板搜索</th><th>存货编码</th><th>名称</th><th>层数</th><th>楞型</th><th>材质</th><th>规格型号</th><th>数量</th><th class="sensitive-price">客户单价</th><th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th><th></th></tr></thead><tbody>
-                <tr v-for="(item,index) in orderForm.items" :key="index"><td class="order-template-cell"><search-select v-model="item.product_id" :disabled="!orderForm.customer_id" :options="orderProductOptions[index] || []" label-key="_label" value-key="id" placeholder="待匹配产品 / 编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)" @change="selectOrderProduct(index,$event)"></search-select></td><td class="order-code-cell"><input class="input order-code-input" :disabled="!orderForm.customer_id" v-model.trim="item.product_code" /></td><td class="order-name-cell"><input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" /></td><td><select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)"><option :value="null">全部</option><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></td><td><select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)"><option :value="null">全部</option><option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option></select></td><td><search-select :disabled="!orderForm.customer_id" v-model="item.material_id" :options="orderItemMaterialSelectOptions(item)" label-key="_label" value-key="id" :allow-empty="true" placeholder="搜索材质" @change="selectOrderMaterial(index)"></search-select></td><td><input class="input spec-input" :disabled="!orderForm.customer_id" v-model.trim="item.specification" /></td><td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td><td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td><td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td><td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td><td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td></tr>
+              <table class="line-items"><thead><tr>
+                <th>历史模板搜索</th><th>存货编码</th><th>名称</th>
+                <th>材质 + 楞型</th><th>规格型号</th>
+                <th>数量</th><th class="sensitive-price">客户单价</th>
+                <th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th>
+                <th>图纸</th><th></th>
+              </tr></thead><tbody>
+                <tr v-for="(item,index) in orderForm.items" :key="index">
+                  <!-- 历史模板搜索 -->
+                  <td class="order-template-cell">
+                    <search-select v-model="item.product_id" :disabled="!orderForm.customer_id"
+                      :options="orderProductOptions[index] || []" label-key="_label" value-key="id"
+                      placeholder="编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)"
+                      @change="selectOrderProduct(index,$event)">
+                    </search-select>
+                  </td>
+                  <!-- 存货编码 -->
+                  <td class="order-code-cell">
+                    <input class="input order-code-input" :disabled="!orderForm.customer_id || item._from_product"
+                      v-model.trim="item.product_code" />
+                  </td>
+                  <!-- 名称 -->
+                  <td class="order-name-cell">
+                    <input class="input" :disabled="!orderForm.customer_id || item._from_product"
+                      v-model.trim="item.product_name" :title="item.product_name" />
+                  </td>
+                  <!-- 材质+楞型（来自常用箱锁定） -->
+                  <td style="min-width:180px;max-width:240px">
+                    <div v-if="item._from_product" style="font-size:12px;line-height:1.5">
+                      <div>{{ orderItemCompressedMaterial(item) }}</div>
+                      <span class="status green" style="font-size:11px;padding:1px 5px;display:inline-block;margin-top:2px">来自常用箱</span>
+                    </div>
+                    <div v-else style="display:flex;flex-direction:column;gap:4px">
+                      <!-- 没有常用箱时，允许手动选层数/楞型/材质 -->
+                      <select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)">
+                        <option :value="null">层数</option><option :value="3">3层</option><option :value="5">5层</option>
+                      </select>
+                      <select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)">
+                        <option :value="null">楞型</option>
+                        <option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option>
+                      </select>
+                      <search-select :disabled="!orderForm.customer_id" v-model="item.material_id"
+                        :options="orderItemMaterialSelectOptions(item)" label-key="_label" value-key="id"
+                        :allow-empty="true" placeholder="搜索材质" @change="selectOrderMaterial(index)">
+                      </search-select>
+                    </div>
+                  </td>
+                  <!-- 规格 -->
+                  <td>
+                    <input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product"
+                      v-model.trim="item.specification" />
+                  </td>
+                  <!-- 数量 -->
+                  <td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td>
+                  <!-- 单价 -->
+                  <td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
+                  <!-- 预估成本 -->
+                  <td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td>
+                  <!-- 预估毛利 -->
+                  <td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td>
+                  <!-- 图纸 -->
+                  <td style="min-width:90px;font-size:12px">
+                    <span v-if="item.drawing_file">
+                      <a :href="item.drawing_file" target="_blank" class="btn small">查看订单图纸</a>
+                    </span>
+                    <span v-else-if="item._product_drawings && item._product_drawings.length">
+                      <a :href="item._product_drawings[0].image_path" target="_blank" class="btn small">查看常用箱图纸</a>
+                    </span>
+                    <span v-else class="muted">-</span>
+                  </td>
+                  <!-- 操作 -->
+                  <td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td>
+                </tr>
               </tbody></table>
               <button class="btn" style="margin-top:8px" @click="addOrderItem">增加明细</button>
               <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><input class="input" v-model.trim="orderForm.remark" /></div>
@@ -1575,7 +1645,28 @@
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
               <div class="section-title">只读订单详情</div>
-              <table><thead><tr><th>存货编码</th><th>产品名称</th><th>客户型号</th><th>规格</th><th>材质</th><th>生产说明</th><th>数量</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in orderDetail.items" :key="item.id"><td>{{ item.snapshot_product_code }}</td><td>{{ item.snapshot_product_name }}</td><td><span v-if="item.snapshot_customer_model" style="color:#1d4ed8;font-weight:600">{{ item.snapshot_customer_model }}</span><span v-else class="muted">-</span></td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.display_material || displayMaterialText(item.snapshot_material) || "-" }}</td><td>{{ item.snapshot_production_notes || "-" }}</td><td>{{ item.quantity }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td></tr></tbody></table>
+              <table><thead><tr>
+                <th>明细编号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
+                <th>材质</th><th>生产说明</th><th>数量</th>
+                <th v-if="!isWorkshop" class="sensitive-price">单价</th>
+                <th v-if="!isWorkshop" class="sensitive-price">金额</th>
+                <th>图纸</th>
+              </tr></thead>
+              <tbody><tr v-for="item in orderDetail.items" :key="item.id">
+                <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}</td>
+                <td>{{ item.snapshot_product_code }}</td>
+                <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.snapshot_product_name }}</td>
+                <td>{{ item.snapshot_spec || "-" }}</td>
+                <td style="white-space:nowrap;font-size:12px">{{ orderItemMaterialText(item) }}</td>
+                <td>{{ item.snapshot_production_notes || "-" }}</td>
+                <td>{{ item.quantity }}</td>
+                <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td>
+                <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td>
+                <td style="font-size:12px">
+                  <a v-if="item.drawing_file" :href="item.drawing_file" target="_blank" class="btn small">查看订单图纸</a>
+                  <span v-else class="muted">-</span>
+                </td>
+              </tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'mobileEntry'" style="text-align:center">
               <p style="margin-top:0">手机与本电脑连接同一局域网后，使用微信或相机扫描二维码。</p>
@@ -2250,13 +2341,34 @@
           // 订单材质显示「材质代码/实际楞型」（A6D/A），实际楞型以订单明细 flute_type 为准，
           // 绝不把材质报价适用楞型后缀（-B/E）当作产品实际楞型显示。
           orderItemMaterialText(item) {
+            // v0.19.2-B：优先用新字段（snapshot_supplier_name / snapshot_weight / flute_type）
+            // 格式：A6D/A｜150/130/130｜苏州嘉林亿
+            // 历史订单无新字段时降级到旧逻辑，不报错。
             let base = String(item.display_material || item.snapshot_material || "").trim();
             base = this.displayMaterialText(base);
             base = base.split("（")[0].split("(")[0].trim().split(/\s+/)[0];
             if (base.includes("-")) base = base.split("-")[0];
             const flute = item.flute_type || "";
-            if (!base || base === "-") return flute ? `${flute}瓦` : "-";
-            return flute ? `${base}/${flute}` : base;
+            const codeFlute = base ? (flute ? `${base}/${flute}` : base) : (flute ? `${flute}瓦` : "");
+            if (!codeFlute) return "-";
+            const weight = item.snapshot_weight ? this.pureWeights(item.snapshot_weight) : "";
+            const supplier = item.snapshot_supplier_name || "";
+            const parts = [codeFlute];
+            if (weight) parts.push(weight);
+            if (supplier) parts.push(supplier);
+            return parts.join("｜");
+          },
+          // 新建订单表单中「材质+楞型」列的压缩显示（来自常用箱时）
+          orderItemCompressedMaterial(item) {
+            const code = (item._material_code || "").split("-")[0];
+            const flute = item.flute_type || item._flute_filter || "";
+            const weight = item._material_weight ? this.pureWeights(item._material_weight) : "";
+            const supplier = item._material_supplier_name || "";
+            const codeFlute = code ? (flute ? `${code}/${flute}` : code) : (flute ? `${flute}瓦` : "");
+            const parts = [codeFlute];
+            if (weight) parts.push(weight);
+            if (supplier) parts.push(supplier);
+            return parts.join("｜") || "-";
           },
           _findMaterial(id) {
             const src = this.allMaterials.length ? this.allMaterials : this.materials;
@@ -3403,7 +3515,21 @@
           },
           addOrderItem() {
             const index = this.orderForm.items.length;
-            this.orderForm.items.push({ product_id:null, is_new_product:false, product_code:"", product_name:"", material_id:null, material:"", specification:"", production_notes:"", _layer_filter:null, _flute_filter:null, _material_supplier:"", quantity:null, unit_price:"", cost_status:"pending", estimated_cost:null });
+            this.orderForm.items.push({
+              product_id:null, is_new_product:false, product_code:"", product_name:"",
+              material_id:null, material:"", specification:"", production_notes:"",
+              _layer_filter:null, _flute_filter:null, _material_supplier:"",
+              quantity:null, unit_price:"", cost_status:"pending", estimated_cost:null,
+              // v0.19.2-B：来自常用箱时自动带出并锁定
+              _from_product: false,         // 是否来自常用箱
+              flute_type: null,             // 实际楞型（保存到 order_item）
+              layer_count: null,            // 层数（保存到 order_item）
+              _material_code: "",           // 材质代码（仅显示用）
+              _material_supplier_name: "",  // 供应商名（仅显示用）
+              _material_weight: "",         // 克重结构（仅显示用）
+              _product_drawings: [],        // 常用箱图纸列表
+              drawing_file: null,           // 订单级图纸
+            });
             if (this.orderForm.customer_id) this.searchOrderProducts(index, "");
             if (this.modal?.type === "order") this.refreshOrderNumberPreview();
           },
@@ -3430,9 +3556,19 @@
             item.product_code = data.product_code || "";
             item.product_name = data.product_name || "";
             item.material_id = data.material_id || null;
-            item.material = this.materialName(data.material_id, data.legacy_material_text);
+            item.material = data.material_code || this.materialName(data.material_id, data.legacy_material_text);
             item.specification = this.spec(data);
             item.unit_price = this.money(data.sale_unit_price);
+            // v0.19.2-B: 常用箱自动带出层数/楞型/材质快照，锁定不允许直接修改
+            item._from_product = true;
+            item.layer_count = data.layer_count || null;
+            item.flute_type = data.flute_type || null;
+            item._layer_filter = data.layer_count || null;
+            item._flute_filter = data.flute_type || null;
+            item._material_code = data.material_code || "";
+            item._material_supplier_name = data.material_supplier_name || "";
+            item._material_weight = data.material_weight || "";
+            item._product_drawings = data.drawings || [];
             await this.recalculateOrderCost(index);
           },
           async selectOrderMaterial(index) {
@@ -3469,7 +3605,12 @@
           async recalculateOrderCost(index) {
             const item=this.orderForm.items[index];
             if (!item.product_id) { item.cost_status="pending"; item.estimated_cost=null; return; }
-            const {data}=await axios.post("/api/orders/cost-preview",{product_id:item.product_id,material_id:item.material_id || null});
+            const body = {
+              product_id: item.product_id,
+              material_id: item.material_id || null,
+              flute_type: item.flute_type || item._flute_filter || null, // v0.19.2-B：传实际楞型
+            };
+            const {data}=await axios.post("/api/orders/cost-preview", body);
             Object.assign(item,data);
           },
           toggleOrderGroup(key) { this.expandedOrders[key] = !this.expandedOrders[key]; },
@@ -3646,7 +3787,25 @@
               if (this.modal.type === "order") {
                 const orderError = this.validateOrderForm();
                 if (orderError) throw new Error(orderError);
-                await axios.post("/api/orders", { ...this.orderForm });
+                // v0.19.2-B: 传 layer_count/flute_type，后端写入 order_item
+                const orderPayload = {
+                  ...this.orderForm,
+                  items: this.orderForm.items.map(item => ({
+                    product_id: item.product_id,
+                    product_code: item.product_code,
+                    product_name: item.product_name,
+                    material_id: item.material_id || null,
+                    material: item.material,
+                    specification: item.specification,
+                    production_notes: item.production_notes || null,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price,
+                    layer_count: item.layer_count || item._layer_filter || null,
+                    flute_type: item.flute_type || item._flute_filter || null,
+                    is_new_product: item.is_new_product || false,
+                  })),
+                };
+                await axios.post("/api/orders", orderPayload);
                 await Promise.all([this.loadOrders(), this.loadKpi()]);
               }
               if (this.modal.type === "orderEdit") {

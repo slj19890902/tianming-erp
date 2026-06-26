@@ -209,6 +209,15 @@ class OrderItem(Base):
         nullable=True,
     )
     requisition_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v0.19.2-B Hotfix: 常用箱层数/楞型/材质快照 + 订单级图纸
+    layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    flute_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL"), nullable=True
+    )
+    snapshot_supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    snapshot_weight: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    drawing_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),

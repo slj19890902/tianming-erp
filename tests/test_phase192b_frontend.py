@@ -117,3 +117,82 @@ class TestBoardCostEffectivePrice:
 
     def test_board_cost_text_shows_delta(self):
         assert "楞型加价" in HTML and "productBoardCostDetail" in HTML
+
+
+class TestOrderItemAutoFillLock:
+    def test_select_order_product_sets_from_product(self):
+        assert "_from_product" in HTML
+        assert "item._from_product = true" in HTML
+
+    def test_layer_flute_auto_filled_from_product(self):
+        assert "item.layer_count = data.layer_count" in HTML
+        assert "item.flute_type = data.flute_type" in HTML
+
+    def test_locked_when_from_product(self):
+        # 匹配常用箱后，存货编码/名称/规格字段应锁定
+        assert "item._from_product" in HTML
+
+    def test_from_product_shows_compressed_material(self):
+        assert "orderItemCompressedMaterial(item)" in HTML
+
+    def test_from_product_badge(self):
+        assert "来自常用箱" in HTML
+
+    def test_cost_preview_passes_flute_type(self):
+        assert "flute_type: item.flute_type || item._flute_filter" in HTML
+
+
+class TestOrderMaterialFormat:
+    def test_material_text_uses_pipe_separator(self):
+        assert 'parts.join("｜")' in HTML
+
+    def test_material_text_includes_supplier(self):
+        assert "snapshot_supplier_name" in HTML
+
+    def test_material_text_includes_weight(self):
+        assert "snapshot_weight" in HTML
+
+    def test_material_text_no_dash_be_suffix(self):
+        # 材质代码去掉 -B/E 后缀
+        assert 'base.split("-")[0]' in HTML
+
+
+class TestOrderListUI:
+    def test_no_main_order_number_column_in_expanded_detail(self):
+        # 主系统单号列已从展开明细中移除
+        assert "主系统单号" not in HTML or HTML.count("主系统单号") <= 1  # 仅剩旧版legacy区域
+
+    def test_item_order_number_shown(self):
+        assert "item_order_number" in HTML
+        assert "明细系统单号" in HTML
+
+    def test_order_detail_no_customer_model_column(self):
+        # 只读订单详情不再有「客户型号」列
+        i = HTML.index("只读订单详情")
+        detail_block = HTML[i:i+2000]
+        assert "客户型号" not in detail_block
+
+    def test_order_detail_has_drawing_column(self):
+        i = HTML.index("只读订单详情")
+        detail_block = HTML[i:i+2000]
+        assert "图纸" in detail_block or "drawing_file" in detail_block
+
+    def test_compact_order_number_preview(self):
+        assert "系统编号预览" in HTML
+
+
+class TestOrderFormColumns:
+    def test_no_standalone_layer_flute_columns_in_header(self):
+        # 新订单表头不再有独立「层数」「楞型」列（已合并入材质+楞型列）
+        i = HTML.index("历史模板搜索</th>")
+        header_row = HTML[i:i+400]
+        assert "材质 + 楞型" in header_row
+
+    def test_drawing_column_in_new_order_table(self):
+        i = HTML.index("历史模板搜索</th>")
+        header_row = HTML[i:i+400]
+        assert "图纸" in header_row
+
+    def test_submit_passes_layer_count_and_flute(self):
+        assert "layer_count: item.layer_count" in HTML
+        assert "flute_type: item.flute_type" in HTML

@@ -24,6 +24,7 @@ from app.models.finance import (
     Statement,
     StatementItem,
 )
+from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
@@ -40,6 +41,7 @@ from app.services.order_numbering import (
     reserve_next_item_sequence,
     reserve_next_order_number,
 )
+from app.services import material_pricing
 from app.services.order_pdf_import import (
     PARSE_STATUS_LABELS,
     PdfParseError,
@@ -105,6 +107,8 @@ class OrderItemCreate(BaseModel):
     production_notes: str | None = None  # v0.19.2-A: 生产/印刷/打勾/摆放/日文警示等行级说明
     is_new_product: bool = False
     material_id: int | None = None
+    layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
+    flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
 
     @field_validator("product_id", "material_id", mode="before")
     @classmethod
@@ -175,6 +179,7 @@ class DraftRematchRequest(BaseModel):
 class CostPreviewRequest(BaseModel):
     product_id: int
     material_id: int | None = None
+    flute_type: str | None = None   # v0.19.2-B: 传楞型以计入加价
 
 
 class OrderStatusRequest(BaseModel):
@@ -286,6 +291,13 @@ def _order_response(
                 "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
                 "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
                 "display_material": _display_material(item.snapshot_material),
+                # v0.19.2-B: 常用箱层数/楞型/供应商/克重/图纸
+                "layer_count": item.layer_count,
+                "flute_type": item.flute_type,
+                "material_id": item.material_id,
+                "snapshot_supplier_name": item.snapshot_supplier_name,
+                "snapshot_weight": item.snapshot_weight,
+                "drawing_file": item.drawing_file,
                 "inventory_deducted_qty": item.inventory_deducted_qty,
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": item.requisition_status,
@@ -625,10 +637,82 @@ def preview_order_cost(
     db: Session = Depends(get_db),
     _user: User = Depends(can_create),
 ) -> dict:
+    """纸板成本预估；若传 flute_type 则计入楞型加价（v0.19.2-B）。"""
     try:
-        return calculate_draft_cost(db, payload.product_id, payload.material_id)
+        result = calculate_draft_cost(db, payload.product_id, payload.material_id)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+    # v0.19.2-B：若有楞型，用 get_effective_material_price 重新算成本
+    if payload.flute_type and result.get("cost_status") == "calculated":
+        from app.services.order_pdf_import import _cost_reference as _ocr
+        from sqlalchemy.orm import joinedload as _jl
+        product = db.scalar(
+            select(Product).options(_jl(Product.material)).where(Product.id == payload.product_id)
+        )
+        if product is not None:
+            mat = db.get(Material, payload.material_id) if payload.material_id else product.material
+            if mat and mat.quote_price is not None:
+                eff = material_pricing.get_effective_material_price(
+                    db,
+                    base_price=mat.quote_price,
+                    supplier_name=mat.supplier_name,
+                    layer_count=product.layer_count or (mat.layer_count if mat else None),
+                    flute_type=payload.flute_type,
+                )
+                if eff["effective_price"] is not None:
+                    from app.services.pricing import calculate_price, PricingError
+                    try:
+                        pr = calculate_price(
+                            box_category=product.box_category,
+                            board_square_price=eff["effective_price"],
+                            length_mm=product.length_mm,
+                            width_mm=product.width_mm,
+                            height_mm=product.height_mm,
+                            unfolded_length_mm=product.default_cardboard_length,
+                            unfolded_width_mm=product.default_cardboard_width,
+                        )
+                        result["estimated_cost"] = str(pr.unit_price)
+                        result["flute_delta"] = eff["flute_delta"]
+                        result["base_material_price"] = eff["base_price"]
+                    except PricingError:
+                        pass
+    return result
+
+
+@router.post("/items/{item_id}/drawing", status_code=status.HTTP_200_OK)
+async def upload_order_item_drawing(
+    item_id: int,
+    file: UploadFile = File(...),
+    save_to_product: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """上传订单明细图纸。默认只写 order_item；save_to_product=true 时同步写入 product_drawings（需用户确认）。"""
+    import os, uuid
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
+    fname = f"{uuid.uuid4().hex}.{ext}"
+    draw_dir = "static/uploads/drawings"
+    os.makedirs(draw_dir, exist_ok=True)
+    fpath = f"{draw_dir}/{fname}"
+    with open(fpath, "wb") as fp:
+        fp.write(content)
+    item.drawing_file = f"/static/uploads/drawings/{fname}"
+    if save_to_product and item.product_id:
+        from app.models.product_drawing import ProductDrawing
+        product_drawing = ProductDrawing(
+            product_id=item.product_id,
+            image_path=item.drawing_file,
+            thumbnail_path=item.drawing_file,
+            uploaded_by=user.id,
+        )
+        db.add(product_drawing)
+    db.commit()
+    return {"drawing_file": item.drawing_file, "saved_to_product": save_to_product}
 
 
 def _order_has_flow_records(db: Session, order_id: int) -> bool:
@@ -1142,6 +1226,23 @@ def create_order(
                 snapshot_production_notes=(
                     (item_payload.production_notes or "").strip() or None
                 ),  # v0.19.2-A: 生产/印刷说明
+                # v0.19.2-B: 常用箱层数/楞型/材质/供应商/克重 — 优先前端传值，否则从product取
+                layer_count=(
+                    item_payload.layer_count
+                    or product.layer_count
+                ),
+                flute_type=(
+                    (item_payload.flute_type or "").strip().upper() or product.flute_type or None
+                ),
+                material_id=(
+                    item_payload.material_id or product.material_id
+                ),
+                snapshot_supplier_name=(
+                    product.material.supplier_name if product.material is not None else None
+                ),
+                snapshot_weight=(
+                    product.material.basis_weight_description if product.material is not None else None
+                ),
                 requisition_status="未报料",
             )
             db.add(item)

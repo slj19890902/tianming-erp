@@ -109,6 +109,8 @@ class OrderItemCreate(BaseModel):
     material_id: int | None = None
     layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
     flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
+    temp_drawing_file: str | None = None   # 新建订单前临时上传的图纸路径
+    drawing_save_option: str | None = None  # "order_only"|"save_to_product"|"overwrite_product"
 
     @field_validator("product_id", "material_id", mode="before")
     @classmethod
@@ -680,6 +682,25 @@ def preview_order_cost(
     return result
 
 
+@router.post("/draft-drawing", status_code=status.HTTP_200_OK)
+async def upload_draft_drawing(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """新建订单未保存前的临时图纸上传。写入临时目录，不写 DB，前端持有路径直到提交。"""
+    import os, uuid
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
+    fname = f"draft_{uuid.uuid4().hex}.{ext}"
+    draft_dir = "static/uploads/order_drafts"
+    os.makedirs(draft_dir, exist_ok=True)
+    fpath = f"{draft_dir}/{fname}"
+    with open(fpath, "wb") as fp:
+        fp.write(content)
+    return {"temp_path": f"/static/uploads/order_drafts/{fname}", "filename": file.filename or fname}
+
+
 @router.post("/items/{item_id}/drawing", status_code=status.HTTP_200_OK)
 async def upload_order_item_drawing(
     item_id: int,
@@ -1245,6 +1266,21 @@ def create_order(
                 ),
                 requisition_status="未报料",
             )
+            # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细
+            if item_payload.temp_drawing_file:
+                import os, uuid, shutil
+                tmp_path = item_payload.temp_drawing_file.lstrip("/")
+                if os.path.isfile(tmp_path):
+                    ext = tmp_path.rsplit(".", 1)[-1].lower() or "png"
+                    fname = f"{uuid.uuid4().hex}.{ext}"
+                    draw_dir = "static/uploads/drawings"
+                    os.makedirs(draw_dir, exist_ok=True)
+                    dest = f"{draw_dir}/{fname}"
+                    shutil.copy2(tmp_path, dest)
+                    item.drawing_file = f"/static/uploads/drawings/{fname}"
+                else:
+                    # 路径不合法时直接使用原路径（保底）
+                    item.drawing_file = item_payload.temp_drawing_file
             db.add(item)
             created_items.append(item)
 
@@ -1273,6 +1309,21 @@ def create_order(
                 description="创建多明细订单",
             )
         )
+        db.flush()  # 获取 item.id 以便处理图纸
+        # v0.19.2-B: 图纸保存到常用箱
+        for i, item in enumerate(created_items):
+            opt = payload.items[i].drawing_save_option if i < len(payload.items) else None
+            if item.drawing_file and item.product_id and opt in ("save_to_product", "overwrite_product"):
+                from app.models.product_drawing import ProductDrawing
+                if opt == "overwrite_product":
+                    from sqlalchemy import delete as _del
+                    db.execute(_del(ProductDrawing).where(ProductDrawing.product_id == item.product_id))
+                db.add(ProductDrawing(
+                    product_id=item.product_id,
+                    image_path=item.drawing_file,
+                    thumbnail_path=item.drawing_file,
+                    uploaded_by=user.id,
+                ))
         db.commit()
         db.refresh(order)
         return _order_response(

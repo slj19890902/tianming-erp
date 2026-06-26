@@ -612,6 +612,46 @@ def purge_product(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+class SyncFieldsPayload(BaseModel):
+    """从订单明细同步部分字段回常用箱（用户确认后调用）。"""
+    fields: dict  # e.g. {"layer_count": 3, "flute_type": "A", "material_id": 5, ...}
+
+
+@router.post("/{product_id}/sync-fields")
+def sync_product_fields(
+    product_id: int,
+    payload: SyncFieldsPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    """将订单录入时手动修改的字段同步回常用箱。只允许同步白名单字段。"""
+    ALLOWED = {
+        "layer_count", "flute_type", "material_id",
+        "length_mm", "width_mm", "height_mm",
+        "sale_unit_price", "cost_unit_price", "remark",
+    }
+    product = _product_or_404(db, product_id)
+    updated = []
+    for k, v in payload.fields.items():
+        if k not in ALLOWED:
+            continue
+        setattr(product, k, v)
+        updated.append(k)
+    if not updated:
+        raise HTTPException(status_code=400, detail="没有可同步的字段")
+    audit_master_change(
+        db,
+        user=user,
+        action="SYNC_FIELDS_FROM_ORDER",
+        resource="Product",
+        resource_id=product.id,
+        details={"synced": updated},
+    )
+    db.commit()
+    db.refresh(product)
+    return {"updated": updated, "product_id": product.id}
+
+
 @router.delete("/{product_id}")
 def delete_product(
     product_id: int,

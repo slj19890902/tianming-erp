@@ -340,10 +340,11 @@
       .line-items td { padding: 5px; }
       .line-items .input, .line-items .select { min-width: 110px; }
       .line-items .search-select { min-width: 170px; }
-      .order-template-cell { width: 190px; min-width: 190px; }
+      .order-template-cell { width: 220px; min-width: 220px; }
       .order-code-cell { width: 160px; min-width: 160px; }
-      .order-code-input { min-width: 150px !important; width: 150px; }
+      .order-code-input { min-width: 80px !important; width: 80px; }
       .order-name-cell { min-width: 180px; }
+      .order-item-sub-row td { background: #f8fafc; border-top: none; padding-top: 0 !important; }
 
       /* Modal */
       .modal-mask {
@@ -734,6 +735,15 @@
               </div>
 
               <!-- 供应商统一调价弹窗 -->
+              <!-- 图纸预览 modal -->
+              <div v-if="showDrawingPreview" class="modal-backdrop" @click.self="showDrawingPreview=false">
+                <div class="modal" style="max-width:90vw;max-height:90vh;overflow:auto">
+                  <div class="modal-header"><h3>图纸预览</h3><button class="btn small" @click="showDrawingPreview=false">关闭</button></div>
+                  <div style="text-align:center;padding:12px">
+                    <img :src="drawingPreviewUrl" style="max-width:100%;max-height:75vh;object-fit:contain" />
+                  </div>
+                </div>
+              </div>
               <div v-if="showPriceAdjustModal" class="modal-backdrop" @click.self="showPriceAdjustModal=false">
                 <div class="modal" style="max-width:760px;max-height:84vh;overflow-y:auto">
                   <div class="modal-header"><h3>供应商统一调价</h3><button class="btn small" @click="showPriceAdjustModal=false">关闭</button></div>
@@ -1516,80 +1526,114 @@
                 <span style="margin:0 6px">/</span>
                 <span class="sys-num" style="font-size:12px">{{ orderForm.items.map((item,index)=>itemOrderNumberPreview(index)).join(" · ") }}</span>
               </div>
-              <table class="line-items"><thead><tr>
-                <th>历史模板搜索</th><th>存货编码</th><th>名称</th>
-                <th>材质 + 楞型</th><th>规格型号</th>
-                <th>数量</th><th class="sensitive-price">客户单价</th>
-                <th class="sensitive-price">预估成本</th><th class="sensitive-price">预估毛利</th>
-                <th>图纸</th><th></th>
+              <!-- 新建订单明细表：2行/明细，避免列过多挤压 -->
+              <div style="overflow-x:auto">
+              <table class="line-items" style="min-width:700px"><thead><tr>
+                <th style="min-width:200px">历史模板搜索</th>
+                <th style="min-width:220px">材质 + 楞型</th>
+                <th style="min-width:80px">规格型号</th>
+                <th style="min-width:70px">数量</th>
+                <th class="sensitive-price" style="min-width:80px">客户单价</th>
+                <th style="min-width:110px">图纸</th>
+                <th style="width:50px"></th>
               </tr></thead><tbody>
-                <tr v-for="(item,index) in orderForm.items" :key="index">
-                  <!-- 历史模板搜索 -->
-                  <td class="order-template-cell">
-                    <search-select v-model="item.product_id" :disabled="!orderForm.customer_id"
-                      :options="orderProductOptions[index] || []" label-key="_label" value-key="id"
-                      placeholder="编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)"
-                      @change="selectOrderProduct(index,$event)">
-                    </search-select>
-                  </td>
-                  <!-- 存货编码 -->
-                  <td class="order-code-cell">
-                    <input class="input order-code-input" :disabled="!orderForm.customer_id || item._from_product"
-                      v-model.trim="item.product_code" />
-                  </td>
-                  <!-- 名称 -->
-                  <td class="order-name-cell">
-                    <input class="input" :disabled="!orderForm.customer_id || item._from_product"
-                      v-model.trim="item.product_name" :title="item.product_name" />
-                  </td>
-                  <!-- 材质+楞型（来自常用箱锁定） -->
-                  <td style="min-width:180px;max-width:240px">
-                    <div v-if="item._from_product" style="font-size:12px;line-height:1.5">
-                      <div>{{ orderItemCompressedMaterial(item) }}</div>
-                      <span class="status green" style="font-size:11px;padding:1px 5px;display:inline-block;margin-top:2px">来自常用箱</span>
-                    </div>
-                    <div v-else style="display:flex;flex-direction:column;gap:4px">
-                      <!-- 没有常用箱时，允许手动选层数/楞型/材质 -->
-                      <select class="select" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)">
-                        <option :value="null">层数</option><option :value="3">3层</option><option :value="5">5层</option>
-                      </select>
-                      <select class="select" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)">
-                        <option :value="null">楞型</option>
-                        <option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option>
-                      </select>
-                      <search-select :disabled="!orderForm.customer_id" v-model="item.material_id"
-                        :options="orderItemMaterialSelectOptions(item)" label-key="_label" value-key="id"
-                        :allow-empty="true" placeholder="搜索材质" @change="selectOrderMaterial(index)">
+                <template v-for="(item,index) in orderForm.items" :key="index">
+                  <!-- 主行 -->
+                  <tr>
+                    <!-- 常用箱搜索 + 编码/名称 2行 -->
+                    <td class="order-template-cell" style="padding:4px 6px">
+                      <search-select v-model="item.product_id" :disabled="!orderForm.customer_id"
+                        :options="orderProductOptions[index] || []" label-key="_label" value-key="id"
+                        placeholder="编码 / 名称 / 规格" @search="searchOrderProducts(index,$event)"
+                        @change="selectOrderProduct(index,$event)">
                       </search-select>
-                    </div>
-                  </td>
-                  <!-- 规格 -->
-                  <td>
-                    <input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product"
-                      v-model.trim="item.specification" />
-                  </td>
-                  <!-- 数量 -->
-                  <td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td>
-                  <!-- 单价 -->
-                  <td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
-                  <!-- 预估成本 -->
-                  <td class="sensitive-price">{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</td>
-                  <!-- 预估毛利 -->
-                  <td class="sensitive-price">{{ estimatedGrossProfit(item) }}</td>
-                  <!-- 图纸 -->
-                  <td style="min-width:90px;font-size:12px">
-                    <span v-if="item.drawing_file">
-                      <a :href="item.drawing_file" target="_blank" class="btn small">查看订单图纸</a>
-                    </span>
-                    <span v-else-if="item._product_drawings && item._product_drawings.length">
-                      <a :href="item._product_drawings[0].image_path" target="_blank" class="btn small">查看常用箱图纸</a>
-                    </span>
-                    <span v-else class="muted">-</span>
-                  </td>
-                  <!-- 操作 -->
-                  <td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td>
-                </tr>
+                      <div style="display:flex;gap:4px;margin-top:4px">
+                        <input class="input order-code-input" style="width:90px;flex:0 0 90px" :disabled="!orderForm.customer_id || item._from_product"
+                          v-model.trim="item.product_code" placeholder="存货编码" />
+                        <input class="input" style="flex:1;min-width:0" :disabled="!orderForm.customer_id || item._from_product"
+                          v-model.trim="item.product_name" :title="item.product_name" placeholder="名称" />
+                      </div>
+                    </td>
+                    <!-- 材质+楞型（来自常用箱锁定） -->
+                    <td style="padding:4px 6px">
+                      <div v-if="item._from_product" style="font-size:12px;line-height:1.5">
+                        <div>{{ orderItemCompressedMaterial(item) }}</div>
+                        <span class="status green" style="font-size:11px;padding:1px 5px;display:inline-block;margin-top:2px">来自常用箱</span>
+                      </div>
+                      <div v-else style="display:flex;flex-direction:column;gap:4px">
+                        <div style="display:flex;gap:4px">
+                          <select class="select" style="flex:1" :disabled="!orderForm.customer_id" v-model.number="item._layer_filter" @change="onOrderItemLayerChange(index)">
+                            <option :value="null">层数</option><option :value="3">3层</option><option :value="5">5层</option>
+                          </select>
+                          <select class="select" style="flex:1" :disabled="!orderForm.customer_id" v-model="item._flute_filter" @change="onOrderItemFluteChange(index)">
+                            <option :value="null">楞型</option>
+                            <option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option>
+                          </select>
+                        </div>
+                        <search-select :disabled="!orderForm.customer_id" v-model="item.material_id"
+                          :options="orderItemMaterialSelectOptions(item)" label-key="_label" value-key="id"
+                          :allow-empty="true" placeholder="搜索材质" @change="selectOrderMaterial(index)">
+                        </search-select>
+                      </div>
+                    </td>
+                    <!-- 规格 -->
+                    <td><input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
+                    <!-- 数量 -->
+                    <td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td>
+                    <!-- 单价 -->
+                    <td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
+                    <!-- 图纸 -->
+                    <td style="font-size:12px;padding:4px 6px">
+                      <div v-if="item.temp_drawing_file || item.drawing_file" style="margin-bottom:4px">
+                        <a v-if="isImageDrawing(item.temp_drawing_file || item.drawing_file)"
+                           href="#" class="btn small" style="display:block;margin-bottom:2px"
+                           @click.prevent="previewDrawingFile(item.temp_drawing_file || item.drawing_file)">查看图纸</a>
+                        <a v-else :href="item.temp_drawing_file || item.drawing_file" target="_blank" class="btn small" style="display:block;margin-bottom:2px">查看图纸(PDF)</a>
+                        <div style="font-size:11px;color:#6b7280">
+                          <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
+                            <input type="radio" :name="'drawing_opt_'+index" value="order_only"
+                              v-model="item.drawing_save_option" style="margin:0" /> 仅本订单
+                          </label>
+                          <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
+                            <input type="radio" :name="'drawing_opt_'+index" value="save_to_product"
+                              v-model="item.drawing_save_option" style="margin:0" /> 保存到常用箱
+                          </label>
+                          <label v-if="item._from_product" style="display:flex;align-items:center;gap:3px;cursor:pointer">
+                            <input type="radio" :name="'drawing_opt_'+index" value="overwrite_product"
+                              v-model="item.drawing_save_option" style="margin:0" /> 覆盖常用箱
+                          </label>
+                        </div>
+                      </div>
+                      <div v-else-if="item._product_drawings && item._product_drawings.length" style="margin-bottom:4px">
+                        <a v-if="isImageDrawing(item._product_drawings[0].image_path)"
+                           href="#" class="btn small" style="display:block"
+                           @click.prevent="previewDrawingFile(item._product_drawings[0].image_path)">查看常用箱图纸</a>
+                        <a v-else :href="item._product_drawings[0].image_path" target="_blank" class="btn small" style="display:block">常用箱图纸(PDF)</a>
+                      </div>
+                      <label class="btn small" style="cursor:pointer;display:inline-block">
+                        上传图纸
+                        <input type="file" accept="image/*,.pdf" style="display:none"
+                          @change="uploadOrderDraftDrawing(index,$event)" />
+                      </label>
+                    </td>
+                    <!-- 操作 -->
+                    <td><button class="btn small danger" @click="removeOrderItem(index)">删除</button></td>
+                  </tr>
+                  <!-- 副行：成本/毛利 + 生产说明 -->
+                  <tr class="order-item-sub-row">
+                    <td colspan="2" style="padding:2px 6px 6px;font-size:12px" v-if="!isWorkshop">
+                      <span class="sensitive-price" style="margin-right:12px">预估成本：{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</span>
+                      <span class="sensitive-price">预估毛利：{{ estimatedGrossProfit(item) }}</span>
+                    </td>
+                    <td colspan="2" v-else></td>
+                    <td colspan="5" style="padding:2px 6px 6px">
+                      <input class="input" style="width:100%" :disabled="!orderForm.customer_id"
+                        v-model.trim="item.production_notes" placeholder="生产说明（印刷/打勾/摆放/颜色等）" />
+                    </td>
+                  </tr>
+                </template>
               </tbody></table>
+              </div>
               <button class="btn" style="margin-top:8px" @click="addOrderItem">增加明细</button>
               <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><input class="input" v-model.trim="orderForm.remark" /></div>
             </div>
@@ -1657,7 +1701,7 @@
                 <td>{{ item.snapshot_product_code }}</td>
                 <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.snapshot_product_name }}</td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
-                <td style="white-space:nowrap;font-size:12px">{{ orderItemMaterialText(item) }}</td>
+                <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}</td>
                 <td>{{ item.quantity }}</td>
                 <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td>
@@ -1986,6 +2030,7 @@
             pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
             // v0.19.2-B 供应商调价 + 价格历史
+            showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
             priceAdjustForm: { supplier_name: "苏州嘉林亿", adjust_percent: "", effective_date: "", remark: "" },
             priceAdjustPreview: null,
@@ -2447,7 +2492,11 @@
           isPdfDrawing(drawing) {
             return String(drawing?.image_path || "").toLowerCase().endsWith(".pdf");
           },
-          spec(row) { return [row.length_mm,row.width_mm,row.height_mm].every(v => v !== null && v !== undefined) ? `${row.length_mm}×${row.width_mm}×${row.height_mm}mm` : "-"; },
+          spec(row) {
+            if (![row.length_mm,row.width_mm,row.height_mm].every(v => v !== null && v !== undefined)) return "-";
+            const fmt = v => { const n = parseFloat(v); return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/,""); };
+            return `${fmt(row.length_mm)}×${fmt(row.width_mm)}×${fmt(row.height_mm)}mm`;
+          },
           statusTone(value) {
             if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","已入库","已结算"].includes(value)) return "green";
             if (["cancelled","dead","inactive"].includes(value)) return "red";
@@ -3528,7 +3577,9 @@
               _material_supplier_name: "",  // 供应商名（仅显示用）
               _material_weight: "",         // 克重结构（仅显示用）
               _product_drawings: [],        // 常用箱图纸列表
-              drawing_file: null,           // 订单级图纸
+              drawing_file: null,           // 订单级图纸（保存后）
+              temp_drawing_file: null,      // 新建订单临时图纸路径
+              drawing_save_option: "order_only", // "order_only"|"save_to_product"|"overwrite_product"
             });
             if (this.orderForm.customer_id) this.searchOrderProducts(index, "");
             if (this.modal?.type === "order") this.refreshOrderNumberPreview();
@@ -3569,12 +3620,70 @@
             item._material_supplier_name = data.material_supplier_name || "";
             item._material_weight = data.material_weight || "";
             item._product_drawings = data.drawings || [];
+            // 保存原始常用箱字段，用于提交时比对是否需要同步
+            item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type };
             await this.recalculateOrderCost(index);
           },
           async selectOrderMaterial(index) {
             const item=this.orderForm.items[index];
             item.material=this.materials.find(row => row.id === item.material_id)?.code || "";
             await this.recalculateOrderCost(index);
+          },
+          async offerSyncCommonBox(items) {
+            // 对每个来自常用箱且有手动修改的明细，询问是否同步回常用箱
+            for (const item of items) {
+              if (!item._from_product || !item.product_id || !item._original_product) continue;
+              const orig = item._original_product;
+              const changed = {};
+              if (item.specification && item.specification !== orig.specification) changed["specification"] = item.specification;
+              if (item.unit_price && String(item.unit_price) !== String(orig.sale_unit_price)) changed["sale_unit_price"] = item.unit_price;
+              if (item.layer_count && item.layer_count !== orig.layer_count) changed["layer_count"] = item.layer_count;
+              if (item.flute_type && item.flute_type !== orig.flute_type) changed["flute_type"] = item.flute_type;
+              if (Object.keys(changed).length === 0) continue;
+              const fieldNames = Object.keys(changed).map(k => ({
+                specification:"规格", sale_unit_price:"客户单价", layer_count:"层数", flute_type:"楞型"
+              }[k] || k)).join("、");
+              const ok = confirm(`订单明细「${item.product_name || item.product_code}」以下字段与常用箱不同：${fieldNames}\n\n是否同步更新到常用箱？`);
+              if (ok) {
+                try {
+                  await axios.post(`/api/master/products/${item.product_id}/sync-fields`, { fields: changed });
+                  this.showToast("已同步到常用箱");
+                } catch (err) {
+                  this.showToast("同步常用箱失败：" + this.errorMessage(err), true);
+                }
+              }
+            }
+          },
+          async uploadOrderDraftDrawing(index, event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append("file", file);
+            try {
+              const resp = await axios.post("/api/orders/draft-drawing", formData, {
+                headers: { "Content-Type": "multipart/form-data" }
+              });
+              const item = this.orderForm.items[index];
+              item.temp_drawing_file = resp.data.temp_path;
+              if (!item.drawing_save_option) item.drawing_save_option = "order_only";
+              this.showToast("图纸上传成功");
+            } catch (err) {
+              this.showToast(this.errorMessage(err), true);
+            }
+            event.target.value = "";
+          },
+          isImageDrawing(path) {
+            if (!path) return false;
+            return /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(path);
+          },
+          previewDrawingFile(path) {
+            if (!path) return;
+            if (this.isImageDrawing(path)) {
+              this.drawingPreviewUrl = path;
+              this.showDrawingPreview = true;
+            } else {
+              window.open(path, "_blank");
+            }
           },
           orderItemFluteOptions(item) {
             const lc = item._layer_filter;
@@ -3803,9 +3912,13 @@
                     layer_count: item.layer_count || item._layer_filter || null,
                     flute_type: item.flute_type || item._flute_filter || null,
                     is_new_product: item.is_new_product || false,
+                    temp_drawing_file: item.temp_drawing_file || null,
+                    drawing_save_option: item.temp_drawing_file ? (item.drawing_save_option || "order_only") : null,
                   })),
                 };
                 await axios.post("/api/orders", orderPayload);
+                // 保存后：检测是否有来自常用箱但被手动修改的明细，提示是否同步
+                await this.offerSyncCommonBox(this.orderForm.items);
                 await Promise.all([this.loadOrders(), this.loadKpi()]);
               }
               if (this.modal.type === "orderEdit") {

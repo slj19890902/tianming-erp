@@ -300,6 +300,14 @@ def _order_response(
                 "snapshot_supplier_name": item.snapshot_supplier_name,
                 "snapshot_weight": item.snapshot_weight,
                 "drawing_file": item.drawing_file,
+                # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
+                "product_drawing_file": (
+                    item.product.drawings[0].image_path
+                    if item.product_id
+                    and item.product is not None
+                    and item.product.drawings
+                    else None
+                ),
                 "inventory_deducted_qty": item.inventory_deducted_qty,
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": item.requisition_status,
@@ -443,7 +451,11 @@ def list_orders(
     if page_ids:
         loaded = db.scalars(
             select(Order)
-            .options(selectinload(Order.items))
+            .options(
+                selectinload(Order.items).selectinload(OrderItem.product).selectinload(
+                    Product.drawings  # type: ignore[attr-defined]
+                )
+            )
             .where(Order.id.in_(page_ids))
         ).all()
         order_map = {order.id: order for order in loaded}
@@ -1006,7 +1018,11 @@ def get_order_detail(
     display_registry = build_display_registry(db)
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items))
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(
+                Product.drawings  # type: ignore[attr-defined]
+            )
+        )
         .where(Order.id == order_id)
     )
     if order is None:

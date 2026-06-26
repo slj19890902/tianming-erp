@@ -993,14 +993,21 @@ def _apply_standard_product(item: dict, product: Product) -> None:
         item["flute_type"] = material.flute_type or item.get("flute_type")
         item["layer_count"] = material.layer_count or item.get("layer_count")
         item["material_supplier_name"] = material.supplier_name
+        # 材质基础代码（去掉 -B/E 报价后缀），供前端显示 A6D/A 格式
+        code_raw = material.code or ""
+        item["material_base_code"] = code_raw.split("-")[0] if code_raw else ""
         item["material_weight_structure"] = "/".join(
             str(int(w)) if w == int(w) else str(w)
             for w in _parse_layer_weights(material.basis_weight_description)
         )
-    if product.production_process:
-        item["production_process"] = product.production_process
+    # 生产说明：常用箱 production_process 写入 production_notes（若 PDF 未提供）
+    std_production = (product.production_process or "").strip()
+    if std_production and not item.get("production_notes"):
+        item["production_notes"] = std_production
     if product.print_content:
         item["print_content"] = product.print_content
+    # 默认单价（供前端比较，不覆盖 PDF 单价）
+    item["product_default_price"] = str(product.sale_unit_price) if product.sale_unit_price is not None else None
 
     # 对比信息（草稿页展示「已匹配常用箱 / 使用常用箱资料」）
     item["standard_match"] = {
@@ -1019,10 +1026,14 @@ def _apply_standard_product(item: dict, product: Product) -> None:
 
 
 def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> dict:
+    from sqlalchemy.orm import selectinload as _sload
     products = (
         db.scalars(
             select(Product)
-            .options(joinedload(Product.material))
+            .options(
+                joinedload(Product.material),
+                _sload(Product.drawings),  # type: ignore[attr-defined]
+            )
             .where(
                 Product.customer_id == customer_id,
                 Product.is_active.is_(True),
@@ -1064,8 +1075,94 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         # 客户单价仍以 PDF 为准；仅当 PDF 未识别到单价时回退常用箱默认价
         if selected and not item.get("unit_price") and selected.sale_unit_price is not None:
             item["unit_price"] = str(selected.sale_unit_price)
+        # 默认单价对比（草稿页显示提醒，不自动修改常用箱）
+        if selected and selected.sale_unit_price is not None and item.get("unit_price"):
+            try:
+                pdf_price = float(item["unit_price"])
+                product_default = float(selected.sale_unit_price)
+                if abs(pdf_price - product_default) > 0.0001:
+                    item["price_conflict"] = {
+                        "pdf_price": str(item["unit_price"]),
+                        "product_default_price": str(selected.sale_unit_price),
+                        "product_id": selected.id,
+                    }
+            except (ValueError, TypeError):
+                pass
+        # 常用箱图纸 URL（第一张，供草稿页显示）
+        if selected is not None and selected.drawings:
+            item["product_drawing_file"] = selected.drawings[0].image_path
         matched_items.append(item)
-    return {**draft, "matched_customer_id": customer_id, "items": matched_items}
+    # 合并相同存货编码（同单价/同交期/同常用箱）
+    merged_items = _merge_same_product_code(matched_items)
+    return {**draft, "matched_customer_id": customer_id, "items": merged_items}
+
+
+def _merge_same_product_code(items: list[dict]) -> list[dict]:
+    """同一草稿内，满足合并条件的相同存货编码行自动合并数量。"""
+    from decimal import Decimal as _D
+
+    def _merge_key(item: dict):
+        return (
+            _normalized_text(item.get("raw_product_code") or ""),
+            str(item.get("matched_product_id") or ""),
+            str(item.get("unit_price") or ""),
+            str(item.get("delivery_date") or ""),
+        )
+
+    groups: dict[tuple, list[dict]] = {}
+    order_keys: list[tuple] = []
+    for item in items:
+        k = _merge_key(item)
+        code = _normalized_text(item.get("raw_product_code") or "")
+        if not code:
+            # 没有存货编码的行不合并
+            groups.setdefault(id(item), []).append(item)  # type: ignore[arg-type]
+            order_keys.append(id(item))  # type: ignore[arg-type]
+        else:
+            if k not in groups:
+                groups[k] = []
+                order_keys.append(k)
+            groups[k].append(item)
+
+    result: list[dict] = []
+    for k in order_keys:
+        group = groups[k]
+        if len(group) == 1:
+            result.append(group[0])
+            continue
+        # 检查是否可以合并
+        can_merge = True
+        reasons: list[str] = []
+        prices = {str(i.get("unit_price") or "") for i in group}
+        dates = {str(i.get("delivery_date") or "") for i in group}
+        products = {str(i.get("matched_product_id") or "") for i in group}
+        if len(prices) > 1:
+            can_merge = False; reasons.append("单价不同")
+        if len(dates) > 1:
+            can_merge = False; reasons.append("交期不同")
+        if len(products) > 1:
+            can_merge = False; reasons.append("匹配常用箱不同")
+        if not can_merge:
+            for item in group:
+                item["merge_status"] = "conflict"
+                item["merge_conflict_reasons"] = reasons
+            result.extend(group)
+            continue
+        # 合并
+        base = dict(group[0])
+        total_qty = sum(int(i.get("quantity") or 0) for i in group)
+        base["quantity"] = total_qty
+        base["merge_status"] = "merged"
+        base["merged_sources"] = [
+            {
+                "line_no": i.get("line_no"),
+                "page": i.get("page"),
+                "quantity": i.get("quantity"),
+            }
+            for i in group
+        ]
+        result.append(base)
+    return result
 
 
 def _lines_signature(items: list[dict]) -> str:

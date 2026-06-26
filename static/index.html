@@ -311,6 +311,7 @@
       .status.green { background: var(--green-bg); color: var(--green); }
       .status.orange { background: var(--orange-bg); color: var(--orange); }
       .status.red { background: var(--red-bg); color: var(--red); }
+      .row-voided { opacity: 0.5; text-decoration: line-through; }
       .status.blue { background: var(--blue-soft); color: var(--primary-dark); }
 
       /* Dashboard cards */
@@ -1031,9 +1032,33 @@
 
             <template v-else-if="activePage === 'requisition'">
               <page-head title="智能报料工作台" desc="历史智索、库存抵扣、合并报料；供应商到货后直接在 WMS 确认入库。"></page-head>
-              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openRequisition">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
+              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button :class="['btn',{primary:requisitionTab==='supplierOrders'}]" @click="requisitionTab='supplierOrders'; loadSupplierOrders()">供应商报料单 {{ supplierOrders.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openRequisition">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
               <data-panel v-if="requisitionTab==='pending'" :empty="!requisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>报料尺寸</th><th>压线</th><th>材质</th><th>订单数</th><th>交期</th></tr></thead><tbody><tr v-for="row in requisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}</td><td style="font-size:12px">{{ formatCrease(row) }}</td><td>{{ row.material }}</td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td></tr></tbody></table></data-panel>
-              <data-panel v-else :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>特殊工艺</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
+              <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>特殊工艺</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
+              <!-- 供应商报料单列表 -->
+              <data-panel v-else-if="requisitionTab==='supplierOrders'" :empty="!supplierOrders.length">
+                <table>
+                  <thead><tr><th>报料单号</th><th>供应商</th><th>规格(宽×长)</th><th>压线</th><th>楞型</th><th>总数量</th><th>库存抵扣</th><th>实际报料数</th><th>状态</th><th>日期</th><th>操作</th></tr></thead>
+                  <tbody>
+                    <tr v-for="so in supplierOrders" :key="so.id" :class="{'row-voided': so.status==='voided'}">
+                      <td><strong>{{ so.order_number }}</strong></td>
+                      <td>{{ so.supplier_name || '-' }}</td>
+                      <td>{{ so.report_width_mm && so.report_length_mm ? so.report_width_mm + '×' + so.report_length_mm + ' mm' : '-' }}</td>
+                      <td style="font-size:12px">{{ so.crease_display }}</td>
+                      <td>{{ so.layer_count || '' }}{{ so.flute_type || '' }}</td>
+                      <td>{{ so.total_quantity }}</td>
+                      <td>{{ so.stock_deduction_qty }}</td>
+                      <td><strong>{{ so.requisition_qty }}</strong></td>
+                      <td><span :class="['status', so.status==='voided'?'red':'green']">{{ so.status==='voided'?'已作废':'有效' }}</span></td>
+                      <td style="font-size:12px">{{ so.created_at ? so.created_at.slice(0,10) : '-' }}</td>
+                      <td><div class="toolbar-group">
+                        <button class="btn small" @click="openSupplierOrderPrint(so)">打印</button>
+                        <button v-if="so.status!=='voided' && canRequisition" class="btn small danger" @click="voidSupplierOrder(so)">作废</button>
+                      </div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </data-panel>
             </template>
 
             <template v-else-if="activePage === 'incoming'">
@@ -1989,12 +2014,21 @@
             </div>
             <div v-else-if="modal.type === 'mergeSuggestions'">
               <div v-if="!mergeSuggestions.length" class="muted">当前没有可合并的报料。</div>
-              <div v-for="(sg, sgIndex) in mergeSuggestions" :key="sg.key" class="order-group-detail-card" style="margin-bottom:12px">
-                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-                  <strong>{{ sg.report_length_mm }}×{{ sg.report_width_mm }} mm</strong>
-                  <span class="status blue">压线：{{ sg.crease_display }}</span>
-                  <span class="muted">{{ sg.supplier_name || '-' }} / {{ sg.flute_type || '-' }}</span>
-                  <span class="status green">合并数量：{{ sg.total_quantity }}</span>
+              <div v-for="(sg, sgIndex) in mergeSuggestions" :key="sg.key" class="order-group-detail-card" style="margin-bottom:16px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap">
+                  <!-- 报料尺寸：宽×长（供应商格式） -->
+                  <strong>{{ sg.report_width_mm }}×{{ sg.report_length_mm }} mm</strong>
+                  <span v-if="sg.crease_type==='压线'" class="status blue">压线：{{ sg.crease_left_mm }}+{{ sg.crease_middle_mm }}+{{ sg.crease_right_mm }}</span>
+                  <span v-else-if="sg.crease_type" class="status orange">{{ sg.crease_type }}</span>
+                  <span class="muted">{{ sg.supplier_name || '未设供应商' }} / {{ sg.layer_count || '' }}{{ sg.flute_type || '-' }}</span>
+                  <span class="status green">{{ sg.member_count }}单合计：{{ sg.total_quantity }}</span>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <label style="font-size:12px;white-space:nowrap">库存抵扣：</label>
+                    <input type="number" class="input" style="width:70px;padding:2px 6px" min="0" :max="sg.total_quantity"
+                           v-model.number="mergeSuggestionsDeduction[sgIndex]" @input="updateSgReqQty(sg, sgIndex)" />
+                    <span style="font-size:12px">实际报料：<strong>{{ sg.total_quantity - (mergeSuggestionsDeduction[sgIndex]||0) }}</strong></span>
+                  </div>
+                  <button class="btn small primary" :disabled="loading" @click="generateSupplierOrder(sg, sgIndex)">生成供应商报料单</button>
                   <button class="btn small" @click="mergeSuggestionsExpanded[sgIndex] = !mergeSuggestionsExpanded[sgIndex]">
                     {{ mergeSuggestionsExpanded[sgIndex] ? '收起' : '展开明细' }}
                   </button>
@@ -2014,6 +2048,63 @@
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+            <!-- 供应商报料单打印预览 -->
+            <div v-else-if="modal.type === 'supplierOrderPrint' && modal.data" style="max-width:700px;margin:0 auto">
+              <div id="supplier-order-print-area" style="font-family:'SimSun',serif;font-size:14px;padding:20px">
+                <div style="text-align:center;margin-bottom:12px">
+                  <h2 style="margin:0 0 4px 0;font-size:20px">天明包装 供应商报料单</h2>
+                  <div style="font-size:12px;color:#666">单号：{{ modal.data.order_number }} &nbsp;|&nbsp; 日期：{{ modal.data.created_at ? modal.data.created_at.slice(0,10) : today() }}</div>
+                </div>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+                  <tr>
+                    <td style="width:50%;padding:4px 8px;border:1px solid #999"><strong>供应商：</strong>{{ modal.data.supplier_name || '-' }}</td>
+                    <td style="width:50%;padding:4px 8px;border:1px solid #999"><strong>楞型：</strong>{{ modal.data.layer_count || '' }}{{ modal.data.flute_type || '-' }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:4px 8px;border:1px solid #999"><strong>规格（宽×长）：</strong>{{ modal.data.report_width_mm }}×{{ modal.data.report_length_mm }} mm</td>
+                    <td style="padding:4px 8px;border:1px solid #999"><strong>压线：</strong>
+                      <span v-if="modal.data.crease_type==='压线'">{{ modal.data.crease_left_mm }}+{{ modal.data.crease_middle_mm }}+{{ modal.data.crease_right_mm }}</span>
+                      <span v-else>{{ modal.data.crease_type || '-' }}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:4px 8px;border:1px solid #999"><strong>合计数量：</strong>{{ modal.data.total_quantity }}</td>
+                    <td style="padding:4px 8px;border:1px solid #999"><strong>实际报料：</strong><strong style="font-size:16px">{{ modal.data.requisition_qty }}</strong></td>
+                  </tr>
+                </table>
+                <table style="width:100%;border-collapse:collapse;font-size:12px">
+                  <thead>
+                    <tr style="background:#f0f0f0">
+                      <th style="border:1px solid #999;padding:4px 6px">订单号</th>
+                      <th style="border:1px solid #999;padding:4px 6px">客户</th>
+                      <th style="border:1px solid #999;padding:4px 6px">存货编码</th>
+                      <th style="border:1px solid #999;padding:4px 6px">品名</th>
+                      <th style="border:1px solid #999;padding:4px 6px">数量</th>
+                      <th style="border:1px solid #999;padding:4px 6px">库存抵扣</th>
+                      <th style="border:1px solid #999;padding:4px 6px">报料数</th>
+                      <th style="border:1px solid #999;padding:4px 6px">交期</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in modal.data.items" :key="item.id">
+                      <td style="border:1px solid #999;padding:4px 6px">{{ item.order_number }}</td>
+                      <td style="border:1px solid #999;padding:4px 6px">{{ item.customer_name }}</td>
+                      <td style="border:1px solid #999;padding:4px 6px">{{ item.product_code }}</td>
+                      <td style="border:1px solid #999;padding:4px 6px">{{ item.product_name }}</td>
+                      <td style="border:1px solid #999;padding:4px 6px;text-align:center">{{ item.quantity }}</td>
+                      <td style="border:1px solid #999;padding:4px 6px;text-align:center">{{ item.stock_deduction_qty }}</td>
+                      <td style="border:1px solid #999;padding:4px 6px;text-align:center"><strong>{{ item.requisition_qty }}</strong></td>
+                      <td style="border:1px solid #999;padding:4px 6px">{{ item.delivery_date || '-' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-if="modal.data.remark" style="margin-top:8px;font-size:12px;color:#555">备注：{{ modal.data.remark }}</div>
+                <div style="margin-top:20px;text-align:right;font-size:12px;color:#888">天明包装</div>
+              </div>
+              <div style="text-align:center;margin-top:12px">
+                <button class="btn primary" @click="printSupplierOrderArea()">打印</button>
               </div>
             </div>
             <div v-else-if="modal.type === 'mobileEntry'" style="text-align:center">
@@ -2355,7 +2446,8 @@
             pdfUploadFile: null, pdfUploadBatchId: null, pdfUploadStore: false, pdfUploadNotes: '',
             pdfOcrStatus: null,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
-            mergeSuggestions: [], mergeSuggestionsExpanded: {},
+            mergeSuggestions: [], mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {},
+            supplierOrders: [],
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
@@ -2594,7 +2686,7 @@
               }
               const group = groups.get(normalizedKey);
               group.orders.push(row);
-              group.child_count += 1;
+              group.child_count += row.items.length || 1;
               group.total_quantity += this.sum(row.items, "quantity");
               group.total_delivered_quantity += this.sum(row.items, "delivered_quantity");
               group.total_amount += Number(row.total_amount || 0);
@@ -3584,7 +3676,102 @@
           toggleAllRequisition(checked) { this.requisitionPending.forEach(row=>this.requisitionSelected[row.item_id]=checked); },
           // ===== 报料合并建议 =====
           openMergeSuggestions() {
+            this.mergeSuggestionsDeduction = {};
             this.modal = { type: 'mergeSuggestions', title: `报料合并建议 (${this.mergeSuggestions.length} 组)` };
+          },
+          updateSgReqQty(sg, sgIndex) {
+            // 更新单组库存抵扣时的即时计算（显示在模板中）
+            const deduct = this.mergeSuggestionsDeduction[sgIndex] || 0;
+            sg._deduction = deduct;
+          },
+          async generateSupplierOrder(sg, sgIndex) {
+            if (this.loading) return;
+            const deduct = this.mergeSuggestionsDeduction[sgIndex] || 0;
+            // 均摊库存抵扣到各明细（按数量比例，或全扣最后一条）
+            const members = sg.members.map((m, i) => ({
+              item_id: m.item_id,
+              order_number: m.order_number,
+              product_code: m.product_code,
+              product_name: m.product_name,
+              quantity: m.quantity,
+              customer_name: m.customer_name,
+              delivery_date: m.delivery_date,
+              stock_deduction_qty: 0,
+              requisition_qty: m.quantity,
+            }));
+            // 简单策略：整体库存抵扣写在header，各条 stock_deduction=0
+            const payload = {
+              supplier_name: sg.supplier_name || null,
+              material_id: sg.material_id || null,
+              layer_count: sg.layer_count || null,
+              flute_type: sg.flute_type || null,
+              report_length_mm: sg.report_length_mm || null,
+              report_width_mm: sg.report_width_mm || null,
+              crease_type: sg.crease_type || null,
+              crease_left_mm: sg.crease_left_mm || null,
+              crease_middle_mm: sg.crease_middle_mm || null,
+              crease_right_mm: sg.crease_right_mm || null,
+              members,
+            };
+            // 调整 requisition_qty：全部合计后减去库存抵扣
+            const totalReq = Math.max(sg.total_quantity - deduct, 0);
+            // 在第一条上抵扣（简单实现）
+            let remaining = deduct;
+            for (const m of payload.members) {
+              const d = Math.min(remaining, m.quantity);
+              m.stock_deduction_qty = d;
+              m.requisition_qty = m.quantity - d;
+              remaining -= d;
+              if (remaining <= 0) break;
+            }
+            this.loading = true;
+            try {
+              const resp = await axios.post('/api/requisition/supplier-orders', payload);
+              this.showToast(`已生成供应商报料单 ${resp.data.order_number}`);
+              // 刷新合并建议和待报料列表
+              await this.loadRequisition();
+              this.modal = null;
+            } catch (e) {
+              this.showToast('生成失败：' + (e.response?.data?.detail || e.message), true);
+            } finally {
+              this.loading = false;
+            }
+          },
+          async loadSupplierOrders() {
+            try {
+              const r = await axios.get('/api/requisition/supplier-orders?page_size=100');
+              this.supplierOrders = r.data.items || [];
+            } catch(e) { this.supplierOrders = []; }
+          },
+          openSupplierOrderPrint(so) {
+            this.modal = { type: 'supplierOrderPrint', title: `供应商报料单 ${so.order_number}`, data: so };
+          },
+          printSupplierOrderArea() {
+            const area = document.getElementById('supplier-order-print-area');
+            if (!area) return;
+            const w = window.open('', '_blank');
+            w.document.write(`<html><head><title>供应商报料单</title><style>
+              body{font-family:'SimSun',serif;font-size:14px;margin:20px}
+              table{border-collapse:collapse;width:100%}
+              th,td{border:1px solid #999;padding:4px 6px}
+              th{background:#f0f0f0}
+              @media print{body{margin:0}}
+            </style></head><body>${area.innerHTML}</body></html>`);
+            w.document.close();
+            w.focus();
+            setTimeout(() => { w.print(); w.close(); }, 300);
+          },
+          async voidSupplierOrder(so) {
+            if (!confirm(`确定作废报料单 ${so.order_number}？关联的订单明细将恢复为待报料。`)) return;
+            this.loading = true;
+            try {
+              await axios.put(`/api/requisition/supplier-orders/${so.id}/void`);
+              this.showToast('已作废');
+              await this.loadSupplierOrders();
+              await this.loadRequisition();
+            } catch(e) {
+              this.showToast('作废失败：' + (e.response?.data?.detail || e.message), true);
+            } finally { this.loading = false; }
           },
           // ===== 报料/压线格式化 helper =====
           formatReportDims(item) {

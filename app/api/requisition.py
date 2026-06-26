@@ -15,6 +15,10 @@ from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
+from app.models.supplier_requisition_order import (
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.user import User
 from app.services.history_orders import (
     build_display_registry,
@@ -704,3 +708,224 @@ def print_batch(
         ],
         "total_quantity": sum(row.requisition_qty for row, _ in rows),
     }
+
+
+# ── 供应商报料单 ──────────────────────────────────────────────────────────────
+
+class SupplierOrderMemberPayload(BaseModel):
+    item_id: int | None = None
+    stock_deduction_qty: int = Field(default=0, ge=0)
+    requisition_qty: int | None = Field(default=None, ge=0)
+    order_number: str | None = None
+    product_code: str | None = None
+    product_name: str | None = None
+    quantity: int = 0
+    customer_name: str | None = None
+    delivery_date: str | None = None
+
+
+class SupplierOrderCreatePayload(BaseModel):
+    supplier_name: str | None = None
+    material_id: int | None = None
+    layer_count: int | None = None
+    flute_type: str | None = None
+    report_length_mm: int | None = None
+    report_width_mm: int | None = None
+    crease_type: str | None = None
+    crease_left_mm: int | None = None
+    crease_middle_mm: int | None = None
+    crease_right_mm: int | None = None
+    remark: str | None = None
+    members: list[SupplierOrderMemberPayload] = Field(default_factory=list)
+
+
+def _supplier_order_number(db: Session) -> str:
+    """生成供应商报料单号，格式：SRO-YYYYMMDD-NNNN"""
+    from datetime import date as _date
+    today_str = _date.today().strftime("%Y%m%d")
+    prefix = f"SRO-{today_str}-"
+    count = db.scalar(
+        select(func.count(SupplierRequisitionOrder.id)).where(
+            SupplierRequisitionOrder.order_number.like(f"{prefix}%")
+        )
+    ) or 0
+    return f"{prefix}{count + 1:04d}"
+
+
+def _supplier_order_dict(order: SupplierRequisitionOrder) -> dict:
+    crease_display = (
+        f"{order.crease_left_mm}+{order.crease_middle_mm}+{order.crease_right_mm}"
+        if order.crease_type == "压线" and order.crease_middle_mm
+        else order.crease_type or "-"
+    )
+    return {
+        "id": order.id,
+        "order_number": order.order_number,
+        "supplier_name": order.supplier_name,
+        "material_id": order.material_id,
+        "layer_count": order.layer_count,
+        "flute_type": order.flute_type,
+        "report_length_mm": order.report_length_mm,
+        "report_width_mm": order.report_width_mm,
+        "crease_type": order.crease_type,
+        "crease_left_mm": order.crease_left_mm,
+        "crease_middle_mm": order.crease_middle_mm,
+        "crease_right_mm": order.crease_right_mm,
+        "crease_display": crease_display,
+        "total_quantity": order.total_quantity,
+        "stock_deduction_qty": order.stock_deduction_qty,
+        "requisition_qty": order.requisition_qty,
+        "remark": order.remark,
+        "status": order.status,
+        "created_at": order.created_at,
+        "voided_at": order.voided_at,
+        "items": [
+            {
+                "id": item.id,
+                "order_item_id": item.order_item_id,
+                "order_number": item.order_number,
+                "product_code": item.product_code,
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "stock_deduction_qty": item.stock_deduction_qty,
+                "requisition_qty": item.requisition_qty,
+                "customer_name": item.customer_name,
+                "delivery_date": item.delivery_date,
+            }
+            for item in order.items
+        ],
+    }
+
+
+@router.post("/supplier-orders", status_code=status.HTTP_201_CREATED)
+def create_supplier_order(
+    payload: SupplierOrderCreatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """从合并建议生成供应商报料单，同步更新 order_items 的 requisition_status。"""
+    if not payload.members:
+        raise HTTPException(status_code=400, detail="至少需要一条明细")
+
+    order_number = _supplier_order_number(db)
+    total_qty = sum(m.quantity for m in payload.members)
+    total_deduct = sum(m.stock_deduction_qty for m in payload.members)
+    total_req = sum(
+        m.requisition_qty if m.requisition_qty is not None else max(m.quantity - m.stock_deduction_qty, 0)
+        for m in payload.members
+    )
+
+    order = SupplierRequisitionOrder(
+        order_number=order_number,
+        supplier_name=payload.supplier_name,
+        material_id=payload.material_id,
+        layer_count=payload.layer_count,
+        flute_type=payload.flute_type,
+        report_length_mm=payload.report_length_mm,
+        report_width_mm=payload.report_width_mm,
+        crease_type=payload.crease_type,
+        crease_left_mm=payload.crease_left_mm,
+        crease_middle_mm=payload.crease_middle_mm,
+        crease_right_mm=payload.crease_right_mm,
+        total_quantity=total_qty,
+        stock_deduction_qty=total_deduct,
+        requisition_qty=total_req,
+        remark=payload.remark,
+        status="confirmed",
+        created_by=user.id,
+    )
+    db.add(order)
+    db.flush()
+
+    for m in payload.members:
+        req_qty = m.requisition_qty if m.requisition_qty is not None else max(m.quantity - m.stock_deduction_qty, 0)
+        db.add(SupplierRequisitionOrderItem(
+            supplier_order_id=order.id,
+            order_item_id=m.item_id,
+            order_number=m.order_number,
+            product_code=m.product_code,
+            product_name=m.product_name,
+            quantity=m.quantity,
+            stock_deduction_qty=m.stock_deduction_qty,
+            requisition_qty=req_qty,
+            customer_name=m.customer_name,
+            delivery_date=date.fromisoformat(m.delivery_date) if m.delivery_date else None,
+        ))
+        # 更新 order_item 状态
+        oi = db.get(OrderItem, m.item_id) if m.item_id else None
+        if oi:
+            oi.requisition_status = "已报料"
+            oi.inventory_deducted_qty = m.stock_deduction_qty
+            oi.requisition_qty = req_qty
+
+    db.commit()
+    db.refresh(order)
+    return _supplier_order_dict(order)
+
+
+@router.get("/supplier-orders")
+def list_supplier_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status_filter: str | None = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """列出供应商报料单（最新在前）。"""
+    q = select(SupplierRequisitionOrder)
+    if status_filter:
+        q = q.where(SupplierRequisitionOrder.status == status_filter)
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    orders = db.scalars(
+        q.order_by(SupplierRequisitionOrder.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [_supplier_order_dict(o) for o in orders],
+    }
+
+
+@router.get("/supplier-orders/{order_id}")
+def get_supplier_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    return _supplier_order_dict(order)
+
+
+@router.put("/supplier-orders/{order_id}/void")
+def void_supplier_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """作废供应商报料单，将关联的 order_items 恢复为待报料。"""
+    from datetime import datetime as _datetime
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    if order.status == "voided":
+        raise HTTPException(status_code=400, detail="该报料单已作废")
+
+    order.status = "voided"
+    order.voided_at = _datetime.now()
+
+    for item in order.items:
+        if item.order_item_id:
+            oi = db.get(OrderItem, item.order_item_id)
+            if oi and oi.requisition_status == "已报料":
+                oi.requisition_status = "未报料"
+                oi.inventory_deducted_qty = 0
+                oi.requisition_qty = None
+
+    db.commit()
+    db.refresh(order)
+    return _supplier_order_dict(order)

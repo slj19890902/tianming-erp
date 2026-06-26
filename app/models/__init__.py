@@ -42,6 +42,10 @@ from app.models.pdf_training import (  # noqa: E402,F401
     PdfOrderCustomerTemplate,
     PdfOrderCorrectionLog,
 )
+from app.models.supplier_requisition_order import (  # noqa: E402,F401
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.finance import (  # noqa: E402,F401
     Invoice,
     ReturnReceipt,

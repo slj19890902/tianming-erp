@@ -33,6 +33,9 @@ from app.models.material_price_history import (  # noqa: E402,F401
     MaterialPriceAdjustmentBatch,
     MaterialPriceHistory,
 )
+from app.models.supplier_flute_price_rule import (  # noqa: E402,F401
+    SupplierFlutePriceRule,
+)
 from app.models.pdf_training import (  # noqa: E402,F401
     PdfOrderTrainingBatch,
     PdfOrderTrainingSample,

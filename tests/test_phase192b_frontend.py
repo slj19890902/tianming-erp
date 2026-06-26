@@ -66,3 +66,54 @@ class TestProductFormFieldOrder:
 
     def test_order_item_three_layer_flute_has_a(self):
         assert 'if (lc === 3) return ["B", "A", "E"];' in HTML
+
+
+class TestModalsCentered:
+    def test_compare_modal_uses_centered_backdrop(self):
+        assert 'v-if="showCompareModal" class="modal-backdrop"' in HTML
+
+    def test_price_adjust_modal_uses_centered_backdrop(self):
+        assert 'v-if="showPriceAdjustModal" class="modal-backdrop"' in HTML
+
+    def test_flute_rule_modal_uses_centered_backdrop(self):
+        assert 'v-if="showFluteRuleModal" class="modal-backdrop"' in HTML
+
+    def test_modal_backdrop_css_is_fixed_centered(self):
+        assert ".modal-backdrop" in HTML
+        assert "position:fixed" in HTML or "position: fixed" in HTML
+
+
+class TestFlutePriceRuleMaintenance:
+    def test_flute_rule_entry_button(self):
+        assert '@click="openFluteRuleModal()"' in HTML
+
+    def test_flute_rule_methods_present(self):
+        for m in ("loadFluteRules", "saveFluteRule", "disableFluteRule", "editFluteRule"):
+            assert m in HTML
+
+    def test_flute_rule_api_paths(self):
+        assert "/api/master/materials/flute-price-rules" in HTML
+        assert "/disable" in HTML
+
+    def test_flute_rule_table_columns(self):
+        # 供应商/层数/楞型/加价/生效日期/状态/操作
+        assert "加价(元/㎡)" in HTML
+
+
+class TestOrderMaterialDisplay:
+    def test_order_uses_material_code_slash_flute(self):
+        # 订单材质显示 A6D/A，经 orderItemMaterialText
+        assert "orderItemMaterialText(item)" in HTML
+        assert "材质代码/实际楞型" in HTML
+
+    def test_compare_backend_driven(self):
+        assert "/api/master/materials/compare" in HTML
+        assert "loadCompare" in HTML
+
+
+class TestBoardCostEffectivePrice:
+    def test_board_cost_sends_flute_for_delta(self):
+        assert "flute_type: f.flute_type" in HTML
+
+    def test_board_cost_text_shows_delta(self):
+        assert "楞型加价" in HTML and "productBoardCostDetail" in HTML

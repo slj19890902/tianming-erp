@@ -128,10 +128,12 @@ def test_requisition_submitted_list_offers_incoming_entry_and_delivery_page_expl
 
 
 def test_order_pages_use_display_material_instead_of_raw_snapshot_material() -> None:
+    # v0.19.2-B：订单材质改为「材质代码/实际楞型」(A6D/A)，统一经 orderItemMaterialText，
+    # 仍以 display_material 为基础、绝不直接渲染原始 snapshot_material。
     orders = _orders_section()
     assert "displayMaterialText" in INDEX
     assert "display_material" in INDEX
-    assert "item.display_material" in orders
+    assert "orderItemMaterialText(item)" in orders
     assert "orderDetail.items" in INDEX
 
 

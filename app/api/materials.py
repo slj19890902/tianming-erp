@@ -19,7 +19,9 @@ from app.models.material_price_history import (
     MaterialPriceHistory,
 )
 from app.models.user import User
+from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services import material_price_adjust as price_adjust
+from app.services import material_pricing
 from app.services.flute_mapping import validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 
@@ -240,6 +242,44 @@ class BoardCostRequest(BaseModel):
     height_mm: Decimal | None = None
     unfolded_length_mm: Decimal | None = None
     unfolded_width_mm: Decimal | None = None
+    # 楞型加价：传 supplier_name + layer_count + flute_type 时，
+    # 纸板成本用「基础平方报价 + 楞型加价」作为最终材料平方价。
+    supplier_name: str | None = None
+    layer_count: int | None = None
+    flute_type: str | None = None
+
+
+class FlutePriceRulePayload(BaseModel):
+    supplier_name: str = Field(min_length=1, max_length=200)
+    layer_count: int = Field(ge=1)
+    flute_type: str = Field(min_length=1, max_length=20)
+    price_delta: Decimal = Decimal("0")
+    effective_date: date | None = None
+    remark: str | None = None
+    is_active: bool = True
+
+
+class FlutePriceRuleUpdate(BaseModel):
+    price_delta: Decimal | None = None
+    effective_date: date | None = None
+    remark: str | None = None
+    is_active: bool | None = None
+
+
+class EffectivePriceRequest(BaseModel):
+    material_id: int | None = None
+    base_price: Decimal | None = None
+    supplier_name: str | None = None
+    layer_count: int | None = None
+    flute_type: str | None = None
+
+
+class CompareRequest(BaseModel):
+    supplier_name: str | None = None
+    layer_count: int | None = None
+    flute_type: str | None = None
+    material_id: int | None = None
+    basis_weight_description: str | None = None
 
 
 @router.post("/price-adjustments/preview")
@@ -320,11 +360,25 @@ def board_cost_reference(
 
     仅支持 普通箱(normal)/A1 与 模切箱(die_cut)；其它箱型返回 supported=False。
     成本只含纸板，不含人工/损耗/印刷/模切/利润/税费。
+    若传 supplier_name+layer_count+flute_type，则用「基础价 + 楞型加价」为最终材料平方价。
     """
+    base_price = payload.board_square_price
+    delta_info = material_pricing.get_effective_material_price(
+        db,
+        base_price=base_price,
+        supplier_name=payload.supplier_name,
+        layer_count=payload.layer_count,
+        flute_type=payload.flute_type,
+    )
+    effective_price = (
+        Decimal(str(delta_info["effective_price"]))
+        if delta_info["effective_price"] is not None
+        else base_price
+    )
     try:
         result = calculate_price(
             box_category=payload.box_category,
-            board_square_price=payload.board_square_price,
+            board_square_price=effective_price,
             length_mm=payload.length_mm,
             width_mm=payload.width_mm,
             height_mm=payload.height_mm,
@@ -338,6 +392,160 @@ def board_cost_reference(
         "box_category": payload.box_category,
         "area_m2": float(result.area_m2),
         "board_cost": float(result.unit_price),
+        "base_price": delta_info["base_price"],
+        "flute_delta": delta_info["flute_delta"],
+        "effective_price": delta_info["effective_price"],
+        "rule_id": delta_info["rule_id"],
+    }
+
+
+def _rule_dict(r: SupplierFlutePriceRule) -> dict:
+    return {
+        "id": r.id,
+        "supplier_name": r.supplier_name,
+        "layer_count": r.layer_count,
+        "flute_type": r.flute_type,
+        "price_delta": float(r.price_delta) if r.price_delta is not None else 0.0,
+        "effective_date": r.effective_date.isoformat() if r.effective_date else None,
+        "remark": r.remark,
+        "is_active": bool(r.is_active),
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
+@router.get("/flute-price-rules")
+def list_flute_price_rules(
+    include_inactive: bool = Query(True),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    stmt = select(SupplierFlutePriceRule)
+    if not include_inactive:
+        stmt = stmt.where(SupplierFlutePriceRule.is_active.is_(True))
+    stmt = stmt.order_by(
+        SupplierFlutePriceRule.supplier_name,
+        SupplierFlutePriceRule.layer_count,
+        SupplierFlutePriceRule.flute_type,
+    )
+    return {"items": [_rule_dict(r) for r in db.scalars(stmt).all()]}
+
+
+@router.post("/flute-price-rules", status_code=status.HTTP_201_CREATED)
+def create_flute_price_rule(
+    payload: FlutePriceRulePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    rule = SupplierFlutePriceRule(
+        supplier_name=payload.supplier_name.strip(),
+        layer_count=payload.layer_count,
+        flute_type=payload.flute_type.strip().upper(),
+        price_delta=payload.price_delta,
+        effective_date=payload.effective_date,
+        remark=payload.remark,
+        is_active=payload.is_active,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return _rule_dict(rule)
+
+
+@router.patch("/flute-price-rules/{rule_id}")
+def update_flute_price_rule(
+    rule_id: int,
+    payload: FlutePriceRuleUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    rule = db.get(SupplierFlutePriceRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="楞型加价规则不存在")
+    if payload.price_delta is not None:
+        rule.price_delta = payload.price_delta
+    if payload.effective_date is not None:
+        rule.effective_date = payload.effective_date
+    if payload.remark is not None:
+        rule.remark = payload.remark
+    if payload.is_active is not None:
+        rule.is_active = payload.is_active
+    db.commit()
+    db.refresh(rule)
+    return _rule_dict(rule)
+
+
+@router.post("/flute-price-rules/{rule_id}/disable")
+def disable_flute_price_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    rule = db.get(SupplierFlutePriceRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="楞型加价规则不存在")
+    rule.is_active = False
+    db.commit()
+    db.refresh(rule)
+    return _rule_dict(rule)
+
+
+@router.post("/effective-price")
+def effective_material_price(
+    payload: EffectivePriceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """统一最终材料平方价：基础价 + 楞型加价。常用箱/订单/比价/成本共用。"""
+    material = None
+    if payload.material_id is not None:
+        material = db.get(Material, payload.material_id)
+        if material is None:
+            raise HTTPException(status_code=404, detail="材质不存在")
+    return material_pricing.get_effective_material_price(
+        db,
+        material=material,
+        base_price=payload.base_price,
+        supplier_name=payload.supplier_name,
+        layer_count=payload.layer_count,
+        flute_type=payload.flute_type,
+    )
+
+
+@router.post("/compare")
+def compare_materials_endpoint(
+    payload: CompareRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """同克重多供应商比价：含楞型加价后的最终可比价。
+
+    candidate 选取：同层数（必填或取自 material）。如给 material_id/克重，限定到同克重组。
+    """
+    layer_count = payload.layer_count
+    weight = payload.basis_weight_description
+    if payload.material_id is not None:
+        ref = db.get(Material, payload.material_id)
+        if ref is not None:
+            layer_count = layer_count or ref.layer_count
+            weight = weight or ref.basis_weight_description
+
+    stmt = select(Material).where(Material.is_active.is_(True))
+    if layer_count is not None:
+        stmt = stmt.where(Material.layer_count == layer_count)
+    if weight:
+        stmt = stmt.where(Material.basis_weight_description == weight)
+    candidates = list(db.scalars(stmt).all())
+    groups = material_pricing.compare_materials(
+        db,
+        candidates=candidates,
+        layer_count=layer_count,
+        flute_type=payload.flute_type,
+    )
+    return {
+        "layer_count": layer_count,
+        "flute_type": (payload.flute_type or "").strip().upper() or None,
+        "groups": groups,
     }
 
 

@@ -1008,6 +1008,14 @@ def _apply_standard_product(item: dict, product: Product) -> None:
         item["print_content"] = product.print_content
     # 默认单价（供前端比较，不覆盖 PDF 单价）
     item["product_default_price"] = str(product.sale_unit_price) if product.sale_unit_price is not None else None
+    # v0.19.2-B: 报料快照（从常用箱读取）
+    item["report_length_mm"] = product.report_length_mm
+    item["report_width_mm"] = product.report_width_mm
+    item["crease_type"] = product.crease_type
+    item["crease_left_mm"] = product.crease_left_mm
+    item["crease_middle_mm"] = product.crease_middle_mm
+    item["crease_right_mm"] = product.crease_right_mm
+    item["report_notes"] = product.report_notes
 
     # 对比信息（草稿页展示「已匹配常用箱 / 使用常用箱资料」）
     item["standard_match"] = {

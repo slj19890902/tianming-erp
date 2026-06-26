@@ -591,7 +591,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th>客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td>{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -1031,8 +1031,8 @@
 
             <template v-else-if="activePage === 'requisition'">
               <page-head title="智能报料工作台" desc="历史智索、库存抵扣、合并报料；供应商到货后直接在 WMS 确认入库。"></page-head>
-              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openRequisition">合并报料</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
-              <data-panel v-if="requisitionTab==='pending'" :empty="!requisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>材质</th><th>订单数</th><th>交期</th></tr></thead><tbody><tr v-for="row in requisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td>{{ row.material }}</td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td></tr></tbody></table></data-panel>
+              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openRequisition">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!requisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>报料尺寸</th><th>压线</th><th>材质</th><th>订单数</th><th>交期</th></tr></thead><tbody><tr v-for="row in requisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}</td><td style="font-size:12px">{{ formatCrease(row) }}</td><td>{{ row.material }}</td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td></tr></tbody></table></data-panel>
               <data-panel v-else :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>特殊工艺</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
             </template>
 
@@ -1396,8 +1396,9 @@
             </div>
             <div v-else-if="modal.type === 'product'" class="form-grid">
               <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
-              <div class="field"><label>品号</label><input class="input" v-model.trim="productForm.product_code" /></div>
-              <div class="field"><label>客户料号</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
+              <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
+              <!-- 客户料号字段保留数据库值但不显示，用隐藏 input 同步 -->
+              <input type="hidden" v-model.trim="productForm.customer_material_code" />
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
               <!-- 材质选择顺序：材质供应商 → 层数 → 楞型 → 材质代码 -->
               <div class="field"><label>材质供应商</label>
@@ -1454,6 +1455,52 @@
               <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" step="0.0001" v-model="productForm.sale_unit_price" /></div>
               <div class="field"><label>上传新版本图纸</label><input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" /><div class="muted">支持图片或客户提供的 PDF 图纸，最大 20MB。</div></div>
               <div v-if="productForm.id" class="field wide"><label>图纸版本历史</label><div v-if="!(productForm.drawings || []).length" class="muted">暂无图纸</div><div v-else class="drawing-gallery"><div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-card"><a :href="drawing.image_path" target="_blank"><div v-if="isPdfDrawing(drawing)" class="drawing-thumb" style="display:flex;align-items:center;justify-content:center;font-weight:900;color:#b91c1c;cursor:pointer">PDF 图纸<br>点击打开</div><img v-else class="drawing-thumb" :src="drawing.thumbnail_path" alt="产品图纸缩略图" /></a><div class="drawing-meta"><span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "当前生效版" : "历史版本" }}</span><div>{{ formatDateTime(drawing.uploaded_at) }}</div><button v-if="user.role==='admin'" class="btn small danger" style="margin-top:6px" @click.prevent="deleteProductDrawing(drawing)">删除</button></div></div></div></div>
+              <div class="field wide">
+                <div class="section-title" style="margin-top:8px;margin-bottom:8px">📦 报料信息</div>
+              </div>
+              <div class="field">
+                <label>报料长 (mm)</label>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" placeholder="如 1550" style="width:120px" />
+                  <span class="muted">×</span>
+                  <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" placeholder="如 600" style="width:120px" />
+                  <span class="muted">mm</span>
+                </div>
+              </div>
+              <div class="field">
+                <label>压线类型</label>
+                <select class="select" v-model="productForm.crease_type" style="width:100px">
+                  <option :value="null">-</option>
+                  <option value="毛片">毛片</option>
+                  <option value="净料">净料</option>
+                  <option value="压线">压线</option>
+                </select>
+              </div>
+              <div class="field" v-if="productForm.crease_type === '压线'">
+                <label>压线尺寸 (mm)</label>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" placeholder="第一段" style="width:80px" />
+                  <span>×</span>
+                  <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" placeholder="中间" style="width:80px" />
+                  <span>×</span>
+                  <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" placeholder="第三段" style="width:80px" />
+                </div>
+                <div class="muted" v-if="productForm.crease_left_mm && productForm.crease_middle_mm && productForm.crease_right_mm">
+                  显示：{{ productForm.crease_left_mm }}×{{ productForm.crease_middle_mm }}×{{ productForm.crease_right_mm }}
+                </div>
+              </div>
+              <div class="field" v-if="productForm.crease_type && productForm.crease_type !== '压线'">
+                <label>&nbsp;</label>
+                <div class="muted">{{ productForm.crease_type === '净料' ? '净（无毛边，可直接出货）' : '毛（含毛边，需后续加工）' }}</div>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button type="button" class="btn small" @click="calcA1ReportDims(productForm)" title="A1型纸箱推荐计算（可手工修改）">⚡ A1 推荐计算</button>
+              </div>
+              <div class="field wide">
+                <label>报料备注</label>
+                <input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发 / 需压线 / 等" />
+              </div>
               <div class="field wide"><label>备注</label><textarea class="textarea" v-model="productForm.remark"></textarea></div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
@@ -1490,8 +1537,15 @@
                   <div class="field"><label>确认</label><input type="checkbox" v-model="draft.confirmed" :disabled="!canConfirmImportDraft(draft)" /> 已确认</div>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
-                <div v-if="draft.warnings?.length" class="status orange" style="display:block;margin-bottom:10px">
-                  <div v-for="(warning, index) in draft.warnings" :key="index">{{ warning }}</div>
+                <div v-if="draft.warnings?.length" style="margin-bottom:10px">
+                  <div class="status orange" style="cursor:pointer;display:flex;align-items:center;gap:8px"
+                       @click="draft._warningsExpanded = !draft._warningsExpanded">
+                    <span>⚠ 识别提示 {{ draft.warnings.length }} 条</span>
+                    <span style="font-size:11px">{{ draft._warningsExpanded ? '▲ 收起' : '▼ 展开查看' }}</span>
+                  </div>
+                  <div v-if="draft._warningsExpanded" class="status orange" style="display:block;margin-top:4px">
+                    <div v-for="(warning, index) in draft.warnings" :key="index" style="font-size:12px">{{ warning }}</div>
+                  </div>
                 </div>
                 <!-- PDF草稿明细：简洁2行布局，常用箱名称/规格/材质为主 -->
                 <div v-if="draft.items?.length" style="overflow-x:auto">
@@ -1592,6 +1646,84 @@
                       <!-- 操作 -->
                       <td style="padding:4px 6px;vertical-align:top">
                         <button class="btn small danger" @click="draft.items.splice(draft.items.indexOf(item),1)">删除</button>
+                        <button v-if="item.matched_product_id && !item.is_new_product && !item._editing"
+                                class="btn small"
+                                style="margin-top:4px"
+                                @click="startEditImportItem(draft, item)">编辑</button>
+                      </td>
+                    </tr>
+                    <!-- 编辑行 -->
+                    <tr v-if="item._editing">
+                      <td colspan="8" style="padding:4px 6px">
+                        <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:#fafafa">
+                          <div class="form-grid">
+                            <div class="field"><label>产品名称</label><input class="input" v-model.trim="item._edit.product_name" /></div>
+                            <div class="field"><label>规格</label><input class="input" v-model.trim="item._edit.specification" /></div>
+                            <div class="field"><label>客户单价</label><input class="input" type="number" step="0.0001" v-model="item._edit.unit_price" /></div>
+                            <div class="field"><label>生产说明</label><input class="input" v-model.trim="item._edit.production_notes" /></div>
+                            <!-- 材质联动 -->
+                            <div class="field"><label>供应商</label>
+                              <select class="select" v-model="item._edit._material_supplier"
+                                @change="resetMaterialIfNotMatched(item._edit, item._edit._material_supplier, item._edit.layer_count, item._edit.flute_type)">
+                                <option value="">全部</option>
+                                <option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
+                              </select>
+                            </div>
+                            <div class="field"><label>层数</label>
+                              <select class="select" v-model.number="item._edit.layer_count">
+                                <option :value="null">-</option>
+                                <option :value="3">三层</option>
+                                <option :value="5">五层</option>
+                                <option :value="7">七层</option>
+                              </select>
+                            </div>
+                            <div class="field"><label>楞型</label>
+                              <select class="select" v-model="item._edit.flute_type">
+                                <option :value="null">-</option>
+                                <option v-for="opt in orderItemFluteOptions(item._edit.layer_count)" :key="opt" :value="opt">{{ opt }}</option>
+                              </select>
+                            </div>
+                            <div class="field"><label>材质</label>
+                              <search-select v-model="item._edit.matched_material_id"
+                                :options="materialSelectOptions(item._edit._material_supplier, item._edit.layer_count, item._edit.flute_type)"
+                                label-key="_display" value-key="id"
+                                placeholder="搜索材质"
+                                @change="onImportItemMaterialChange(item._edit)">
+                              </search-select>
+                              <div class="muted" style="font-size:11px">{{ item._edit._material_display || '' }}</div>
+                            </div>
+                            <!-- 报料尺寸 -->
+                            <div class="field"><label>报料长×宽 (mm)</label>
+                              <div style="display:flex;gap:6px;align-items:center">
+                                <input class="input" type="number" min="1" step="1" v-model.number="item._edit.report_length_mm" style="width:90px" placeholder="长" />
+                                <span>×</span>
+                                <input class="input" type="number" min="1" step="1" v-model.number="item._edit.report_width_mm" style="width:90px" placeholder="宽" />
+                              </div>
+                            </div>
+                            <div class="field"><label>压线类型</label>
+                              <select class="select" v-model="item._edit.crease_type" style="width:100px">
+                                <option :value="null">-</option>
+                                <option value="毛片">毛片</option>
+                                <option value="净料">净料</option>
+                                <option value="压线">压线</option>
+                              </select>
+                            </div>
+                            <div class="field" v-if="item._edit.crease_type === '压线'"><label>压线尺寸</label>
+                              <div style="display:flex;gap:4px;align-items:center">
+                                <input class="input" type="number" min="0" step="1" v-model.number="item._edit.crease_left_mm" style="width:70px" />
+                                <span>×</span>
+                                <input class="input" type="number" min="0" step="1" v-model.number="item._edit.crease_middle_mm" style="width:70px" />
+                                <span>×</span>
+                                <input class="input" type="number" min="0" step="1" v-model.number="item._edit.crease_right_mm" style="width:70px" />
+                              </div>
+                            </div>
+                          </div>
+                          <div class="toolbar-group" style="margin-top:8px">
+                            <button class="btn primary small" :disabled="loading" @click="saveImportItemEdit(draft, item, draftIndex)">保存并覆盖常用箱</button>
+                            <button class="btn small" @click="cancelEditImportItem(item)">取消</button>
+                            <span class="muted" style="font-size:11px">保存后将覆盖常用箱产品资料，草稿立即刷新</span>
+                          </div>
+                        </div>
                       </td>
                     </tr>
                     <!-- 副行：成本/毛利 + 生产说明 -->
@@ -1767,7 +1899,39 @@
             </div>
             <div v-else-if="modal.type === 'orderItem'">
               <div class="form-grid">
-                <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div><div class="field"><label>名称</label><input class="input" v-model.trim="orderItemForm.product_name" /></div><div class="field"><label>材质</label><input class="input" v-model.trim="orderItemForm.material" /></div><div class="field"><label>规格</label><input class="input" v-model.trim="orderItemForm.specification" /></div><div class="field wide"><label>生产说明</label><input class="input" v-model.trim="orderItemForm.production_notes" placeholder="印刷/打勾/摆放/颜色/警示等" /></div><div class="field"><label>数量</label><input class="input" type="number" min="1" v-model.number="orderItemForm.quantity" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>客户单价</label><input class="input" type="number" step="0.01" v-model="orderItemForm.unit_price" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>预估成本</label><div>{{ orderItemForm.cost_status === "calculated" ? money(orderItemForm.estimated_cost) : "待计算" }}</div></div><div v-if="!isWorkshop" class="field sensitive-price"><label>预估毛利</label><div>{{ estimatedGrossProfit(orderItemForm) }}</div></div>
+                <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderItemForm.product_code" /></div><div class="field"><label>名称</label><input class="input" v-model.trim="orderItemForm.product_name" /></div>
+                <!-- 材质联动选择 -->
+                <div class="field"><label>供应商</label>
+                  <select class="select" v-model="orderItemForm._material_supplier"
+                    @change="resetMaterialIfNotMatched(orderItemForm, orderItemForm._material_supplier, orderItemForm.layer_count, orderItemForm.flute_type)">
+                    <option value="">全部</option>
+                    <option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
+                  </select>
+                </div>
+                <div class="field"><label>层数</label>
+                  <select class="select" v-model.number="orderItemForm.layer_count">
+                    <option :value="null">-</option>
+                    <option :value="3">三层</option>
+                    <option :value="5">五层</option>
+                    <option :value="7">七层</option>
+                  </select>
+                </div>
+                <div class="field"><label>楞型</label>
+                  <select class="select" v-model="orderItemForm.flute_type">
+                    <option :value="null">-</option>
+                    <option v-for="opt in orderItemFluteOptions(orderItemForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <div class="field"><label>材质代码</label>
+                  <search-select v-model="orderItemForm.material_id"
+                    :options="materialSelectOptions(orderItemForm._material_supplier, orderItemForm.layer_count, orderItemForm.flute_type)"
+                    label-key="_display" value-key="id"
+                    placeholder="搜索材质代码"
+                    @change="onOrderItemMaterialChange(orderItemForm)">
+                  </search-select>
+                  <div class="muted" style="font-size:12px;margin-top:2px">{{ orderItemForm._material_display || '' }}</div>
+                </div>
+                <div class="field"><label>规格</label><input class="input" v-model.trim="orderItemForm.specification" /></div><div class="field wide"><label>生产说明</label><input class="input" v-model.trim="orderItemForm.production_notes" placeholder="印刷/打勾/摆放/颜色/警示等" /></div><div class="field"><label>数量</label><input class="input" type="number" min="1" v-model.number="orderItemForm.quantity" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>客户单价</label><input class="input" type="number" step="0.01" v-model="orderItemForm.unit_price" /></div><div v-if="!isWorkshop" class="field sensitive-price"><label>预估成本</label><div>{{ orderItemForm.cost_status === "calculated" ? money(orderItemForm.estimated_cost) : "待计算" }}</div></div><div v-if="!isWorkshop" class="field sensitive-price"><label>预估毛利</label><div>{{ estimatedGrossProfit(orderItemForm) }}</div></div>
               </div>
               <div v-if="canSales" class="danger-zone">
                 <div class="danger-zone-head" @click="showOrderItemDanger=!showOrderItemDanger">
@@ -1795,6 +1959,7 @@
               <table><thead><tr>
                 <th>明细编号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
                 <th>材质</th><th>生产说明</th><th>数量</th>
+                <th>报料尺寸</th><th>压线</th>
                 <th v-if="!isWorkshop" class="sensitive-price">单价</th>
                 <th v-if="!isWorkshop" class="sensitive-price">金额</th>
                 <th>图纸</th>
@@ -1807,6 +1972,8 @@
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}</td>
                 <td>{{ item.quantity }}</td>
+                <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
+                <td style="font-size:12px">{{ formatCrease(item) }}</td>
                 <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td>
                 <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td>
                 <td style="font-size:12px">
@@ -1819,6 +1986,35 @@
                   <span v-else class="muted">-</span>
                 </td>
               </tr></tbody></table>
+            </div>
+            <div v-else-if="modal.type === 'mergeSuggestions'">
+              <div v-if="!mergeSuggestions.length" class="muted">当前没有可合并的报料。</div>
+              <div v-for="(sg, sgIndex) in mergeSuggestions" :key="sg.key" class="order-group-detail-card" style="margin-bottom:12px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                  <strong>{{ sg.report_length_mm }}×{{ sg.report_width_mm }} mm</strong>
+                  <span class="status blue">压线：{{ sg.crease_display }}</span>
+                  <span class="muted">{{ sg.supplier_name || '-' }} / {{ sg.flute_type || '-' }}</span>
+                  <span class="status green">合并数量：{{ sg.total_quantity }}</span>
+                  <button class="btn small" @click="mergeSuggestionsExpanded[sgIndex] = !mergeSuggestionsExpanded[sgIndex]">
+                    {{ mergeSuggestionsExpanded[sgIndex] ? '收起' : '展开明细' }}
+                  </button>
+                </div>
+                <div v-if="mergeSuggestionsExpanded[sgIndex]">
+                  <table style="font-size:12px">
+                    <thead><tr><th>订单号</th><th>客户</th><th>存货编码</th><th>品名</th><th>数量</th><th>交期</th></tr></thead>
+                    <tbody>
+                      <tr v-for="m in sg.members" :key="m.item_id">
+                        <td>{{ m.order_number }}</td>
+                        <td>{{ m.customer_name }}</td>
+                        <td>{{ m.product_code }}</td>
+                        <td>{{ m.product_name }}</td>
+                        <td>{{ m.quantity }}</td>
+                        <td>{{ m.delivery_date || '-' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
             <div v-else-if="modal.type === 'mobileEntry'" style="text-align:center">
               <p style="margin-top:0">手机与本电脑连接同一局域网后，使用微信或相机扫描二维码。</p>
@@ -2099,7 +2295,10 @@
         suggested_price: null, die_cut_path: null, drawings: [],
         remark: "", is_active: true,
         flute_type: null, layer_count: null, surface_paper_type: null,
-        _material_supplier: "全部供应商"
+        _material_supplier: "全部供应商",
+        report_length_mm: null, report_width_mm: null,
+        crease_type: null, crease_left_mm: null, crease_middle_mm: null, crease_right_mm: null,
+        report_notes: null,
       });
       const blankMaterial = () => ({
         id:null, code:"", paper_composition:"", layer_count:5, flute_type:"AB",
@@ -2156,6 +2355,7 @@
             pdfUploadFile: null, pdfUploadBatchId: null, pdfUploadStore: false, pdfUploadNotes: '',
             pdfOcrStatus: null,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
+            mergeSuggestions: [], mergeSuggestionsExpanded: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
@@ -2966,8 +3166,15 @@
           // 构建 search-select 选项对象（含可搜索字段）
           materialSelectOptions(supplierName, layerCount, fluteType) {
             return this.filteredMaterialOptions(supplierName, layerCount, fluteType, "").map(m => ({
+              ...m,
               id: m.id,
               _label: this.formatMaterialOption(m),
+              _display: (() => {
+                const code = (m.code || '').split('-')[0];
+                const weight = m.basis_weight_description || '';
+                const supplier = m.supplier_name || '';
+                return [code, weight, supplier].filter(Boolean).join('｜');
+              })(),
               _code: m.code || "",
               _supplier: m.supplier_name || "",
               _weight: this.materialWeightStructure(m),
@@ -3195,6 +3402,10 @@
             ]);
             this.requisitionPending = pending.data.items;
             this.requisitionItems = items.data.items;
+            try {
+              const ms = await axios.get("/api/requisition/merge-suggestions");
+              this.mergeSuggestions = ms.data.suggestions || [];
+            } catch(e) { this.mergeSuggestions = []; }
           },
           async loadIncoming() {
             const [pending,received]=await Promise.all([
@@ -3371,6 +3582,165 @@
             if (values.length>=3) this.materialForm.basis_weight_description=values.map(value=>`${value}g`).join("/");
           },
           toggleAllRequisition(checked) { this.requisitionPending.forEach(row=>this.requisitionSelected[row.item_id]=checked); },
+          // ===== 报料合并建议 =====
+          openMergeSuggestions() {
+            this.modal = { type: 'mergeSuggestions', title: `报料合并建议 (${this.mergeSuggestions.length} 组)` };
+          },
+          // ===== 报料/压线格式化 helper =====
+          formatReportDims(item) {
+            const L = item.snapshot_report_length_mm || item.report_length_mm;
+            const W = item.snapshot_report_width_mm || item.report_width_mm;
+            if (L && W) return `${L}×${W}`;
+            return '-';
+          },
+          formatCrease(item) {
+            const ct = item.snapshot_crease_type || item.crease_type;
+            if (!ct) return '-';
+            if (ct === '压线') {
+              const l = item.snapshot_crease_left_mm || item.crease_left_mm;
+              const m = item.snapshot_crease_middle_mm || item.crease_middle_mm;
+              const r = item.snapshot_crease_right_mm || item.crease_right_mm;
+              if (l && m && r) return `${l}×${m}×${r}`;
+              return '压线';
+            }
+            return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
+          },
+          // ===== A1 推荐报料计算 =====
+          calcA1ReportDims(form) {
+            const L = Number(form.length_mm) || 0;
+            const W = Number(form.width_mm) || 0;
+            const H = Number(form.height_mm) || 0;
+            if (!L || !W || !H) { this.showToast("请先填写成箱长×宽×高", true); return; }
+            const reportLen = Math.round((L + W) * 2 + 30);
+            const flap = Math.round(W / 2);
+            const mid = H;
+            const reportWidth = flap + mid + flap;
+            form.report_length_mm = reportLen;
+            form.report_width_mm = reportWidth;
+            if (form.crease_type === '压线' || !form.crease_type) {
+              form.crease_type = '压线';
+              form.crease_left_mm = flap;
+              form.crease_middle_mm = mid;
+              form.crease_right_mm = flap;
+            }
+            this.showToast(`推荐报料：${reportLen}×${reportWidth} mm，压线：${flap}×${mid}×${flap}（可手动修改）`);
+          },
+          // ===== 材质显示构建 =====
+          buildMaterialDisplay(mat) {
+            if (!mat) return '';
+            const code = (mat.code || '').split('-')[0];
+            const weight = mat.basis_weight_description || '';
+            const supplier = mat.supplier_name || '';
+            return [code, weight, supplier].filter(Boolean).join('｜');
+          },
+          // ===== 订单明细材质联动 =====
+          onOrderItemMaterialChange(form) {
+            const mat = this.allMaterials.find(m => m.id === form.material_id);
+            if (mat) {
+              form._material_display = this.buildMaterialDisplay(mat);
+              if (!form.layer_count) form.layer_count = mat.layer_count;
+              if (!form.flute_type) form.flute_type = mat.flute_type;
+            }
+          },
+          // ===== PDF 草稿行内编辑 =====
+          onImportItemMaterialChange(editObj) {
+            const mat = this.allMaterials.find(m => m.id === editObj.matched_material_id);
+            if (mat) {
+              editObj._material_display = this.buildMaterialDisplay(mat);
+              if (!editObj.layer_count) editObj.layer_count = mat.layer_count;
+              if (!editObj.flute_type) editObj.flute_type = mat.flute_type;
+            }
+          },
+          startEditImportItem(draft, item) {
+            const mat = this.allMaterials.find(m => m.id === item.matched_material_id);
+            item._backup = JSON.parse(JSON.stringify({
+              product_name: item.product_name, specification: item.specification,
+              unit_price: item.unit_price, production_notes: item.production_notes,
+              matched_material_id: item.matched_material_id, layer_count: item.layer_count,
+              flute_type: item.flute_type, report_length_mm: item.report_length_mm,
+              report_width_mm: item.report_width_mm, crease_type: item.crease_type,
+              crease_left_mm: item.crease_left_mm, crease_middle_mm: item.crease_middle_mm,
+              crease_right_mm: item.crease_right_mm,
+            }));
+            item._edit = {
+              product_name: item.product_name || '',
+              specification: item.specification || '',
+              unit_price: item.unit_price,
+              production_notes: item.production_notes || '',
+              matched_material_id: item.matched_material_id || null,
+              _material_supplier: mat?.supplier_name || '',
+              _material_display: mat ? this.buildMaterialDisplay(mat) : '',
+              layer_count: item.layer_count || null,
+              flute_type: item.flute_type || null,
+              report_length_mm: item.report_length_mm || null,
+              report_width_mm: item.report_width_mm || null,
+              crease_type: item.crease_type || null,
+              crease_left_mm: item.crease_left_mm || null,
+              crease_middle_mm: item.crease_middle_mm || null,
+              crease_right_mm: item.crease_right_mm || null,
+            };
+            item._editing = true;
+          },
+          cancelEditImportItem(item) {
+            if (item._backup) {
+              Object.assign(item, item._backup);
+            }
+            item._editing = false;
+            item._edit = null;
+            item._backup = null;
+          },
+          async saveImportItemEdit(draft, item, draftIndex) {
+            if (!item.matched_product_id || item.is_new_product) return;
+            if (!confirm('确认保存并覆盖常用箱产品资料？此操作将更新常用箱数据，不可撤销。')) return;
+            this.loading = true;
+            try {
+              const edit = item._edit;
+              const prodResp = await axios.get(`/api/master/products/${item.matched_product_id}`);
+              const prod = prodResp.data;
+              const payload = {
+                customer_id: prod.customer_id,
+                product_code: prod.product_code,
+                customer_material_code: prod.customer_material_code || prod.product_code,
+                product_name: edit.product_name || prod.product_name,
+                material_id: edit.matched_material_id || prod.material_id,
+                length_mm: prod.length_mm,
+                width_mm: prod.width_mm,
+                height_mm: prod.height_mm,
+                box_category: prod.box_category || 'normal',
+                layer_count: edit.layer_count || prod.layer_count,
+                flute_type: edit.flute_type || prod.flute_type,
+                sale_unit_price: edit.unit_price || prod.sale_unit_price,
+                production_process: edit.production_notes || prod.production_process,
+                report_length_mm: edit.report_length_mm || null,
+                report_width_mm: edit.report_width_mm || null,
+                crease_type: edit.crease_type || null,
+                crease_left_mm: edit.crease_left_mm || null,
+                crease_middle_mm: edit.crease_middle_mm || null,
+                crease_right_mm: edit.crease_right_mm || null,
+                remark: prod.remark,
+              };
+              await axios.put(`/api/master/products/${item.matched_product_id}`, payload);
+              item.product_name = edit.product_name;
+              item.specification = edit.specification;
+              item.unit_price = edit.unit_price;
+              item.production_notes = edit.production_notes;
+              if (edit.matched_material_id) item.matched_material_id = edit.matched_material_id;
+              if (edit.layer_count) item.layer_count = edit.layer_count;
+              if (edit.flute_type) item.flute_type = edit.flute_type;
+              item.report_length_mm = edit.report_length_mm;
+              item.report_width_mm = edit.report_width_mm;
+              item.crease_type = edit.crease_type;
+              item.crease_left_mm = edit.crease_left_mm;
+              item.crease_middle_mm = edit.crease_middle_mm;
+              item.crease_right_mm = edit.crease_right_mm;
+              await this.rematchImportDraft(draftIndex);
+              item._editing = false;
+              item._edit = null;
+              this.showToast('常用箱已更新，草稿已刷新');
+            } catch(e) {
+              this.showToast(this.errorMessage(e), true);
+            } finally { this.loading = false; }
+          },
           toggleAllDelivery(checked) { this.deliveryOptions.forEach(row=>this.deliveryForm.selected[row.item_id]=checked); },
           toggleAllStatement(checked) { this.pendingStatements.forEach(row=>this.statementForm.selected[row.return_receipt_item_id]=checked); },
           async deleteCustomer(row) {
@@ -3900,8 +4270,11 @@
               window.open(path, "_blank");
             }
           },
-          orderItemFluteOptions(item) {
-            const lc = item._layer_filter;
+          orderItemFluteOptions(itemOrLayerCount) {
+            // 支持传入 item 对象（含 _layer_filter）或直接传数字 layerCount
+            const lc = (typeof itemOrLayerCount === 'number' || itemOrLayerCount === null)
+              ? itemOrLayerCount
+              : (itemOrLayerCount?._layer_filter ?? null);
             if (lc === 3) return ["B", "A", "E"];
             if (lc === 5) return ["AB", "BE"];
             if (lc === 7) return [];
@@ -3947,12 +4320,18 @@
           openOrderItem(order, item) {
             this.orderItemOrder = order;
             this.showOrderItemDanger = false;
+            const mat = this.allMaterials.find(m => m.id === item.material_id);
             this.orderItemForm = {
               id:item.id, order_number:this.displayOrderNumber(order), product_code:item.snapshot_product_code || "",
               product_name:item.snapshot_product_name || "", material:item.display_material || this.displayMaterialText(item.snapshot_material) || "",
               specification:item.snapshot_spec || "", production_notes:item.snapshot_production_notes || "",
               quantity:item.quantity, unit_price:this.money(item.unit_price),
-              cost_status:item.cost_status || "pending", estimated_cost:item.estimated_cost || null
+              cost_status:item.cost_status || "pending", estimated_cost:item.estimated_cost || null,
+              material_id: item.material_id || null,
+              layer_count: item.layer_count || null,
+              flute_type: item.flute_type || null,
+              _material_supplier: mat?.supplier_name || "",
+              _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
             };
             this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
           },
@@ -4091,6 +4470,7 @@
               if (this.modal.type === "product") {
                 const payload = { ...this.productForm };
                 delete payload.id;
+                if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
                 ["length_mm","width_mm","height_mm","sale_unit_price"].forEach(key => { if (payload[key] === "") payload[key] = null; });
                 let saved;
                 if (this.productForm.id) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
@@ -4151,6 +4531,10 @@
               }
               if (this.modal.type === "orderItem") {
                 const payload = {...this.orderItemForm}; delete payload.id; delete payload.order_number;
+                payload.material = this.orderItemForm._material_display || this.orderItemForm.material || null;
+                payload.material_id = this.orderItemForm.material_id || null;
+                payload.layer_count = this.orderItemForm.layer_count || null;
+                payload.flute_type = this.orderItemForm.flute_type || null;
                 await axios.put(`/api/orders/items/${this.orderItemForm.id}`, payload);
                 await this.loadOrders();
               }

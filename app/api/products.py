@@ -75,6 +75,14 @@ class ProductPayload(BaseModel):
     flute_type: str | None = None
     layer_count: int | None = None
     surface_paper_type: str | None = None
+    # v0.19.2-B: 报料尺寸 + 压线信息
+    report_length_mm: int | None = None
+    report_width_mm: int | None = None
+    crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线)$|^$")
+    crease_left_mm: int | None = None
+    crease_middle_mm: int | None = None
+    crease_right_mm: int | None = None
+    report_notes: str | None = None
 
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
@@ -629,6 +637,10 @@ def sync_product_fields(
         "layer_count", "flute_type", "material_id",
         "length_mm", "width_mm", "height_mm",
         "sale_unit_price", "cost_unit_price", "remark",
+        # v0.19.2-B: 报料尺寸 + 压线同步
+        "report_length_mm", "report_width_mm",
+        "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+        "report_notes", "production_process", "product_name", "specification",
     }
     product = _product_or_404(db, product_id)
     updated = []

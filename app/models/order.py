@@ -218,6 +218,14 @@ class OrderItem(Base):
     snapshot_supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     snapshot_weight: Mapped[str | None] = mapped_column(String(200), nullable=True)
     drawing_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # v0.19.2-B: 报料快照（常用箱数据在下单时固化，历史订单保留 NULL）
+    snapshot_report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_crease_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    snapshot_crease_left_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_crease_right_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_report_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),

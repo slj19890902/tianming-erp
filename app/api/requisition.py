@@ -236,6 +236,18 @@ def pending_requisitions(
                 "suggested_cardboard_width": (
                     item.cardboard_width or suggested_width
                 ),
+                # v0.19.2-B: 报料快照字段
+                "layer_count": item.layer_count,
+                "flute_type": item.flute_type,
+                "material_id": item.material_id,
+                "snapshot_supplier_name": item.snapshot_supplier_name,
+                "snapshot_report_length_mm": item.snapshot_report_length_mm,
+                "snapshot_report_width_mm": item.snapshot_report_width_mm,
+                "snapshot_crease_type": item.snapshot_crease_type,
+                "snapshot_crease_left_mm": item.snapshot_crease_left_mm,
+                "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
+                "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
+                "snapshot_report_notes": item.snapshot_report_notes,
             }
         )
     return {"items": items}
@@ -557,6 +569,97 @@ def search_history(
             for item, order, customer, product in rows
         ]
     }
+
+
+@router.get("/merge-suggestions")
+def merge_suggestions(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """返回待报料池中可合并的报料分组建议。
+    合并口径：supplier_name + material_id + layer_count + flute_type +
+              snapshot_report_length_mm + snapshot_report_width_mm +
+              snapshot_crease_type + crease_left/middle/right 全部一致
+    不修改订单，只返回展示数据。
+    """
+    registry = build_display_registry(db)
+    rows = db.execute(
+        select(OrderItem, Order, Customer, Product)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(
+            OrderItem.requisition_status == "未报料",
+            OrderItem.material_status == "pending",
+            Order.status != "cancelled",
+        )
+        .order_by(Order.delivery_date, OrderItem.id)
+    ).all()
+
+    def _merge_key(item: "OrderItem") -> tuple:
+        return (
+            item.snapshot_supplier_name or "",
+            item.material_id or 0,
+            item.layer_count or 0,
+            (item.flute_type or "").upper(),
+            item.snapshot_report_length_mm or 0,
+            item.snapshot_report_width_mm or 0,
+            item.snapshot_crease_type or "",
+            item.snapshot_crease_left_mm or 0,
+            item.snapshot_crease_middle_mm or 0,
+            item.snapshot_crease_right_mm or 0,
+        )
+
+    from collections import defaultdict  # noqa: PLC0415
+    groups: dict = defaultdict(list)
+    for item, order, customer, product in rows:
+        if is_history_order_number(order.order_number):
+            continue
+        key = _merge_key(item)
+        # 只有报料尺寸有值才纳入合并建议
+        if not (item.snapshot_report_length_mm and item.snapshot_report_width_mm):
+            continue
+        groups[key].append({
+            "item_id": item.id,
+            "order_number": display_order_number(order, registry),
+            "customer_name": customer.name,
+            "product_code": item.snapshot_product_code or product.product_code,
+            "product_name": item.snapshot_product_name,
+            "quantity": item.quantity,
+            "delivery_date": order.delivery_date,
+        })
+
+    suggestions = []
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        supplier_name, material_id, layer_count, flute_type, \
+            report_len, report_width, crease_type, \
+            crease_left, crease_middle, crease_right = key
+        crease_display = (
+            f"{crease_left}×{crease_middle}×{crease_right}"
+            if crease_type == "压线" and crease_middle
+            else crease_type or "-"
+        )
+        suggestions.append({
+            "key": str(key),
+            "supplier_name": supplier_name,
+            "material_id": material_id,
+            "layer_count": layer_count,
+            "flute_type": flute_type,
+            "report_length_mm": report_len,
+            "report_width_mm": report_width,
+            "crease_type": crease_type,
+            "crease_left_mm": crease_left,
+            "crease_middle_mm": crease_middle,
+            "crease_right_mm": crease_right,
+            "crease_display": crease_display,
+            "total_quantity": sum(m["quantity"] for m in members),
+            "member_count": len(members),
+            "members": members,
+        })
+
+    return {"suggestions": suggestions}
 
 
 @router.get("/batches/{batch_id}/print")

@@ -119,6 +119,14 @@ class Product(Base):
     surface_paper_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # 楞型批量识别前的原始文本快照
     legacy_flute_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v0.19.2-B: 报料尺寸 + 压线信息（单位 mm，整数）
+    report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crease_type: Mapped[str | None] = mapped_column(String(20), nullable=True)   # 毛片 / 净料 / 压线
+    crease_left_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crease_right_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime,

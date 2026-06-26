@@ -132,6 +132,18 @@ class OrderItemUpdate(BaseModel):
     material: str | None = None
     specification: str | None = None
     production_notes: str | None = None  # v0.19.2-A
+    # v0.19.2-B: 材质联动字段
+    material_id: int | None = None
+    layer_count: int | None = None
+    flute_type: str | None = None
+    # v0.19.2-B: 报料快照（从常用箱编辑/PDF 草稿编辑时写入）
+    snapshot_report_length_mm: int | None = None
+    snapshot_report_width_mm: int | None = None
+    snapshot_crease_type: str | None = None
+    snapshot_crease_left_mm: int | None = None
+    snapshot_crease_middle_mm: int | None = None
+    snapshot_crease_right_mm: int | None = None
+    snapshot_report_notes: str | None = None
 
 
 class OrderCreate(BaseModel):
@@ -300,6 +312,14 @@ def _order_response(
                 "snapshot_supplier_name": item.snapshot_supplier_name,
                 "snapshot_weight": item.snapshot_weight,
                 "drawing_file": item.drawing_file,
+                # v0.19.2-B: 报料快照
+                "snapshot_report_length_mm": item.snapshot_report_length_mm,
+                "snapshot_report_width_mm": item.snapshot_report_width_mm,
+                "snapshot_crease_type": item.snapshot_crease_type,
+                "snapshot_crease_left_mm": item.snapshot_crease_left_mm,
+                "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
+                "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
+                "snapshot_report_notes": item.snapshot_report_notes,
                 # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
                 "product_drawing_file": (
                     item.product.drawings[0].image_path
@@ -1280,6 +1300,14 @@ def create_order(
                 snapshot_weight=(
                     product.material.basis_weight_description if product.material is not None else None
                 ),
+                # v0.19.2-B: 报料快照（从常用箱复制，历史不回填）
+                snapshot_report_length_mm=product.report_length_mm,
+                snapshot_report_width_mm=product.report_width_mm,
+                snapshot_crease_type=product.crease_type,
+                snapshot_crease_left_mm=product.crease_left_mm,
+                snapshot_crease_middle_mm=product.crease_middle_mm,
+                snapshot_crease_right_mm=product.crease_right_mm,
+                snapshot_report_notes=product.report_notes,
                 requisition_status="未报料",
             )
             # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细
@@ -1403,6 +1431,32 @@ def update_order_item(
         item.snapshot_production_notes = (
             payload.production_notes.strip() or None
         )
+    # v0.19.2-B: 材质联动字段
+    if payload.material_id is not None:
+        item.material_id = payload.material_id
+        mat = db.get(Material, payload.material_id)
+        if mat is not None:
+            item.snapshot_supplier_name = mat.supplier_name
+            item.snapshot_weight = mat.basis_weight_description
+    if payload.layer_count is not None:
+        item.layer_count = payload.layer_count
+    if payload.flute_type is not None:
+        item.flute_type = (payload.flute_type or "").strip().upper() or None
+    # v0.19.2-B: 报料快照
+    if payload.snapshot_report_length_mm is not None:
+        item.snapshot_report_length_mm = payload.snapshot_report_length_mm
+    if payload.snapshot_report_width_mm is not None:
+        item.snapshot_report_width_mm = payload.snapshot_report_width_mm
+    if payload.snapshot_crease_type is not None:
+        item.snapshot_crease_type = payload.snapshot_crease_type or None
+    if payload.snapshot_crease_left_mm is not None:
+        item.snapshot_crease_left_mm = payload.snapshot_crease_left_mm
+    if payload.snapshot_crease_middle_mm is not None:
+        item.snapshot_crease_middle_mm = payload.snapshot_crease_middle_mm
+    if payload.snapshot_crease_right_mm is not None:
+        item.snapshot_crease_right_mm = payload.snapshot_crease_right_mm
+    if payload.snapshot_report_notes is not None:
+        item.snapshot_report_notes = payload.snapshot_report_notes or None
     _refresh_total(db, order)
     db.add(
         OperationLog(

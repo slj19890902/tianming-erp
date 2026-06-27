@@ -3,8 +3,8 @@ ERP 系统版本信息。
 每次发布更新此文件，不依赖数据库。
 """
 
-APP_VERSION = "v0.20.0"
-APP_VERSION_NAME = "送货状态流闭环版"
+APP_VERSION = "v0.20.1"
+APP_VERSION_NAME = "送货状态流闭环 + 工厂安全更新修正版"
 APP_BUILD_DATE = "2026-06-27"
 
 APP_CHANGELOG = [
@@ -54,4 +54,9 @@ APP_CHANGELOG = [
     "v0.20.0：确认回单加条件写锁，防止与取消发货同时成功",
     "v0.20.0：所有写操作事务化并记录 UPDATE/DELETE/CANCEL_DISPATCH 审计日志",
     "v0.20.0：前端送货列表新增编辑/删除/取消发货三个操作按钮",
+    # v0.20.1
+    "v0.20.1：工厂更新脚本固定使用 data/carton_erp.sqlite3，不再回退到 erp.db",
+    "v0.20.1：更新前先停服务，再使用 SQLite Backup API 备份到 data/backups 并校验完整性与 SHA-256",
+    "v0.20.1：仅允许 factory-current-baseline 分支以 --ff-only 更新，工作区不干净时拒绝执行",
+    "v0.20.1：修正更新后版本检查接口为 /api/system/version，并兼容 Windows PowerShell 5.1 中文脚本编码",
 ]

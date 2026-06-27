@@ -1141,6 +1141,47 @@
                 <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in systemUsers" :key="row.id"><td>{{ row.username }}</td><td>{{ row.real_name }}</td><td>{{ roleLabel(row.role) }}</td><td>{{ row.must_change_password ? "是" : "否" }}</td><td><button class="btn small danger" @click="openResetPassword(row)">重置密码</button></td></tr></tbody></table></div>
               </div>
+
+              <!-- 公司信息 -->
+              <div class="section-title" style="margin-top:16px">公司信息</div>
+              <div class="panel" style="margin-bottom:10px;padding:14px 18px">
+                <div style="display:flex;flex-wrap:wrap;gap:8px 32px;font-size:14px;align-items:baseline">
+                  <span><strong>公司名称：</strong>{{ companyConfig.company_name || '（未设置）' }}</span>
+                  <span v-if="companyConfig.short_name"><strong>简称：</strong>{{ companyConfig.short_name }}</span>
+                  <span v-if="companyConfig.tax_number"><strong>税号：</strong>{{ companyConfig.tax_number }}</span>
+                  <span v-if="companyConfig.phone"><strong>电话：</strong>{{ companyConfig.phone }}</span>
+                  <span v-if="companyConfig.address" style="flex-basis:100%"><strong>地址：</strong>{{ companyConfig.address }}</span>
+                  <span v-if="companyConfig.bank_name"><strong>开户行：</strong>{{ companyConfig.bank_name }}</span>
+                  <span v-if="companyConfig.bank_account"><strong>账号：</strong>{{ companyConfig.bank_account }}</span>
+                </div>
+                <div style="margin-top:10px">
+                  <button v-if="user.role==='admin'" class="btn small" @click="openCompanyModal">编辑公司信息</button>
+                </div>
+              </div>
+
+              <!-- 公司信息编辑弹层 -->
+              <div v-if="showCompanyModal" class="modal-mask" @click.self="showCompanyModal=false">
+                <div class="modal" style="max-width:560px">
+                  <div class="modal-head"><strong>编辑公司信息</strong><button class="btn small" @click="showCompanyModal=false">关闭</button></div>
+                  <div class="modal-body">
+                    <div class="form-row"><label>公司名称 *</label><input v-model="companyForm.company_name" class="input" placeholder="苏州天明包装有限公司" style="width:100%"/></div>
+                    <div class="form-row"><label>简称</label><input v-model="companyForm.short_name" class="input" placeholder="天明包装" style="width:100%"/></div>
+                    <div class="form-row"><label>地址</label><input v-model="companyForm.address" class="input" placeholder="苏州市相城区..." style="width:100%"/></div>
+                    <div class="form-row"><label>电话</label><input v-model="companyForm.phone" class="input" placeholder="0512-12345678" style="width:180px"/></div>
+                    <div class="form-row"><label>传真</label><input v-model="companyForm.fax" class="input" placeholder="0512-12345678" style="width:180px"/></div>
+                    <div class="form-row"><label>税号</label><input v-model="companyForm.tax_number" class="input" placeholder="91320594..." style="width:240px"/></div>
+                    <div class="form-row"><label>开户行</label><input v-model="companyForm.bank_name" class="input" placeholder="工商银行苏州支行" style="width:100%"/></div>
+                    <div class="form-row"><label>银行账号</label><input v-model="companyForm.bank_account" class="input" placeholder="620200..." style="width:240px"/></div>
+                    <div class="form-row"><label>联系人</label><input v-model="companyForm.contact_person" class="input" style="width:140px"/></div>
+                    <div class="form-row"><label>联系电话</label><input v-model="companyForm.contact_phone" class="input" style="width:180px"/></div>
+                    <div class="toolbar-group" style="justify-content:flex-end;margin-top:12px">
+                      <button class="btn" @click="showCompanyModal=false">取消</button>
+                      <button class="btn primary" @click="saveCompany" :disabled="!companyForm.company_name">保存</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div class="section-title">系统版本</div>
               <div class="panel" style="margin-bottom:10px;padding:14px 18px">
                 <div style="display:flex;flex-wrap:wrap;gap:12px 28px;align-items:baseline;font-size:14px">
@@ -2427,6 +2468,7 @@
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
             pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
+            companyConfig: {}, companyForm: {}, showCompanyModal: false,
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
@@ -3568,15 +3610,31 @@
             };
           },
           async loadSystem() {
-            const [backups, users, version] = await Promise.all([
+            const [backups, users, version, company] = await Promise.all([
               axios.get("/api/system/backups"),
               axios.get("/api/auth/users"),
               axios.get("/api/system/version"),
+              axios.get("/api/system/company"),
             ]);
             this.backups = backups.data.items;
             this.systemUsers = users.data.items;
             this.versionInfo = version.data;
+            this.companyConfig = company.data;
             await this.loadMaterialMapping(1);
+          },
+          openCompanyModal() {
+            this.companyForm = { ...this.companyConfig };
+            this.showCompanyModal = true;
+          },
+          async saveCompany() {
+            try {
+              const { data } = await axios.put("/api/system/company", this.companyForm);
+              this.companyConfig = data;
+              this.showCompanyModal = false;
+              this.$nextTick(() => this.showToast("公司信息已保存"));
+            } catch (e) {
+              this.showToast("保存失败：" + (e.response?.data?.detail || e.message), true);
+            }
           },
           forgotPassword() {
             this.loginError = "请联系管理员在“系统设置 → 用户与密码”中重置。系统不会通过匿名页面直接修改密码。";

@@ -393,7 +393,7 @@ def test_export_excel_contains_all_required_columns(phase12_app):
 
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
-    header_row = [cell.value for cell in sheet[4]]
+    header_row = [cell.value for cell in sheet[5]]
     required = {
         "客户名称", "客户单号", "存货编码", "送货日期", "送货单号",
         "产品名称", "规格型号", "材质", "实际签收数量",
@@ -412,9 +412,9 @@ def test_export_uses_actual_received_quantity_not_delivered(phase12_app):
 
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
-    headers = [cell.value for cell in sheet[4]]
+    headers = [cell.value for cell in sheet[5]]
     qty_col = headers.index("实际签收数量") + 1
-    assert sheet.cell(5, qty_col).value == 78, "应使用实际签收数量 78，不是送货数量 80"
+    assert sheet.cell(6,qty_col).value == 78, "应使用实际签收数量 78，不是送货数量 80"
 
 
 def test_export_amount_equals_receivable_amount(phase12_app):
@@ -426,9 +426,9 @@ def test_export_amount_equals_receivable_amount(phase12_app):
 
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
-    headers = [cell.value for cell in sheet[4]]
+    headers = [cell.value for cell in sheet[5]]
     amount_col = headers.index("金额") + 1
-    assert float(sheet.cell(5, amount_col).value) == 234.0
+    assert float(sheet.cell(6,amount_col).value) == 234.0
 
 
 def test_export_remarks_spec_material_correct(phase12_app):
@@ -439,11 +439,11 @@ def test_export_remarks_spec_material_correct(phase12_app):
 
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
-    headers = [cell.value for cell in sheet[4]]
+    headers = [cell.value for cell in sheet[5]]
     remarks_col = headers.index("备注") + 1
     material_col = headers.index("材质") + 1
-    assert sheet.cell(5, remarks_col).value == "压坏2个"
-    assert sheet.cell(5, material_col).value == "WCX1"
+    assert sheet.cell(6,remarks_col).value == "压坏2个"
+    assert sheet.cell(6,material_col).value == "WCX1"
 
 
 def test_export_returns_404_for_nonexistent_statement(phase12_app):
@@ -471,8 +471,12 @@ def test_export_does_not_write_to_database(phase12_app):
     assert after_count == before_count, "导出操作不应写入数据库"
 
 
+HEADER_ROW = 5  # row 1=title, 2=customer info, 3=company info, 4=blank, 5=headers
+DATA_ROW_START = 6
+
+
 def _get_header_col(sheet, name: str) -> int:
-    headers = [cell.value for cell in sheet[4]]
+    headers = [cell.value for cell in sheet[HEADER_ROW]]
     return headers.index(name) + 1
 
 
@@ -486,7 +490,7 @@ def test_export_product_code_uses_snapshot_not_current(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "存货编码")
-    assert sheet.cell(5, col).value == "21301028"
+    assert sheet.cell(6,col).value == "21301028"
 
 
 def test_export_invoice_status_partial(phase12_app):
@@ -505,7 +509,7 @@ def test_export_invoice_status_partial(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "开票状态")
-    assert sheet.cell(5, col).value == "部分开票"
+    assert sheet.cell(6,col).value == "部分开票"
 
 
 def test_export_invoice_status_full(phase12_app):
@@ -524,7 +528,7 @@ def test_export_invoice_status_full(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "开票状态")
-    assert sheet.cell(5, col).value == "已开票"
+    assert sheet.cell(6,col).value == "已开票"
 
 
 def test_export_settlement_status_not_received(phase12_app):
@@ -537,7 +541,7 @@ def test_export_settlement_status_not_received(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "结清状态")
-    assert sheet.cell(5, col).value == "未收款"
+    assert sheet.cell(6,col).value == "未收款"
 
 
 def test_export_settlement_status_partial(phase12_app):
@@ -556,7 +560,7 @@ def test_export_settlement_status_partial(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "结清状态")
-    assert sheet.cell(5, col).value == "部分收款"
+    assert sheet.cell(6,col).value == "部分收款"
 
 
 def test_export_settlement_status_full(phase12_app):
@@ -575,7 +579,7 @@ def test_export_settlement_status_full(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "结清状态")
-    assert sheet.cell(5, col).value == "已结清"
+    assert sheet.cell(6,col).value == "已结清"
 
 
 def test_export_reconciliation_status_is_always_reconciled(phase12_app):
@@ -587,7 +591,7 @@ def test_export_reconciliation_status_is_always_reconciled(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "对账状态")
-    assert sheet.cell(5, col).value == "已对账"
+    assert sheet.cell(6,col).value == "已对账"
 
 
 def test_export_original_fields_not_lost(phase12_app):
@@ -598,7 +602,7 @@ def test_export_original_fields_not_lost(phase12_app):
 
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
-    headers = {cell.value for cell in sheet[4]}
+    headers = {cell.value for cell in sheet[5]}
     for field in ("送货日期", "送货单号", "客户单号", "产品名称", "规格型号",
                   "实际签收数量", "单价", "金额", "备注"):
         assert field in headers, f"原有字段丢失：{field}"
@@ -612,7 +616,7 @@ def test_export_column_order_exact(phase12_app):
 
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
-    actual = [cell.value for cell in sheet[4]]
+    actual = [cell.value for cell in sheet[5]]
     expected = [
         "客户名称", "客户单号", "存货编码", "送货日期", "送货单号",
         "产品名称", "规格型号", "材质", "实际签收数量", "单价", "金额",
@@ -631,4 +635,4 @@ def test_export_invoice_status_zero_is_not_invoiced(phase12_app):
     workbook = load_workbook(BytesIO(response.content))
     sheet = workbook.active
     col = _get_header_col(sheet, "开票状态")
-    assert sheet.cell(5, col).value == "未开票"
+    assert sheet.cell(6,col).value == "未开票"

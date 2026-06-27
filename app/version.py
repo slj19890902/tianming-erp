@@ -3,8 +3,8 @@ ERP 系统版本信息。
 每次发布更新此文件，不依赖数据库。
 """
 
-APP_VERSION = "v0.20.2"
-APP_VERSION_NAME = "对账单导出完善版"
+APP_VERSION = "v0.20.3"
+APP_VERSION_NAME = "公司信息维护版"
 APP_BUILD_DATE = "2026-06-27"
 
 APP_CHANGELOG = [
@@ -59,6 +59,10 @@ APP_CHANGELOG = [
     "v0.20.1：更新前先停服务，再使用 SQLite Backup API 备份到 data/backups 并校验完整性与 SHA-256",
     "v0.20.1：仅允许 factory-current-baseline 分支以 --ff-only 更新，工作区不干净时拒绝执行",
     "v0.20.1：修正更新后版本检查接口为 /api/system/version，并兼容 Windows PowerShell 5.1 中文脚本编码",
+    # v0.20.3
+    "v0.20.3：新增公司信息维护（名称/地址/电话/税号/开户行/账号等），管理员可在系统设置中编辑",
+    "v0.20.3：对账单 Excel 第 3 行自动带入供方公司信息（名称/地址/税号/银行信息）",
+    "v0.20.3：送货单打印接口返回 sender 字段（公司信息），供打印模板读取",
     # v0.20.2
     "v0.20.2：对账单导出文件名改为客户简称 + 月份（如天华2026-06对账单.xlsx）",
     "v0.20.2：Excel 明细扩展为 15 列：含存货编码（历史快照）、材质、开票状态、对账状态、结清状态",

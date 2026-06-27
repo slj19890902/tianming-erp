@@ -19,6 +19,7 @@ from app.core.database import (
     restore_from_backup,
 )
 from app.models.audit import OperationLog
+from app.models.company_config import CompanyConfig
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,19 @@ class RestoreRequest(BaseModel):
 
 class DeleteRequest(BaseModel):
     filename: str
+
+
+class CompanyConfigUpdate(BaseModel):
+    company_name: str
+    short_name: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    fax: str | None = None
+    tax_number: str | None = None
+    bank_name: str | None = None
+    bank_account: str | None = None
+    contact_person: str | None = None
+    contact_phone: str | None = None
 
 
 def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
@@ -951,3 +965,81 @@ def fix_flute_consistency(request: Request, db: Session = Depends(get_db)):
         "fixed_3layer_to_null": result.fixed_3layer_to_null,
         "changes": result.changes[:100],
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# 公司信息维护（v0.20.3）
+# ─────────────────────────────────────────────────────────────
+
+def _company_row(db: Session) -> CompanyConfig:
+    """取 id=1 的记录；若不存在则创建空行（迁移前兼容）。"""
+    from sqlalchemy import select as _select
+    row = db.scalar(_select(CompanyConfig).where(CompanyConfig.id == 1))
+    if row is None:
+        row = CompanyConfig(id=1, company_name="")
+        db.add(row)
+        db.flush()
+    return row
+
+
+def _company_dict(row: CompanyConfig) -> dict:
+    return {
+        "company_name": row.company_name or "",
+        "short_name": row.short_name,
+        "address": row.address,
+        "phone": row.phone,
+        "fax": row.fax,
+        "tax_number": row.tax_number,
+        "bank_name": row.bank_name,
+        "bank_account": row.bank_account,
+        "contact_person": row.contact_person,
+        "contact_phone": row.contact_phone,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.get("/company")
+def get_company(db: Session = Depends(get_db)) -> dict:
+    """读取公司信息（无需登录，供打印/导出调用）。"""
+    return _company_dict(_company_row(db))
+
+
+@router.put("/company", dependencies=[Depends(admin_only)])
+def update_company(
+    body: CompanyConfigUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """更新公司信息（admin only）。"""
+    row = _company_row(db)
+    row.company_name = body.company_name.strip()
+    row.short_name = body.short_name.strip() if body.short_name else None
+    row.address = body.address.strip() if body.address else None
+    row.phone = body.phone.strip() if body.phone else None
+    row.fax = body.fax.strip() if body.fax else None
+    row.tax_number = body.tax_number.strip() if body.tax_number else None
+    row.bank_name = body.bank_name.strip() if body.bank_name else None
+    row.bank_account = body.bank_account.strip() if body.bank_account else None
+    row.contact_person = body.contact_person.strip() if body.contact_person else None
+    row.contact_phone = body.contact_phone.strip() if body.contact_phone else None
+    row.updated_at = datetime.now()
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="UPDATE_COMPANY_CONFIG",
+            resource="System",
+            details=json.dumps(
+                {"company_name": row.company_name},
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=user.username,
+            role=user.role,
+            entity_type="company_config",
+            description=f"管理员更新公司信息：{row.company_name}",
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+    return _company_dict(row)

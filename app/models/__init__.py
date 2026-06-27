@@ -55,3 +55,4 @@ from app.models.finance import (  # noqa: E402,F401
     StatementItem,
     StatementMonthlySequence,
 )
+from app.models.company_config import CompanyConfig  # noqa: E402,F401

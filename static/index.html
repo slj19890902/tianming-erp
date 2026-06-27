@@ -1112,7 +1112,7 @@
               <div class="toolbar"><div><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
                 <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status || 'waiting_receipt'"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canFinance && row.status==='dispatched'" class="btn small" @click="openReceipt(row)">{{ row.return_receipt_id ? "编辑回单" : "确认回单" }}</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button></td></tr></tbody></table>
+                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status || 'waiting_receipt'"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched'" class="btn small" @click="openReceipt(row)">{{ row.return_receipt_id ? "编辑回单" : "确认回单" }}</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
               </data-panel>
               <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
@@ -2123,12 +2123,12 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id"><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
+                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId"><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
               <div v-if="!deliveryOptions.length" class="status orange" style="margin-bottom:10px">只有已入库的订单明细才能生成送货单，请先去来料入库。</div>
-              <table><thead><tr><th><input type="checkbox" :checked="allDeliverySelected" @change="toggleAllDelivery($event.target.checked)" /> 全选</th><th>订单号</th><th>品号/产品</th><th>剩余可发</th><th>本次送货</th><th>提示</th></tr></thead><tbody><tr v-for="row in deliveryOptions" :key="row.item_id" :class="{'warning-row':Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity)}"><td><input type="checkbox" v-model="deliveryForm.selected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.remaining_quantity }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="deliveryForm.quantities[row.item_id]" /></td><td class="danger-text">{{ Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity) ? "超出可送数量，允许提交" : "" }}</td></tr></tbody></table>
+              <table><thead><tr><th><input type="checkbox" :checked="allDeliverySelected" @change="toggleAllDelivery($event.target.checked)" /> 全选</th><th>订单号</th><th>品号/产品</th><th>剩余可发</th><th>本次送货</th><th>备注</th><th>提示</th></tr></thead><tbody><tr v-for="row in deliveryOptions" :key="row.item_id" :class="{'warning-row':Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity)}"><td><input type="checkbox" v-model="deliveryForm.selected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.remaining_quantity }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="deliveryForm.quantities[row.item_id]" /></td><td><input class="input" v-model.trim="deliveryForm.remarks[row.item_id]" placeholder="可选" /></td><td class="danger-text">{{ Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity) ? "超出可送数量，允许提交" : "" }}</td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'statement'">
               <div class="form-grid">
@@ -2485,7 +2485,7 @@
             orderImportDrafts: [],
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
-            deliveryForm: { customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {} },
+            deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {}, remarks: {} },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -4622,8 +4622,11 @@
           },
           async openDelivery() {
             await this.loadDeliveries();
-            this.deliveryForm = { customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", selected:{}, quantities:{} };
-            this.pendingDeliveryItems.forEach(row => this.deliveryForm.quantities[row.item_id] = row.remaining_quantity);
+            this.deliveryForm = { editingId:null, customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", selected:{}, quantities:{}, remarks:{} };
+            this.pendingDeliveryItems.forEach(row => {
+              this.deliveryForm.quantities[row.item_id] = row.remaining_quantity;
+              this.deliveryForm.remarks[row.item_id] = "";
+            });
             this.modal = { type:"delivery", title:"新增送货单" };
           },
           async openStatement() {
@@ -4751,10 +4754,17 @@
               }
               if (this.modal.type === "delivery") {
                 const items = this.deliveryOptions.filter(row => this.deliveryForm.selected[row.item_id]).map(row => ({
-                  order_item_id: row.item_id, delivered_quantity: Number(this.deliveryForm.quantities[row.item_id]), remarks:null
+                  order_item_id: row.item_id,
+                  delivered_quantity: Number(this.deliveryForm.quantities[row.item_id]),
+                  remarks: this.deliveryForm.remarks[row.item_id] || null
                 }));
                 if (!items.length) throw new Error("至少选择一条送货明细");
-                const {data} = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items });
+                let data;
+                if (this.deliveryForm.editingId) {
+                  ({ data } = await axios.put(`/api/deliveries/${this.deliveryForm.editingId}`, { delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
+                } else {
+                  ({ data } = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
+                }
                 if (data.warnings?.some(w => w.code === "OVER_DELIVERY")) this.showToast("警告：实际发货数超过订单可送数量，系统已按工厂实际情况放行");
                 await this.loadDeliveries();
               }
@@ -4815,6 +4825,37 @@
             catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           printDelivery(row) { window.open(`/delivery-print.html?id=${row.id}`, "_blank"); },
+          async editDelivery(row) {
+            await this.loadDeliveries();
+            const quantities = {};
+            this.pendingDeliveryItems.forEach(it => quantities[it.item_id] = it.remaining_quantity);
+            const selected = {};
+            const remarks = {};
+            this.pendingDeliveryItems.forEach(it => remarks[it.item_id] = "");
+            (row.items || []).forEach(it => {
+              selected[it.order_item_id] = true;
+              quantities[it.order_item_id] = it.delivered_quantity;
+              remarks[it.order_item_id] = it.remarks || "";
+            });
+            this.deliveryForm = { editingId: row.id, customer_id: row.customer_id, delivery_date: row.delivery_date, vehicle_number: row.vehicle_number || "", selected, quantities, remarks };
+            this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
+          },
+          async deleteDelivery(row) {
+            if (!confirm(`确认删除待发货送货单 ${row.delivery_number} 吗？\n仅删除送货单本身，不影响订单已送数量。`)) return;
+            try {
+              await axios.delete(`/api/deliveries/${row.id}`);
+              await Promise.all([this.loadDeliveries(), this.loadKpi()]);
+              this.showToast("已删除待发货送货单");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async cancelDelivery(row) {
+            if (!confirm(`确认取消发货 ${row.delivery_number} 吗？\n将回滚本单已送数量并恢复订单待送状态。\n若已有回单或已进入对账，系统会拒绝取消。`)) return;
+            try {
+              await axios.put(`/api/deliveries/${row.id}/cancel`);
+              await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi()]);
+              this.showToast("已取消发货，订单待送数量已恢复");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
           exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
           async registerInvoice(row) {
             const invoiceNumber = prompt("请输入发票号码");

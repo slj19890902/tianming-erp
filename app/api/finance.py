@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -432,21 +432,36 @@ def create_return_receipt(
     db: Session = Depends(get_db),
     user: User = Depends(finance_only),
 ) -> dict:
-    delivery = db.get(Delivery, payload.delivery_id)
-    if delivery is None:
-        raise HTTPException(status_code=404, detail="送货单不存在")
-    if delivery.status != "dispatched":
-        raise HTTPException(status_code=400, detail="送货单尚未确认发货")
-    delivery_items = db.scalars(
-        select(DeliveryItem)
-        .where(DeliveryItem.delivery_id == delivery.id)
-        .order_by(DeliveryItem.id)
-    ).all()
-    requested = {line.delivery_item_id: line for line in payload.items}
-    if set(requested) != {item.id for item in delivery_items}:
-        raise HTTPException(status_code=400, detail="回单必须包含送货单全部明细")
-
     try:
+        # 与取消发货竞争时，先对同一送货单执行条件写并取得写锁。
+        # 第二个事务等待后会重新判断状态，不能同时确认回单和取消发货。
+        claimed = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == payload.delivery_id,
+                Delivery.status == "dispatched",
+            )
+            .values(status="dispatched")
+        )
+        if claimed.rowcount != 1:
+            exists = db.scalar(
+                select(Delivery.id).where(Delivery.id == payload.delivery_id)
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="送货单不存在")
+            raise HTTPException(status_code=400, detail="送货单尚未确认发货")
+        delivery = db.get(Delivery, payload.delivery_id)
+        delivery_items = db.scalars(
+            select(DeliveryItem)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .order_by(DeliveryItem.id)
+        ).all()
+        requested = {line.delivery_item_id: line for line in payload.items}
+        if set(requested) != {item.id for item in delivery_items}:
+            raise HTTPException(
+                status_code=400,
+                detail="回单必须包含送货单全部明细",
+            )
         receipt = ReturnReceipt(
             delivery_id=delivery.id,
             actual_received_date=payload.actual_received_date,

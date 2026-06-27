@@ -3,8 +3,8 @@ ERP 系统版本信息。
 每次发布更新此文件，不依赖数据库。
 """
 
-APP_VERSION = "v0.20.1"
-APP_VERSION_NAME = "送货状态流闭环 + 工厂安全更新修正版"
+APP_VERSION = "v0.20.2"
+APP_VERSION_NAME = "对账单导出完善版"
 APP_BUILD_DATE = "2026-06-27"
 
 APP_CHANGELOG = [
@@ -59,4 +59,12 @@ APP_CHANGELOG = [
     "v0.20.1：更新前先停服务，再使用 SQLite Backup API 备份到 data/backups 并校验完整性与 SHA-256",
     "v0.20.1：仅允许 factory-current-baseline 分支以 --ff-only 更新，工作区不干净时拒绝执行",
     "v0.20.1：修正更新后版本检查接口为 /api/system/version，并兼容 Windows PowerShell 5.1 中文脚本编码",
+    # v0.20.2
+    "v0.20.2：对账单导出文件名改为客户简称 + 月份（如天华2026-06对账单.xlsx）",
+    "v0.20.2：Excel 明细扩展为 15 列：含存货编码（历史快照）、材质、开票状态、对账状态、结清状态",
+    "v0.20.2：开票状态三档：未开票 / 部分开票 / 已开票",
+    "v0.20.2：结清状态三档：未收款 / 部分收款 / 已结清",
+    "v0.20.2：对账状态固定为已对账（能导出即已进入对账）",
+    "v0.20.2：存货编码取 snapshot_product_code，保证历史快照准确",
+    "v0.20.2：Content-Disposition 同时输出 ASCII 回退和 RFC 5987 中文编码",
 ]

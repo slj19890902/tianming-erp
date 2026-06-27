@@ -5,6 +5,7 @@ import re
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -36,6 +37,30 @@ from app.services.history_orders import build_display_registry, display_order_nu
 router = APIRouter()
 finance_only = RoleChecker(["admin", "finance"])
 MONEY = Decimal("0.00")
+
+_CITY_PREFIXES = ("苏州", "昆山", "常熟", "太仓", "上海", "无锡", "南京", "杭州", "深圳", "广州")
+_COMPANY_SUFFIXES = ("股份有限公司", "有限责任公司", "科技有限公司", "有限公司")
+_ILLEGAL_CHARS = r'/\:*?"<>|'
+
+
+def _customer_abbr(name: str) -> str:
+    for prefix in _CITY_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    for suffix in _COMPANY_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    chinese = [c for c in name if "一" <= c <= "鿿"]
+    abbr = "".join(chinese[:2])
+    return abbr if abbr else "客户"
+
+
+def _safe_filename(name: str) -> str:
+    for ch in _ILLEGAL_CHARS:
+        name = name.replace(ch, "")
+    return name.strip()
 
 
 class ReturnReceiptLineCreate(BaseModel):
@@ -208,9 +233,10 @@ def export_statement_excel(
             Delivery.delivery_date,
             Delivery.delivery_number,
             Order.customer_po,
-            Product.product_code,
+            OrderItem.snapshot_product_code,
             OrderItem.snapshot_product_name,
             OrderItem.snapshot_spec,
+            OrderItem.snapshot_material,
             StatementItem.actual_received_quantity,
             StatementItem.unit_price_snapshot,
             StatementItem.receivable_amount,
@@ -227,34 +253,57 @@ def export_statement_excel(
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .join(Order, Order.id == OrderItem.order_id)
-        .join(Product, Product.id == OrderItem.product_id)
         .where(StatementItem.statement_id == statement.id)
         .order_by(Delivery.delivery_date, Delivery.delivery_number)
     ).all()
 
+    inv = statement.invoiced_amount
+    rec = statement.total_receivable
+    if inv <= 0:
+        invoice_status = "未开票"
+    elif inv < rec:
+        invoice_status = "部分开票"
+    else:
+        invoice_status = "已开票"
+
+    sett = statement.settled_amount
+    if sett <= 0:
+        settlement_status = "未收款"
+    elif sett < rec:
+        settlement_status = "部分收款"
+    else:
+        settlement_status = "已结清"
+
+    col_count = 15
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "月结对账单"
-    sheet.merge_cells("A1:J1")
+    last_col = chr(64 + col_count)
+    sheet.merge_cells(f"A1:{last_col}1")
     sheet["A1"] = "月结对账单"
     sheet["A1"].font = Font(size=18, bold=True)
     sheet["A1"].alignment = Alignment(horizontal="center")
-    sheet.merge_cells("A2:J2")
+    sheet.merge_cells(f"A2:{last_col}2")
     sheet["A2"] = (
         f"客户：{customer.name}    月份：{statement.statement_month}    "
         f"对账单号：{statement.statement_number}"
     )
     headers = [
-        "送货日期",
-        "送货单号",
-        "客户单号",
-        "存货编码",
-        "产品名称",
-        "规格",
-        "实收数量",
-        "单价",
-        "金额",
-        "备注",
+        "客户名称",    # 1
+        "客户单号",    # 2
+        "存货编码",    # 3
+        "送货日期",    # 4
+        "送货单号",    # 5
+        "产品名称",    # 6
+        "规格型号",    # 7
+        "材质",        # 8
+        "实际签收数量", # 9
+        "单价",        # 10
+        "金额",        # 11
+        "备注",        # 12
+        "开票状态",    # 13
+        "对账状态",    # 14
+        "结清状态",    # 15
     ]
     sheet.append([])
     sheet.append(headers)
@@ -265,24 +314,29 @@ def export_statement_excel(
     for line in lines:
         sheet.append(
             [
+                customer.name,
+                line.customer_po,
+                line.snapshot_product_code,
                 line.delivery_date,
                 line.delivery_number,
-                line.customer_po,
-                line.product_code,
                 line.snapshot_product_name,
                 line.snapshot_spec,
+                line.snapshot_material,
                 line.actual_received_quantity,
                 float(line.unit_price_snapshot),
                 float(line.receivable_amount),
                 line.difference_reason,
+                invoice_status,
+                "已对账",
+                settlement_status,
             ]
         )
     total_row = sheet.max_row + 2
-    sheet.cell(total_row, 8, "合计")
-    sheet.cell(total_row, 9, float(statement.total_receivable))
-    sheet.cell(total_row, 8).font = Font(bold=True)
-    sheet.cell(total_row, 9).font = Font(bold=True)
-    widths = [13, 20, 18, 18, 28, 20, 12, 12, 14, 24]
+    sheet.cell(total_row, 10, "合计")
+    sheet.cell(total_row, 11, float(statement.total_receivable))
+    sheet.cell(total_row, 10).font = Font(bold=True)
+    sheet.cell(total_row, 11).font = Font(bold=True)
+    widths = [22, 18, 16, 13, 20, 28, 20, 14, 12, 12, 14, 24, 10, 10, 10]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index)].width = width
     sheet.freeze_panes = "A5"
@@ -290,14 +344,19 @@ def export_statement_excel(
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
-    filename = f"{statement.statement_number}.xlsx"
+    abbr = _customer_abbr(customer.name)
+    raw_name = f"{abbr}{statement.statement_month}对账单.xlsx"
+    filename = _safe_filename(raw_name)
+    encoded = quote(filename, safe="")
     return StreamingResponse(
         output,
         media_type=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": (
+                f'attachment; filename="statement.xlsx"; filename*=UTF-8\'\'{encoded}'
+            ),
         },
     )
 

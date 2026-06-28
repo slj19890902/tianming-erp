@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_db
 from app.models.audit import OperationLog
+from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
@@ -902,6 +903,7 @@ def get_delivery_print_data(
 ) -> dict:
     delivery = _delivery_or_404(db, delivery_id)
     customer = db.get(Customer, delivery.customer_id)
+    company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     rows = db.execute(
         select(
             Order.customer_po,
@@ -931,6 +933,17 @@ def get_delivery_print_data(
             "contact_person": customer.contact_person if customer else None,
             "phone": customer.phone if customer else None,
             "address": customer.address if customer else None,
+        },
+        "sender": {
+            "company_name": company.company_name if company else "",
+            "address": company.address if company else None,
+            "phone": company.phone if company else None,
+            "fax": company.fax if company else None,
+            "tax_number": company.tax_number if company else None,
+            "bank_name": company.bank_name if company else None,
+            "bank_account": company.bank_account if company else None,
+            "contact_person": company.contact_person if company else None,
+            "contact_phone": company.contact_phone if company else None,
         },
         "items": [
             {

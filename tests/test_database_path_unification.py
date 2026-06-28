@@ -95,11 +95,17 @@ def test_database_path_is_absolute_and_independent_of_working_directory(
     assert Path(result.stdout.strip()).resolve() == FORMAL_DATABASE
 
 
-def test_phase1_compatibility_backend_no_longer_defaults_to_test_database() -> None:
-    from phase1_postgres.database import DATABASE_PATH, DATABASE_URL
+def test_phase1_compatibility_backend_no_longer_defaults_to_test_database(
+    monkeypatch,
+) -> None:
+    import importlib
+    import phase1_postgres.database as compatibility_database
 
-    assert DATABASE_PATH == FORMAL_DATABASE
-    assert "tm_phase3_dev.sqlite3" not in DATABASE_URL
+    monkeypatch.delenv("ERP_DATABASE_PATH", raising=False)
+    compatibility_database = importlib.reload(compatibility_database)
+
+    assert compatibility_database.DATABASE_PATH == FORMAL_DATABASE
+    assert "tm_phase3_dev.sqlite3" not in compatibility_database.DATABASE_URL
 
 
 def test_health_reports_current_formal_database_path(monkeypatch) -> None:
@@ -133,13 +139,14 @@ def test_health_reports_current_formal_database_path(monkeypatch) -> None:
 
 
 def test_start_script_uses_complete_backend_entrypoint() -> None:
+    from app.core.config import DEFAULT_DATABASE_PATH
+
     bat = (PROJECT_ROOT / "start_erp.bat").read_text(encoding="utf-8")
     launcher = (
         PROJECT_ROOT / "scripts" / "admin" / "start_erp_background.ps1"
     ).read_text(encoding="utf-8")
-    env_file = (PROJECT_ROOT / ".env").read_text(encoding="utf-8")
 
     assert "start_erp_background.ps1" in bat
     assert "app.main:app" in launcher
     assert "phase1_postgres.main:app" not in launcher
-    assert "ERP_DATABASE_PATH" in env_file
+    assert DEFAULT_DATABASE_PATH.resolve() == FORMAL_DATABASE

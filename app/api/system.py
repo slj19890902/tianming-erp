@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import RoleChecker, get_db
@@ -19,6 +20,7 @@ from app.core.database import (
     restore_from_backup,
 )
 from app.models.audit import OperationLog
+from app.models.company_config import CompanyConfig
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,27 @@ class RestoreRequest(BaseModel):
 
 class DeleteRequest(BaseModel):
     filename: str
+
+
+class CompanyConfigUpdate(BaseModel):
+    company_name: str
+    short_name: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    fax: str | None = None
+    tax_number: str | None = None
+    bank_name: str | None = None
+    bank_account: str | None = None
+    contact_person: str | None = None
+    contact_phone: str | None = None
+
+    @field_validator("company_name")
+    @classmethod
+    def validate_company_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("公司名称不能为空")
+        return normalized
 
 
 def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
@@ -951,3 +974,78 @@ def fix_flute_consistency(request: Request, db: Session = Depends(get_db)):
         "fixed_3layer_to_null": result.fixed_3layer_to_null,
         "changes": result.changes[:100],
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# 公司信息维护（v0.20.3）
+# ─────────────────────────────────────────────────────────────
+
+def _find_company_row(db: Session) -> CompanyConfig | None:
+    """只读获取单行公司配置。"""
+    return db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
+
+
+def _company_dict(row: CompanyConfig | None) -> dict:
+    return {
+        "company_name": row.company_name or "" if row else "",
+        "short_name": row.short_name if row else None,
+        "address": row.address if row else None,
+        "phone": row.phone if row else None,
+        "fax": row.fax if row else None,
+        "tax_number": row.tax_number if row else None,
+        "bank_name": row.bank_name if row else None,
+        "bank_account": row.bank_account if row else None,
+        "contact_person": row.contact_person if row else None,
+        "contact_phone": row.contact_phone if row else None,
+        "updated_at": row.updated_at.isoformat() if row and row.updated_at else None,
+    }
+
+
+@router.get("/company", dependencies=[Depends(admin_only)])
+def get_company(db: Session = Depends(get_db)) -> dict:
+    """管理员读取公司信息。打印和导出由各自受保护接口直接读取配置。"""
+    return _company_dict(_find_company_row(db))
+
+
+@router.put("/company", dependencies=[Depends(admin_only)])
+def update_company(
+    body: CompanyConfigUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """更新公司信息（admin only）。"""
+    row = _find_company_row(db)
+    if row is None:
+        row = CompanyConfig(id=1, company_name=body.company_name)
+        db.add(row)
+    row.company_name = body.company_name
+    row.short_name = body.short_name.strip() if body.short_name else None
+    row.address = body.address.strip() if body.address else None
+    row.phone = body.phone.strip() if body.phone else None
+    row.fax = body.fax.strip() if body.fax else None
+    row.tax_number = body.tax_number.strip() if body.tax_number else None
+    row.bank_name = body.bank_name.strip() if body.bank_name else None
+    row.bank_account = body.bank_account.strip() if body.bank_account else None
+    row.contact_person = body.contact_person.strip() if body.contact_person else None
+    row.contact_phone = body.contact_phone.strip() if body.contact_phone else None
+    row.updated_at = datetime.now()
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="UPDATE_COMPANY_CONFIG",
+            resource="System",
+            details=json.dumps(
+                {"company_name": row.company_name},
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=user.username,
+            role=user.role,
+            entity_type="company_config",
+            description=f"管理员更新公司信息：{row.company_name}",
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+    return _company_dict(row)

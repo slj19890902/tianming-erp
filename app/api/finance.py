@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_db
 from app.models.audit import OperationLog
+from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import (
@@ -274,6 +275,9 @@ def export_statement_excel(
     else:
         settlement_status = "已结清"
 
+    company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
+    company_name = company.company_name if company and company.company_name else ""
+
     col_count = 15
     workbook = Workbook()
     sheet = workbook.active
@@ -288,6 +292,18 @@ def export_statement_excel(
         f"客户：{customer.name}    月份：{statement.statement_month}    "
         f"对账单号：{statement.statement_number}"
     )
+    sheet.merge_cells(f"A3:{last_col}3")
+    sender_parts = [f"供方：{company_name}"] if company_name else []
+    if company and company.address:
+        sender_parts.append(f"地址：{company.address}")
+    if company and company.phone:
+        sender_parts.append(f"电话：{company.phone}")
+    if company and company.tax_number:
+        sender_parts.append(f"税号：{company.tax_number}")
+    if company and company.bank_name and company.bank_account:
+        sender_parts.append(f"开户行：{company.bank_name}  账号：{company.bank_account}")
+    sheet["A3"] = "    ".join(sender_parts)
+    sheet["A3"].alignment = Alignment(horizontal="left")
     headers = [
         "客户名称",    # 1
         "客户单号",    # 2
@@ -307,7 +323,7 @@ def export_statement_excel(
     ]
     sheet.append([])
     sheet.append(headers)
-    for cell in sheet[4]:
+    for cell in sheet[5]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="DCE6F1")
         cell.alignment = Alignment(horizontal="center")
@@ -339,7 +355,7 @@ def export_statement_excel(
     widths = [22, 18, 16, 13, 20, 28, 20, 14, 12, 12, 14, 24, 10, 10, 10]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index)].width = width
-    sheet.freeze_panes = "A5"
+    sheet.freeze_panes = "A6"
 
     output = BytesIO()
     workbook.save(output)

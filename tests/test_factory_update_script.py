@@ -16,11 +16,11 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
     assert 'Join-Path $projectRoot "erp.db"' not in UPDATE_SCRIPT
 
 
-def test_factory_update_hotfix_has_release_version() -> None:
+def test_factory_update_reports_current_release_version() -> None:
     from app.version import APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.20.1"
-    assert "安全更新" in APP_VERSION_NAME
+    assert APP_VERSION == "v0.20.3"
+    assert "公司信息维护" in APP_VERSION_NAME
 
 
 def test_update_script_stops_service_before_database_backup() -> None:

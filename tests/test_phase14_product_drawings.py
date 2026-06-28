@@ -207,3 +207,34 @@ def test_invalid_pdf_drawing_is_rejected(drawing_app: FastAPI) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "PDF 图纸文件无法识别"
+
+
+def test_common_box_process_and_print_type_round_trip_without_drawing(
+    drawing_app: FastAPI,
+) -> None:
+    payload = {
+        "customer_id": 1,
+        "product_code": "001A",
+        "customer_material_code": "001A",
+        "product_name": "001A outer carton",
+        "material_id": 1,
+        "length_mm": 680,
+        "width_mm": 240,
+        "height_mm": 165,
+        "box_category": "normal",
+        "print_content": "双色印刷",
+        "production_process": "粘贴,打钉,模切",
+        "sale_unit_price": "4.1600",
+        "remark": "常用箱编辑回显测试",
+    }
+    with TestClient(drawing_app) as client:
+        _login(client, "admin")
+        updated = client.put("/api/master/products/1", json=payload)
+        detail = client.get("/api/master/products/1")
+
+    assert updated.status_code == 200, updated.text
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["production_process"] == "粘贴,打钉,模切"
+    assert body["print_content"] == "双色印刷"
+    assert body["drawings"] == []

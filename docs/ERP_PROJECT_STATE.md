@@ -2,11 +2,19 @@
 
 ## Current Baseline
 
-- Branch: `factory-current-baseline`
-- Latest merge commit: `6913749`
-- Feature branch merged: `feature/v0203-company-info`
-- App version: `v0.20.7`
-- Version name: `首页待对账汇总与一键启动版`
+- Stable branch: `factory-current-baseline`
+- Current delivery branch: `feature/v0208-common-box-edit`
+- App version: `v0.20.8`
+- Version name: `常用箱编辑优化版`
+
+## What v0.20.8 Fixed
+
+- 常用箱编辑页按六行重新整理，桌面录入更紧凑。
+- 长、宽、高按整数毫米显示，单价继续保留小数。
+- 生产工艺支持多选，印刷内容使用清楚的固定选项。
+- 无印刷时隐藏图纸区域；有印刷时显示上传入口和版本历史。
+- 图纸继续逐版保存，新版本不会覆盖旧版本。
+- 没有新增数据库字段，也没有批量修改历史产品。
 
 ## What v0.20.7 Fixed
 
@@ -24,6 +32,11 @@
 
 ## Verified Behavior
 
+- v0.20.8 定向测试 `85 passed`
+- 浏览器实测常用箱编辑弹窗六行布局正常
+- 无印刷/有印刷切换会正确隐藏或显示图纸区域
+- 浏览器控制台无错误
+- 正式库只读核对：`integrity_check=ok`、`foreign_key_check=0`
 - Admin can read and save company info
 - Non-admin cannot read company info
 - Blank company name is rejected
@@ -32,6 +45,6 @@
 
 ## Notes
 
-- No history migration was performed in this merge.
+- No history migration was performed in this release.
 - No `legacy_*` tables were changed.
 - Existing ERP structure and workflows remain intact.

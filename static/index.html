@@ -395,6 +395,107 @@
       .modal-header h3 { margin: 0; font-size: 16px; }
       .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 14px; }
       .form-grid .wide { grid-column: 1 / -1; }
+      .product-edit-grid { display: grid; gap: 10px; }
+      .product-form-row {
+        display: grid;
+        gap: 10px 12px;
+        align-items: start;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #ededf0;
+      }
+      .product-core-row,
+      .product-size-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .product-material-row {
+        grid-template-columns: minmax(150px, .8fr) minmax(110px, .55fr) minmax(130px, .65fr) minmax(360px, 2fr);
+      }
+      .product-report-row {
+        grid-template-columns: minmax(270px, 1fr) minmax(480px, 1.8fr) minmax(260px, 1fr);
+      }
+      .product-print-row {
+        grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
+      }
+      .product-remark-row {
+        grid-template-columns: 1fr;
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+      .product-edit-grid .field { min-width: 0; }
+      .product-edit-grid .field label { margin-bottom: 5px; white-space: nowrap; }
+      .product-edit-grid .input,
+      .product-edit-grid .select { min-height: 34px; }
+      .process-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-height: 34px;
+        align-items: center;
+      }
+      .process-option {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fafafa;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .process-option:has(input:checked) {
+        color: var(--primary);
+        border-color: #99c8f7;
+        background: #eef6ff;
+      }
+      .report-size-line,
+      .crease-control-line {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: nowrap;
+      }
+      .report-size-line .input { width: 104px; }
+      .crease-control-line .select { width: 92px; flex: 0 0 92px; }
+      .crease-segments { display: flex; align-items: center; gap: 4px; min-width: 0; }
+      .crease-segments .input { width: 70px; min-width: 58px; }
+      .a1-calc-button { flex: 0 0 auto; white-space: nowrap; }
+      .drawing-history-list {
+        display: grid;
+        gap: 6px;
+        max-height: 150px;
+        overflow-y: auto;
+      }
+      .drawing-history-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fafafa;
+        font-size: 12px;
+      }
+      .drawing-history-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text);
+      }
+      @media (max-width: 1100px) {
+        .product-core-row,
+        .product-size-row,
+        .product-material-row,
+        .product-print-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .product-report-row { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 680px) {
+        .product-core-row,
+        .product-size-row,
+        .product-material-row,
+        .product-print-row { grid-template-columns: 1fr; }
+        .crease-control-line { align-items: flex-start; flex-wrap: wrap; }
+      }
 
       /* Toast */
       .toast {
@@ -1505,114 +1606,127 @@
               <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
               <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
             </div>
-            <div v-else-if="modal.type === 'product'" class="form-grid">
-              <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
-              <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
-              <!-- 客户料号字段保留数据库值但不显示，用隐藏 input 同步 -->
-              <input type="hidden" v-model.trim="productForm.customer_material_code" />
-              <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
+            <div v-else-if="modal.type === 'product'" class="product-edit-grid">
+              <div class="product-form-row product-core-row">
+                <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
+                <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
+                <input type="hidden" v-model.trim="productForm.customer_material_code" />
+                <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
+                <div class="field"><label>箱型</label><select class="select" v-model="productForm.box_category"><option value="normal">普通箱</option><option value="die_cut">模切箱</option></select></div>
+              </div>
+
+              <div class="product-form-row product-size-row">
+                <div class="field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
+                <div class="field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
+                <div class="field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
+                <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+              </div>
+
               <!-- 材质选择顺序：材质供应商 → 层数 → 楞型 → 材质代码 -->
-              <div class="field"><label>材质供应商</label>
-                <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
-                  <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ opt }}</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>层数</label>
-                <select class="select" v-model.number="productForm.layer_count" @change="onProductLayerChange">
-                  <option :value="null">未设置</option>
-                  <option :value="3">3层（单楞）</option>
-                  <option :value="5">5层（双楞）</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>楞型</label>
-                <select class="select" v-model="productForm.flute_type" @change="onProductFluteChange" :disabled="productForm.layer_count===7">
-                  <option :value="null">未设置</option>
-                  <template v-if="productForm.layer_count===5">
-                    <option value="AB">AB（五层双楞）</option>
-                    <option value="BE">BE（五层双楞）</option>
-                  </template>
-                  <template v-else-if="productForm.layer_count===3">
-                    <option value="A">A瓦（三层）</option>
-                    <option value="B">B瓦（三层）</option>
-                    <option value="E">E瓦（三层）</option>
-                  </template>
-                  <template v-else>
-                    <option value="AB">AB（五层）</option>
-                    <option value="BE">BE（五层）</option>
-                    <option value="A">A瓦（三层）</option>
-                    <option value="B">B瓦（三层）</option>
-                    <option value="E">E瓦（三层）</option>
-                  </template>
-                </select>
-                <div v-if="productForm.layer_count===7" class="muted" style="font-size:12px">七层楞型规则待维护</div>
-                <div v-if="productFluteLayerError" style="color:#dc2626;font-size:12px;margin-top:4px">{{ productFluteLayerError }}</div>
-              </div>
-              <div class="field"><label>材质（代码｜供应商｜克重｜报价）</label>
-                <search-select v-model="productForm.material_id"
-                  :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
-                  label-key="_label" value-key="id" :allow-empty="true"
-                  placeholder="输入代码/供应商/克重/报价搜索"></search-select>
-                <div class="muted" style="font-size:12px">材质代码只按供应商+层数过滤；楞型仅保存不影响代码列表。只输入文字不选中无效。</div>
-                <div v-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
-              </div>
-              <div class="field"><label>箱型</label><select class="select" v-model="productForm.box_category"><option value="normal">普通箱</option><option value="die_cut">模切箱</option></select></div>
-              <div class="field"><label>长(mm)</label><input class="input" type="number" v-model="productForm.length_mm" /></div>
-              <div class="field"><label>宽(mm)</label><input class="input" type="number" v-model="productForm.width_mm" /></div>
-              <div class="field"><label>高(mm)</label><input class="input" type="number" v-model="productForm.height_mm" /></div>
-              <div class="field"><label>印刷内容</label><input class="input" v-model.trim="productForm.print_content" /></div>
-              <div class="field"><label>生产工艺</label><input class="input" v-model.trim="productForm.production_process" /></div>
-              <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" step="0.0001" v-model="productForm.sale_unit_price" /></div>
-              <div class="field"><label>上传新版本图纸</label><input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" /><div class="muted">支持图片或客户提供的 PDF 图纸，最大 20MB。</div></div>
-              <div v-if="productForm.id" class="field wide"><label>图纸版本历史</label><div v-if="!(productForm.drawings || []).length" class="muted">暂无图纸</div><div v-else class="drawing-gallery"><div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-card"><a :href="drawing.image_path" target="_blank"><div v-if="isPdfDrawing(drawing)" class="drawing-thumb" style="display:flex;align-items:center;justify-content:center;font-weight:900;color:#b91c1c;cursor:pointer">PDF 图纸<br>点击打开</div><img v-else class="drawing-thumb" :src="drawing.thumbnail_path" alt="产品图纸缩略图" /></a><div class="drawing-meta"><span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "当前生效版" : "历史版本" }}</span><div>{{ formatDateTime(drawing.uploaded_at) }}</div><button v-if="user.role==='admin'" class="btn small danger" style="margin-top:6px" @click.prevent="deleteProductDrawing(drawing)">删除</button></div></div></div></div>
-              <div class="field wide">
-                <div class="section-title" style="margin-top:8px;margin-bottom:8px">📦 报料信息</div>
-              </div>
-              <div class="field">
-                <label>报料长 (mm)</label>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" placeholder="如 1550" style="width:120px" />
-                  <span class="muted">×</span>
-                  <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" placeholder="如 600" style="width:120px" />
-                  <span class="muted">mm</span>
+              <div class="product-form-row product-material-row">
+                <div class="field"><label>材质供应商</label>
+                  <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
+                    <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <div class="field"><label>层数</label>
+                  <select class="select" v-model.number="productForm.layer_count" @change="onProductLayerChange">
+                    <option :value="null">未设置</option><option :value="3">3层</option><option :value="5">5层</option>
+                  </select>
+                </div>
+                <div class="field"><label>楞型</label>
+                  <select class="select" v-model="productForm.flute_type" @change="onProductFluteChange" :disabled="productForm.layer_count===7">
+                    <option :value="null">未设置</option>
+                    <template v-if="productForm.layer_count===5"><option value="AB">AB</option><option value="BE">BE</option></template>
+                    <template v-else-if="productForm.layer_count===3"><option value="A">A瓦（三层）</option><option value="B">B瓦（三层）</option><option value="E">E瓦（三层）</option></template>
+                    <template v-else><option value="AB">AB（五层）</option><option value="BE">BE（五层）</option><option value="A">A瓦（三层）</option><option value="B">B瓦（三层）</option><option value="E">E瓦（三层）</option></template>
+                  </select>
+                  <div v-if="productFluteLayerError" style="color:#dc2626;font-size:12px;margin-top:4px">{{ productFluteLayerError }}</div>
+                </div>
+                <div class="field"><label>材质（代码｜供应商｜克重｜报价）</label>
+                  <search-select v-model="productForm.material_id"
+                    :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
+                    label-key="_label" value-key="id" :allow-empty="true"
+                    placeholder="输入代码/供应商/克重/报价搜索"></search-select>
+                  <div v-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
               </div>
-              <div class="field">
-                <label>压线类型</label>
-                <select class="select" v-model="productForm.crease_type" style="width:100px">
-                  <option :value="null">-</option>
-                  <option value="毛片">毛片</option>
-                  <option value="净料">净料</option>
-                  <option value="压线">压线</option>
-                </select>
-              </div>
-              <div class="field" v-if="productForm.crease_type === '压线'">
-                <label>压线尺寸 (mm)</label>
-                <div style="display:flex;align-items:center;gap:6px">
-                  <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" placeholder="第一段" style="width:80px" />
-                  <span>×</span>
-                  <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" placeholder="中间" style="width:80px" />
-                  <span>×</span>
-                  <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" placeholder="第三段" style="width:80px" />
+
+              <div class="product-form-row product-report-row">
+                <div class="field"><label>报料长宽</label>
+                  <div class="report-size-line">
+                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" placeholder="长" />
+                    <span class="muted">×</span>
+                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" placeholder="宽" />
+                    <span class="muted">mm</span>
+                  </div>
                 </div>
-                <div class="muted" v-if="productForm.crease_left_mm && productForm.crease_middle_mm && productForm.crease_right_mm">
-                  显示：{{ productForm.crease_left_mm }}×{{ productForm.crease_middle_mm }}×{{ productForm.crease_right_mm }}
+                <div class="field"><label>压线类型</label>
+                  <div class="crease-control-line">
+                    <select class="select" v-model="productForm.crease_type">
+                      <option :value="null">未设置</option><option value="毛片">毛片</option><option value="净料">净料</option><option value="压线">压线</option>
+                    </select>
+                    <div v-if="productForm.crease_type === '压线'" class="crease-segments">
+                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" placeholder="左" />
+                      <span>×</span>
+                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" placeholder="中" />
+                      <span>×</span>
+                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" placeholder="右" />
+                    </div>
+                    <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '无毛边' : '含毛边' }}</span>
+                    <button type="button" class="btn small a1-calc-button" @click="calcA1ReportDims(productForm)" title="A1型纸箱推荐计算（可手工修改）">A1 推荐计算</button>
+                  </div>
                 </div>
+                <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、需压线等" /></div>
               </div>
-              <div class="field" v-if="productForm.crease_type && productForm.crease_type !== '压线'">
-                <label>&nbsp;</label>
-                <div class="muted">{{ productForm.crease_type === '净料' ? '净（无毛边，可直接出货）' : '毛（含毛边，需后续加工）' }}</div>
+
+              <div class="product-form-row product-print-row">
+                <div class="field"><label>生产工艺（可多选）</label>
+                  <div class="process-options">
+                    <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" />粘贴</label>
+                    <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" />打钉</label>
+                    <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" />模切</label>
+                    <label class="process-option"><input type="checkbox" value="双拼" v-model="productForm._production_processes" />双拼</label>
+                    <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" />其他</label>
+                  </div>
+                </div>
+                <div class="field"><label>印刷内容</label>
+                  <select class="select" v-model="productForm.print_content">
+                    <option value="无印刷">无印刷</option>
+                    <option value="单色印刷">单色印刷</option>
+                    <option value="双色印刷">双色印刷</option>
+                    <option value="多色印刷">多色印刷</option>
+                    <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','多色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
+                  </select>
+                </div>
+                <template v-if="productForm.print_content !== '无印刷'">
+                  <div class="field"><label>上传新版本图纸</label>
+                    <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
+                    <div class="muted">支持 JPG、PNG、WEBP、PDF，最大 20MB。</div>
+                  </div>
+                  <div class="field"><label>图纸版本历史</label>
+                    <div v-if="!productForm.id" class="muted">先保存常用箱，图纸会随保存一起上传。</div>
+                    <div v-else-if="!(productForm.drawings || []).length" class="muted">暂无图纸版本</div>
+                    <div v-else class="drawing-history-list">
+                      <div v-for="(drawing,index) in productForm.drawings" :key="drawing.id" class="drawing-history-row">
+                        <span :class="['drawing-version',{current:index===0}]">{{ index===0 ? "最新" : `历史第 ${productForm.drawings.length-index} 版` }}</span>
+                        <div>
+                          <div class="drawing-history-name" :title="drawingDisplayName(drawing)">{{ drawingDisplayName(drawing) }}</div>
+                          <div class="muted">{{ formatDateTime(drawing.uploaded_at) }}</div>
+                        </div>
+                        <div style="display:flex;gap:4px">
+                          <a class="btn small" :href="drawing.image_path" target="_blank">查看/下载</a>
+                          <button v-if="user.role==='admin'" class="btn small danger" @click.prevent="deleteProductDrawing(drawing)">删除</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </div>
-              <div class="field">
-                <label>&nbsp;</label>
-                <button type="button" class="btn small" @click="calcA1ReportDims(productForm)" title="A1型纸箱推荐计算（可手工修改）">⚡ A1 推荐计算</button>
+
+              <div class="product-form-row product-remark-row">
+                <div class="field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="3"></textarea></div>
               </div>
-              <div class="field wide">
-                <label>报料备注</label>
-                <input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发 / 需压线 / 等" />
-              </div>
-              <div class="field wide"><label>备注</label><textarea class="textarea" v-model="productForm.remark"></textarea></div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
@@ -2524,8 +2638,8 @@
         id: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
-        box_style: "", print_content: "", printing_colors: "",
-        production_process: "", unit: "只", sale_unit_price: "0",
+        box_style: "", print_content: "无印刷", printing_colors: "",
+        production_process: "", _production_processes: [], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
         suggested_price: null, die_cut_path: null, drawings: [],
         remark: "", is_active: true,
@@ -3781,11 +3895,55 @@
           async openProduct(row=null) {
             let detail = row;
             if (row?.id) detail = (await axios.get(`/api/master/products/${row.id}`)).data;
-            this.productForm = detail ? { ...blankProduct(), ...JSON.parse(JSON.stringify(detail)) } : { ...blankProduct(), customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null, drawings:[] };
+            this.productForm = this.hydrateProductForm(
+              detail || {
+                customer_id: this.selectedProductCustomer?.id || this.activeCustomerOptions[0]?.id || null,
+                drawings: [],
+              }
+            );
             this.drawingFile = null;
             // 拍快照用于检测未保存更改
             this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
             this.modal = { type:"product", title: row ? "编辑产品" : "新增产品" };
+          },
+          normalizeProductDimensions(form) {
+            ["length_mm", "width_mm", "height_mm"].forEach(key => {
+              if (form[key] === null || form[key] === undefined || form[key] === "") return;
+              const value = Number(form[key]);
+              if (Number.isFinite(value)) form[key] = Math.round(value);
+            });
+            return form;
+          },
+          parseProductionProcesses(value) {
+            const allowed = ["粘贴", "打钉", "模切", "双拼", "其他"];
+            const aliases = { "粘箱":"粘贴", "糊箱":"粘贴", "钉箱":"打钉", "打钉箱":"打钉" };
+            const values = String(value || "").split(/[，,、+]/).map(item => item.trim()).filter(Boolean);
+            const normalized = values.map(item => aliases[item] || item).filter(item => allowed.includes(item));
+            if (values.length && !normalized.length) normalized.push("其他");
+            return [...new Set(normalized)];
+          },
+          serializeProductionProcesses(values, legacyValue="") {
+            if ((values || []).length === 1 && values[0] === "其他" && legacyValue) {
+              return legacyValue;
+            }
+            return [...new Set((values || []).filter(Boolean))].join(",");
+          },
+          hydrateProductForm(detail) {
+            const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
+            form.print_content = form.print_content || "无印刷";
+            form._production_processes = this.parseProductionProcesses(form.production_process);
+            form._production_process_legacy =
+              form._production_processes.length === 1 &&
+              form._production_processes[0] === "其他" &&
+              form.production_process !== "其他"
+                ? String(form.production_process || "")
+                : "";
+            return this.normalizeProductDimensions(form);
+          },
+          drawingDisplayName(drawing) {
+            const stored = String(drawing?.file_name || drawing?.image_path || "").split("/").pop();
+            try { return decodeURIComponent(stored || "图纸文件"); }
+            catch (_) { return stored || "图纸文件"; }
           },
           _productFormSaveFields() {
             const f = this.productForm;
@@ -3794,8 +3952,13 @@
               customer_material_code: f.customer_material_code, product_name: f.product_name,
               material_id: f.material_id, box_category: f.box_category,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
-              print_content: f.print_content, production_process: f.production_process,
+              print_content: f.print_content, production_processes: f._production_processes,
               sale_unit_price: f.sale_unit_price, remark: f.remark,
+              layer_count: f.layer_count, flute_type: f.flute_type,
+              report_length_mm: f.report_length_mm, report_width_mm: f.report_width_mm,
+              crease_type: f.crease_type, crease_left_mm: f.crease_left_mm,
+              crease_middle_mm: f.crease_middle_mm, crease_right_mm: f.crease_right_mm,
+              report_notes: f.report_notes,
             };
           },
           _productFormDirty() {
@@ -3809,7 +3972,8 @@
             try {
               await axios.delete(`/api/master/products/drawings/${drawing.id}`);
               const { data } = await axios.get(`/api/master/products/${this.productForm.id}`);
-              this.productForm = { ...blankProduct(), ...data };
+              this.productForm = this.hydrateProductForm(data);
+              this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
               await this.loadProducts();
               this.showToast("图纸版本已删除");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
@@ -4894,8 +5058,21 @@
               if (this.modal.type === "product") {
                 const payload = { ...this.productForm };
                 delete payload.id;
+                payload.production_process = this.serializeProductionProcesses(
+                  payload._production_processes,
+                  payload._production_process_legacy
+                );
+                delete payload._production_processes;
+                delete payload._production_process_legacy;
+                delete payload._material_supplier;
+                delete payload.drawings;
                 if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
-                ["length_mm","width_mm","height_mm","sale_unit_price"].forEach(key => { if (payload[key] === "") payload[key] = null; });
+                ["length_mm","width_mm","height_mm"].forEach(key => {
+                  if (payload[key] === "") payload[key] = null;
+                  else if (payload[key] !== null && payload[key] !== undefined) payload[key] = Math.round(Number(payload[key]));
+                });
+                if (payload.sale_unit_price === "") payload.sale_unit_price = null;
+                payload.print_content = payload.print_content || "无印刷";
                 let saved;
                 if (this.productForm.id) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
                 else saved=(await axios.post("/api/master/products", payload)).data;

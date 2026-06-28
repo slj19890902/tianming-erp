@@ -1,5 +1,31 @@
 # Codex 项目交接
 
+## 2026-06-28 v0.20.3 合并进基线
+
+- 合并结果：`feature/v0203-company-info` 已合并到 `factory-current-baseline`
+- 合并提交：`6913749`
+- 关联修复提交：`4df6c50`
+- 验证结果：
+  - `tests/test_v0203_company_info.py`：16 passed
+  - `tests/test_phase10_frontend.py`：7 passed
+  - `tests/test_phase7_deliveries.py`：14 passed
+- 主库未写入，正式数据库 SHA-256 未变化
+- 已补充状态文档：
+  - `docs/ERP_PROJECT_STATE.md`
+  - `docs/BUSINESS_RULES.md`
+  - `docs/UI_STYLE_GUIDE.md`
+
+## 2026-06-28 订单历史清理（2026-03 以前）
+
+- 已按授权删除 `sales_orders.order_date < '2026-03-01'` 的历史订单。
+- 删除前主库：`sales_orders=15595`、`sales_order_items=15661`，目标订单 `15098`、目标明细 `15158`。
+- 已连带删除对应的回单、对账、结清、送货、报料、迁移映射和操作日志。
+- 删除后主库：`sales_orders=497`、`sales_order_items=503`。
+- 完整性检查：`integrity_check=ok`，`foreign_key_check=0`。
+- 备份：`data/backups/carton_erp_before_delete_orders_before_2026_03_20260628_131335.sqlite3`
+- 当前主库 SHA-256：`9947423b4f820a1bf822a3cd4a7a9e78dbff13a8ab80e09b8e6b23d86416cc1c`
+- 说明：这次是本地数据库数据清理，不是历史迁移，不改 `legacy_*`。
+
 ## 2026-06-22 全量测试收尾（P1，仅改测试，未动正式库/源码/RBAC）
 
 - 目标：将全量 `python -X utf8 -m pytest -q` 从 `285 passed / 6 failed` 修到 `291 passed / 0 failed`。
@@ -871,3 +897,58 @@ legacy_ruida_* 原始层
 - 新增受控清理脚本：`scripts/admin/cleanup_pre2020_orders.py`，默认 dry-run，正式执行需同时提供 `--apply --confirm DELETE_PRE2020_ORDERS`。
 - 定向回归测试：`108 passed`。
 - ERP 已重新启动，`http://127.0.0.1:8000/api/health` 返回正常。
+
+## 36. 正式 UI 审查与 Figma 重设计准备（2026-06-27）
+
+- 本轮目标：审查 `http://127.0.0.1:8000/` 当前正式前端，为标准模式、大字模式和手机收料端 Figma 重设计建立证据。
+- 审查记录：`docs/ui_audit/2026-06-27-figma-redesign/audit-notes.md`
+- 已保存并人工核对运行态截图：
+  - `docs/ui_audit/2026-06-27-figma-redesign/01-login.png`
+  - `docs/ui_audit/2026-06-27-figma-redesign/02-mobile-incoming-logged-out.png`
+- 已确认正式首页存在登录门禁；旧默认密码已经失效，本轮未猜测、读取或代填现场密码。
+- 手机来料页在 390×844 视口下出现标题、提示和按钮逐字纵排的严重响应式问题。
+- 手机来料页 viewport 当前禁止用户缩放，与老花眼和长辈友好要求冲突。
+- 本轮未写入数据库，未执行订单、报料、来料、送货、回单、对账、开票、收款或系统设置操作。
+- 下一步：现场用户在已打开的浏览器中手动登录后，继续逐页截图审查；完成证据板后再创建 Figma 设计系统和关键页面方案。
+
+## 37. 正式 UI 完整审查与 Figma 部分交付（2026-06-28）
+
+- 用户已在浏览器中完成管理员登录。
+- 已基于真实运行态检查 18 个界面 / 状态：
+  - 登录、首页、订单、报料、桌面来料、手机来料
+  - 送货回单、财务、客户、产品、材质、系统设置
+  - 新建订单、OCR 导入、新增送货单、生成对账单、新增客户
+- 截图与审查记录：
+  `docs/ui_audit/2026-06-27-figma-redesign/`
+- 完整设计说明：
+  `docs/product_planning/FIGMA_UI_REDESIGN_20260628.md`
+- Figma 文件：
+  `https://www.figma.com/design/iyA1wrl2IK7G0zI2OGgnKy`
+- Figma 已完成：
+  - “00 现状审查”页面
+  - 18 张截图上传和逐页问题说明
+  - “01 设计系统”页面骨架
+  - 标题、设计目标和第一组颜色语义
+- 关键发现：
+  - 手机来料页 390px 下严重错位，登录态和真实数据下均复现
+  - 手机页禁止缩放，与老花眼目标冲突
+  - 桌面来料、送货、新建订单仍依赖横向滚动
+  - 缺少标准 / 大字模式
+  - 状态色不统一，危险操作过度暴露
+- Figma Starter 方案已触发 MCP 调用上限，服务端拒绝继续写入；现有节点已保留。
+- 本轮未写入数据库，未执行任何业务状态操作。
+- 下一步：Figma 调用额度恢复或方案升级后，继续完成标准 / 大字组件对照和首页、订单、送货、财务、手机收料高保真画板。
+
+## 38. Figma 额度阻塞确认（2026-06-28）
+- 当前 Figma 文件 `iyA1wrl2IK7G0zI2OGgnKy` 仍可保留，但 MCP 写入 / 读取调用已经触发 Starter 方案上限。
+- 明确报错：`You've reached the Figma MCP tool call limit on the Starter plan.`
+- 受影响的后续动作：
+  - `get_metadata`
+  - `use_figma`
+  - 页面补全
+  - 组件对照
+  - 截图验证
+- 现在可继续做的事情：
+  - 维护本地设计说明 `docs/product_planning/FIGMA_UI_REDESIGN_20260628.md`
+  - 维护审查记录 `docs/ui_audit/2026-06-27-figma-redesign/`
+  - 等额度恢复后，回到同一个 Figma 文件继续补完未完成页面

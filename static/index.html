@@ -545,11 +545,16 @@
                     <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.order_no}-${todo.item_no || ''}`" class="todo-item">
                       <div class="todo-main">
                         <div class="todo-title">{{ todo.type }} ? {{ todo.customer_name }}</div>
-                        <div class="todo-detail">{{ todo.order_no }}<span v-if="todo.item_no"> / {{ todo.item_no }}</span></div>
+                        <div class="todo-detail" v-if="todo.month">
+                          {{ todo.month }}
+                          <span v-if="todo.item_count"> / 共 {{ todo.item_count }} 条</span>
+                          <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
+                        </div>
+                        <div class="todo-detail" v-else>{{ todo.order_no }}<span v-if="todo.item_no"> / {{ todo.item_no }}</span></div>
                       </div>
                       <div class="todo-message">{{ todo.message }}</div>
                       <div class="toolbar-group">
-                        <button class="btn small" @click="go(todo.target)">查看对应页面</button>
+                        <button class="btn small" @click="go(todo.target)">{{ todo.action_text || "查看对应页面" }}</button>
                       </div>
                     </div>
                   </div>

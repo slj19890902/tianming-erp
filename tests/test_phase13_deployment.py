@@ -134,13 +134,13 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port(
     project_root = Path(__file__).resolve().parents[1]
     bat = (project_root / "start_erp.bat").read_text(encoding="utf-8")
     launcher = (
-        project_root / "scripts" / "admin" / "start_erp_background.ps1"
+        project_root / "scripts" / "windows" / "start_erp.ps1"
     ).read_text(encoding="utf-8")
 
-    assert "start_erp_background.ps1" in bat
-    assert r".venv\Scripts\python.exe" in launcher
+    assert "scripts\\windows\\start_erp.bat" in bat
+    assert ".venv\\Scripts\\python.exe" in launcher
     assert "app.main:app" in launcher
-    assert '"--host", "0.0.0.0"' in launcher
+    assert '"--host", "127.0.0.1"' in launcher
     assert '"--port", "8000"' in launcher
     assert '"--workers", "1"' in launcher
     assert "erp_server.log" in launcher

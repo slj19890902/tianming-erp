@@ -143,10 +143,12 @@ def test_start_script_uses_complete_backend_entrypoint() -> None:
 
     bat = (PROJECT_ROOT / "start_erp.bat").read_text(encoding="utf-8")
     launcher = (
-        PROJECT_ROOT / "scripts" / "admin" / "start_erp_background.ps1"
+        PROJECT_ROOT / "scripts" / "windows" / "start_erp.ps1"
     ).read_text(encoding="utf-8")
 
-    assert "start_erp_background.ps1" in bat
+    assert "scripts\\windows\\start_erp.bat" in bat
     assert "app.main:app" in launcher
     assert "phase1_postgres.main:app" not in launcher
+    assert ".venv\\Scripts\\python.exe" in launcher
+    assert "alembic upgrade head" in launcher
     assert DEFAULT_DATABASE_PATH.resolve() == FORMAL_DATABASE

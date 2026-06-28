@@ -492,3 +492,205 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
     assert body["todos"]
     assert body["todos"][0]["type"] == "待报料"
     assert body["todos"][0]["target"] == "requisition"
+
+
+def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
+    tmp_path: Path,
+) -> None:
+    from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "dashboard-overview-reconciliation.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        session.add(
+            User(
+                username="admin",
+                password_hash=hash_password("RolePass123!"),
+                role="admin",
+                real_name="管理员",
+                must_change_password=False,
+            )
+        )
+        customer_a = Customer(
+            customer_number=1,
+            customer_code="CUST-A",
+            name="苏州思迈尔包装有限公司",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        customer_b = Customer(
+            customer_number=2,
+            customer_code="CUST-B",
+            name="昆山华诚电子有限公司",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        session.add_all([customer_a, customer_b])
+        session.flush()
+        product_a = Product(
+            customer_id=customer_a.id,
+            product_code="PA",
+            customer_material_code="PA",
+            product_name="测试纸箱A",
+            box_category="normal",
+            cost_unit_price=Decimal("1.00"),
+        )
+        product_b = Product(
+            customer_id=customer_b.id,
+            product_code="PB",
+            customer_material_code="PB",
+            product_name="测试纸箱B",
+            box_category="normal",
+            cost_unit_price=Decimal("1.00"),
+        )
+        session.add_all([product_a, product_b])
+        session.flush()
+
+        def add_confirmed_receipt(
+            *,
+            customer: Customer,
+            product: Product,
+            order_no: str,
+            receipt_date: date,
+            quantity: int,
+        ) -> None:
+            order = Order(
+                order_number=order_no,
+                customer_id=customer.id,
+                order_date=receipt_date,
+                delivery_date=receipt_date,
+                status="pending_delivery",
+                payment_status="unpaid",
+                total_amount=Decimal("0"),
+            )
+            session.add(order)
+            session.flush()
+            order_item = OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                quantity=quantity,
+                delivered_quantity=quantity,
+                unit_price=Decimal("10.00"),
+                subtotal=Decimal("0"),
+                material_status="received",
+                requisition_status="已入库",
+                snapshot_product_name=product.product_name,
+                snapshot_product_code=product.product_code,
+            )
+            session.add(order_item)
+            session.flush()
+            delivery = Delivery(
+                delivery_number=f"DH-{order_no}",
+                customer_id=customer.id,
+                delivery_date=receipt_date,
+                status="dispatched",
+                total_quantity=quantity,
+            )
+            session.add(delivery)
+            session.flush()
+            delivery_item = DeliveryItem(
+                delivery_id=delivery.id,
+                order_item_id=order_item.id,
+                delivered_quantity=quantity,
+            )
+            session.add(delivery_item)
+            session.flush()
+            receipt = ReturnReceipt(
+                delivery_id=delivery.id,
+                actual_received_date=receipt_date,
+                signed_by="签收人",
+                status="confirmed",
+            )
+            session.add(receipt)
+            session.flush()
+            session.add(
+                ReturnReceiptItem(
+                    return_receipt_id=receipt.id,
+                    delivery_item_id=delivery_item.id,
+                    actual_received_quantity=quantity,
+                    difference_reason="",
+                )
+            )
+
+        add_confirmed_receipt(
+            customer=customer_a,
+            product=product_a,
+            order_no="PO-RECON-A1",
+            receipt_date=date(2026, 6, 1),
+            quantity=10,
+        )
+        add_confirmed_receipt(
+            customer=customer_a,
+            product=product_a,
+            order_no="PO-RECON-A2",
+            receipt_date=date(2026, 6, 8),
+            quantity=20,
+        )
+        add_confirmed_receipt(
+            customer=customer_a,
+            product=product_a,
+            order_no="PO-RECON-A3",
+            receipt_date=date(2026, 7, 2),
+            quantity=15,
+        )
+        add_confirmed_receipt(
+            customer=customer_b,
+            product=product_b,
+            order_no="PO-RECON-B1",
+            receipt_date=date(2026, 6, 3),
+            quantity=8,
+        )
+        session.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "RolePass123!"},
+        ).status_code == 200
+        response = client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    counts = {card["key"]: card["count"] for card in body["cards"]}
+    assert counts["pending_reconciliation"] == 4
+    recon_todos = [todo for todo in body["todos"] if todo["type"] == "待对账"]
+    assert len(recon_todos) == 3
+    assert {
+        (todo["customer_name"], todo["month"])
+        for todo in recon_todos
+    } == {
+        ("苏州思迈尔包装有限公司", "2026-06"),
+        ("苏州思迈尔包装有限公司", "2026-07"),
+        ("昆山华诚电子有限公司", "2026-06"),
+    }
+    june_sme = next(
+        todo
+        for todo in recon_todos
+        if todo["customer_name"] == "苏州思迈尔包装有限公司"
+        and todo["month"] == "2026-06"
+    )
+    assert june_sme["item_count"] == 2
+    assert Decimal(str(june_sme["amount"])) == Decimal("300.00")
+    assert "月结对账单" in june_sme["message"]
+    assert june_sme["action_text"] == "去生成月结对账单"

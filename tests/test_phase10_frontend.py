@@ -57,6 +57,18 @@ def test_dashboard_frontend_uses_plain_language_workflow_cards() -> None:
         assert marker in source
 
 
+def test_dashboard_frontend_shows_grouped_reconciliation_todo_fields() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+
+    for marker in (
+        "todo.month",
+        "todo.item_count",
+        "todo.amount",
+        "todo.action_text",
+    ):
+        assert marker in source
+
+
 def test_phase10_frontend_enforces_auth_and_workshop_finance_masking() -> None:
     source = INDEX.read_text(encoding="utf-8")
 

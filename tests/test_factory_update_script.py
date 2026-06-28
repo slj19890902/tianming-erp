@@ -19,11 +19,15 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.20.6"
-    assert APP_VERSION_NAME.startswith("\u9996\u9875") or "\u5f85\u529e\u63d0\u9192" in APP_VERSION_NAME
-    assert any("\u9996\u9875\u73b0\u5728\u4e00\u6253\u5f00\u5c31\u80fd\u770b\u5230\u5f85\u62a5\u6599" in item for item in APP_CHANGELOG)
-    assert any("\u9996\u9875\u591a\u4e86\u4e00\u5757\u5927\u5b57\u5361\u7247\u548c\u5f85\u529e\u5217\u8868" in item for item in APP_CHANGELOG)
-    assert any("\u9996\u9875\u52a0\u8f7d\u5931\u8d25\u65f6\u4f1a\u663e\u793a\u4e2d\u6587\u63d0\u793a" in item for item in APP_CHANGELOG)
+    assert APP_VERSION == "v0.20.7"
+    assert (
+        APP_VERSION_NAME.startswith("\u9996\u9875")
+        or "\u5f85\u7ed3\u6e05" in APP_VERSION_NAME
+        or "\u4e00\u952e\u542f\u52a8" in APP_VERSION_NAME
+    )
+    assert any("\u5f85\u5bf9\u8d26" in item and "\u6309\u5ba2\u6237+\u6708\u4efd\u6c47\u603b" in item for item in APP_CHANGELOG)
+    assert any("\u4e00\u952e\u542f\u52a8" in item for item in APP_CHANGELOG)
+    assert any("\u684c\u9762\u56fe\u6807\u5c31\u80fd\u81ea\u52a8\u5347\u7ea7" in item for item in APP_CHANGELOG)
 
 
 def test_update_script_stops_service_before_database_backup() -> None:

@@ -340,14 +340,24 @@ def dashboard_overview(
         .order_by(Delivery.delivery_date.is_(None), Delivery.delivery_date, Delivery.created_at)
         .limit(2)
     ).mappings().all()
+    recon_month_expr = func.coalesce(
+        func.strftime("%Y-%m", ReturnReceipt.actual_received_date),
+        "未知月份",
+    )
     pending_recon_rows = db.execute(
         select(
-            ReturnReceiptItem.id,
-            ReturnReceipt.actual_received_date,
-            ReturnReceipt.created_at,
-            ReturnReceiptItem.actual_received_quantity,
-            Order.order_number,
+            Customer.id.label("customer_id"),
             Customer.name.label("customer_name"),
+            recon_month_expr.label("month"),
+            func.count(ReturnReceiptItem.id).label("item_count"),
+            func.coalesce(
+                func.sum(
+                    ReturnReceiptItem.actual_received_quantity * OrderItem.unit_price
+                ),
+                0,
+            ).label("amount"),
+            func.min(ReturnReceipt.actual_received_date).label("first_received_date"),
+            func.min(ReturnReceipt.created_at).label("first_created_at"),
         )
         .select_from(ReturnReceiptItem)
         .join(ReturnReceipt, ReturnReceipt.id == ReturnReceiptItem.return_receipt_id)
@@ -365,12 +375,20 @@ def dashboard_overview(
                 )
             ),
         )
+        .group_by(Customer.id, Customer.name, recon_month_expr)
         .order_by(
-            ReturnReceipt.actual_received_date.is_(None),
-            ReturnReceipt.actual_received_date,
-            ReturnReceipt.created_at,
+            recon_month_expr,
+            func.count(ReturnReceiptItem.id).desc(),
+            func.coalesce(
+                func.sum(
+                    ReturnReceiptItem.actual_received_quantity * OrderItem.unit_price
+                ),
+                0,
+            ).desc(),
+            func.min(ReturnReceipt.actual_received_date),
+            func.min(ReturnReceipt.created_at),
         )
-        .limit(2)
+        .limit(6)
     ).mappings().all()
     unsettled_rows = db.execute(
         select(
@@ -442,15 +460,26 @@ def dashboard_overview(
             }
         )
     for row in pending_recon_rows:
+        month_label = row["month"] or "未知月份"
+        item_count = int(row["item_count"] or 0)
+        amount = _money(row["amount"])
         todos.append(
             {
                 "type": "待对账",
+                "customer_id": row["customer_id"],
                 "customer_name": row["customer_name"],
-                "order_no": row["order_number"],
-                "item_no": f"回单 {row['id']}",
+                "month": month_label,
+                "item_count": item_count,
+                "amount": amount,
+                "order_no": f"{month_label} 月结对账单",
+                "item_no": f"共 {item_count} 条 / {amount} 元",
                 "current_status": "已回单",
-                "message": "这条回单已经确认，但还没有进入月结对账。",
+                "message": (
+                    f"该客户 {month_label} 有 {item_count} 条送货明细待生成月结对账单，"
+                    f"合计 {amount} 元。"
+                ),
                 "target": "finance",
+                "action_text": "去生成月结对账单",
             }
         )
     for row in unsettled_rows:

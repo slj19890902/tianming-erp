@@ -190,3 +190,305 @@ def test_dashboard_kpi_uses_real_database_aggregates(tmp_path: Path) -> None:
     assert Decimal(str(body["outstanding_receivables"])) == Decimal("280.80")
     assert body["today_pending_delivery_tasks"] == 1
     assert body["today_pending_incoming_tasks"] == 1
+
+
+def test_dashboard_overview_returns_safe_empty_defaults(tmp_path: Path) -> None:
+    from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "dashboard-overview.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        session.add(
+            User(
+                username="admin",
+                password_hash=hash_password("RolePass123!"),
+                role="admin",
+                real_name="管理员",
+                must_change_password=False,
+            )
+        )
+        session.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "RolePass123!"},
+        ).status_code == 200
+        response = client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["today_orders"] == 0
+    assert body["summary"]["today_deliveries"] == 0
+    assert body["summary"]["today_receipts"] == 0
+    assert len(body["cards"]) == 6
+    assert {card["count"] for card in body["cards"]} == {0}
+    assert body["todos"] == []
+
+
+def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> None:
+    from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import (
+        ReturnReceipt,
+        ReturnReceiptItem,
+        Statement,
+        StatementItem,
+    )
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "dashboard-overview-counts.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    today = date.today()
+    with factory() as session:
+        user = User(
+            username="admin",
+            password_hash=hash_password("RolePass123!"),
+            role="admin",
+            real_name="管理员",
+            must_change_password=False,
+        )
+        customer = Customer(
+            customer_number=1,
+            customer_code="SME",
+            name="苏州思迈尔包装有限公司",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        session.add_all([user, customer])
+        session.flush()
+        product = Product(
+            customer_id=customer.id,
+            product_code="P1",
+            customer_material_code="P1",
+            product_name="测试纸箱",
+            box_category="normal",
+            cost_unit_price=Decimal("2.70"),
+        )
+        session.add(product)
+        session.flush()
+        material_order = Order(
+            order_number="PO-DASH-001",
+            customer_id=customer.id,
+            order_date=today,
+            delivery_date=today,
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=0,
+        )
+        incoming_order = Order(
+            order_number="PO-DASH-002",
+            customer_id=customer.id,
+            order_date=today,
+            delivery_date=today,
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=0,
+        )
+        delivery_order = Order(
+            order_number="PO-DASH-003",
+            customer_id=customer.id,
+            order_date=today,
+            delivery_date=today,
+            status="pending_delivery",
+            payment_status="unpaid",
+            total_amount=0,
+        )
+        receipt_order = Order(
+            order_number="PO-DASH-004",
+            customer_id=customer.id,
+            order_date=today,
+            delivery_date=today,
+            status="pending_delivery",
+            payment_status="unpaid",
+            total_amount=0,
+        )
+        session.add_all([material_order, incoming_order, delivery_order, receipt_order])
+        session.flush()
+        session.add_all(
+            [
+                OrderItem(
+                    order_id=material_order.id,
+                    product_id=product.id,
+                    quantity=100,
+                    delivered_quantity=0,
+                    unit_price=Decimal("3.00"),
+                    subtotal=0,
+                    material_status="pending",
+                    requisition_status="未报料",
+                    snapshot_product_name="测试纸箱",
+                    snapshot_product_code="P1",
+                ),
+                OrderItem(
+                    order_id=incoming_order.id,
+                    product_id=product.id,
+                    quantity=80,
+                    delivered_quantity=0,
+                    unit_price=Decimal("3.10"),
+                    subtotal=0,
+                    material_status="pending",
+                    requisition_status="已报料",
+                    snapshot_product_name="测试纸箱",
+                    snapshot_product_code="P1",
+                ),
+                OrderItem(
+                    order_id=delivery_order.id,
+                    product_id=product.id,
+                    quantity=70,
+                    delivered_quantity=20,
+                    unit_price=Decimal("3.20"),
+                    subtotal=0,
+                    material_status="received",
+                    requisition_status="已入库",
+                    snapshot_product_name="测试纸箱",
+                    snapshot_product_code="P1",
+                ),
+                OrderItem(
+                    order_id=receipt_order.id,
+                    product_id=product.id,
+                    quantity=60,
+                    delivered_quantity=60,
+                    unit_price=Decimal("3.30"),
+                    subtotal=0,
+                    material_status="received",
+                    requisition_status="已入库",
+                    snapshot_product_name="测试纸箱",
+                    snapshot_product_code="P1",
+                ),
+            ]
+        )
+        session.flush()
+        delivery_pending = Delivery(
+            delivery_number="DH-DASH-001",
+            customer_id=customer.id,
+            delivery_date=today,
+            status="dispatched",
+            total_quantity=20,
+        )
+        delivery_confirmed = Delivery(
+            delivery_number="DH-DASH-002",
+            customer_id=customer.id,
+            delivery_date=today,
+            status="dispatched",
+            total_quantity=60,
+        )
+        session.add_all([delivery_pending, delivery_confirmed])
+        session.flush()
+        pending_delivery_item = session.get(OrderItem, 3)
+        confirmed_delivery_item = session.get(OrderItem, 4)
+        session.add_all(
+            [
+                DeliveryItem(
+                    delivery_id=delivery_pending.id,
+                    order_item_id=pending_delivery_item.id,
+                    delivered_quantity=20,
+                ),
+                DeliveryItem(
+                    delivery_id=delivery_confirmed.id,
+                    order_item_id=confirmed_delivery_item.id,
+                    delivered_quantity=60,
+                ),
+            ]
+        )
+        session.flush()
+        receipt = ReturnReceipt(
+            delivery_id=delivery_confirmed.id,
+            actual_received_date=today,
+            signed_by="客户签收",
+            status="confirmed",
+        )
+        session.add(receipt)
+        session.flush()
+        receipt_item = ReturnReceiptItem(
+            return_receipt_id=receipt.id,
+            delivery_item_id=delivery_confirmed.items[0].id,
+            actual_received_quantity=58,
+            difference_reason="少收2箱",
+        )
+        session.add(receipt_item)
+        session.flush()
+        statement = Statement(
+            statement_number="ST-DASH-001",
+            customer_id=customer.id,
+            statement_month=today.strftime("%Y-%m"),
+            total_receivable=Decimal("174.00"),
+            total_gross_profit=Decimal("58.00"),
+            settled_amount=Decimal("0"),
+            status="unsettled",
+        )
+        session.add(statement)
+        session.flush()
+        session.add(
+            StatementItem(
+                statement_id=statement.id,
+                return_receipt_item_id=receipt_item.id,
+                actual_received_quantity=58,
+                unit_price_snapshot=Decimal("3.00"),
+                unit_cost_snapshot=Decimal("2.00"),
+                receivable_amount=Decimal("174.00"),
+                gross_profit_amount=Decimal("58.00"),
+            )
+        )
+        session.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "RolePass123!"},
+        ).status_code == 200
+        response = client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [card["key"] for card in body["cards"]] == [
+        "pending_material",
+        "pending_incoming",
+        "pending_delivery",
+        "pending_receipt",
+        "pending_reconciliation",
+        "unsettled_statements",
+    ]
+    counts = {card["key"]: card["count"] for card in body["cards"]}
+    assert counts["pending_material"] == 1
+    assert counts["pending_incoming"] == 1
+    assert counts["pending_delivery"] == 1
+    assert counts["pending_receipt"] == 1
+    assert counts["pending_reconciliation"] == 0
+    assert counts["unsettled_statements"] == 1
+    assert body["todos"]
+    assert body["todos"][0]["type"] == "待报料"
+    assert body["todos"][0]["target"] == "requisition"

@@ -24,6 +24,7 @@ def test_phase10_frontend_uses_core_real_api_contracts() -> None:
 
     required = (
         "/api/dashboard/kpi",
+        "/api/dashboard/overview",
         "/api/master/customers",
         "/api/master/products",
         "/api/master/materials",
@@ -37,6 +38,22 @@ def test_phase10_frontend_uses_core_real_api_contracts() -> None:
         "window.open(`/delivery-print.html?id=${",
     )
     for marker in required:
+        assert marker in source
+
+
+def test_dashboard_frontend_uses_plain_language_workflow_cards() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+
+    for marker in (
+        "overview.cards",
+        "overview.todos",
+        "overviewError",
+        "dashboard-cards",
+        "todo-list",
+        "go(card.target)",
+        "go(todo.target)",
+        "当前没有紧急待办",
+    ):
         assert marker in source
 
 

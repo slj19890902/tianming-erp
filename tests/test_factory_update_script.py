@@ -19,11 +19,11 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.20.5"
-    assert "回单撤销" in APP_VERSION_NAME or "对账单" in APP_VERSION_NAME
-    assert any("送货单确认回单后可以取消回单" in item for item in APP_CHANGELOG)
-    assert any("月结对账单可以切换客户" in item for item in APP_CHANGELOG)
-    assert any("已结清和未结清的对账单都能编辑或取消" in item for item in APP_CHANGELOG)
+    assert APP_VERSION == "v0.20.6"
+    assert APP_VERSION_NAME.startswith("\u9996\u9875") or "\u5f85\u529e\u63d0\u9192" in APP_VERSION_NAME
+    assert any("\u9996\u9875\u73b0\u5728\u4e00\u6253\u5f00\u5c31\u80fd\u770b\u5230\u5f85\u62a5\u6599" in item for item in APP_CHANGELOG)
+    assert any("\u9996\u9875\u591a\u4e86\u4e00\u5757\u5927\u5b57\u5361\u7247\u548c\u5f85\u529e\u5217\u8868" in item for item in APP_CHANGELOG)
+    assert any("\u9996\u9875\u52a0\u8f7d\u5931\u8d25\u65f6\u4f1a\u663e\u793a\u4e2d\u6587\u63d0\u793a" in item for item in APP_CHANGELOG)
 
 
 def test_update_script_stops_service_before_database_backup() -> None:

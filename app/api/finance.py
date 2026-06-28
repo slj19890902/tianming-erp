@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -125,6 +125,17 @@ class StatementCreate(BaseModel):
         return value
 
 
+class StatementUpdate(BaseModel):
+    statement_month: str
+
+    @field_validator("statement_month")
+    @classmethod
+    def validate_month(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
+            raise ValueError("对账月份格式必须为 YYYY-MM")
+        return value
+
+
 class InvoiceCreate(BaseModel):
     statement_id: int
     invoice_number: str
@@ -212,6 +223,136 @@ def list_statements(
             }
             for statement, customer_name in rows
         ],
+    }
+
+
+@router.get("/statement-customers")
+def list_statement_customers(
+    statement_month: str | None = None,
+    db: Session = Depends(get_db),
+    _user: User = Depends(finance_only),
+) -> dict:
+    query = (
+        select(
+            Customer.id,
+            Customer.name,
+            func.count(ReturnReceiptItem.id).label("pending_count"),
+        )
+        .join(Delivery, Delivery.customer_id == Customer.id)
+        .join(ReturnReceipt, ReturnReceipt.delivery_id == Delivery.id)
+        .join(ReturnReceiptItem, ReturnReceiptItem.return_receipt_id == ReturnReceipt.id)
+        .outerjoin(
+            StatementItem,
+            StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+        )
+        .where(
+            ReturnReceipt.status == "confirmed",
+            StatementItem.id.is_(None),
+        )
+    )
+    if statement_month:
+        query = query.where(
+            func.strftime("%Y-%m", ReturnReceipt.actual_received_date)
+            == statement_month
+        )
+    rows = db.execute(
+        query.group_by(Customer.id, Customer.name).order_by(Customer.name)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": customer_id,
+                "name": customer_name,
+                "pending_count": pending_count,
+            }
+            for customer_id, customer_name, pending_count in rows
+        ]
+    }
+
+
+def _statement_detail_response(db: Session, statement_id: int) -> dict:
+    row = db.execute(
+        select(Statement, Customer.name.label("customer_name"))
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.id == statement_id)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="对账单不存在")
+    statement, customer_name = row
+    items = db.execute(
+        select(
+            StatementItem.id.label("statement_item_id"),
+            StatementItem.return_receipt_item_id,
+            ReturnReceipt.actual_received_date,
+            Delivery.delivery_number,
+            Order.customer_po,
+            Product.product_code,
+            OrderItem.snapshot_product_name.label("product_name"),
+            OrderItem.snapshot_spec.label("specification"),
+            OrderItem.snapshot_material.label("material"),
+            StatementItem.actual_received_quantity,
+            StatementItem.unit_price_snapshot,
+            StatementItem.unit_cost_snapshot,
+            StatementItem.receivable_amount,
+            StatementItem.gross_profit_amount,
+            ReturnReceiptItem.difference_reason,
+        )
+        .select_from(StatementItem)
+        .join(
+            ReturnReceiptItem,
+            ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+        )
+        .join(
+            ReturnReceipt,
+            ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
+        )
+        .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(StatementItem.statement_id == statement.id)
+        .order_by(StatementItem.id)
+    ).all()
+    invoices = db.execute(
+        select(
+            Invoice.id,
+            Invoice.invoice_number,
+            Invoice.invoice_date,
+            Invoice.invoice_amount,
+        ).where(Invoice.statement_id == statement.id)
+    ).all()
+    settlements = db.execute(
+        select(
+            SettlementRecord.id,
+            SettlementRecord.settled_amount,
+            SettlementRecord.settlement_date,
+            SettlementRecord.account,
+        ).where(SettlementRecord.statement_id == statement.id)
+    ).all()
+    return {
+        "id": statement.id,
+        "statement_number": statement.statement_number,
+        "customer_id": statement.customer_id,
+        "customer_name": customer_name,
+        "statement_month": statement.statement_month,
+        "total_receivable": statement.total_receivable,
+        "total_gross_profit": statement.total_gross_profit,
+        "invoiced_amount": statement.invoiced_amount,
+        "settled_amount": statement.settled_amount,
+        "status": statement.status,
+        "status_label": "已结清" if statement.status == "settled" else "未结清",
+        "item_count": len(items),
+        "invoice_count": len(invoices),
+        "settlement_count": len(settlements),
+        "items": [
+            {
+                **dict(item._mapping),
+            }
+            for item in items
+        ],
+        "invoices": [dict(row._mapping) for row in invoices],
+        "settlements": [dict(row._mapping) for row in settlements],
     }
 
 
@@ -537,15 +678,30 @@ def create_return_receipt(
                 status_code=400,
                 detail="回单必须包含送货单全部明细",
             )
-        receipt = ReturnReceipt(
-            delivery_id=delivery.id,
-            actual_received_date=payload.actual_received_date,
-            signed_by=(payload.signed_by or "").strip() or None,
-            status="confirmed",
-            created_by=user.id,
+        receipt = db.scalar(
+            select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery.id)
         )
-        db.add(receipt)
-        db.flush()
+        if receipt is not None and receipt.status == "confirmed":
+            raise HTTPException(status_code=409, detail="该送货单已经提交回单")
+        if receipt is None:
+            receipt = ReturnReceipt(
+                delivery_id=delivery.id,
+                actual_received_date=payload.actual_received_date,
+                signed_by=(payload.signed_by or "").strip() or None,
+                status="confirmed",
+                created_by=user.id,
+            )
+            db.add(receipt)
+            db.flush()
+        else:
+            db.execute(
+                delete(ReturnReceiptItem).where(
+                    ReturnReceiptItem.return_receipt_id == receipt.id
+                )
+            )
+            receipt.actual_received_date = payload.actual_received_date
+            receipt.signed_by = (payload.signed_by or "").strip() or None
+            receipt.status = "confirmed"
         for item in delivery_items:
             line = requested[item.id]
             if (
@@ -655,6 +811,7 @@ def update_return_receipt(
         target.difference_reason = reason or None
     receipt.actual_received_date = payload.actual_received_date
     receipt.signed_by = (payload.signed_by or "").strip() or None
+    receipt.status = "confirmed"
     _audit(
         db,
         user=user,
@@ -1029,6 +1186,176 @@ def settle_statement(
             ),
             "settlement_record_id": settlement.id,
         }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/return_receipts/{receipt_id}/cancel")
+def cancel_return_receipt(
+    receipt_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(finance_only),
+) -> dict:
+    receipt = db.get(ReturnReceipt, receipt_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="回单不存在")
+    receipt_item_ids = list(
+        db.scalars(
+            select(ReturnReceiptItem.id).where(
+                ReturnReceiptItem.return_receipt_id == receipt.id
+            )
+        ).all()
+    )
+    if receipt_item_ids and db.scalar(
+        select(StatementItem.id)
+        .where(StatementItem.return_receipt_item_id.in_(receipt_item_ids))
+        .limit(1)
+    ) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该送货单已进入对账/结清流程，请先取消或编辑对应对账单。",
+        )
+    before = _receipt_response(db, receipt.id)
+    receipt.status = "cancelled"
+    receipt.signed_by = None
+    _audit(
+        db,
+        user=user,
+        action="CANCEL_RETURN_RECEIPT",
+        resource="ReturnReceipt",
+        entity_id=receipt.id,
+        details={"before": before},
+        description="撤销客户送货回单",
+    )
+    db.commit()
+    return _receipt_response(db, receipt.id)
+
+
+@router.get("/statements/{statement_id}")
+def get_statement(
+    statement_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(finance_only),
+) -> dict:
+    return _statement_detail_response(db, statement_id)
+
+
+@router.put("/statements/{statement_id}")
+def update_statement(
+    statement_id: int,
+    payload: StatementUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(finance_only),
+) -> dict:
+    try:
+        statement = db.get(Statement, statement_id)
+        if statement is None:
+            raise HTTPException(status_code=404, detail="对账单不存在")
+        if db.scalar(
+            select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
+        ) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已有开票记录，请先取消开票后再编辑。",
+            )
+        if db.scalar(
+            select(SettlementRecord.id)
+            .where(SettlementRecord.statement_id == statement.id)
+            .limit(1)
+        ) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已有收款记录，请先撤销收款后再编辑。",
+            )
+        old_month = statement.statement_month
+        if payload.statement_month == old_month:
+            return _statement_detail_response(db, statement.id)
+        receipt_months = {
+            row[0]
+            for row in db.execute(
+                select(func.strftime("%Y-%m", ReturnReceipt.actual_received_date))
+                .join(
+                    ReturnReceiptItem,
+                    ReturnReceiptItem.return_receipt_id == ReturnReceipt.id,
+                )
+                .join(
+                    StatementItem,
+                    StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+                )
+                .where(StatementItem.statement_id == statement.id)
+            ).all()
+        }
+        if receipt_months and receipt_months != {payload.statement_month}:
+            raise HTTPException(
+                status_code=409,
+                detail="对账月份必须与该对账单明细的回单月份一致。",
+            )
+        before = _statement_detail_response(db, statement.id)
+        statement.statement_month = payload.statement_month
+        statement.statement_number = _next_statement_number(db, payload.statement_month)
+        _audit(
+            db,
+            user=user,
+            action="UPDATE_STATEMENT",
+            resource="Statement",
+            entity_id=statement.id,
+            details={"before": before, "after": {"statement_month": payload.statement_month}},
+            description="修改月结对账单基础信息",
+        )
+        db.commit()
+        return _statement_detail_response(db, statement.id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/statements/{statement_id}/cancel")
+def cancel_statement(
+    statement_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(finance_only),
+) -> dict:
+    try:
+        statement = db.get(Statement, statement_id)
+        if statement is None:
+            raise HTTPException(status_code=404, detail="对账单不存在")
+        if db.scalar(
+            select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
+        ) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已有开票记录，请先取消开票后再取消对账单。",
+            )
+        if db.scalar(
+            select(SettlementRecord.id)
+            .where(SettlementRecord.statement_id == statement.id)
+            .limit(1)
+        ) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已有收款记录，请先撤销收款后再取消对账单。",
+            )
+        before = _statement_detail_response(db, statement.id)
+        db.execute(delete(StatementItem).where(StatementItem.statement_id == statement.id))
+        db.execute(delete(Statement).where(Statement.id == statement.id))
+        _audit(
+            db,
+            user=user,
+            action="CANCEL_STATEMENT",
+            resource="Statement",
+            entity_id=statement.id,
+            details={"before": before},
+            description="取消月结对账单",
+        )
+        db.commit()
+        return {"status": "cancelled", "statement_id": statement_id}
     except HTTPException:
         db.rollback()
         raise

@@ -1112,7 +1112,7 @@
               <div class="toolbar"><div><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
                 <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status || 'waiting_receipt'"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched'" class="btn small" @click="openReceipt(row)">{{ row.return_receipt_id ? "编辑回单" : "确认回单" }}</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
+                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
               </data-panel>
               <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
@@ -1123,7 +1123,7 @@
               <div class="panel">
                 <div class="section-title">对账单</div>
                 <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in statements" :key="row.id"><td>{{ row.statement_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button class="btn small" @click="registerInvoice(row)">登记开票</button><button class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button class="btn small" @click="openStatementEdit(row)">编辑</button><button class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button class="btn small" @click="registerInvoice(row)">登记开票</button><button class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                 <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
               </div>
               <div class="panel" style="margin-top:10px">
@@ -2173,11 +2173,69 @@
             </div>
             <div v-else-if="modal.type === 'statement'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><search-select v-model="statementForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="loadPendingStatements"></search-select></div>
-                <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementForm.statement_month" @change="loadPendingStatements" /></div>
+                <div class="field"><label>客户</label><search-select v-model="statementForm.customer_id" :options="statementCustomerOptions" label-key="name" value-key="id" placeholder="搜索有对账资格的客户" @change="loadPendingStatements"></search-select></div>
+                <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementForm.statement_month" @change="refreshStatementFilters" /></div>
               </div>
+              <div v-if="!statementCustomers.length" class="status orange" style="margin-bottom:10px">该月份暂无可对账客户，请切换月份或先完成回单确认。</div>
               <table><thead><tr><th><input type="checkbox" :checked="allStatementSelected" @change="toggleAllStatement($event.target.checked)" /> 全选</th><th>回单日期</th><th>送货单</th><th>产品</th><th>实收数量</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="row in pendingStatements" :key="row.return_receipt_item_id"><td><input type="checkbox" v-model="statementForm.selected[row.return_receipt_item_id]" /></td><td>{{ row.actual_received_date }}</td><td>{{ row.delivery_number }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(row.receivable_amount) }}</td></tr></tbody></table>
-              <div v-if="!pendingStatements.length" class="empty">该客户当前没有可对账的已回单明细</div>
+              <div v-if="statementForm.customer_id && !pendingStatements.length" class="empty">该客户当前月份暂无可生成对账单的送货明细。</div>
+              <div v-else-if="!statementForm.customer_id && statementCustomers.length" class="empty">请先选择客户，再查看可对账明细。</div>
+            </div>
+            <div v-else-if="modal.type === 'statementDetail' && statementDetail">
+              <div class="form-grid">
+                <div class="field"><label>对账单号</label><div><strong>{{ statementDetail.statement_number }}</strong></div></div>
+                <div class="field"><label>客户</label><div>{{ statementDetail.customer_name }}</div></div>
+                <div class="field"><label>对账月份</label><div>{{ statementDetail.statement_month }}</div></div>
+                <div class="field"><label>状态</label><div><status-tag :value="statementDetail.status"></status-tag></div></div>
+                <div class="field sensitive-price"><label>应收金额</label><div>¥ {{ money(statementDetail.total_receivable) }}</div></div>
+                <div class="field sensitive-price"><label>已开票</label><div>¥ {{ money(statementDetail.invoiced_amount) }}</div></div>
+                <div class="field sensitive-price"><label>已收款</label><div>¥ {{ money(statementDetail.settled_amount) }}</div></div>
+                <div class="field sensitive-price"><label>毛利</label><div>¥ {{ money(statementDetail.total_gross_profit) }}</div></div>
+              </div>
+              <div class="toolbar-group" style="margin:10px 0">
+                <button class="btn primary" @click="openStatementEdit(statementDetail)">编辑</button>
+                <button class="btn danger" @click="cancelStatement(statementDetail)">取消</button>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>回单日期</th>
+                    <th>送货单</th>
+                    <th>客户单号</th>
+                    <th>产品</th>
+                    <th>规格</th>
+                    <th>材质</th>
+                    <th>实收数量</th>
+                    <th class="sensitive-price">单价</th>
+                    <th class="sensitive-price">应收金额</th>
+                    <th>差异原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in statementDetail.items" :key="item.statement_item_id">
+                    <td>{{ item.actual_received_date }}</td>
+                    <td>{{ item.delivery_number }}</td>
+                    <td>{{ item.customer_po }}</td>
+                    <td>{{ item.product_code }} / {{ item.product_name }}</td>
+                    <td>{{ item.specification }}</td>
+                    <td>{{ item.material }}</td>
+                    <td>{{ item.actual_received_quantity }}</td>
+                    <td class="sensitive-price">¥ {{ money(item.unit_price_snapshot) }}</td>
+                    <td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td>
+                    <td>{{ item.difference_reason || "-" }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录，取消前请先处理开票。</div>
+              <div v-if="statementDetail.settlements?.length" class="status orange" style="margin-top:10px">已有 {{ statementDetail.settlement_count }} 条收款记录，取消前请先处理收款。</div>
+            </div>
+            <div v-else-if="modal.type === 'statementEdit'">
+              <div class="form-grid">
+                <div class="field"><label>对账单号</label><div><strong>{{ statementDetail?.statement_number || "-" }}</strong></div></div>
+                <div class="field"><label>客户</label><div>{{ statementDetail?.customer_name || "-" }}</div></div>
+                <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementEditForm.statement_month" /></div>
+              </div>
+              <div class="muted">如果该对账单已开票或已收款，系统会拒绝保存。已结清时请先撤销收款再编辑。</div>
             </div>
             <div v-else-if="modal.type === 'password'" class="form-grid">
               <div v-if="modal.force" class="field wide danger-text">当前为临时密码，修改完成后才能继续使用系统。</div>
@@ -2466,7 +2524,7 @@
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "苏州嘉林亿", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
-            pendingStatements: [], backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
+            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
             companyConfig: {}, companyForm: {}, showCompanyModal: false,
             // v0.19.2-B 供应商调价 + 价格历史
@@ -2535,6 +2593,9 @@
           };
         },
         computed: {
+          statementCustomerOptions() {
+            return this.statementCustomers;
+          },
           materialFluteOptions() {
             const lc = this.materialForm.layer_count;
             if (lc === 3) return ["B", "A", "E"];
@@ -2651,6 +2712,7 @@
             if (["order","orderEdit","orderItem"].includes(this.modal.type)) return this.canSales;
             if (this.modal.type === "delivery") return this.canDelivery;
             if (this.modal.type === "statement") return this.canFinance;
+            if (this.modal.type === "statementEdit") return this.canFinance;
             if (this.modal.type === "requisition") return this.canRequisition;
             if (this.modal.type === "receipt") return this.canFinance;
             if (this.modal.type === "password") return true;
@@ -2951,7 +3013,7 @@
               business:"日常订单", history:"历史订单", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", production:"生产中", pending_delivery:"待送货",
               partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
               delivered:"已送货", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
-              dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认",
+              dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
               unsettled:"未结清", settled:"已结清", "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
             })[value] || value || "-";
           },
@@ -4676,7 +4738,8 @@
                 difference_reason:saved.get(item.id)?.difference_reason || ""
               }))
             };
-            this.modal={type:"receipt",title:receipt ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
+            const isConfirmed = receipt?.status === "confirmed";
+            this.modal={type:"receipt",title: isConfirmed ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
           },
           async openDelivery() {
             await this.loadDeliveries();
@@ -4688,14 +4751,61 @@
             this.modal = { type:"delivery", title:"新增送货单" };
           },
           async openStatement() {
-            this.statementForm = { customer_id:this.activeCustomerOptions[0]?.id || null, statement_month:month(), selected:{} };
+            this.statementForm = { customer_id:null, statement_month:month(), selected:{} };
             this.modal = { type:"statement", title:"生成月结对账单" };
+            await this.loadStatementCustomers();
             await this.loadPendingStatements();
+          },
+          async loadStatementCustomers() {
+            const { data } = await axios.get("/api/finance/statement-customers", {
+              params: { statement_month: this.statementForm.statement_month }
+            });
+            this.statementCustomers = data.items || [];
+            if (this.statementCustomers.length === 1) {
+              this.statementForm.customer_id = this.statementCustomers[0].id;
+            } else if (this.statementCustomers.length && !this.statementCustomers.some(row => row.id === this.statementForm.customer_id)) {
+              this.statementForm.customer_id = null;
+            }
           },
           async loadPendingStatements() {
             if (!this.statementForm.customer_id) { this.pendingStatements=[]; return; }
             this.pendingStatements = (await axios.get("/api/finance/pending_statements", { params:{ customer_id:this.statementForm.customer_id } })).data.items
               .filter(row => String(row.actual_received_date).startsWith(this.statementForm.statement_month));
+          },
+          async refreshStatementFilters() {
+            await this.loadStatementCustomers();
+            await this.loadPendingStatements();
+          },
+          async openStatementDetail(row) {
+            this.statementDetail = (await axios.get(`/api/finance/statements/${row.id}`)).data;
+            this.modal = { type:"statementDetail", title:`对账单详情 ${this.statementDetail.statement_number}` };
+          },
+          async openStatementEdit(row) {
+            const detail = this.statementDetail?.id === row.id ? this.statementDetail : (await axios.get(`/api/finance/statements/${row.id}`)).data;
+            this.statementEditForm = {
+              id: detail.id,
+              statement_month: detail.statement_month,
+            };
+            this.statementDetail = detail;
+            this.modal = { type:"statementEdit", title:`编辑对账单 ${detail.statement_number}` };
+          },
+          async saveStatementEdit() {
+            const payload = { statement_month: this.statementEditForm.statement_month };
+            await axios.put(`/api/finance/statements/${this.statementEditForm.id}`, payload);
+            await this.loadFinance();
+            this.statementDetail = null;
+          },
+          async cancelStatement(row) {
+            if (!confirm(`确定取消该对账单吗？取消后相关送货明细可重新生成对账单。`)) return;
+            try {
+              await axios.post(`/api/finance/statements/${row.id}/cancel`);
+              await this.loadFinance();
+              if (this.statementDetail?.id === row.id) this.statementDetail = null;
+              if (this.modal?.type === "statementDetail" || this.modal?.type === "statementEdit") this.modal = null;
+              this.showToast("对账单已取消，相关送货明细可重新生成");
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+            }
           },
           closeModal() {
             if (this.isForcedPassword) return;
@@ -4703,6 +4813,8 @@
               if (!confirm("表单有未保存的修改，确定要关闭吗？")) return;
             }
             this.modal = null;
+            this.statementDetail = null;
+            this.statementEditForm = { id: null, statement_month: "" };
             this.productFormSnapshot = null;
           },
           async saveModal() {
@@ -4827,10 +4939,15 @@
                 await this.loadDeliveries();
               }
               if (this.modal.type === "statement") {
+                if (!this.statementForm.customer_id) throw new Error("请先选择客户");
                 const ids = this.pendingStatements.filter(row => this.statementForm.selected[row.return_receipt_item_id]).map(row => row.return_receipt_item_id);
                 if (!ids.length) throw new Error("至少选择一条待对账明细");
                 await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, return_receipt_item_ids:ids });
                 await this.loadFinance();
+              }
+              if (this.modal.type === "statementEdit") {
+                if (!this.statementEditForm.statement_month) throw new Error("请填写对账月份");
+                await this.saveStatementEdit();
               }
               if (this.modal.type === "password") {
                 if (this.passwordForm.new_password !== this.passwordForm.confirm_password) throw new Error("两次输入的新密码不一致");
@@ -4914,6 +5031,18 @@
               this.showToast("已取消发货，订单待送数量已恢复");
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
+          async cancelReceipt(row) {
+            const receiptId = row.return_receipt_id || this.receiptForm?.id;
+            if (!receiptId) return;
+            if (!confirm("确定要取消回单吗？取消后该送货单会退回到已发货状态。")) return;
+            try {
+              this.receiptForm = this.receiptForm?.id === receiptId ? this.receiptForm : (await axios.get(`/api/finance/return_receipts/${receiptId}`)).data;
+              await axios.post(`/api/finance/return_receipts/${this.receiptForm.id}/cancel`);
+              await Promise.all([this.loadDeliveries(), this.loadOrders(), this.loadKpi(), this.loadFinance()]);
+              if (this.modal?.type === "receipt") this.modal = null;
+              this.showToast("已取消回单，该送货单已退回到已发货状态，可以继续修改或取消发货。");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
           exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
           async registerInvoice(row) {
             const invoiceNumber = prompt("请输入发票号码");
@@ -4931,7 +5060,7 @@
             const amount = prompt("请输入本次收款金额", remaining.toFixed(2));
             if (amount === null) return;
             try {
-              await axios.put(`/api/finance/statements/${row.id}/settle`, { amount, settlement_date:today(), account:"" });
+              await axios.put(`/api/finance/statements/${row.id}/settle`, { amount, settlement_date:today() });
               await Promise.all([this.loadFinance(),this.loadKpi()]); this.showToast("收款核销成功");
             } catch (error) {
               const validation = this.normalizeValidationErrors(error, {

@@ -17,10 +17,13 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
 
 
 def test_factory_update_reports_current_release_version() -> None:
-    from app.version import APP_VERSION, APP_VERSION_NAME
+    from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.20.3"
-    assert "公司信息维护" in APP_VERSION_NAME
+    assert APP_VERSION == "v0.20.5"
+    assert "回单撤销" in APP_VERSION_NAME or "对账单" in APP_VERSION_NAME
+    assert any("送货单确认回单后可以取消回单" in item for item in APP_CHANGELOG)
+    assert any("月结对账单可以切换客户" in item for item in APP_CHANGELOG)
+    assert any("已结清和未结清的对账单都能编辑或取消" in item for item in APP_CHANGELOG)
 
 
 def test_update_script_stops_service_before_database_backup() -> None:

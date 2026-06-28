@@ -5,8 +5,15 @@
 - Branch: `factory-current-baseline`
 - Latest merge commit: `6913749`
 - Feature branch merged: `feature/v0203-company-info`
-- App version: `v0.20.3`
-- Version name: `公司信息维护版`
+- App version: `v0.20.5`
+- Version name: `回单撤销与对账单修复版`
+
+## What v0.20.5 Fixed
+
+- 送货单确认回单后，可以撤销回单，误点后能退回已发货状态。
+- 月结对账单现在可以切换到有对账资格的客户，不会只盯住一个客户。
+- 对账单新增了查看、编辑、取消按钮，遇到开票或收款记录会明确提示原因。
+- 收款核销不再要求填写收款账户，直接输入金额即可。
 
 ## What v0.20.3 Added
 

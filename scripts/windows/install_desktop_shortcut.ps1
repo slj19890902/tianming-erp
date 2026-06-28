@@ -1,12 +1,12 @@
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = "D:\纸箱厂erp软件搭建"
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Target = Join-Path $ProjectRoot "scripts\windows\start_erp.bat"
 $Desktop = [Environment]::GetFolderPath("Desktop")
-$ShortcutPath = Join-Path $Desktop "打开天明ERP.lnk"
+$ShortcutPath = Join-Path $Desktop "Open Tianming ERP.lnk"
 
 if (-not (Test-Path -LiteralPath $Target)) {
-    throw "没有找到启动脚本：$Target"
+    throw "Launcher not found: $Target"
 }
 
 $shell = New-Object -ComObject WScript.Shell
@@ -17,4 +17,4 @@ $shortcut.WindowStyle = 1
 $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll, 0"
 $shortcut.Save()
 
-Write-Host "桌面快捷方式已创建，以后双击【打开天明ERP】即可进入系统。"
+Write-Host "Desktop shortcut created: Open Tianming ERP.lnk"

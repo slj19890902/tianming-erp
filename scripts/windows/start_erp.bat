@@ -1,14 +1,19 @@
 @echo off
 setlocal EnableExtensions
-set "ROOT=%~dp0..\.."
-cd /d "%ROOT%"
-title 天明ERP启动中
+chcp 65001 >nul
+title Tianming ERP Starter
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_erp.ps1"
+set "SCRIPT_DIR=%~dp0"
+set "ROOT=%SCRIPT_DIR%..\.."
+cd /d "%ROOT%"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\windows\start_erp.ps1"
+
 if errorlevel 1 (
-  echo ERP startup failed. 请把这个窗口截图发给管理员。
-  pause
-  exit /b 1
+    echo.
+    echo ERP startup failed. Please check logs\erp_startup.log
+    pause
+    exit /b 1
 )
 
 exit /b 0

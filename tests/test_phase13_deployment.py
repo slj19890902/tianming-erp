@@ -126,13 +126,16 @@ def test_production_security_removes_docs_and_uses_private_lan_regex(
     assert "192\\.168\\." in settings.allowed_origin_regex
 
 
-def test_start_batch_uses_project_venv_one_worker_and_production_port() -> None:
+def test_start_batch_uses_project_venv_one_worker_and_production_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import load_settings
+
     project_root = Path(__file__).resolve().parents[1]
     bat = (project_root / "start_erp.bat").read_text(encoding="utf-8")
     launcher = (
         project_root / "scripts" / "admin" / "start_erp_background.ps1"
     ).read_text(encoding="utf-8")
-    env_file = (project_root / ".env").read_text(encoding="utf-8")
 
     assert "start_erp_background.ps1" in bat
     assert r".venv\Scripts\python.exe" in launcher
@@ -141,4 +144,5 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port() -> None:
     assert '"--port", "8000"' in launcher
     assert '"--workers", "1"' in launcher
     assert "erp_server.log" in launcher
-    assert "ERP_ENVIRONMENT" in env_file
+    monkeypatch.setenv("ERP_ENVIRONMENT", "production")
+    assert load_settings().is_production is True

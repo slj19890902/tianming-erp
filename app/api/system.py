@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import RoleChecker, get_db
@@ -50,6 +51,14 @@ class CompanyConfigUpdate(BaseModel):
     bank_account: str | None = None
     contact_person: str | None = None
     contact_phone: str | None = None
+
+    @field_validator("company_name")
+    @classmethod
+    def validate_company_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("公司名称不能为空")
+        return normalized
 
 
 def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
@@ -971,37 +980,31 @@ def fix_flute_consistency(request: Request, db: Session = Depends(get_db)):
 # 公司信息维护（v0.20.3）
 # ─────────────────────────────────────────────────────────────
 
-def _company_row(db: Session) -> CompanyConfig:
-    """取 id=1 的记录；若不存在则创建空行（迁移前兼容）。"""
-    from sqlalchemy import select as _select
-    row = db.scalar(_select(CompanyConfig).where(CompanyConfig.id == 1))
-    if row is None:
-        row = CompanyConfig(id=1, company_name="")
-        db.add(row)
-        db.flush()
-    return row
+def _find_company_row(db: Session) -> CompanyConfig | None:
+    """只读获取单行公司配置。"""
+    return db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
 
 
-def _company_dict(row: CompanyConfig) -> dict:
+def _company_dict(row: CompanyConfig | None) -> dict:
     return {
-        "company_name": row.company_name or "",
-        "short_name": row.short_name,
-        "address": row.address,
-        "phone": row.phone,
-        "fax": row.fax,
-        "tax_number": row.tax_number,
-        "bank_name": row.bank_name,
-        "bank_account": row.bank_account,
-        "contact_person": row.contact_person,
-        "contact_phone": row.contact_phone,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "company_name": row.company_name or "" if row else "",
+        "short_name": row.short_name if row else None,
+        "address": row.address if row else None,
+        "phone": row.phone if row else None,
+        "fax": row.fax if row else None,
+        "tax_number": row.tax_number if row else None,
+        "bank_name": row.bank_name if row else None,
+        "bank_account": row.bank_account if row else None,
+        "contact_person": row.contact_person if row else None,
+        "contact_phone": row.contact_phone if row else None,
+        "updated_at": row.updated_at.isoformat() if row and row.updated_at else None,
     }
 
 
-@router.get("/company")
+@router.get("/company", dependencies=[Depends(admin_only)])
 def get_company(db: Session = Depends(get_db)) -> dict:
-    """读取公司信息（无需登录，供打印/导出调用）。"""
-    return _company_dict(_company_row(db))
+    """管理员读取公司信息。打印和导出由各自受保护接口直接读取配置。"""
+    return _company_dict(_find_company_row(db))
 
 
 @router.put("/company", dependencies=[Depends(admin_only)])
@@ -1012,8 +1015,11 @@ def update_company(
     user: User = Depends(admin_only),
 ) -> dict:
     """更新公司信息（admin only）。"""
-    row = _company_row(db)
-    row.company_name = body.company_name.strip()
+    row = _find_company_row(db)
+    if row is None:
+        row = CompanyConfig(id=1, company_name=body.company_name)
+        db.add(row)
+    row.company_name = body.company_name
     row.short_name = body.short_name.strip() if body.short_name else None
     row.address = body.address.strip() if body.address else None
     row.phone = body.phone.strip() if body.phone else None

@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 
@@ -204,17 +205,55 @@ def _login(client: TestClient, role: str = "admin") -> None:
 def test_get_company_returns_empty_on_fresh_db(company_app):
     app, _, = company_app
     with TestClient(app) as client:
+        _login(client, "admin")
         resp = client.get("/api/system/company")
     assert resp.status_code == 200
     assert resp.json()["company_name"] == ""
 
 
-def test_get_company_requires_no_auth(company_app):
-    """公司信息 GET 无需登录（供打印页调用）。"""
+def test_get_company_requires_admin(company_app):
+    """公司信息包含税号及银行账号，只允许管理员读取。"""
     app, _ = company_app
     with TestClient(app) as client:
         resp = client.get("/api/system/company")
+    assert resp.status_code == 401
+
+
+def test_get_company_does_not_write_when_config_row_is_missing(company_app):
+    """只读 GET 不得为了补空配置行而执行 INSERT。"""
+    app, session_factory = company_app
+    engine = session_factory.kw["bind"]
+    write_statements: list[str] = []
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+
+        def record_writes(
+            _conn, _cursor, statement, _parameters, _context, _executemany
+        ):
+            normalized = statement.lstrip().upper()
+            if normalized.startswith(("INSERT", "UPDATE", "DELETE")):
+                write_statements.append(normalized)
+
+        event.listen(engine, "before_cursor_execute", record_writes)
+        try:
+            resp = client.get("/api/system/company")
+        finally:
+            event.remove(engine, "before_cursor_execute", record_writes)
+
     assert resp.status_code == 200
+    assert write_statements == []
+
+
+def test_put_company_rejects_blank_company_name(company_app):
+    app, _ = company_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        resp = client.put(
+            "/api/system/company",
+            json={"company_name": "   "},
+        )
+    assert resp.status_code == 422
 
 
 def test_put_company_requires_admin(company_app):
@@ -395,3 +434,17 @@ def test_print_endpoint_sender_reflects_company_info(company_app):
     assert sender["company_name"] == "苏州天明包装有限公司"
     assert sender["tax_number"] == "9132059412345678XY"
     assert sender["bank_name"] == "工商银行苏州支行"
+
+
+def test_delivery_print_page_uses_sender_from_api():
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "static" / "delivery-print.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'id="senderCompanyName"' in source
+    assert 'id="senderContact"' in source
+    assert "const sender = data.sender || {}" in source
+    assert "sender.company_name" in source
+    assert "sender.address" in source
+    assert "sender.phone" in source
+    assert '<h1 class="company">苏州天明包装有限公司</h1>' not in source

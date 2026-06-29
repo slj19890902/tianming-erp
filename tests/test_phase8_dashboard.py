@@ -490,8 +490,12 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
     assert counts["pending_reconciliation"] == 0
     assert counts["unsettled_statements"] == 1
     assert body["todos"]
-    assert body["todos"][0]["type"] == "待报料"
-    assert body["todos"][0]["target"] == "requisition"
+    todo_types = {todo["type"] for todo in body["todos"]}
+    assert {"待报料", "待入库", "待送货", "待回单", "未结清对账单"} <= todo_types
+    pending_material = next(todo for todo in body["todos"] if todo["type"] == "待报料")
+    assert pending_material["target"] == "requisition"
+    assert pending_material["count"] == 1
+    assert pending_material["first_order_no"] == "PO-DASH-001"
 
 
 def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
@@ -694,3 +698,204 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
     assert Decimal(str(june_sme["amount"])) == Decimal("300.00")
     assert "月结对账单" in june_sme["message"]
     assert june_sme["action_text"] == "去生成月结对账单"
+
+
+def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
+    tmp_path: Path,
+) -> None:
+    from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import Statement
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "dashboard-overview-grouped.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    today = date(2026, 6, 29)
+    with factory() as session:
+        session.add(
+            User(
+                username="admin",
+                password_hash=hash_password("RolePass123!"),
+                role="admin",
+                real_name="管理员",
+                must_change_password=False,
+            )
+        )
+        customer_a = Customer(
+            customer_number=1,
+            customer_code="A",
+            name="苏州天华超净科技股份有限公司",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        customer_b = Customer(
+            customer_number=2,
+            customer_code="B",
+            name="昆山华诚电子有限公司",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        session.add_all([customer_a, customer_b])
+        session.flush()
+        product_a = Product(
+            customer_id=customer_a.id,
+            product_code="PA",
+            customer_material_code="PA",
+            product_name="测试纸箱A",
+            box_category="normal",
+        )
+        product_b = Product(
+            customer_id=customer_b.id,
+            product_code="PB",
+            customer_material_code="PB",
+            product_name="测试纸箱B",
+            box_category="normal",
+        )
+        session.add_all([product_a, product_b])
+        session.flush()
+
+        def add_order(
+            *,
+            customer: Customer,
+            product: Product,
+            order_no: str,
+            requisition_status: str,
+            material_status: str,
+            delivered_quantity: int = 0,
+            quantity: int = 10,
+        ) -> OrderItem:
+            order = Order(
+                order_number=order_no,
+                customer_id=customer.id,
+                order_date=today,
+                delivery_date=today,
+                status="pending_delivery",
+                payment_status="unpaid",
+                total_amount=Decimal("0"),
+            )
+            session.add(order)
+            session.flush()
+            item = OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                quantity=quantity,
+                delivered_quantity=delivered_quantity,
+                unit_price=Decimal("10.00"),
+                subtotal=Decimal("0"),
+                material_status=material_status,
+                requisition_status=requisition_status,
+                snapshot_product_name=product.product_name,
+                snapshot_product_code=product.product_code,
+            )
+            session.add(item)
+            session.flush()
+            return item
+
+        add_order(customer=customer_a, product=product_a, order_no="PO-MAT-001", requisition_status="未报料", material_status="pending")
+        add_order(customer=customer_a, product=product_a, order_no="PO-MAT-002", requisition_status="未报料", material_status="pending")
+        add_order(customer=customer_a, product=product_a, order_no="PO-IN-001", requisition_status="已报料", material_status="pending")
+        add_order(customer=customer_a, product=product_a, order_no="PO-IN-002", requisition_status="供应商已排单", material_status="pending")
+        add_order(customer=customer_a, product=product_a, order_no="PO-DE-001", requisition_status="已入库", material_status="received", delivered_quantity=0)
+        add_order(customer=customer_a, product=product_a, order_no="PO-DE-002", requisition_status="已入库", material_status="received", delivered_quantity=4, quantity=10)
+        shipped_item_1 = add_order(customer=customer_a, product=product_a, order_no="PO-RC-001", requisition_status="已入库", material_status="received", delivered_quantity=8, quantity=8)
+        shipped_item_2 = add_order(customer=customer_a, product=product_a, order_no="PO-RC-002", requisition_status="已入库", material_status="received", delivered_quantity=6, quantity=6)
+        add_order(customer=customer_b, product=product_b, order_no="PO-MAT-B1", requisition_status="未报料", material_status="pending")
+
+        delivery_1 = Delivery(
+            delivery_number="DH-RC-001",
+            customer_id=customer_a.id,
+            delivery_date=today,
+            status="dispatched",
+            total_quantity=8,
+        )
+        delivery_2 = Delivery(
+            delivery_number="DH-RC-002",
+            customer_id=customer_a.id,
+            delivery_date=today,
+            status="dispatched",
+            total_quantity=6,
+        )
+        session.add_all([delivery_1, delivery_2])
+        session.flush()
+        session.add_all(
+            [
+                DeliveryItem(delivery_id=delivery_1.id, order_item_id=shipped_item_1.id, delivered_quantity=8),
+                DeliveryItem(delivery_id=delivery_2.id, order_item_id=shipped_item_2.id, delivered_quantity=6),
+            ]
+        )
+        session.add_all(
+            [
+                Statement(
+                    statement_number="ST-A-001",
+                    customer_id=customer_a.id,
+                    statement_month="2026-06",
+                    total_receivable=Decimal("1000.00"),
+                    settled_amount=Decimal("200.00"),
+                    total_gross_profit=Decimal("0"),
+                    status="unsettled",
+                ),
+                Statement(
+                    statement_number="ST-A-002",
+                    customer_id=customer_a.id,
+                    statement_month="2026-06",
+                    total_receivable=Decimal("500.00"),
+                    settled_amount=Decimal("0"),
+                    total_gross_profit=Decimal("0"),
+                    status="unsettled",
+                ),
+            ]
+        )
+        session.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "RolePass123!"},
+        ).status_code == 200
+        response = client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+
+    def find_todo(todo_type: str, customer_name: str) -> dict:
+        return next(
+            todo
+            for todo in body["todos"]
+            if todo["type"] == todo_type and todo["customer_name"] == customer_name
+        )
+
+    pending_material = find_todo("待报料", "苏州天华超净科技股份有限公司")
+    assert pending_material["count"] == 2
+    assert pending_material["first_order_no"] == "PO-MAT-001"
+
+    pending_incoming = find_todo("待入库", "苏州天华超净科技股份有限公司")
+    assert pending_incoming["count"] == 2
+    assert pending_incoming["first_item_no"] == "PA"
+
+    pending_delivery = find_todo("待送货", "苏州天华超净科技股份有限公司")
+    assert pending_delivery["count"] == 2
+
+    pending_receipt = find_todo("待回单", "苏州天华超净科技股份有限公司")
+    assert pending_receipt["count"] == 2
+
+    unsettled = find_todo("未结清对账单", "苏州天华超净科技股份有限公司")
+    assert unsettled["count"] == 2
+    assert Decimal(str(unsettled["amount"])) == Decimal("1300.00")

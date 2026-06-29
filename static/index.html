@@ -316,7 +316,7 @@
 
       /* Dashboard cards */
       .cards { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 14px; }
-      .dashboard-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+      .dashboard-cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
       .card {
         padding: 20px;
         border: 1px solid var(--line);
@@ -324,20 +324,29 @@
         background: var(--panel);
         box-shadow: var(--shadow-card);
       }
-      .dashboard-card { display: flex; flex-direction: column; min-height: 168px; }
+      .dashboard-card { display: flex; flex-direction: column; min-height: 132px; padding: 14px 14px 12px; cursor: pointer; }
       .card-label { color: var(--muted); font-weight: 600; font-size: 13px; }
       .card-value { margin-top: 8px; font-size: 26px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
-      .dashboard-card-value { margin-top: 8px; line-height: 1.2; }
-      .dashboard-card-count { font-size: 30px; font-weight: 800; color: var(--text); letter-spacing: -0.6px; }
-      .dashboard-card-amount { font-size: 18px; font-weight: 700; color: var(--text); }
-      .card-hint { margin-top: 4px; color: var(--muted); font-size: 12px; }
-      .dashboard-card-actions { margin-top: auto; padding-top: 12px; }
+      .dashboard-card-value { margin-top: 6px; line-height: 1.15; }
+      .dashboard-card-count { font-size: 28px; font-weight: 800; color: var(--text); letter-spacing: -0.6px; }
+      .dashboard-card-amount { font-size: 16px; font-weight: 700; color: var(--text); }
+      .card-hint { margin-top: 3px; color: var(--muted); font-size: 11px; }
+      .dashboard-card-actions { margin-top: auto; padding-top: 8px; }
       .dashboard-block { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius-card); overflow: hidden; background: var(--panel); box-shadow: var(--shadow-card); }
       .todo-list { display: grid; gap: 10px; }
-      .todo-item { display: grid; grid-template-columns: minmax(220px, 1.3fr) minmax(320px, 2fr) auto; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid #e5edf7; border-radius: 12px; background: #f9fbff; }
+      .todo-item { display: grid; grid-template-columns: minmax(260px, 1.4fr) minmax(260px, 1.8fr) auto; gap: 12px; align-items: center; padding: 11px 14px; border: 1px solid #e5edf7; border-radius: 12px; background: #f9fbff; }
       .todo-title { font-weight: 700; color: var(--text); }
-      .todo-detail { margin-top: 2px; color: var(--muted); font-size: 12px; }
+      .todo-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .todo-type { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: #eaf2ff; color: var(--primary-dark); font-size: 11px; font-weight: 700; }
+      .todo-detail { margin-top: 4px; color: var(--muted); font-size: 12px; }
       .todo-message { color: var(--text); font-size: 13px; line-height: 1.45; }
+      .todo-more { margin-top: 10px; color: var(--muted); font-size: 12px; text-align: right; }
+      @media (max-width: 1500px) { .dashboard-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+      @media (max-width: 1024px) {
+        .dashboard-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .todo-item { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 640px) { .dashboard-cards { grid-template-columns: 1fr; } }
       .section-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
       .section-title {
         padding: 12px 16px;
@@ -642,15 +651,15 @@
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
               <div v-if="overview.cards && overview.cards.length" class="dashboard-cards">
-                <div v-for="card in overview.cards" :key="card.key" class="card dashboard-card">
+                <div v-for="card in overview.cards" :key="card.key" class="card dashboard-card" @click="go(card.target)">
                   <div class="card-label">{{ card.title }}</div>
                   <div class="dashboard-card-value">
                     <span class="dashboard-card-count">{{ card.count || 0 }}</span>
-                    <span v-if="card.amount !== undefined" class="dashboard-card-amount">{{ isWorkshop ? " / 无权限" : ` / ? ${money(card.amount)}` }}</span>
+                    <span v-if="card.amount !== undefined" class="dashboard-card-amount">{{ isWorkshop ? " / 无权限" : ` / ￥ ${money(card.amount)}` }}</span>
                   </div>
                   <div class="card-hint">{{ card.description }}</div>
                   <div class="dashboard-card-actions">
-                    <button class="btn small primary" @click="go(card.target)">{{ card.button_label || "去处理" }}</button>
+                    <button class="btn small primary" @click.stop="go(card.target)">{{ card.button_label || "去处理" }}</button>
                   </div>
                 </div>
               </div>
@@ -659,21 +668,29 @@
                 <div class="section-title">今日日常待办</div>
                 <div class="section-body">
                   <div v-if="overview.todos && overview.todos.length" class="todo-list">
-                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.order_no}-${todo.item_no || ''}`" class="todo-item">
+                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.customer_name}-${todo.month || ''}-${todo.first_order_no || ''}`" class="todo-item">
                       <div class="todo-main">
-                        <div class="todo-title">{{ todo.type }} ? {{ todo.customer_name }}</div>
+                        <div class="todo-meta">
+                          <span class="todo-type">{{ todo.type }}</span>
+                          <div class="todo-title">{{ todo.customer_name }}</div>
+                        </div>
                         <div class="todo-detail" v-if="todo.month">
                           {{ todo.month }}
-                          <span v-if="todo.item_count"> / 共 {{ todo.item_count }} 条</span>
+                          <span v-if="todo.count"> / 共 {{ todo.count }} 条</span>
                           <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
                         </div>
-                        <div class="todo-detail" v-else>{{ todo.order_no }}<span v-if="todo.item_no"> / {{ todo.item_no }}</span></div>
+                        <div class="todo-detail" v-else>
+                          <span v-if="todo.count">共 {{ todo.count }} 条</span>
+                          <span v-if="todo.first_order_no"> / 最早单号 {{ todo.first_order_no }}</span>
+                          <span v-if="todo.first_item_no"> / {{ todo.first_item_no }}</span>
+                        </div>
                       </div>
                       <div class="todo-message">{{ todo.message }}</div>
                       <div class="toolbar-group">
                         <button class="btn small" @click="go(todo.target)">{{ todo.action_text || "查看对应页面" }}</button>
                       </div>
                     </div>
+                    <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
                   </div>
                   <div v-else class="empty">当前没有紧急待办。</div>
                 </div>

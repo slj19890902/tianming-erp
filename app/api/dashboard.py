@@ -32,6 +32,27 @@ def _safe_int(value) -> int:
     return int(value or 0)
 
 
+def _coalesce_date(value):
+    return value or date.max
+
+
+def _todo_sort_key(todo: dict) -> tuple:
+    priority_map = {
+        "待对账": 10,
+        "未结清对账单": 20,
+        "待回单": 30,
+        "待送货": 40,
+        "待入库": 50,
+        "待报料": 60,
+    }
+    return (
+        priority_map.get(todo.get("type"), 99),
+        _coalesce_date(todo.get("sort_date")),
+        -(todo.get("amount") or 0),
+        todo.get("customer_name") or "",
+    )
+
+
 @router.get("/kpi")
 def dashboard_kpi(
     db: Session = Depends(get_db),
@@ -204,7 +225,7 @@ def dashboard_overview(
             "key": "pending_material",
             "title": "待报料订单",
             "count": pending_material_orders,
-            "description": "订单已创建，还没有进入报料流程。",
+            "description": "订单还没进入报料",
             "button_label": "去报料",
             "target": "requisition",
         },
@@ -212,7 +233,7 @@ def dashboard_overview(
             "key": "pending_incoming",
             "title": "待入库明细",
             "count": pending_incoming_items,
-            "description": "已经报料，但仓库还没有确认来料入库。",
+            "description": "已报料但还没入库",
             "button_label": "去入库",
             "target": "incoming",
         },
@@ -220,7 +241,7 @@ def dashboard_overview(
             "key": "pending_delivery",
             "title": "待送货明细",
             "count": pending_delivery_items,
-            "description": "已经入库，可以安排送货，但还没有生成或确认送货。",
+            "description": "已入库但还没送货",
             "button_label": "去送货",
             "target": "deliveries",
         },
@@ -228,7 +249,7 @@ def dashboard_overview(
             "key": "pending_receipt",
             "title": "待回单送货单",
             "count": pending_receipt_deliveries,
-            "description": "已经发货，但还没有确认客户回单。",
+            "description": "已发货但还没回单",
             "button_label": "去回单",
             "target": "deliveries",
         },
@@ -236,7 +257,7 @@ def dashboard_overview(
             "key": "pending_reconciliation",
             "title": "待对账明细",
             "count": pending_reconciliation_items,
-            "description": "已经确认回单，但还没有进入月结对账。",
+            "description": "已回单但还没对账",
             "button_label": "去对账",
             "target": "finance",
         },
@@ -245,43 +266,42 @@ def dashboard_overview(
             "title": "未结清对账单",
             "count": unsettled_count,
             "amount": unsettled_amount,
-            "description": "已经生成对账单，但还没有收款结清。",
+            "description": "还没收款结清",
             "button_label": "去收款/对账",
             "target": "finance",
         },
     ]
 
-    # 只取最紧急的少量待办，避免首页过重。
     pending_material_rows = db.execute(
         select(
-            Order.id,
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
             Order.order_number,
-            Order.customer_po,
             Order.delivery_date,
             Order.created_at,
-            OrderItem.id.label("item_id"),
-            Customer.name.label("customer_name"),
         )
-        .join(OrderItem, OrderItem.order_id == Order.id)
+        .select_from(Order)
         .join(Customer, Customer.id == Order.customer_id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
         .where(
             Order.status.notin_(["cancelled", "dead"]),
             OrderItem.requisition_status == "未报料",
         )
-        .order_by(Order.delivery_date.is_(None), Order.delivery_date, Order.created_at)
-        .limit(3)
+        .order_by(
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            Order.created_at,
+            Order.id,
+        )
     ).mappings().all()
     pending_incoming_rows = db.execute(
         select(
-            OrderItem.id.label("item_id"),
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
             Order.order_number,
-            Order.customer_po,
             Order.delivery_date,
             Order.created_at,
-            Customer.name.label("customer_name"),
             OrderItem.snapshot_product_code,
-            OrderItem.snapshot_product_name,
-            OrderItem.requisition_status,
         )
         .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
@@ -291,19 +311,21 @@ def dashboard_overview(
             OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
             OrderItem.material_status == "pending",
         )
-        .order_by(Order.delivery_date.is_(None), Order.delivery_date, Order.created_at)
-        .limit(2)
+        .order_by(
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            Order.created_at,
+            OrderItem.id,
+        )
     ).mappings().all()
     pending_delivery_rows = db.execute(
         select(
-            OrderItem.id.label("item_id"),
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
             Order.order_number,
-            Order.customer_po,
             Order.delivery_date,
             Order.created_at,
-            Customer.name.label("customer_name"),
             OrderItem.snapshot_product_code,
-            OrderItem.snapshot_product_name,
         )
         .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
@@ -314,17 +336,20 @@ def dashboard_overview(
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
-        .order_by(Order.delivery_date.is_(None), Order.delivery_date, Order.created_at)
-        .limit(2)
+        .order_by(
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            Order.created_at,
+            OrderItem.id,
+        )
     ).mappings().all()
     pending_receipt_rows = db.execute(
         select(
-            Delivery.id,
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
             Delivery.delivery_number,
             Delivery.delivery_date,
             Delivery.created_at,
-            Customer.name.label("customer_name"),
-            Delivery.status,
         )
         .select_from(Delivery)
         .join(Customer, Customer.id == Delivery.customer_id)
@@ -337,8 +362,12 @@ def dashboard_overview(
                 )
             ),
         )
-        .order_by(Delivery.delivery_date.is_(None), Delivery.delivery_date, Delivery.created_at)
-        .limit(2)
+        .order_by(
+            Delivery.delivery_date.is_(None),
+            Delivery.delivery_date,
+            Delivery.created_at,
+            Delivery.id,
+        )
     ).mappings().all()
     recon_month_expr = func.coalesce(
         func.strftime("%Y-%m", ReturnReceipt.actual_received_date),
@@ -388,16 +417,14 @@ def dashboard_overview(
             func.min(ReturnReceipt.actual_received_date),
             func.min(ReturnReceipt.created_at),
         )
-        .limit(6)
     ).mappings().all()
     unsettled_rows = db.execute(
         select(
-            Statement.id,
-            Statement.statement_number,
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
             Statement.statement_month,
             Statement.total_receivable,
             Statement.settled_amount,
-            Customer.name.label("customer_name"),
             Statement.created_at,
         )
         .select_from(Statement)
@@ -407,58 +434,101 @@ def dashboard_overview(
             (Statement.total_receivable - Statement.settled_amount).desc(),
             Statement.created_at,
         )
-        .limit(2)
     ).mappings().all()
 
-    todos = []
+    pending_material_groups: dict[int, dict] = {}
     for row in pending_material_rows:
-        todos.append(
+        group = pending_material_groups.setdefault(
+            row["customer_id"],
             {
                 "type": "待报料",
                 "customer_name": row["customer_name"],
-                "order_no": row["order_number"],
-                "item_no": None,
-                "current_status": "待报料",
-                "message": "这张订单还没有进入报料流程，建议优先处理。",
+                "count": 0,
+                "first_order_no": row["order_number"],
+                "first_item_no": None,
+                "sort_date": row["delivery_date"] or row["created_at"],
+                "message": "",
                 "target": "requisition",
-            }
+                "action_text": "去报料",
+            },
         )
+        group["count"] += 1
+
+    pending_incoming_groups: dict[int, dict] = {}
     for row in pending_incoming_rows:
-        todos.append(
+        group = pending_incoming_groups.setdefault(
+            row["customer_id"],
             {
                 "type": "待入库",
                 "customer_name": row["customer_name"],
-                "order_no": row["order_number"],
-                "item_no": row["snapshot_product_code"],
-                "current_status": row["requisition_status"],
-                "message": "这条明细已经报料，还没有确认来料入库。",
+                "count": 0,
+                "first_order_no": row["order_number"],
+                "first_item_no": row["snapshot_product_code"],
+                "sort_date": row["delivery_date"] or row["created_at"],
+                "message": "",
                 "target": "incoming",
-            }
+                "action_text": "去入库",
+            },
         )
+        group["count"] += 1
+
+    pending_delivery_groups: dict[int, dict] = {}
     for row in pending_delivery_rows:
-        todos.append(
+        group = pending_delivery_groups.setdefault(
+            row["customer_id"],
             {
                 "type": "待送货",
                 "customer_name": row["customer_name"],
-                "order_no": row["order_number"],
-                "item_no": row["snapshot_product_code"],
-                "current_status": "已入库未送货",
-                "message": "这条明细可以送货了，但还没有生成或确认送货。",
+                "count": 0,
+                "first_order_no": row["order_number"],
+                "first_item_no": row["snapshot_product_code"],
+                "sort_date": row["delivery_date"] or row["created_at"],
+                "message": "",
                 "target": "deliveries",
-            }
+                "action_text": "去送货",
+            },
         )
+        group["count"] += 1
+
+    pending_receipt_groups: dict[int, dict] = {}
     for row in pending_receipt_rows:
-        todos.append(
+        group = pending_receipt_groups.setdefault(
+            row["customer_id"],
             {
                 "type": "待回单",
                 "customer_name": row["customer_name"],
-                "order_no": row["delivery_number"],
-                "item_no": None,
-                "current_status": "已发货",
-                "message": "这张送货单已经发出，还没有确认客户回单。",
+                "count": 0,
+                "first_order_no": row["delivery_number"],
+                "first_item_no": None,
+                "sort_date": row["delivery_date"] or row["created_at"],
+                "message": "",
                 "target": "deliveries",
-            }
+                "action_text": "去回单",
+            },
         )
+        group["count"] += 1
+
+    todos = []
+    for group in pending_material_groups.values():
+        group["message"] = (
+            f"该客户有 {group['count']} 张订单还没有进入报料流程，建议优先处理。"
+        )
+        todos.append(group)
+    for group in pending_incoming_groups.values():
+        group["message"] = (
+            f"该客户有 {group['count']} 条明细已报料但还没有确认来料入库。"
+        )
+        todos.append(group)
+    for group in pending_delivery_groups.values():
+        group["message"] = (
+            f"该客户有 {group['count']} 条明细已可送货，建议尽快安排。"
+        )
+        todos.append(group)
+    for group in pending_receipt_groups.values():
+        group["message"] = (
+            f"该客户有 {group['count']} 张送货单已发货但还没确认回单。"
+        )
+        todos.append(group)
     for row in pending_recon_rows:
         month_label = row["month"] or "未知月份"
         item_count = int(row["item_count"] or 0)
@@ -469,11 +539,12 @@ def dashboard_overview(
                 "customer_id": row["customer_id"],
                 "customer_name": row["customer_name"],
                 "month": month_label,
+                "count": item_count,
                 "item_count": item_count,
                 "amount": amount,
-                "order_no": f"{month_label} 月结对账单",
-                "item_no": f"共 {item_count} 条 / {amount} 元",
-                "current_status": "已回单",
+                "first_order_no": None,
+                "first_item_no": None,
+                "sort_date": row["first_received_date"] or row["first_created_at"],
                 "message": (
                     f"该客户 {month_label} 有 {item_count} 条送货明细待生成月结对账单，"
                     f"合计 {amount} 元。"
@@ -482,23 +553,41 @@ def dashboard_overview(
                 "action_text": "去生成月结对账单",
             }
         )
+    unsettled_groups: dict[int, dict] = {}
     for row in unsettled_rows:
-        todos.append(
+        balance = _money((row["total_receivable"] or 0) - (row["settled_amount"] or 0))
+        group = unsettled_groups.setdefault(
+            row["customer_id"],
             {
                 "type": "未结清对账单",
                 "customer_name": row["customer_name"],
-                "order_no": row["statement_number"],
-                "item_no": row["statement_month"],
-                "current_status": "未结清",
-                "message": "这张对账单已经生成，但还没有收款结清。",
+                "count": 0,
+                "amount": Decimal("0.00"),
+                "month": row["statement_month"],
+                "first_order_no": None,
+                "first_item_no": None,
+                "sort_date": row["created_at"],
+                "message": "",
                 "target": "finance",
-            }
+                "action_text": "去收款/对账",
+            },
         )
+        group["count"] += 1
+        group["amount"] = _money(group["amount"] + balance)
+    for group in unsettled_groups.values():
+        group["message"] = (
+            f"该客户还有 {group['count']} 张对账单未结清，合计 {group['amount']} 元。"
+        )
+        todos.append(group)
+
+    todos.sort(key=_todo_sort_key)
+    remaining_todo_count = max(len(todos) - 8, 0)
     todos = todos[:8]
 
     return {
         "cards": cards,
         "todos": todos,
+        "remaining_todo_count": remaining_todo_count,
         "summary": {
             "today_orders": _safe_int(
                 db.scalar(select(func.count(Order.id)).where(Order.order_date == today))

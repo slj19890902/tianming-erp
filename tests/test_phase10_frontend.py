@@ -62,9 +62,14 @@ def test_dashboard_frontend_shows_grouped_reconciliation_todo_fields() -> None:
 
     for marker in (
         "todo.month",
-        "todo.item_count",
+        "todo.count",
         "todo.amount",
         "todo.action_text",
+        "todo.first_order_no",
+        "todo.first_item_no",
+        "overview.remaining_todo_count",
+        "todo-meta",
+        "todo-type",
     ):
         assert marker in source
 

@@ -94,13 +94,33 @@ def test_common_box_size_and_report_controls_share_second_row_without_a1_button(
 
     for marker in (
         "长(mm)", "宽(mm)", "高(mm)", "报料长宽", "压线类型",
-        "压线尺寸", "上摇盖", "下摇盖", "报料备注", "重新推荐",
+        "压线尺寸", "报料备注", "重新推荐",
     ):
         assert marker in row
     assert "A1 推荐计算" not in source
     assert 'placeholder="左"' not in source
     assert 'placeholder="中"' not in source
     assert 'placeholder="右"' not in source
+    assert '<span>上摇盖</span>' not in row
+    assert '<span>高</span>' not in row
+    assert '<span>下摇盖</span>' not in row
+
+
+def test_common_box_crease_inputs_use_placeholders_and_plus_separators() -> None:
+    source = _source()
+
+    for marker in (
+        'placeholder="上摇盖"',
+        'placeholder="高"',
+        'placeholder="下摇盖"',
+        'aria-label="上摇盖"',
+        'aria-label="高"',
+        'aria-label="下摇盖"',
+        'class="crease-segment-plus"',
+        ".crease-segments .input::placeholder",
+    ):
+        assert marker in source
+    assert source.count('class="crease-segment-plus"') >= 2
 
 
 def test_common_box_a1_board_and_crease_recommendations_use_purchase_formula() -> None:

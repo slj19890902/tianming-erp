@@ -460,10 +460,20 @@
       }
       .report-size-line .input { width: 82px; min-width: 68px; }
       .report-size-line .btn { flex: 0 0 auto; white-space: nowrap; padding-inline: 8px; }
-      .crease-segments { display: grid; grid-template-columns: repeat(3, minmax(58px, 1fr)); gap: 4px; min-width: 0; }
-      .crease-segment-item { display: grid; gap: 2px; min-width: 0; }
-      .crease-segment-item span { color: var(--muted); font-size: 11px; text-align: center; white-space: nowrap; }
-      .crease-segments .input { width: 100%; min-width: 58px; text-align: center; }
+      .crease-segments { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: nowrap; }
+      .crease-segments .input {
+        width: 74px;
+        min-width: 74px;
+        flex: 0 0 74px;
+        text-align: center;
+      }
+      .crease-segments .input::placeholder { color: #9ba8b8; opacity: 1; }
+      .crease-segment-plus {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1;
+        flex: 0 0 auto;
+      }
       .product-recommendation-hint { margin-top: 4px; font-size: 11px; line-height: 1.3; }
       .drawing-history-list {
         display: grid;
@@ -1652,9 +1662,11 @@
                 </div>
                 <div class="field"><label>压线尺寸</label>
                   <div v-if="productForm.crease_type === '压线'" class="crease-segments">
-                    <label class="crease-segment-item"><span>上摇盖</span><input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="markProductCreaseManual" /></label>
-                    <label class="crease-segment-item"><span>高</span><input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" /></label>
-                    <label class="crease-segment-item"><span>下摇盖</span><input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="markProductCreaseManual" /></label>
+                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="markProductCreaseManual" placeholder="上摇盖" aria-label="上摇盖" />
+                    <span class="crease-segment-plus" aria-hidden="true">+</span>
+                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" placeholder="高" aria-label="高" />
+                    <span class="crease-segment-plus" aria-hidden="true">+</span>
+                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="markProductCreaseManual" placeholder="下摇盖" aria-label="下摇盖" />
                   </div>
                   <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请在报料备注中填写要求' }}</span>
                   <span v-else class="muted">请人工选择</span>

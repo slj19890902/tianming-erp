@@ -226,6 +226,9 @@ class OrderItem(Base):
     snapshot_crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snapshot_crease_right_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snapshot_report_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_splice_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    snapshot_pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),

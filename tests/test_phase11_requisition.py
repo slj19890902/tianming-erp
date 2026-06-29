@@ -120,14 +120,15 @@ def _batch_payload() -> dict:
             {
                 "order_item_id": 1,
                 "inventory_deducted_qty": 20,
-                "requisition_qty": 85,
+                "requisition_qty": 27,
                 "cardboard_len": "1756",
-                "cardboard_width": "654",
-                "special_process": "大做小",
-                "remark": "多备5张损耗",
+                "cardboard_width": "1962",
+                "special_process": "一开三",
+                "remark": "按一开三采购",
             }
         ],
     }
+
 
 
 def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
@@ -138,10 +139,10 @@ def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
     with session_factory() as session:
         item = session.get(OrderItem, 1)
         item.requisition_status = "已报料"
-        item.requisition_qty = 85
+        item.requisition_qty = 27
         item.requisition_date = date(2026, 6, 22)
         item.cardboard_len = Decimal("1756")
-        item.cardboard_width = Decimal("654")
+        item.cardboard_width = Decimal("1962")
         session.add(
             ProductDrawing(
                 product_id=item.product_id,
@@ -221,13 +222,14 @@ def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> No
     assert created.json()["requisition_number"].startswith(
         f"BL-{date.today():%Y%m%d}-"
     )
-    assert created.json()["items"][0]["requisition_qty"] == 85
+    assert created.json()["items"][0]["requisition_qty"] == 27
+    assert created.json()["items"][0]["cutting_mode"] == "一开三"
     with session_factory() as session:
         item = session.get(OrderItem, 1)
         assert item.inventory_deducted_qty == 20
-        assert item.requisition_qty == 85
+        assert item.requisition_qty == 27
         assert item.requisition_status == "已报料"
-        assert item.special_process == "大做小"
+        assert item.special_process == "一开三"
         assert session.scalar(select(Requisition)) is not None
         assert session.scalar(select(RequisitionItem)) is not None
 
@@ -327,7 +329,7 @@ def test_requisition_cannot_change_or_cancel_after_material_received(
                 "requisition_qty": 100,
                 "cardboard_len": "1756",
                 "cardboard_width": "654",
-                "special_process": "无",
+                "special_process": "一开一",
                 "remark": None,
             },
         )
@@ -351,6 +353,7 @@ def test_history_search_returns_latest_successful_requisition(requisition_app) -
     result = response.json()["items"][0]
     assert result["product_code"] == "21301028"
     assert Decimal(str(result["cardboard_len"])) == Decimal("1756")
+    assert result["special_process"] == "一开三"
     assert result["material"] == "K=A-BC"
 
 
@@ -367,6 +370,54 @@ def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> 
     serialized = str(response.json()).lower()
     for forbidden in ("unit_price", "subtotal", "cost", "amount"):
         assert forbidden not in serialized
+
+
+def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.snapshot_splice_mode = "double"
+        item.snapshot_pieces_per_box = 2
+        item.snapshot_report_length_mm = 800
+        item.snapshot_report_width_mm = 200
+        session.commit()
+
+    payload = {
+        "supplier_name": "苏州纸板供应商",
+        "items": [
+            {
+                "order_item_id": 1,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 4,
+                "cardboard_len": "800",
+                "cardboard_width": "600",
+                "special_process": "一开三",
+                "remark": "双拼一开三",
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        created = client.post("/api/requisition/batches", json=payload)
+
+    assert pending.status_code == 200
+    row = pending.json()["items"][0]
+    assert row["pieces_per_box"] == 2
+    assert row["required_piece_qty"] == 200
+    assert created.status_code == 201, created.text
+    assert created.json()["items"][0]["requisition_qty"] == 4
+    assert created.json()["items"][0]["cardboard_len"] == "800"
+    assert created.json()["items"][0]["cardboard_width"] == "600"
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        assert item.requisition_qty == 4
+        assert item.special_process == "一开三"
+
 
 
 def test_phase11_migration_is_additive_and_preserves_order_items(

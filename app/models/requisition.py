@@ -105,6 +105,8 @@ class RequisitionItem(Base):
         Numeric(12, 2),
         nullable=False,
     )
+    pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    required_piece_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
     special_process: Mapped[str] = mapped_column(
         String(30),
         default="无",

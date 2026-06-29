@@ -31,6 +31,14 @@ router = APIRouter()
 can_read = RoleChecker(["admin", "sales"])
 can_operate = RoleChecker(["admin", "sales"])
 admin_only = RoleChecker(["admin"])
+CUTTING_MODE_FACTORS = {
+    "一开一": 1,
+    "一开二": 2,
+    "一开三": 3,
+    "一开四": 4,
+    "一开五": 5,
+}
+DEFAULT_CUTTING_MODE = "一开一"
 SPECIAL_PROCESSES = {"无", "大做小", "双拼", "多拼"}
 
 
@@ -40,15 +48,16 @@ class RequisitionLinePayload(BaseModel):
     requisition_qty: int | None = Field(default=None, ge=0)
     cardboard_len: Decimal = Field(gt=0)
     cardboard_width: Decimal = Field(gt=0)
-    special_process: str = "无"
+    special_process: str = DEFAULT_CUTTING_MODE
     remark: str | None = None
 
     @field_validator("special_process")
     @classmethod
     def validate_process(cls, value: str) -> str:
-        if value not in SPECIAL_PROCESSES:
-            raise ValueError("特殊处理仅允许：无、大做小、双拼、多拼")
-        return value
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
 
 
 class RequisitionBatchCreate(BaseModel):
@@ -80,9 +89,10 @@ class RequisitionEdit(BaseModel):
     @field_validator("special_process")
     @classmethod
     def validate_process(cls, value: str) -> str:
-        if value not in SPECIAL_PROCESSES:
-            raise ValueError("特殊处理仅允许：无、大做小、双拼、多拼")
-        return value
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
 
 
 class SupplierSchedulePayload(BaseModel):
@@ -106,6 +116,40 @@ def _plain(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value, "f").rstrip("0").rstrip(".") or "0"
+
+
+def _pieces_per_box(item: OrderItem) -> int:
+    value = item.snapshot_pieces_per_box
+    if value in (1, 2):
+        return value
+    if (item.snapshot_splice_mode or "").strip().lower() == "double":
+        return 2
+    return 1
+
+
+def _cutting_factor(cutting_mode: str | None) -> int:
+    return CUTTING_MODE_FACTORS.get((cutting_mode or "").strip(), 1)
+
+
+def _required_piece_qty(order_qty: int, pieces_per_box: int) -> int:
+    return max(int(order_qty or 0), 0) * max(int(pieces_per_box or 1), 1)
+
+
+def _purchase_qty(required_piece_qty: int, inventory_deducted_qty: int, cutting_mode: str | None) -> int:
+    remaining = max(int(required_piece_qty or 0) - max(int(inventory_deducted_qty or 0), 0), 0)
+    factor = _cutting_factor(cutting_mode)
+    return (remaining + factor - 1) // factor
+
+
+def _purchase_dimensions(
+    report_length_mm: int | None,
+    report_width_mm: int | None,
+    cutting_mode: str | None,
+) -> tuple[Decimal | None, Decimal | None]:
+    if not report_length_mm or not report_width_mm:
+        return None, None
+    factor = _cutting_factor(cutting_mode)
+    return Decimal(report_length_mm), Decimal(report_width_mm * factor)
 
 
 def _suggested_dimensions(product: Product) -> tuple[Decimal | None, Decimal | None]:
@@ -171,12 +215,19 @@ def _item_or_404(db: Session, item_id: int) -> OrderItem:
 
 
 def _item_response(item: OrderItem) -> dict:
+    pieces_per_box = _pieces_per_box(item)
+    cutting_mode = item.special_process if item.special_process in CUTTING_MODE_FACTORS else DEFAULT_CUTTING_MODE
+    required_piece_qty = _required_piece_qty(item.quantity, pieces_per_box)
     return {
         "item_id": item.id,
         "inventory_deducted_qty": item.inventory_deducted_qty,
         "requisition_qty": item.requisition_qty,
         "requisition_status": item.requisition_status,
         "special_process": item.special_process,
+        "cutting_mode": cutting_mode,
+        "cutting_factor": _cutting_factor(cutting_mode),
+        "pieces_per_box": pieces_per_box,
+        "required_piece_qty": required_piece_qty,
         "requisition_spec": item.requisition_spec,
         "cardboard_len": item.cardboard_len,
         "cardboard_width": item.cardboard_width,
@@ -209,7 +260,16 @@ def pending_requisitions(
     for item, order, customer, product in rows:
         if is_history_order_number(order.order_number):
             continue
-        suggested_len, suggested_width = _suggested_dimensions(product)
+        pieces_per_box = _pieces_per_box(item)
+        cutting_mode = item.special_process if item.special_process in CUTTING_MODE_FACTORS else DEFAULT_CUTTING_MODE
+        required_piece_qty = _required_piece_qty(item.quantity, pieces_per_box)
+        suggested_len, suggested_width = _purchase_dimensions(
+            item.snapshot_report_length_mm,
+            item.snapshot_report_width_mm,
+            DEFAULT_CUTTING_MODE,
+        )
+        if suggested_len is None or suggested_width is None:
+            suggested_len, suggested_width = _suggested_dimensions(product)
         items.append(
             {
                 "item_id": item.id,
@@ -218,9 +278,7 @@ def pending_requisitions(
                 "customer_id": customer.id,
                 "customer_name": customer.name,
                 "product_id": product.id,
-                "product_code": (
-                    item.snapshot_product_code or product.product_code
-                ),
+                "product_code": item.snapshot_product_code or product.product_code,
                 "product_name": item.snapshot_product_name,
                 "specification": item.snapshot_spec,
                 "material": item.snapshot_material,
@@ -230,17 +288,16 @@ def pending_requisitions(
                 "requisition_qty": (
                     item.requisition_qty
                     if item.requisition_qty is not None
-                    else max(item.quantity - item.inventory_deducted_qty, 0)
+                    else _purchase_qty(required_piece_qty, item.inventory_deducted_qty, cutting_mode)
                 ),
                 "requisition_status": item.requisition_status,
                 "special_process": item.special_process,
-                "suggested_cardboard_len": (
-                    item.cardboard_len or suggested_len
-                ),
-                "suggested_cardboard_width": (
-                    item.cardboard_width or suggested_width
-                ),
-                # v0.19.2-B: 报料快照字段
+                "cutting_mode": cutting_mode,
+                "cutting_factor": _cutting_factor(cutting_mode),
+                "pieces_per_box": pieces_per_box,
+                "required_piece_qty": required_piece_qty,
+                "suggested_cardboard_len": item.cardboard_len or suggested_len,
+                "suggested_cardboard_width": item.cardboard_width or suggested_width,
                 "layer_count": item.layer_count,
                 "flute_type": item.flute_type,
                 "material_id": item.material_id,
@@ -252,6 +309,9 @@ def pending_requisitions(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_splice_mode": item.snapshot_splice_mode,
+                "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
+                "snapshot_flap_mm": item.snapshot_flap_mm,
             }
         )
     return {"items": items}
@@ -343,16 +403,18 @@ def create_batch(
                 raise HTTPException(status_code=409, detail="已入库明细不能报料")
             if item.requisition_status != "未报料":
                 raise HTTPException(status_code=409, detail="订单明细已经报料")
-            if line.inventory_deducted_qty > item.quantity:
-                raise HTTPException(status_code=400, detail="库存抵扣数不能超过订单数")
+            pieces_per_box = _pieces_per_box(item)
+            required_piece_qty = _required_piece_qty(item.quantity, pieces_per_box)
+            if line.inventory_deducted_qty > required_piece_qty:
+                raise HTTPException(status_code=400, detail="库存抵扣数不能超过需求小片数")
             requisition_qty = (
                 line.requisition_qty
                 if line.requisition_qty is not None
-                else item.quantity - line.inventory_deducted_qty
+                else _purchase_qty(required_piece_qty, line.inventory_deducted_qty, line.special_process)
             )
             if requisition_qty < 0:
-                raise HTTPException(status_code=400, detail="实际报料数不能为负数")
-            spec = f"{_plain(line.cardboard_len)}×{_plain(line.cardboard_width)}"
+                raise HTTPException(status_code=400, detail="采购报料张数不能为负数")
+            spec = f"{_plain(line.cardboard_len)}?{_plain(line.cardboard_width)}"
             item.inventory_deducted_qty = line.inventory_deducted_qty
             item.requisition_qty = requisition_qty
             item.requisition_status = "已报料"
@@ -369,11 +431,11 @@ def create_batch(
                 requisition_qty=requisition_qty,
                 cardboard_len=line.cardboard_len,
                 cardboard_width=line.cardboard_width,
+                pieces_per_box=pieces_per_box,
+                required_piece_qty=required_piece_qty,
                 special_process=line.special_process,
                 material_snapshot=item.snapshot_material,
-                product_code_snapshot=(
-                    item.snapshot_product_code or product.product_code
-                ),
+                product_code_snapshot=(item.snapshot_product_code or product.product_code),
                 product_name_snapshot=item.snapshot_product_name,
                 specification_snapshot=item.snapshot_spec,
                 remark=item.requisition_remark,
@@ -421,17 +483,34 @@ def edit_requisition(
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
         raise HTTPException(status_code=409, detail="该明细尚未报料")
-    if payload.inventory_deducted_qty > item.quantity:
-        raise HTTPException(status_code=400, detail="库存抵扣数不能超过订单数")
+    pieces_per_box = _pieces_per_box(item)
+    required_piece_qty = _required_piece_qty(item.quantity, pieces_per_box)
+    if payload.inventory_deducted_qty > required_piece_qty:
+        raise HTTPException(status_code=400, detail="库存抵扣数不能超过需求小片数")
     item.inventory_deducted_qty = payload.inventory_deducted_qty
     item.requisition_qty = payload.requisition_qty
     item.cardboard_len = payload.cardboard_len
     item.cardboard_width = payload.cardboard_width
-    item.requisition_spec = (
-        f"{_plain(payload.cardboard_len)}×{_plain(payload.cardboard_width)}"
-    )
+    item.requisition_spec = f"{_plain(payload.cardboard_len)}?{_plain(payload.cardboard_width)}"
     item.special_process = payload.special_process
     item.requisition_remark = (payload.remark or "").strip() or None
+    db.execute(
+        update(RequisitionItem)
+        .where(
+            RequisitionItem.order_item_id == item.id,
+            RequisitionItem.status == "有效",
+        )
+        .values(
+            inventory_deducted_qty=payload.inventory_deducted_qty,
+            requisition_qty=payload.requisition_qty,
+            cardboard_len=payload.cardboard_len,
+            cardboard_width=payload.cardboard_width,
+            pieces_per_box=pieces_per_box,
+            required_piece_qty=required_piece_qty,
+            special_process=payload.special_process,
+            remark=item.requisition_remark,
+        )
+    )
     _audit(
         db,
         user=user,
@@ -482,9 +561,9 @@ def cancel_requisition(
 ) -> dict:
     item = _item_or_404(db, item_id)
     if item.material_status == "received":
-        raise HTTPException(status_code=409, detail="已入库明细禁止取消报料")
+        raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
-        raise HTTPException(status_code=409, detail="该明细当前未报料")
+        raise HTTPException(status_code=409, detail="订单明细已经报料")
     db.execute(
         update(RequisitionItem)
         .where(
@@ -496,7 +575,7 @@ def cancel_requisition(
     item.inventory_deducted_qty = 0
     item.requisition_qty = None
     item.requisition_status = "未报料"
-    item.special_process = "无"
+    item.special_process = DEFAULT_CUTTING_MODE
     item.requisition_spec = None
     item.cardboard_len = None
     item.cardboard_width = None
@@ -510,7 +589,7 @@ def cancel_requisition(
         action="CANCEL_REQUISITION",
         entity_id=item.id,
         details={"reason": payload.reason},
-        description="取消采购报料",
+        description="修改报料信息",
     )
     db.commit()
     return _item_response(item)
@@ -580,12 +659,6 @@ def merge_suggestions(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    """返回待报料池中可合并的报料分组建议。
-    合并口径：supplier_name + material_id + layer_count + flute_type +
-              snapshot_report_length_mm + snapshot_report_width_mm +
-              snapshot_crease_type + crease_left/middle/right 全部一致
-    不修改订单，只返回展示数据。
-    """
     registry = build_display_registry(db)
     rows = db.execute(
         select(OrderItem, Order, Customer, Product)
@@ -600,7 +673,7 @@ def merge_suggestions(
         .order_by(Order.delivery_date, OrderItem.id)
     ).all()
 
-    def _merge_key(item: "OrderItem") -> tuple:
+    def _merge_key(item: OrderItem) -> tuple:
         return (
             item.snapshot_supplier_name or "",
             item.material_id or 0,
@@ -608,28 +681,31 @@ def merge_suggestions(
             (item.flute_type or "").upper(),
             item.snapshot_report_length_mm or 0,
             item.snapshot_report_width_mm or 0,
+            _pieces_per_box(item),
+            (item.snapshot_splice_mode or "single"),
             item.snapshot_crease_type or "",
             item.snapshot_crease_left_mm or 0,
             item.snapshot_crease_middle_mm or 0,
             item.snapshot_crease_right_mm or 0,
         )
 
-    from collections import defaultdict  # noqa: PLC0415
+    from collections import defaultdict
     groups: dict = defaultdict(list)
     for item, order, customer, product in rows:
         if is_history_order_number(order.order_number):
             continue
-        key = _merge_key(item)
-        # 只有报料尺寸有值才纳入合并建议
         if not (item.snapshot_report_length_mm and item.snapshot_report_width_mm):
             continue
-        groups[key].append({
+        pieces_per_box = _pieces_per_box(item)
+        groups[_merge_key(item)].append({
             "item_id": item.id,
             "order_number": display_order_number(order, registry),
             "customer_name": customer.name,
             "product_code": item.snapshot_product_code or product.product_code,
             "product_name": item.snapshot_product_name,
             "quantity": item.quantity,
+            "pieces_per_box": pieces_per_box,
+            "required_piece_qty": _required_piece_qty(item.quantity, pieces_per_box),
             "delivery_date": order.delivery_date,
         })
 
@@ -637,11 +713,9 @@ def merge_suggestions(
     for key, members in groups.items():
         if len(members) < 2:
             continue
-        supplier_name, material_id, layer_count, flute_type, \
-            report_len, report_width, crease_type, \
-            crease_left, crease_middle, crease_right = key
+        supplier_name, material_id, layer_count, flute_type, report_len, report_width, pieces_per_box, splice_mode, crease_type, crease_left, crease_middle, crease_right = key
         crease_display = (
-            f"{crease_left}×{crease_middle}×{crease_right}"
+            f"{crease_left}?{crease_middle}?{crease_right}"
             if crease_type == "压线" and crease_middle
             else crease_type or "-"
         )
@@ -653,12 +727,16 @@ def merge_suggestions(
             "flute_type": flute_type,
             "report_length_mm": report_len,
             "report_width_mm": report_width,
+            "pieces_per_box": pieces_per_box,
+            "splice_mode": splice_mode,
+            "cutting_mode": DEFAULT_CUTTING_MODE,
             "crease_type": crease_type,
             "crease_left_mm": crease_left,
             "crease_middle_mm": crease_middle,
             "crease_right_mm": crease_right,
             "crease_display": crease_display,
             "total_quantity": sum(m["quantity"] for m in members),
+            "total_required_piece_qty": sum(m["required_piece_qty"] for m in members),
             "member_count": len(members),
             "members": members,
         })
@@ -697,11 +775,10 @@ def print_batch(
                 "product_code": row.product_code_snapshot,
                 "product_name": row.product_name_snapshot,
                 "material": row.material_snapshot,
-                "specification": (
-                    f"{_plain(row.cardboard_len)}×{_plain(row.cardboard_width)}"
-                ),
+                "specification": f"{_plain(row.cardboard_len)}?{_plain(row.cardboard_width)}",
                 "quantity": row.requisition_qty,
                 "special_process": row.special_process,
+                "cutting_mode": row.special_process,
                 "production_notes": production_notes,
             }
             for row, production_notes in rows
@@ -709,8 +786,6 @@ def print_batch(
         "total_quantity": sum(row.requisition_qty for row, _ in rows),
     }
 
-
-# ── 供应商报料单 ──────────────────────────────────────────────────────────────
 
 class SupplierOrderMemberPayload(BaseModel):
     item_id: int | None = None
@@ -720,6 +795,9 @@ class SupplierOrderMemberPayload(BaseModel):
     product_code: str | None = None
     product_name: str | None = None
     quantity: int = 0
+    pieces_per_box: int | None = None
+    required_piece_qty: int | None = None
+    cutting_mode: str = DEFAULT_CUTTING_MODE
     customer_name: str | None = None
     delivery_date: str | None = None
 
@@ -735,6 +813,9 @@ class SupplierOrderCreatePayload(BaseModel):
     crease_left_mm: int | None = None
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None
+    cutting_mode: str = DEFAULT_CUTTING_MODE
+    pieces_per_box: int | None = None
+    required_piece_qty: int | None = None
     remark: str | None = None
     members: list[SupplierOrderMemberPayload] = Field(default_factory=list)
 
@@ -772,6 +853,10 @@ def _supplier_order_dict(order: SupplierRequisitionOrder) -> dict:
         "crease_middle_mm": order.crease_middle_mm,
         "crease_right_mm": order.crease_right_mm,
         "crease_display": crease_display,
+        "cutting_mode": order.cutting_mode or DEFAULT_CUTTING_MODE,
+        "cutting_factor": _cutting_factor(order.cutting_mode),
+        "pieces_per_box": order.pieces_per_box,
+        "required_piece_qty": order.required_piece_qty,
         "total_quantity": order.total_quantity,
         "stock_deduction_qty": order.stock_deduction_qty,
         "requisition_qty": order.requisition_qty,
@@ -789,6 +874,9 @@ def _supplier_order_dict(order: SupplierRequisitionOrder) -> dict:
                 "quantity": item.quantity,
                 "stock_deduction_qty": item.stock_deduction_qty,
                 "requisition_qty": item.requisition_qty,
+                "cutting_mode": item.cutting_mode or order.cutting_mode or DEFAULT_CUTTING_MODE,
+                "pieces_per_box": item.pieces_per_box,
+                "required_piece_qty": item.required_piece_qty,
                 "customer_name": item.customer_name,
                 "delivery_date": item.delivery_date,
             }
@@ -803,7 +891,6 @@ def create_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    """从合并建议生成供应商报料单，同步更新 order_items 的 requisition_status。"""
     if not payload.members:
         raise HTTPException(status_code=400, detail="至少需要一条明细")
 
@@ -814,6 +901,7 @@ def create_supplier_order(
         m.requisition_qty if m.requisition_qty is not None else max(m.quantity - m.stock_deduction_qty, 0)
         for m in payload.members
     )
+    total_required_piece_qty = sum(int(m.required_piece_qty or 0) for m in payload.members)
 
     order = SupplierRequisitionOrder(
         order_number=order_number,
@@ -827,6 +915,9 @@ def create_supplier_order(
         crease_left_mm=payload.crease_left_mm,
         crease_middle_mm=payload.crease_middle_mm,
         crease_right_mm=payload.crease_right_mm,
+        cutting_mode=payload.cutting_mode,
+        pieces_per_box=payload.pieces_per_box,
+        required_piece_qty=payload.required_piece_qty if payload.required_piece_qty is not None else total_required_piece_qty,
         total_quantity=total_qty,
         stock_deduction_qty=total_deduct,
         requisition_qty=total_req,
@@ -848,15 +939,18 @@ def create_supplier_order(
             quantity=m.quantity,
             stock_deduction_qty=m.stock_deduction_qty,
             requisition_qty=req_qty,
+            cutting_mode=m.cutting_mode or payload.cutting_mode,
+            pieces_per_box=m.pieces_per_box,
+            required_piece_qty=m.required_piece_qty,
             customer_name=m.customer_name,
             delivery_date=date.fromisoformat(m.delivery_date) if m.delivery_date else None,
         ))
-        # 更新 order_item 状态
         oi = db.get(OrderItem, m.item_id) if m.item_id else None
         if oi:
             oi.requisition_status = "已报料"
             oi.inventory_deducted_qty = m.stock_deduction_qty
             oi.requisition_qty = req_qty
+            oi.special_process = m.cutting_mode or payload.cutting_mode
 
     db.commit()
     db.refresh(order)
@@ -907,7 +1001,6 @@ def void_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    """作废供应商报料单，将关联的 order_items 恢复为待报料。"""
     from datetime import datetime as _datetime
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
@@ -925,6 +1018,7 @@ def void_supplier_order(
                 oi.requisition_status = "未报料"
                 oi.inventory_deducted_qty = 0
                 oi.requisition_qty = None
+                oi.special_process = DEFAULT_CUTTING_MODE
 
     db.commit()
     db.refresh(order)

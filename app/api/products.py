@@ -83,6 +83,9 @@ class ProductPayload(BaseModel):
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None
     report_notes: str | None = None
+    splice_mode: str | None = "single"
+    pieces_per_box: int | None = None
+    flap_mm: int | None = 30
 
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
@@ -91,6 +94,18 @@ class ProductPayload(BaseModel):
         err = validate_flute_consistency(self.flute_type, self.layer_count)
         if err:
             raise ValueError(err)
+        splice_mode = (self.splice_mode or "single").strip().lower()
+        if splice_mode not in {"single", "double"}:
+            raise ValueError("拼箱方式仅允许：single 或 double")
+        self.splice_mode = splice_mode
+        if self.pieces_per_box is None:
+            self.pieces_per_box = 2 if splice_mode == "double" else 1
+        if self.pieces_per_box not in {1, 2}:
+            raise ValueError("每箱片数仅允许 1 或 2")
+        if self.flap_mm is None:
+            self.flap_mm = 30
+        if self.flap_mm <= 0:
+            raise ValueError("舌头(mm)必须大于0")
         return self
 
 
@@ -641,6 +656,7 @@ def sync_product_fields(
         "report_length_mm", "report_width_mm",
         "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm",
         "report_notes", "production_process", "product_name", "specification",
+        "splice_mode", "pieces_per_box", "flap_mm",
     }
     product = _product_or_404(db, product_id)
     updated = []

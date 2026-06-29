@@ -416,6 +416,8 @@
       .product-size-report-row {
         grid-template-columns:
           76px 76px 76px
+          108px
+          92px
           minmax(250px, 1.15fr)
           104px
           minmax(245px, 1.1fr)
@@ -1213,7 +1215,7 @@
               <page-head title="智能报料工作台" desc="历史智索、库存抵扣、合并报料；供应商到货后直接在 WMS 确认入库。"></page-head>
               <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button :class="['btn',{primary:requisitionTab==='supplierOrders'}]" @click="requisitionTab='supplierOrders'; loadSupplierOrders()">供应商报料单 {{ supplierOrders.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openRequisition">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
               <data-panel v-if="requisitionTab==='pending'" :empty="!requisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>报料尺寸</th><th>压线</th><th>材质</th><th>订单数</th><th>交期</th></tr></thead><tbody><tr v-for="row in requisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}</td><td style="font-size:12px">{{ formatCrease(row) }}</td><td>{{ row.material }}</td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td></tr></tbody></table></data-panel>
-              <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>特殊工艺</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
+              <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>开料方式</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.cutting_mode || row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
               <!-- 供应商报料单列表 -->
               <data-panel v-else-if="requisitionTab==='supplierOrders'" :empty="!supplierOrders.length">
                 <table>
@@ -1658,6 +1660,13 @@
                 <div class="field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
                 <div class="field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
                 <div class="field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
+                <div class="field"><label>拼箱方式</label>
+                  <select class="select" v-model="productForm.splice_mode">
+                    <option value="single">单拼</option>
+                    <option value="double">双拼</option>
+                  </select>
+                </div>
+                <div class="field"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="productForm.flap_mm" /></div>
                 <div class="field"><label>报料长宽</label>
                   <div class="report-size-line">
                     <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" @input="markProductReportManual" placeholder="长" />
@@ -1691,7 +1700,6 @@
                 <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
               </div>
 
-              <!-- 材质选择顺序：材质供应商 → 层数 → 楞型 → 材质代码 -->
               <div class="product-form-row product-material-row">
                 <div class="field"><label>材质供应商</label>
                   <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
@@ -1727,7 +1735,6 @@
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" />打钉</label>
                     <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" />模切</label>
-                    <label class="process-option"><input type="checkbox" value="双拼" v-model="productForm._production_processes" />双拼</label>
                     <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" />其他</label>
                   </div>
                 </div>
@@ -2356,8 +2363,8 @@
             </div>
             <div v-else-if="modal.type === 'requisition'">
               <div class="field" style="width:360px"><label>供应商（选填）</label><input class="input" v-model.trim="requisitionForm.supplier_name" /></div>
-              <table><thead><tr><th>客户 / 订单 / 产品</th><th>订单数</th><th>抵扣库存</th><th>实际报料数</th><th>纸板长(mm)</th><th>纸板宽(mm)</th><th>特殊处理</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':line.special_process!=='无'}"><td>{{ line.customer_name }}<br>{{ line.order_number }} / {{ line.product_code }} {{ line.product_name }}</td><td>{{ line.quantity }}</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process"><option>无</option><option>大做小</option><option>双拼</option><option>多拼</option></select></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
-              <div class="muted" style="margin-top:8px">纸板长、纸板宽必须填写；保存后由车间/管理员到“来料入库”完成入库，入库后才能送货。</div>
+              <table><thead><tr><th>客户 / 订单 / 产品</th><th>订单数</th><th>每箱片数</th><th>需求小片</th><th>抵扣库存(小片)</th><th>采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td>{{ line.customer_name }}<br>{{ line.order_number }} / {{ line.product_code }} {{ line.product_name }}<br><span class="muted">{{ line.splice_mode_label }} · 需求{{ line.required_piece_qty }}片 · 采购{{ line.requisition_qty }}张 {{ formatBoardSpec(line.cardboard_len, line.cardboard_width) }}</span></td><td>{{ line.quantity }}</td><td>{{ line.pieces_per_box }}</td><td>{{ line.required_piece_qty }}</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
+              <div class="muted" style="margin-top:8px">订单数量仍按成品数；需求小片会根据单拼/双拼自动换算；采购张数和采购规格会根据开料方式按宽度方向自动计算。</div>
             </div>
             <div v-else-if="modal.type === 'receipt'">
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
@@ -2687,6 +2694,7 @@
         remark: "", is_active: true,
         flute_type: null, layer_count: null, surface_paper_type: null,
         _material_supplier: "全部供应商",
+        splice_mode: "single", pieces_per_box: 1, flap_mm: 30,
         report_length_mm: null, report_width_mm: null,
         crease_type: null, crease_left_mm: null, crease_middle_mm: null, crease_right_mm: null,
         report_notes: null,
@@ -3052,6 +3060,8 @@
           "productForm.length_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.width_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.height_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.splice_mode"() { this.autoApplyProductRecommendations(); },
+          "productForm.flap_mm"() { this.autoApplyProductRecommendations(); },
           "productForm.layer_count"() { this.refreshProductBoardCost(); },
           "productForm.flute_type"() { this.refreshProductBoardCost(); },
           "productForm.crease_type"() { this.autoApplyProductRecommendations(); }
@@ -3967,7 +3977,7 @@
           },
           normalizeProductDimensions(form) {
             [
-              "length_mm", "width_mm", "height_mm",
+              "length_mm", "width_mm", "height_mm", "flap_mm",
               "report_length_mm", "report_width_mm",
               "crease_left_mm", "crease_middle_mm", "crease_right_mm",
             ].forEach(key => {
@@ -3975,12 +3985,15 @@
               const value = this.normalizeMmInteger(form[key]);
               if (value !== null) form[key] = value;
             });
+            form.splice_mode = form.splice_mode || "single";
+            form.pieces_per_box = form.splice_mode === "double" ? 2 : 1;
+            form.flap_mm = this.normalizeMmInteger(form.flap_mm) || 30;
             return form;
           },
           parseProductionProcesses(value) {
-            const allowed = ["粘贴", "打钉", "模切", "双拼", "其他"];
+            const allowed = ["粘贴", "打钉", "模切", "其他"];
             const aliases = { "粘箱":"粘贴", "糊箱":"粘贴", "钉箱":"打钉", "打钉箱":"打钉" };
-            const values = String(value || "").split(/[，,、+]/).map(item => item.trim()).filter(Boolean);
+            const values = String(value || "").split(/[，、,]/).map(item => item.trim()).filter(Boolean);
             const normalized = values.map(item => aliases[item] || item).filter(item => allowed.includes(item));
             if (values.length && !normalized.length) normalized.push("其他");
             return [...new Set(normalized)];
@@ -3995,6 +4008,9 @@
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
             form.box_style = form.box_style || "";
             form.print_content = form.print_content || "无印刷";
+            form.splice_mode = form.splice_mode || (String(form.production_process || "").includes("双拼") ? "double" : "single");
+            form.pieces_per_box = Number(form.pieces_per_box || (form.splice_mode === "double" ? 2 : 1));
+            form.flap_mm = this.normalizeMmInteger(form.flap_mm) || 30;
             form._report_dims_manual =
               form.report_length_mm !== null && form.report_length_mm !== undefined && form.report_length_mm !== "" ||
               form.report_width_mm !== null && form.report_width_mm !== undefined && form.report_width_mm !== "";
@@ -4027,6 +4043,7 @@
               print_content: f.print_content, production_processes: f._production_processes,
               sale_unit_price: f.sale_unit_price, remark: f.remark,
               layer_count: f.layer_count, flute_type: f.flute_type,
+              splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box, flap_mm: f.flap_mm,
               report_length_mm: f.report_length_mm, report_width_mm: f.report_width_mm,
               crease_type: f.crease_type, crease_left_mm: f.crease_left_mm,
               crease_middle_mm: f.crease_middle_mm, crease_right_mm: f.crease_right_mm,
@@ -4222,10 +4239,11 @@
             const value = String(boxType || "").trim().toUpperCase();
             return value.includes("A1") || value.includes("0201");
           },
-          calculateBoardSizeByBoxType(boxType, length, width, height) {
+          calculateBoardSizeByBoxType(boxType, length, width, height, spliceMode, flapMm) {
             const L = this.normalizeMmInteger(length);
             const W = this.normalizeMmInteger(width);
             const H = this.normalizeMmInteger(height);
+            const flap = this.normalizeMmInteger(flapMm) || 30;
             if (!L || !W || !H) return null;
             if (!this.isA1BoxStyle(boxType)) {
               return {
@@ -4234,10 +4252,13 @@
                 formula_label: "该箱型暂无自动推荐公式，请手工填写报料长宽。",
               };
             }
+            const isDouble = String(spliceMode || "single") === "double";
             return {
-              board_length: this.normalizeMmInteger(2 * (L + W) + 30),
+              board_length: this.normalizeMmInteger(isDouble ? (L + W + flap) : (2 * (L + W) + flap)),
               board_width: this.normalizeMmInteger(W + H + 5),
-              formula_label: "按采购报料经验推荐：2×(长+宽)+30，宽+高+5",
+              formula_label: isDouble
+                ? `A1/0201 双拼推荐：长+宽+舌头，当前舌头 ${flap}mm`
+                : `A1/0201 单拼推荐：2×(长+宽)+舌头，当前舌头 ${flap}mm`,
             };
           },
           calculateCreaseByBoxType(boxType, length, width, height, creaseType) {
@@ -4273,8 +4294,9 @@
             if (!form || this.modal?.type !== "product") return;
 
             const board = this.calculateBoardSizeByBoxType(
-              form.box_style, form.length_mm, form.width_mm, form.height_mm
+              form.box_style, form.length_mm, form.width_mm, form.height_mm, form.splice_mode, form.flap_mm
             );
+            form.pieces_per_box = form.splice_mode === "double" ? 2 : 1;
             if (board && board.board_length && board.board_width && form.material_id) {
               if (force || this.shouldAutoApplyRecommendation(form._report_dims_manual)) {
                 form.report_length_mm = board.board_length;
@@ -5072,26 +5094,62 @@
             try { await axios.delete(`/api/orders/items/${item.id}`); await this.loadOrders(); this.showToast("订单明细已删除"); }
             catch (error) { this.showToast(this.errorMessage(error), true); }
           },
+          cuttingModeFactor(mode) {
+            return ({ "一开一": 1, "一开二": 2, "一开三": 3, "一开四": 4, "一开五": 5 }[mode]) || 1;
+          },
+          normalizeCuttingMode(mode) {
+            return ({ "一开一": 1, "一开二": 2, "一开三": 3, "一开四": 4, "一开五": 5 }[mode]) ? mode : "一开一";
+          },
+          recalculateRequisitionLine(line, { preserveManualQty = false } = {}) {
+            line.special_process = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
+            line.cutting_mode = line.special_process;
+            line.cutting_factor = this.cuttingModeFactor(line.special_process);
+            line.pieces_per_box = Number(line.pieces_per_box || 1);
+            line.required_piece_qty = Math.max(Number(line.quantity || 0) * Number(line.pieces_per_box || 1), 0);
+            const reportLength = Number(line.snapshot_report_length_mm || 0);
+            const reportWidth = Number(line.snapshot_report_width_mm || 0);
+            if (reportLength > 0) line.cardboard_len = reportLength;
+            if (reportWidth > 0) line.cardboard_width = reportWidth * line.cutting_factor;
+            if (!preserveManualQty || line.requisition_qty === null || line.requisition_qty === undefined || line.requisition_qty === "") {
+              const remaining = Math.max(line.required_piece_qty - Number(line.inventory_deducted_qty || 0), 0);
+              line.requisition_qty = Math.ceil(remaining / line.cutting_factor);
+            }
+          },
           async openRequisition() {
             const rows = this.requisitionPending.filter(row => this.requisitionSelected[row.item_id]);
             if (!rows.length) { this.showToast("请先勾选待报料明细", true); return; }
             this.requisitionForm = { supplier_name:"", items:rows.map(row => ({
               order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_name:row.customer_name,
-              product_code:row.product_code, product_name:row.product_name, quantity:row.quantity,
+              product_code:row.product_code, product_name:row.product_name, quantity:Number(row.quantity || 0),
               inventory_deducted_qty:Number(row.inventory_deducted_qty || 0),
-              requisition_qty:Number(row.requisition_qty ?? row.quantity),
+              requisition_qty:Number(row.requisition_qty ?? 0),
               cardboard_len:row.suggested_cardboard_len, cardboard_width:row.suggested_cardboard_width,
-              special_process:row.special_process || "无", remark:""
+              special_process:this.normalizeCuttingMode(row.cutting_mode || row.special_process),
+              cutting_mode:this.normalizeCuttingMode(row.cutting_mode || row.special_process),
+              pieces_per_box:Number(row.pieces_per_box || row.snapshot_pieces_per_box || 1),
+              required_piece_qty:Number(row.required_piece_qty || 0),
+              snapshot_report_length_mm:row.snapshot_report_length_mm || null,
+              snapshot_report_width_mm:row.snapshot_report_width_mm || null,
+              snapshot_splice_mode:row.snapshot_splice_mode || "single",
+              splice_mode_label:(row.snapshot_splice_mode || "single") === "double" ? "双拼" : "单拼",
+              remark:""
             }))};
+            this.requisitionForm.items.forEach(line => this.recalculateRequisitionLine(line));
             this.modal = {type:"requisition", title:"生成合并报料单"};
             await Promise.all(this.requisitionForm.items.map(async line => {
+              if (line.snapshot_report_length_mm && line.snapshot_report_width_mm) return;
               const keyword = `${line.customer_name} ${line.product_code}`;
               const {data} = await axios.get("/api/requisition/search_history", {params:{keyword}});
               const hit = data.items?.[0];
-              if (hit) { line.cardboard_len=hit.cardboard_len || line.cardboard_len; line.cardboard_width=hit.cardboard_width || line.cardboard_width; }
+              if (hit) {
+                line.cardboard_len = hit.cardboard_len || line.cardboard_len;
+                line.cardboard_width = hit.cardboard_width || line.cardboard_width;
+                line.special_process = this.normalizeCuttingMode(hit.cutting_mode || hit.special_process || line.special_process);
+                this.recalculateRequisitionLine(line);
+              }
             }));
           },
-          autoRequisitionQty(line) { line.requisition_qty = Math.max(Number(line.quantity)-Number(line.inventory_deducted_qty || 0),0); },
+          autoRequisitionQty(line) { this.recalculateRequisitionLine(line); },
           openIncomingPage() {
             window.location.href = "/incoming.html";
           },
@@ -5227,7 +5285,8 @@
                 if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
                 [
                   "length_mm", "width_mm", "height_mm",
-                  "report_length_mm", "report_width_mm",
+                  "splice_mode", "pieces_per_box", "flap_mm",
+              "report_length_mm", "report_width_mm",
                   "crease_left_mm", "crease_middle_mm", "crease_right_mm",
                 ].forEach(key => {
                   if (payload[key] === "") payload[key] = null;

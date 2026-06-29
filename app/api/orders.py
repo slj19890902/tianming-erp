@@ -144,6 +144,9 @@ class OrderItemUpdate(BaseModel):
     snapshot_crease_middle_mm: int | None = None
     snapshot_crease_right_mm: int | None = None
     snapshot_report_notes: str | None = None
+    snapshot_splice_mode: str | None = None
+    snapshot_pieces_per_box: int | None = None
+    snapshot_flap_mm: int | None = None
 
 
 class OrderCreate(BaseModel):
@@ -320,6 +323,9 @@ def _order_response(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_splice_mode": item.snapshot_splice_mode,
+                "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
+                "snapshot_flap_mm": item.snapshot_flap_mm,
                 # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
                 "product_drawing_file": (
                     item.product.drawings[0].image_path
@@ -1308,6 +1314,9 @@ def create_order(
                 snapshot_crease_middle_mm=product.crease_middle_mm,
                 snapshot_crease_right_mm=product.crease_right_mm,
                 snapshot_report_notes=product.report_notes,
+                snapshot_splice_mode=product.splice_mode or "single",
+                snapshot_pieces_per_box=product.pieces_per_box or (2 if (product.splice_mode or "").lower() == "double" else 1),
+                snapshot_flap_mm=product.flap_mm or 30,
                 requisition_status="未报料",
             )
             # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细
@@ -1457,6 +1466,12 @@ def update_order_item(
         item.snapshot_crease_right_mm = payload.snapshot_crease_right_mm
     if payload.snapshot_report_notes is not None:
         item.snapshot_report_notes = payload.snapshot_report_notes or None
+    if payload.snapshot_splice_mode is not None:
+        item.snapshot_splice_mode = payload.snapshot_splice_mode or None
+    if payload.snapshot_pieces_per_box is not None:
+        item.snapshot_pieces_per_box = payload.snapshot_pieces_per_box
+    if payload.snapshot_flap_mm is not None:
+        item.snapshot_flap_mm = payload.snapshot_flap_mm
     _refresh_total(db, order)
     db.add(
         OperationLog(
@@ -1491,6 +1506,16 @@ def update_order_item(
         "snapshot_spec": item.snapshot_spec,
         "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
         "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
+        "snapshot_report_length_mm": item.snapshot_report_length_mm,
+        "snapshot_report_width_mm": item.snapshot_report_width_mm,
+        "snapshot_crease_type": item.snapshot_crease_type,
+        "snapshot_crease_left_mm": item.snapshot_crease_left_mm,
+        "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
+        "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
+        "snapshot_report_notes": item.snapshot_report_notes,
+        "snapshot_splice_mode": item.snapshot_splice_mode,
+        "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
+        "snapshot_flap_mm": item.snapshot_flap_mm,
     }
 
 

@@ -1,31 +1,34 @@
-"""v0.19.2-B Phase 3: 供应商报料单 API 测试
-
-运行: python -X utf8 -m pytest tests/test_phase192_supplier_orders.py -q
-"""
 from __future__ import annotations
 
 import sys
-sys.path.insert(0, ".")
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
-import app.models  # noqa: F401 – registers all ORM models
+sys.path.insert(0, ".")
+
+import app.models  # noqa: F401
 
 
 @pytest.fixture(scope="module")
 def api_app(tmp_path_factory):
+    from app.api.auth import router as auth_router
+    from app.api.deps import get_db
+    from app.api.requisition import router as req_router
     from app.core.database import create_sqlite_engine
     from app.models import Base
-    from app.api.deps import get_db
 
     db_path = tmp_path_factory.mktemp("suporder") / "so.sqlite3"
     engine = create_sqlite_engine(db_path)
     Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False,
-                                   expire_on_commit=False)
+    session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
 
     def override_get_db():
         db = session_factory()
@@ -34,14 +37,10 @@ def api_app(tmp_path_factory):
         finally:
             db.close()
 
-    from app.api.auth import router as auth_router
-    from app.api.requisition import router as req_router
-
     application = FastAPI()
     application.include_router(auth_router, prefix="/api/auth")
     application.include_router(req_router, prefix="/api/requisition")
     application.dependency_overrides[get_db] = override_get_db
-
     return application, session_factory
 
 
@@ -59,8 +58,8 @@ def session_factory(api_app):
 
 @pytest.fixture(scope="module")
 def admin_cookies(client, session_factory):
-    from app.models.user import User
     from app.core.security import hash_password
+    from app.models.user import User
 
     db = session_factory()
     try:
@@ -110,21 +109,27 @@ class TestSupplierOrders:
             "supplier_name": "天意纸板厂",
             "layer_count": 5,
             "flute_type": "BC",
-            "report_length_mm": 620,
-            "report_width_mm": 410,
+            "report_length_mm": 800,
+            "report_width_mm": 200,
             "crease_type": "压线",
             "crease_left_mm": 130,
             "crease_middle_mm": 360,
             "crease_right_mm": 130,
+            "cutting_mode": "一开三",
+            "pieces_per_box": 2,
+            "required_piece_qty": 10,
             "members": [
                 {
                     "item_id": None,
                     "order_number": "TM260101-001",
                     "product_code": "BOX001",
                     "product_name": "普通瓦楞箱",
-                    "quantity": 500,
-                    "stock_deduction_qty": 50,
-                    "requisition_qty": 450,
+                    "quantity": 5,
+                    "pieces_per_box": 2,
+                    "required_piece_qty": 10,
+                    "stock_deduction_qty": 0,
+                    "requisition_qty": 4,
+                    "cutting_mode": "一开三",
                     "customer_name": "客户甲",
                     "delivery_date": "2026-07-10",
                 },
@@ -133,9 +138,12 @@ class TestSupplierOrders:
                     "order_number": "TM260101-002",
                     "product_code": "BOX001",
                     "product_name": "普通瓦楞箱",
-                    "quantity": 300,
+                    "quantity": 3,
+                    "pieces_per_box": 2,
+                    "required_piece_qty": 6,
                     "stock_deduction_qty": 0,
-                    "requisition_qty": 300,
+                    "requisition_qty": 2,
+                    "cutting_mode": "一开三",
                     "customer_name": "客户乙",
                     "delivery_date": "2026-07-12",
                 },
@@ -146,12 +154,16 @@ class TestSupplierOrders:
         data = r.json()
         assert data["order_number"].startswith("SRO-")
         assert data["supplier_name"] == "天意纸板厂"
-        assert data["total_quantity"] == 800
-        assert data["stock_deduction_qty"] == 50
-        assert data["requisition_qty"] == 750
+        assert data["total_quantity"] == 8
+        assert data["stock_deduction_qty"] == 0
+        assert data["requisition_qty"] == 6
+        assert data["cutting_mode"] == "一开三"
+        assert data["pieces_per_box"] == 2
+        assert data["required_piece_qty"] == 10
         assert len(data["items"]) == 2
         assert data["status"] == "confirmed"
         assert data["crease_display"] == "130+360+130"
+        assert data["items"][0]["cutting_mode"] == "一开三"
         _created_id = data["id"]
         _created_number = data["order_number"]
 
@@ -166,6 +178,7 @@ class TestSupplierOrders:
         data = r.json()
         assert data["order_number"] == _created_number
         assert len(data["items"]) == 2
+        assert data["cutting_mode"] == "一开三"
 
     def test_get_404(self, client, admin_cookies):
         r = client.get("/api/requisition/supplier-orders/99999", cookies=admin_cookies)
@@ -185,5 +198,4 @@ class TestSupplierOrders:
     def test_list_with_status_filter(self, client, admin_cookies):
         r = client.get("/api/requisition/supplier-orders?status=confirmed", cookies=admin_cookies)
         assert r.status_code == 200
-        # 唯一一条已作废，过滤后为空
         assert r.json()["total"] == 0

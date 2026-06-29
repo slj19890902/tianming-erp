@@ -403,19 +403,23 @@
         padding-bottom: 10px;
         border-bottom: 1px solid #ededf0;
       }
-      .product-core-row,
-      .product-size-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      .product-material-row {
-        grid-template-columns: minmax(150px, .8fr) minmax(110px, .55fr) minmax(130px, .65fr) minmax(360px, 2fr);
+      .product-core-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .product-size-report-row {
+        grid-template-columns:
+          76px 76px 76px
+          minmax(250px, 1.15fr)
+          104px
+          minmax(245px, 1.1fr)
+          minmax(180px, 1fr);
       }
-      .product-report-row {
-        grid-template-columns: minmax(270px, 1fr) minmax(480px, 1.8fr) minmax(260px, 1fr);
+      .product-material-row {
+        grid-template-columns: minmax(130px, .7fr) minmax(90px, .45fr) minmax(110px, .55fr) minmax(360px, 2fr);
       }
       .product-print-row {
         grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
       }
-      .product-remark-row {
-        grid-template-columns: 1fr;
+      .product-final-row {
+        grid-template-columns: minmax(150px, .3fr) minmax(500px, 1.7fr);
         border-bottom: 0;
         padding-bottom: 0;
       }
@@ -454,11 +458,13 @@
         gap: 6px;
         flex-wrap: nowrap;
       }
-      .report-size-line .input { width: 104px; }
-      .crease-control-line .select { width: 92px; flex: 0 0 92px; }
-      .crease-segments { display: flex; align-items: center; gap: 4px; min-width: 0; }
-      .crease-segments .input { width: 70px; min-width: 58px; }
-      .a1-calc-button { flex: 0 0 auto; white-space: nowrap; }
+      .report-size-line .input { width: 82px; min-width: 68px; }
+      .report-size-line .btn { flex: 0 0 auto; white-space: nowrap; padding-inline: 8px; }
+      .crease-segments { display: grid; grid-template-columns: repeat(3, minmax(58px, 1fr)); gap: 4px; min-width: 0; }
+      .crease-segment-item { display: grid; gap: 2px; min-width: 0; }
+      .crease-segment-item span { color: var(--muted); font-size: 11px; text-align: center; white-space: nowrap; }
+      .crease-segments .input { width: 100%; min-width: 58px; text-align: center; }
+      .product-recommendation-hint { margin-top: 4px; font-size: 11px; line-height: 1.3; }
       .drawing-history-list {
         display: grid;
         gap: 6px;
@@ -484,17 +490,17 @@
       }
       @media (max-width: 1100px) {
         .product-core-row,
-        .product-size-row,
         .product-material-row,
-        .product-print-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .product-report-row { grid-template-columns: 1fr; }
+        .product-print-row,
+        .product-final-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .product-size-report-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       }
       @media (max-width: 680px) {
         .product-core-row,
-        .product-size-row,
+        .product-size-report-row,
         .product-material-row,
-        .product-print-row { grid-template-columns: 1fr; }
-        .crease-control-line { align-items: flex-start; flex-wrap: wrap; }
+        .product-print-row,
+        .product-final-row { grid-template-columns: 1fr; }
       }
 
       /* Toast */
@@ -1612,14 +1618,48 @@
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
                 <input type="hidden" v-model.trim="productForm.customer_material_code" />
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
-                <div class="field"><label>箱型</label><select class="select" v-model="productForm.box_category"><option value="normal">普通箱</option><option value="die_cut">模切箱</option></select></div>
+                <div class="field"><label>箱型</label>
+                  <select class="select" v-model="productForm.box_style" @change="onProductBoxStyleChange">
+                    <option value="">请选择箱型</option>
+                    <option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option>
+                    <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
+                  </select>
+                </div>
               </div>
 
-              <div class="product-form-row product-size-row">
+              <div class="product-form-row product-size-report-row">
                 <div class="field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
                 <div class="field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
                 <div class="field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
-                <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+                <div class="field"><label>报料长宽</label>
+                  <div class="report-size-line">
+                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" @input="markProductReportManual" placeholder="长" />
+                    <span class="muted">×</span>
+                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" @input="markProductReportManual" placeholder="宽" />
+                    <span class="muted">mm</span>
+                    <button type="button" class="btn small" @click="reapplyProductRecommendations">重新推荐</button>
+                  </div>
+                  <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted">{{ productForm._recommendation_message }}</div>
+                </div>
+                <div class="field"><label>压线类型</label>
+                  <select class="select" v-model="productForm.crease_type">
+                    <option :value="null">未设置</option>
+                    <option value="压线">压线</option>
+                    <option value="毛片">毛</option>
+                    <option value="净料">净</option>
+                    <option value="其他">其他</option>
+                  </select>
+                </div>
+                <div class="field"><label>压线尺寸</label>
+                  <div v-if="productForm.crease_type === '压线'" class="crease-segments">
+                    <label class="crease-segment-item"><span>上摇盖</span><input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="markProductCreaseManual" /></label>
+                    <label class="crease-segment-item"><span>高</span><input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" /></label>
+                    <label class="crease-segment-item"><span>下摇盖</span><input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="markProductCreaseManual" /></label>
+                  </div>
+                  <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请在报料备注中填写要求' }}</span>
+                  <span v-else class="muted">请人工选择</span>
+                </div>
+                <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
               </div>
 
               <!-- 材质选择顺序：材质供应商 → 层数 → 楞型 → 材质代码 -->
@@ -1650,34 +1690,6 @@
                     placeholder="输入代码/供应商/克重/报价搜索"></search-select>
                   <div v-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
-              </div>
-
-              <div class="product-form-row product-report-row">
-                <div class="field"><label>报料长宽</label>
-                  <div class="report-size-line">
-                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" placeholder="长" />
-                    <span class="muted">×</span>
-                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" placeholder="宽" />
-                    <span class="muted">mm</span>
-                  </div>
-                </div>
-                <div class="field"><label>压线类型</label>
-                  <div class="crease-control-line">
-                    <select class="select" v-model="productForm.crease_type">
-                      <option :value="null">未设置</option><option value="毛片">毛片</option><option value="净料">净料</option><option value="压线">压线</option>
-                    </select>
-                    <div v-if="productForm.crease_type === '压线'" class="crease-segments">
-                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" placeholder="左" />
-                      <span>×</span>
-                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" placeholder="中" />
-                      <span>×</span>
-                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" placeholder="右" />
-                    </div>
-                    <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '无毛边' : '含毛边' }}</span>
-                    <button type="button" class="btn small a1-calc-button" @click="calcA1ReportDims(productForm)" title="A1型纸箱推荐计算（可手工修改）">A1 推荐计算</button>
-                  </div>
-                </div>
-                <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、需压线等" /></div>
               </div>
 
               <div class="product-form-row product-print-row">
@@ -1724,8 +1736,9 @@
                 </template>
               </div>
 
-              <div class="product-form-row product-remark-row">
-                <div class="field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="3"></textarea></div>
+              <div class="product-form-row product-final-row">
+                <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+                <div class="field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="2"></textarea></div>
               </div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
@@ -2648,6 +2661,8 @@
         report_length_mm: null, report_width_mm: null,
         crease_type: null, crease_left_mm: null, crease_middle_mm: null, crease_right_mm: null,
         report_notes: null,
+        _report_dims_manual: false, _crease_dims_manual: false,
+        _recommendation_message: "",
       });
       const blankMaterial = () => ({
         id:null, code:"", paper_composition:"", layer_count:5, flute_type:"AB",
@@ -2735,6 +2750,18 @@
             showOrderItemDanger: false,
             showOrderEditDanger: false,
             orderItemOrder: null,
+            productBoxStyleOptions: [
+              "A1/0201 普通开槽箱",
+              "A3 天地盖",
+              "平卡",
+              "刀卡",
+              "隔板",
+              "围套",
+              "半开槽箱",
+              "全搭盖箱",
+              "异形箱",
+              "其他",
+            ],
             customerForm: blankCustomer(), productForm: blankProduct(),
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), remark: "", items: [] },
@@ -2990,13 +3017,15 @@
         },
         watch: {
           // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
-          "productForm.material_id"() { this.refreshProductBoardCost(); },
+          "productForm.material_id"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.box_category"() { this.refreshProductBoardCost(); },
-          "productForm.length_mm"() { this.refreshProductBoardCost(); },
-          "productForm.width_mm"() { this.refreshProductBoardCost(); },
-          "productForm.height_mm"() { this.refreshProductBoardCost(); },
+          "productForm.box_style"() { this.autoApplyProductRecommendations(); },
+          "productForm.length_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.width_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
+          "productForm.height_mm"() { this.refreshProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.layer_count"() { this.refreshProductBoardCost(); },
-          "productForm.flute_type"() { this.refreshProductBoardCost(); }
+          "productForm.flute_type"() { this.refreshProductBoardCost(); },
+          "productForm.crease_type"() { this.autoApplyProductRecommendations(); }
         },
         async mounted() {
           window.erpAuthRequired = () => {
@@ -3905,12 +3934,17 @@
             // 拍快照用于检测未保存更改
             this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
             this.modal = { type:"product", title: row ? "编辑产品" : "新增产品" };
+            this.$nextTick(() => this.autoApplyProductRecommendations());
           },
           normalizeProductDimensions(form) {
-            ["length_mm", "width_mm", "height_mm"].forEach(key => {
+            [
+              "length_mm", "width_mm", "height_mm",
+              "report_length_mm", "report_width_mm",
+              "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+            ].forEach(key => {
               if (form[key] === null || form[key] === undefined || form[key] === "") return;
-              const value = Number(form[key]);
-              if (Number.isFinite(value)) form[key] = Math.round(value);
+              const value = this.normalizeMmInteger(form[key]);
+              if (value !== null) form[key] = value;
             });
             return form;
           },
@@ -3930,7 +3964,16 @@
           },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
+            form.box_style = form.box_style || "";
             form.print_content = form.print_content || "无印刷";
+            form._report_dims_manual =
+              form.report_length_mm !== null && form.report_length_mm !== undefined && form.report_length_mm !== "" ||
+              form.report_width_mm !== null && form.report_width_mm !== undefined && form.report_width_mm !== "";
+            form._crease_dims_manual =
+              form.crease_left_mm !== null && form.crease_left_mm !== undefined && form.crease_left_mm !== "" ||
+              form.crease_middle_mm !== null && form.crease_middle_mm !== undefined && form.crease_middle_mm !== "" ||
+              form.crease_right_mm !== null && form.crease_right_mm !== undefined && form.crease_right_mm !== "";
+            form._recommendation_message = "";
             form._production_processes = this.parseProductionProcesses(form.production_process);
             form._production_process_legacy =
               form._production_processes.length === 1 &&
@@ -3950,7 +3993,7 @@
             return {
               customer_id: f.customer_id, product_code: f.product_code,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
-              material_id: f.material_id, box_category: f.box_category,
+              material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
               print_content: f.print_content, production_processes: f._production_processes,
               sale_unit_price: f.sale_unit_price, remark: f.remark,
@@ -4140,25 +4183,108 @@
             }
             return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
           },
-          // ===== A1 推荐报料计算 =====
-          calcA1ReportDims(form) {
-            const L = Number(form.length_mm) || 0;
-            const W = Number(form.width_mm) || 0;
-            const H = Number(form.height_mm) || 0;
-            if (!L || !W || !H) { this.showToast("请先填写成箱长×宽×高", true); return; }
-            const reportLen = Math.round((L + W) * 2 + 30);
-            const flap = Math.round(W / 2);
-            const mid = H;
-            const reportWidth = flap + mid + flap;
-            form.report_length_mm = reportLen;
-            form.report_width_mm = reportWidth;
-            if (form.crease_type === '压线' || !form.crease_type) {
-              form.crease_type = '压线';
-              form.crease_left_mm = flap;
-              form.crease_middle_mm = mid;
-              form.crease_right_mm = flap;
+          // ===== 常用箱采购报料/压线推荐（只推荐，不强制覆盖人工值） =====
+          normalizeMmInteger(value) {
+            if (value === null || value === undefined || value === "") return null;
+            const number = Number(value);
+            return Number.isFinite(number) ? Math.round(number) : null;
+          },
+          isA1BoxStyle(boxType) {
+            const value = String(boxType || "").trim().toUpperCase();
+            return value.includes("A1") || value.includes("0201");
+          },
+          calculateBoardSizeByBoxType(boxType, length, width, height) {
+            const L = this.normalizeMmInteger(length);
+            const W = this.normalizeMmInteger(width);
+            const H = this.normalizeMmInteger(height);
+            if (!L || !W || !H) return null;
+            if (!this.isA1BoxStyle(boxType)) {
+              return {
+                board_length: null,
+                board_width: null,
+                formula_label: "该箱型暂无自动推荐公式，请手工填写报料长宽。",
+              };
             }
-            this.showToast(`推荐报料：${reportLen}×${reportWidth} mm，压线：${flap}×${mid}×${flap}（可手动修改）`);
+            return {
+              board_length: this.normalizeMmInteger(2 * (L + W) + 30),
+              board_width: this.normalizeMmInteger(W + H + 5),
+              formula_label: "按采购报料经验推荐：2×(长+宽)+30，宽+高+5",
+            };
+          },
+          calculateCreaseByBoxType(boxType, length, width, height, creaseType) {
+            if (creaseType !== "压线" || !this.isA1BoxStyle(boxType)) return null;
+            const W = this.normalizeMmInteger(width);
+            const H = this.normalizeMmInteger(height);
+            if (!W || !H) return null;
+            return {
+              top_flap: Math.round(W / 2),
+              height: H,
+              bottom_flap: Math.round(W / 2),
+              formula_label: "按宽度一半推荐上下摇盖，高度取执行高",
+            };
+          },
+          shouldAutoApplyRecommendation(fieldState) {
+            return !Boolean(fieldState);
+          },
+          markProductReportManual() {
+            this.productForm._report_dims_manual = true;
+          },
+          markProductCreaseManual() {
+            this.productForm._crease_dims_manual = true;
+          },
+          onProductBoxStyleChange() {
+            const selected = this.productForm.box_style;
+            if (this.productBoxStyleOptions.includes(selected)) {
+              this.productForm.box_category = selected === "异形箱" ? "die_cut" : "normal";
+            }
+            this.autoApplyProductRecommendations();
+          },
+          autoApplyProductRecommendations({ force = false } = {}) {
+            const form = this.productForm;
+            if (!form || this.modal?.type !== "product") return;
+
+            const board = this.calculateBoardSizeByBoxType(
+              form.box_style, form.length_mm, form.width_mm, form.height_mm
+            );
+            if (board && board.board_length && board.board_width && form.material_id) {
+              if (force || this.shouldAutoApplyRecommendation(form._report_dims_manual)) {
+                form.report_length_mm = board.board_length;
+                form.report_width_mm = board.board_width;
+              }
+              form._recommendation_message = board.formula_label;
+            } else if (board && !board.board_length) {
+              form._recommendation_message = board.formula_label;
+            } else if (this.isA1BoxStyle(form.box_style)) {
+              form._recommendation_message = "请先填写长、宽、高并选择材质，系统将自动推荐报料长宽。";
+            } else if (form.box_style) {
+              form._recommendation_message = "该箱型暂无自动推荐公式，请手工填写报料长宽。";
+            } else {
+              form._recommendation_message = "";
+            }
+
+            const crease = this.calculateCreaseByBoxType(
+              form.box_style, form.length_mm, form.width_mm, form.height_mm, form.crease_type
+            );
+            if (crease && (force || this.shouldAutoApplyRecommendation(form._crease_dims_manual))) {
+              form.crease_left_mm = crease.top_flap;
+              form.crease_middle_mm = crease.height;
+              form.crease_right_mm = crease.bottom_flap;
+            }
+          },
+          reapplyProductRecommendations() {
+            if (!this.isA1BoxStyle(this.productForm.box_style)) {
+              this.productForm._recommendation_message = "该箱型暂无自动推荐公式，请手工填写报料长宽。";
+              this.showToast(this.productForm._recommendation_message, true);
+              return;
+            }
+            if (!this.productForm.material_id) {
+              this.showToast("请先选择材质，再重新推荐报料长宽。", true);
+              return;
+            }
+            this.productForm._report_dims_manual = false;
+            this.productForm._crease_dims_manual = false;
+            this.autoApplyProductRecommendations({ force: true });
+            this.showToast("已按当前箱型和执行尺寸重新生成推荐值，可继续手工修改。");
           },
           // ===== 材质显示构建 =====
           buildMaterialDisplay(mat) {
@@ -5065,11 +5191,20 @@
                 delete payload._production_processes;
                 delete payload._production_process_legacy;
                 delete payload._material_supplier;
+                delete payload._report_dims_manual;
+                delete payload._crease_dims_manual;
+                delete payload._recommendation_message;
                 delete payload.drawings;
                 if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
-                ["length_mm","width_mm","height_mm"].forEach(key => {
+                [
+                  "length_mm", "width_mm", "height_mm",
+                  "report_length_mm", "report_width_mm",
+                  "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+                ].forEach(key => {
                   if (payload[key] === "") payload[key] = null;
-                  else if (payload[key] !== null && payload[key] !== undefined) payload[key] = Math.round(Number(payload[key]));
+                  else if (payload[key] !== null && payload[key] !== undefined) {
+                    payload[key] = this.normalizeMmInteger(payload[key]);
+                  }
                 });
                 if (payload.sale_unit_price === "") payload.sale_unit_price = null;
                 payload.print_content = payload.print_content || "无印刷";

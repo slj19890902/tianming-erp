@@ -54,9 +54,9 @@ class ProductPayload(BaseModel):
     product_name: str = Field(min_length=1, max_length=250)
     material_id: int | None = None
     legacy_material_text: str | None = None
-    length_mm: Decimal | None = Field(default=None, gt=0)
-    width_mm: Decimal | None = Field(default=None, gt=0)
-    height_mm: Decimal | None = Field(default=None, gt=0)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
     box_category: str = Field(pattern="^(normal|die_cut)$")
     box_style: str | None = None
     print_content: str | None = None
@@ -78,7 +78,7 @@ class ProductPayload(BaseModel):
     # v0.19.2-B: 报料尺寸 + 压线信息
     report_length_mm: int | None = None
     report_width_mm: int | None = None
-    crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线)$|^$")
+    crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线|其他)$|^$")
     crease_left_mm: int | None = None
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None

@@ -2456,6 +2456,7 @@
                 <div class="section-title">上传天华预送货截图</div>
                 <div class="toolbar-group">
                   <input class="input" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onTianhuaImageSelected" />
+                  <label class="muted">预送货日期 <input class="input" type="date" v-model="tianhuaPreimport.preDeliveryDate" /></label>
                   <span class="muted">{{ tianhuaPreimport.fileName || "尚未选择图片" }}</span>
                   <button class="btn primary" :disabled="!tianhuaPreimport.file || loading" @click="startTianhuaRecognition">开始识别</button>
                 </div>
@@ -2479,17 +2480,17 @@
               </div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>图片数量</th><th>系统未送数量</th><th>建议送货数量</th><th>产品名称</th><th>订单号</th><th>手机拿货状态</th><th>实际拿货数量</th><th>拿货备注</th><th>拿货时间</th><th>风险提示</th><th>操作</th></tr></thead>
+                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>图片数量</th><th>系统未送数量</th><th>建议送货数量</th><th>产品名称</th><th>订单号</th><th>候选数</th><th>匹配说明</th><th>手机拿货状态</th><th>实际拿货数量</th><th>拿货备注</th><th>拿货时间</th><th>风险提示</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr v-for="row in tianhuaPreimport.items" :key="row.row_no" :class="'tianhua-row-'+row.status">
                       <td><input type="checkbox" v-model="row.selected" :disabled="!isTianhuaRowGeneratable(row)" :title="tianhuaRowDisabledReason(row)" /></td>
                       <td>{{ row.status_label }}</td><td>{{ row.stock_code || "-" }}</td><td>{{ row.image_qty ?? "-" }}</td><td>{{ row.system_pending_qty ?? "-" }}</td>
                       <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" :disabled="!isTianhuaRowGeneratable(row)" /></td>
-                      <td>{{ row.product_name || "-" }}</td><td>{{ row.order_no || "-" }}</td>
+                      <td>{{ row.product_name || "-" }}</td><td>{{ row.order_no || "-" }}<div v-if="row.customer_order_no" class="muted">{{ row.customer_order_no }}</div></td><td>{{ row.candidate_count ?? 0 }}</td><td>{{ row.match_reason || "-" }}</td>
                       <td>{{ tianhuaPickStatusLabel(row.mobile_pick_status) }}</td><td>{{ row.mobile_picked_qty ?? "-" }}</td><td>{{ row.mobile_pick_note || "-" }}</td><td>{{ row.mobile_picked_at ? formatTime(row.mobile_picked_at) : "-" }}</td><td>{{ row.warning || "-" }}</td>
                       <td class="toolbar-group"><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
                     </tr>
-                    <tr v-if="!tianhuaPreimport.items.length"><td colspan="14" class="empty">上传图片并开始识别后，在这里显示预处理结果。</td></tr>
+                    <tr v-if="!tianhuaPreimport.items.length"><td colspan="16" class="empty">上传图片并开始识别后，在这里显示预处理结果。</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -2944,7 +2945,7 @@
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {}, remarks: {} },
-            tianhuaPreimport: { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
+            tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -5535,7 +5536,7 @@
             this.modal = { type:"delivery", title:"新增送货单" };
           },
           openTianhuaPreimport() {
-            this.tianhuaPreimport = { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };
+            this.tianhuaPreimport = { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };
             this.modal = { type:"tianhuaPreimport", title:"导入天华预送货" };
           },
           onTianhuaImageSelected(event) {
@@ -5553,9 +5554,11 @@
             try {
               const form = new FormData();
               form.append("file", this.tianhuaPreimport.file);
+              form.append("pre_delivery_date", this.tianhuaPreimport.preDeliveryDate || plusDays(1));
               const {data} = await axios.post("/api/deliveries/tianhua-preimport/upload", form, {headers:{"Content-Type":"multipart/form-data"}});
               this.tianhuaPreimport.batchId = data.batch_id;
               this.tianhuaPreimport.batchNumber = data.batch_number;
+              this.tianhuaPreimport.preDeliveryDate = data.pre_delivery_date || this.tianhuaPreimport.preDeliveryDate;
               this.tianhuaPreimport.items = data.items || [];
               this.tianhuaPreimport.draft = data.draft || null;
               this.showToast(`已识别 ${data.total_rows} 行天华预送货明细`);
@@ -5608,6 +5611,7 @@
               const {data} = await axios.get(`/api/deliveries/tianhua-preimport/${this.tianhuaPreimport.batchId}`);
               this.tianhuaPreimport.items = data.items || [];
               this.tianhuaPreimport.draft = data.draft || null;
+              this.tianhuaPreimport.preDeliveryDate = data.pre_delivery_date || this.tianhuaPreimport.preDeliveryDate;
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },

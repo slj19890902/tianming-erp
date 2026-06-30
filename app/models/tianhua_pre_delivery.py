@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from datetime import date, datetime
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
@@ -14,6 +14,7 @@ class TianhuaPreDeliveryImportBatch(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    pre_delivery_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(30), default="preprocessed", nullable=False)
     total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
@@ -30,10 +31,16 @@ class TianhuaPreDeliveryImportItem(Base):
     raw_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     stock_code: Mapped[str | None] = mapped_column(String(30))
     image_qty: Mapped[int | None] = mapped_column(Integer)
+    image_order_no: Mapped[str | None] = mapped_column(String(150))
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"))
     product_name: Mapped[str | None] = mapped_column(String(250))
     order_item_id: Mapped[int | None] = mapped_column(ForeignKey("sales_order_items.id"))
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("sales_orders.id"))
     order_number: Mapped[str | None] = mapped_column(String(64))
+    customer_order_no: Mapped[str | None] = mapped_column(String(150))
+    match_reason: Mapped[str | None] = mapped_column(Text)
+    match_score: Mapped[int | None] = mapped_column(Integer)
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     system_pending_qty: Mapped[int | None] = mapped_column(Integer)
     available_qty: Mapped[int | None] = mapped_column(Integer)
     suggested_qty: Mapped[int | None] = mapped_column(Integer)
@@ -76,6 +83,9 @@ class TianhuaPreDeliveryDraftItem(Base):
     stock_code: Mapped[str] = mapped_column(String(30), nullable=False)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     order_item_id: Mapped[int] = mapped_column(ForeignKey("sales_order_items.id"), nullable=False)
+    order_id: Mapped[int] = mapped_column(ForeignKey("sales_orders.id"), nullable=False)
+    order_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    customer_order_no: Mapped[str | None] = mapped_column(String(150))
     delivery_qty: Mapped[int] = mapped_column(Integer, nullable=False)
     warning: Mapped[str | None] = mapped_column(Text)
     mobile_pick_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)

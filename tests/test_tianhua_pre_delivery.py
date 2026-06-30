@@ -83,6 +83,8 @@ def test_api_creates_isolated_draft_and_blocks_duplicate(tmp_path,monkeypatch):
     assert duplicate_line.status_code==400
     assert [response.status_code for response in blocked_responses]==[400,400]
     assert first.status_code==201 and second.status_code==409
+    assert first.json()["items"][0]["order_id"] == 1
+    assert first.json()["items"][0]["order_no"] == "TH-1"
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(TianhuaPreDeliveryDraft))==1
         assert db.scalar(select(func.count()).select_from(Delivery))==0

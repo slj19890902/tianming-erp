@@ -1,10 +1,10 @@
 import base64
 import socket
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 
 import qrcode
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -52,13 +52,13 @@ def _batch(db,batch_id):
 
 
 @router.post("/tianhua-preimport/upload",status_code=status.HTTP_201_CREATED)
-async def upload(file:UploadFile=File(...),db:Session=Depends(get_db),user:User=Depends(can_operate)):
+async def upload(file:UploadFile=File(...),pre_delivery_date:date|None=Form(default=None),db:Session=Depends(get_db),user:User=Depends(can_operate)):
     filename=(file.filename or "").strip()
     if not any(filename.lower().endswith(s) for s in (".jpg",".jpeg",".png")): raise HTTPException(400,"仅支持 jpg、jpeg、png 图片")
     content=await file.read(12*1024*1024+1)
     if not content: raise HTTPException(400,"上传图片为空")
     if len(content)>12*1024*1024: raise HTTPException(413,"图片不能超过 12MB")
-    try: return batch_dict(db,create_batch(db,content,filename,user.id))
+    try: return batch_dict(db,create_batch(db,content,filename,user.id,pre_delivery_date or date.today()+timedelta(days=1)))
     except ValueError as e: db.rollback(); raise HTTPException(400,str(e)) from e
 
 
@@ -119,6 +119,8 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
         "item_id":draft_item.id,
         "stock_code":draft_item.stock_code,
         "product_name":import_item.product_name,
+        "order_no":draft_item.order_number,
+        "customer_order_no":draft_item.customer_order_no,
         "suggested_qty":import_item.suggested_qty,
         "final_delivery_qty":draft_item.delivery_qty,
         "mobile_picked_qty":draft_item.mobile_picked_qty,
@@ -149,7 +151,7 @@ def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),
 @mobile_router.get("/tianhua-pick")
 def get_mobile_pick(token:str,db:Session=Depends(get_db)):
     batch,draft=_token_scope(token,db)
-    return {"batch_id":batch.id,"draft_id":draft.id,"draft_number":draft.draft_number,"customer_name":batch.customer_name,"items":_mobile_items(db,draft)}
+    return {"batch_id":batch.id,"draft_id":draft.id,"draft_number":draft.draft_number,"customer_name":batch.customer_name,"pre_delivery_date":batch.pre_delivery_date.isoformat() if batch.pre_delivery_date else None,"items":_mobile_items(db,draft)}
 
 
 @mobile_router.put("/tianhua-pick/items/{item_id}")

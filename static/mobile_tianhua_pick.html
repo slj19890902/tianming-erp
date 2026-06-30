@@ -52,7 +52,7 @@
     <div id="loading" class="message">正在加载拿货明细...</div>
     <div id="error" class="message" hidden></div>
     <div id="app" hidden>
-      <header><h1>天华预送货拿货</h1><div id="subtitle" class="sub"></div></header>
+      <header><h1>天华预送货拿货</h1><div id="subtitle" class="sub"></div><div id="deliveryDate" class="sub"></div></header>
       <div id="stats" class="stats"></div>
       <main id="items"></main>
     </div>
@@ -75,6 +75,7 @@
       function render() {
         const count = counts();
         document.getElementById("subtitle").textContent = `${data.customer_name} · 草稿 ${data.draft_number}`;
+        document.getElementById("deliveryDate").textContent = `预送货日期：${data.pre_delivery_date || "-"}`;
         document.getElementById("stats").innerHTML = [
           ["总数",data.items.length],["已拿货",count.picked],["没货",count.no_stock],["部分",count.partial],["待处理",count.pending]
         ].map(([label,value]) => `<div class="stat"><strong>${value}</strong>${label}</div>`).join("");
@@ -86,6 +87,7 @@
           return `<article class="card ${escapeHtml(item.status)} ${escapeHtml(pickStatus)}" data-id="${item.item_id}">
             <div class="code">${escapeHtml(item.stock_code)}</div>
             <div class="name">${escapeHtml(item.product_name || "-")}</div>
+            <div class="sub" style="color:var(--muted)">订单：${escapeHtml(item.order_no || "-")}${item.customer_order_no ? ` · 客户单号 ${escapeHtml(item.customer_order_no)}` : ""}</div>
             <span class="badge ${escapeHtml(pickStatus)}">${labels[pickStatus] || pickStatus}</span>
             ${shortage}${warning}
             <div class="row"><label>建议数量<input value="${item.suggested_qty ?? "-"}" disabled /></label><label>实际数量<input class="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></label></div>

@@ -164,6 +164,7 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
         assert len(mobile.json()["items"]) == 2
         shortage = mobile.json()["items"][1]
         assert shortage["status"] == "stock_shortage"
+        assert shortage["order_no"] == "TH-MOBILE-1"
         expired_token, _expires = create_tianhua_pick_token(
             uploaded.json()["batch_id"],
             draft.json()["draft_id"],

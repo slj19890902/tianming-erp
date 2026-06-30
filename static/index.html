@@ -437,6 +437,12 @@
         border-right: 2px solid #8fc5f4 !important;
       }
       .purchase-qty-input { width: 82px !important; min-width: 82px !important; font-size: 17px; font-weight: 700; text-align: center; }
+      .quotation-edit-table { min-width: 1900px; font-size: 12px; }
+      .quotation-edit-table th { white-space: nowrap; }
+      .quotation-edit-table .input,
+      .quotation-edit-table .select { min-height: 32px; }
+      .quotation-number-input { width: 78px !important; min-width: 78px !important; }
+      .quotation-price-input { width: 94px !important; min-width: 94px !important; font-weight: 700; }
       .pieces-per-box-cell { width: 64px; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
       .supplier-print-sheet { font-family: "SimSun", serif; color: #111; }
       .supplier-print-title { text-align: center; }
@@ -773,10 +779,61 @@
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button class="btn small" @click="openCustomer(row)">{{ canAdmin ? "查看/编辑" : "查看" }}</button><button v-if="user.role==='admin'" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                  <td class="toolbar-group"><button v-if="canSales" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button class="btn small" @click="openCustomer(row)">{{ canAdmin ? "查看/编辑" : "查看" }}</button><button v-if="user.role==='admin'" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
+            </template>
+
+            <template v-else-if="activePage === 'quotations'">
+              <page-head title="客户报价" :desc="quotationCustomer ? `当前客户：${quotationCustomer.name}` : '从客户管理选择客户后创建报价。'"></page-head>
+              <div class="toolbar">
+                <div class="toolbar-group">
+                  <button class="btn" @click="go('customers')">返回客户管理</button>
+                  <button class="btn primary" @click="newQuotationDraft">新建报价</button>
+                </div>
+                <div class="toolbar-group">
+                  <button class="btn" :disabled="loading || !quotationEditable || !quotationDraft.items.length" @click="saveQuotationDraft">保存草稿</button>
+                  <button class="btn success" :disabled="loading || !quotationEditable || !quotationDraft.items.length" @click="generateQuotation">生成报价单</button>
+                </div>
+              </div>
+              <div v-if="quotationCustomer" class="panel" style="margin-bottom:14px">
+                <div class="form-grid" style="margin-bottom:10px">
+                  <div class="field"><label>客户</label><div><strong>{{ quotationCustomer.name }}</strong></div></div>
+                  <div class="field"><label>报价日期</label><input class="input" type="date" v-model="quotationDraft.quotation_date" :disabled="!quotationEditable" /></div>
+                  <div class="field wide"><label>报价备注</label><input class="input" v-model.trim="quotationDraft.remarks" :disabled="!quotationEditable" /></div>
+                </div>
+                <div class="table-wrap">
+                  <table class="quotation-edit-table">
+                    <thead><tr><th>产品名称</th><th>临时编码</th><th>箱型</th><th>长</th><th>宽</th><th>高</th><th>材质</th><th>楞型</th><th>数量</th><th>预估成本</th><th>毛利率%</th><th>建议单价</th><th>最终单价</th><th>备注</th><th>操作</th></tr></thead>
+                    <tbody><tr v-for="(line,index) in quotationDraft.items" :key="line._key || line.id || index">
+                      <td><input class="input compact-input" v-model.trim="line.product_name" placeholder="产品名称" :disabled="!quotationEditable" /></td>
+                      <td><input class="input compact-input" v-model.trim="line.temporary_code" placeholder="仅供参考" :disabled="!quotationEditable" /></td>
+                      <td><select class="select" v-model="line.box_type" :disabled="!quotationEditable" @change="refreshQuotationLine(line)"><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.length_mm" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.width_mm" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.height_mm" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td style="min-width:190px"><search-select v-model="line.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="搜索材质" :disabled="!quotationEditable" @change="onQuotationMaterialSelected(line)"></search-select><div class="muted" style="font-size:11px">{{ line.material_supplier || '-' }}｜{{ line.material_code || '-' }}</div></td>
+                      <td><select class="select" v-model="line.flute_type" :disabled="!quotationEditable" @change="refreshQuotationLine(line)"><option value="">-</option><option v-for="opt in ['A','B','E','AB','BE']" :key="opt" :value="opt">{{ opt }}</option></select></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="!quotationEditable" /></td>
+                      <td><strong>{{ line.estimated_unit_cost == null ? '待计算' : money(line.estimated_unit_cost) }}</strong></td>
+                      <td><input class="input quotation-number-input" type="number" min="0" max="99" step="0.1" v-model.number="line.margin_rate" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td><strong>{{ line.suggested_unit_price == null ? '待计算' : money(line.suggested_unit_price) }}</strong><div class="muted" style="font-size:11px">{{ line._message || '' }}</div></td>
+                      <td><input class="input quotation-price-input" type="number" min="0" step="0.0001" v-model.number="line.final_unit_price" :disabled="!quotationEditable" @input="line._final_manual=true" /></td>
+                      <td><input class="input compact-input" v-model.trim="line.remarks" :disabled="!quotationEditable" /></td>
+                      <td><button class="btn small danger" :disabled="!quotationEditable || quotationDraft.items.length===1" @click="removeQuotationLine(index)">删除</button></td>
+                    </tr></tbody>
+                  </table>
+                </div>
+                <div class="toolbar" style="margin-top:10px"><button class="btn" :disabled="!quotationEditable" @click="addQuotationLine">增加一行</button><strong>预计报价合计：￥ {{ money(quotationDraftTotal) }}</strong></div>
+              </div>
+              <div class="panel">
+                <div class="toolbar"><strong>报价历史</strong><button class="btn" @click="loadQuotationHistory">刷新</button></div>
+                <div v-if="!quotationHistory.length" class="empty">该客户还没有报价记录</div>
+                <div v-else class="table-wrap"><table><thead><tr><th>报价单号</th><th>报价日期</th><th>状态</th><th>报价金额</th><th>报价明细</th><th>操作</th></tr></thead><tbody>
+                  <tr v-for="row in quotationHistory" :key="row.id"><td><strong>{{ row.quotation_no }}</strong></td><td>{{ row.quotation_date }}</td><td><status-tag :value="row.status"></status-tag></td><td>￥ {{ money(row.total_amount) }}</td><td><div v-for="item in row.items" :key="item.id">{{ item.product_name }}｜{{ item.box_type }}｜{{ item.material_code || '-' }}<span v-if="item.converted_product_id" class="status green">已转常用箱</span><button v-else-if="row.status==='accepted'" class="btn small" @click="convertQuotationItem(row,item)">转入常用箱</button></div></td><td class="toolbar-group"><button class="btn small" @click="editQuotation(row)">{{ ['draft','quoted'].includes(row.status) ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printQuotation(row)">打印/PDF</button><button v-if="row.status==='quoted'" class="btn small success" @click="acceptQuotation(row)">客户接受</button><button v-if="!['voided','converted'].includes(row.status)" class="btn small danger" @click="voidQuotation(row)">作废</button></td></tr>
+                </tbody></table></div>
+              </div>
             </template>
 
             <template v-else-if="activePage === 'products'">
@@ -2837,6 +2894,29 @@
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
         supplier_name:"", quote_date:null, remarks:"", is_active:true
       });
+      let quotationLineKey = 0;
+      const blankQuotationLine = () => ({
+        _key: ++quotationLineKey,
+        product_name: "",
+        temporary_code: "",
+        box_type: "A1/0201 普通开槽箱",
+        length_mm: null,
+        width_mm: null,
+        height_mm: null,
+        material_id: null,
+        material_supplier: "",
+        material_code: "",
+        flute_type: "AB",
+        quantity: null,
+        estimated_unit_cost: null,
+        margin_rate: 20,
+        suggested_unit_price: null,
+        final_unit_price: null,
+        remarks: "",
+        converted_product_id: null,
+        _final_manual: false,
+        _message: "",
+      });
 
       const app = createApp({
         data() {
@@ -2845,6 +2925,9 @@
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
+            quotationCustomer: null,
+            quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
+            quotationHistory: [],
             materialLayerFilter: 3,
             materialLayerTabs: [
               { value: 3, label: "三层" },
@@ -3062,6 +3145,15 @@
             return null;
           },
           canSales() { return ["admin", "sales"].includes(this.user?.role); },
+          quotationDraftTotal() {
+            return (this.quotationDraft.items || []).reduce(
+              (sum, line) => sum + Number(line.quantity || 0) * Number(line.final_unit_price || 0),
+              0,
+            );
+          },
+          quotationEditable() {
+            return !this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status);
+          },
           canFinance() { return ["admin", "finance"].includes(this.user?.role); },
           canDelivery() { return ["admin", "sales"].includes(this.user?.role); },
           canRequisition() { return ["admin", "sales"].includes(this.user?.role); },
@@ -3404,9 +3496,9 @@
             return `${fmt(row.length_mm)}×${fmt(row.width_mm)}×${fmt(row.height_mm)}mm`;
           },
           statusTone(value) {
-            if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","已入库","已结算"].includes(value)) return "green";
-            if (["cancelled","dead","inactive"].includes(value)) return "red";
-            if (["pending","unsettled","waiting_receipt","pending_production"].includes(value)) return "orange";
+            if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","accepted","converted","已入库","已结算"].includes(value)) return "green";
+            if (["cancelled","dead","inactive","voided"].includes(value)) return "red";
+            if (["pending","unsettled","waiting_receipt","pending_production","draft"].includes(value)) return "orange";
             return "blue";
           },
           statusText(value) {
@@ -3416,7 +3508,8 @@
               partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
               delivered:"已送货", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
-              unsettled:"未结清", settled:"已结清", "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
+              unsettled:"未结清", settled:"已结清", draft:"草稿", quoted:"已报价", accepted:"客户接受", converted:"已转常用箱", voided:"作废",
+              "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
             })[value] || value || "-";
           },
           showToast(message, error=false) {
@@ -3577,6 +3670,7 @@
             try {
               if (page === "dashboard") await Promise.all([this.loadOverview(), this.loadKpi()]);
               if (page === "customers") await this.loadCustomers();
+              if (page === "quotations" && this.quotationCustomer) await this.loadQuotationHistory();
               if (page === "products") await Promise.all([this.loadProducts(), this.loadMaterials()]);
               if (page === "orders") await this.loadOrders();
               if (page === "requisition") await this.loadRequisition();
@@ -4178,6 +4272,178 @@
             const next = row ? JSON.parse(JSON.stringify(row)) : blankCustomer();
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
             this.customerForm = next; this.modal = { type:"customer", title: row ? "编辑客户" : "新增客户" };
+          },
+          async openCustomerQuotations(row) {
+            this.quotationCustomer = { id:row.id, name:row.name };
+            this.newQuotationDraft();
+            this.activePage = "quotations";
+            await this.loadQuotationHistory();
+          },
+          newQuotationDraft() {
+            this.quotationDraft = {
+              id:null,
+              quotation_no:"",
+              quotation_date:today(),
+              status:"draft",
+              remarks:"",
+              items:[blankQuotationLine()],
+            };
+          },
+          hydrateQuotation(data) {
+            return {
+              ...data,
+              items:(data.items || []).map(item => ({
+                ...blankQuotationLine(),
+                ...item,
+                _final_manual:true,
+                _message:item.estimated_unit_cost == null ? "当前行需手工确认最终单价" : "已按保存时的成本口径计算",
+              })),
+            };
+          },
+          addQuotationLine() {
+            this.quotationDraft.items.push(blankQuotationLine());
+          },
+          removeQuotationLine(index) {
+            if (this.quotationDraft.items.length <= 1) return;
+            this.quotationDraft.items.splice(index,1);
+          },
+          async loadQuotationHistory() {
+            if (!this.quotationCustomer?.id) return;
+            const {data} = await axios.get("/api/quotations", {params:{customer_id:this.quotationCustomer.id}});
+            this.quotationHistory = data.items || [];
+          },
+          onQuotationMaterialSelected(line) {
+            const material = this._findMaterial(line.material_id);
+            line.material_supplier = material?.supplier_name || "";
+            line.material_code = material?.code || "";
+            if (material?.flute_type) line.flute_type = material.flute_type;
+            line._final_manual = false;
+            this.refreshQuotationLine(line);
+          },
+          async refreshQuotationLine(line) {
+            if (!line.box_type) return;
+            try {
+              const {data} = await axios.post("/api/quotations/preview", {
+                box_type:line.box_type,
+                length_mm:line.length_mm || null,
+                width_mm:line.width_mm || null,
+                height_mm:line.height_mm || null,
+                material_id:line.material_id || null,
+                flute_type:line.flute_type || null,
+                margin_rate:Number(line.margin_rate ?? 20),
+              });
+              line.estimated_unit_cost = data.estimated_unit_cost;
+              line.suggested_unit_price = data.suggested_unit_price;
+              line._message = data.message || "";
+              if (!line._final_manual && data.suggested_unit_price != null) {
+                line.final_unit_price = Number(data.suggested_unit_price);
+              }
+            } catch(error) {
+              line.estimated_unit_cost = null;
+              line.suggested_unit_price = null;
+              line._message = this.errorMessage(error);
+            }
+          },
+          quotationPayload() {
+            return {
+              quotation_date:this.quotationDraft.quotation_date || today(),
+              remarks:this.quotationDraft.remarks || null,
+              items:this.quotationDraft.items.map((line,index) => {
+                if (!String(line.product_name || "").trim()) throw new Error(`第${index+1}条请填写产品名称`);
+                if (line.final_unit_price === null || line.final_unit_price === undefined || line.final_unit_price === "") throw new Error(`第${index+1}条请确认最终单价`);
+                return {
+                  product_name:String(line.product_name).trim(),
+                  temporary_code:String(line.temporary_code || "").trim() || null,
+                  box_type:line.box_type,
+                  length_mm:line.length_mm || null,
+                  width_mm:line.width_mm || null,
+                  height_mm:line.height_mm || null,
+                  material_id:line.material_id || null,
+                  flute_type:line.flute_type || null,
+                  quantity:line.quantity || null,
+                  margin_rate:Number(line.margin_rate ?? 20),
+                  final_unit_price:Number(line.final_unit_price),
+                  remarks:String(line.remarks || "").trim() || null,
+                };
+              }),
+            };
+          },
+          async persistQuotation(showMessage=true) {
+            if (!this.quotationCustomer?.id) throw new Error("请先选择客户");
+            const payload = this.quotationPayload();
+            const response = this.quotationDraft.id
+              ? await axios.put(`/api/quotations/${this.quotationDraft.id}`, payload)
+              : await axios.post("/api/quotations", payload, {params:{customer_id:this.quotationCustomer.id}});
+            this.quotationDraft = this.hydrateQuotation(response.data);
+            await this.loadQuotationHistory();
+            if (showMessage) this.showToast(`报价草稿 ${response.data.quotation_no} 已保存`);
+            return response.data;
+          },
+          async saveQuotationDraft() {
+            if (this.loading) return;
+            this.loading = true;
+            try { await this.persistQuotation(true); }
+            catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.loading = false; }
+          },
+          async generateQuotation() {
+            if (this.loading) return;
+            this.loading = true;
+            try {
+              const saved = await this.persistQuotation(false);
+              const {data} = await axios.post(`/api/quotations/${saved.id}/generate`);
+              this.quotationDraft = this.hydrateQuotation(data);
+              await this.loadQuotationHistory();
+              window.open(`/quotation-print.html?id=${data.id}`,"_blank");
+              this.showToast(`报价单 ${data.quotation_no} 已生成`);
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.loading = false; }
+          },
+          editQuotation(row) {
+            this.quotationDraft = this.hydrateQuotation(JSON.parse(JSON.stringify(row)));
+            window.scrollTo({top:0,behavior:"smooth"});
+          },
+          printQuotation(row) {
+            window.open(`/quotation-print.html?id=${row.id}`,"_blank");
+          },
+          async acceptQuotation(row) {
+            if (!confirm(`确认客户已接受报价单 ${row.quotation_no} 吗？`)) return;
+            try {
+              await axios.post(`/api/quotations/${row.id}/accept`);
+              await this.loadQuotationHistory();
+              this.showToast("已标记为客户接受，可以转入常用箱");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async voidQuotation(row) {
+            if (!confirm(`确认作废报价单 ${row.quotation_no} 吗？`)) return;
+            try {
+              await axios.post(`/api/quotations/${row.id}/void`);
+              await this.loadQuotationHistory();
+              this.showToast("报价单已作废");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async convertQuotationItem(quotation,item) {
+            if (quotation.status !== "accepted") {
+              this.showToast("请先将报价标记为客户接受",true);
+              return;
+            }
+            const code = prompt("请输入并确认正式存货编码：", item.temporary_code || "");
+            if (code === null) return;
+            if (!code.trim()) {
+              this.showToast("没有存货编码，不能转入常用箱",true);
+              return;
+            }
+            const productName = prompt("请确认产品名称：", item.product_name || "");
+            if (productName === null) return;
+            if (!confirm(`确认将“${productName || item.product_name}”以存货编码 ${code.trim()} 转入常用箱吗？`)) return;
+            try {
+              await axios.post(`/api/quotations/items/${item.id}/convert-to-product`, {
+                product_code:code.trim(),
+                product_name:(productName || item.product_name).trim(),
+              });
+              await Promise.all([this.loadQuotationHistory(),this.loadProducts()]);
+              this.showToast("已转入常用箱，可在新建订单时直接选择");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async openProduct(row=null) {
             let detail = row;

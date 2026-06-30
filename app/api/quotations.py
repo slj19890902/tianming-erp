@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import RoleChecker, get_db
@@ -290,9 +290,7 @@ def list_quotations(
         query = query.where(QuotationOrder.status == status_filter)
     quotations = db.scalars(
         query.order_by(
-            func.coalesce(
-                QuotationOrder.updated_at, QuotationOrder.created_at
-            ).desc(),
+            QuotationOrder.quotation_date.desc(),
             QuotationOrder.id.desc(),
         )
     ).all()
@@ -342,8 +340,8 @@ def update_quotation(
     _user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
-    if quotation.status in {"converted", "voided"}:
-        raise HTTPException(status_code=409, detail="已转常用箱或已作废报价不能修改")
+    if quotation.status not in {"draft", "quoted"}:
+        raise HTTPException(status_code=409, detail="客户已接受、已转常用箱或已作废报价不能修改")
     quotation.quotation_date = payload.quotation_date
     quotation.remarks = (payload.remarks or "").strip() or None
     quotation.status = "draft"
@@ -359,8 +357,8 @@ def generate_quotation(
     _user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
-    if quotation.status == "voided":
-        raise HTTPException(status_code=409, detail="已作废报价不能生成")
+    if quotation.status not in {"draft", "quoted"}:
+        raise HTTPException(status_code=409, detail="当前报价状态不能重新生成")
     if not quotation.items:
         raise HTTPException(status_code=400, detail="报价单至少需要一条明细")
     quotation.status = "quoted"
@@ -389,8 +387,10 @@ def void_quotation(
     _user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
-    if quotation.status == "converted":
-        raise HTTPException(status_code=409, detail="已转常用箱报价不能作废")
+    if quotation.status == "converted" or any(
+        item.converted_product_id is not None for item in quotation.items
+    ):
+        raise HTTPException(status_code=409, detail="已有明细转入常用箱，报价不能作废")
     quotation.status = "voided"
     db.commit()
     return _quotation_dict(_quotation_or_404(db, quotation.id))
@@ -440,7 +440,7 @@ def convert_to_product(
         length_mm=item.length_mm,
         width_mm=item.width_mm,
         height_mm=item.height_mm,
-        box_category="normal" if is_a1 else "die_cut",
+        box_category="die_cut" if "异形" in item.box_type else "normal",
         box_style=item.box_type,
         unit="只",
         sale_unit_price=item.final_unit_price,

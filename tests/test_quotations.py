@@ -13,6 +13,8 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
     from app.core.security import hash_password
     from app.models import Base
     from app.models.customer import Customer
+    from app.models.material import Material
+    from app.models.product import Product
     from app.models.user import User
 
     engine = create_sqlite_engine(tmp_path / "quotation.sqlite3")
@@ -40,8 +42,18 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             must_change_password=False,
         )
         db.add_all([customer, sales, workshop])
+        material = Material(
+            code="A416D",
+            layer_count=5,
+            flute_type="AB",
+            quote_price=Decimal("5.0000"),
+            supplier_name="报价测试纸板厂",
+            is_active=True,
+        )
+        db.add(material)
         db.commit()
         customer_id = customer.id
+        material_id = material.id
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -58,14 +70,24 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         "items": [
             {
                 "product_name": "A1 测试纸箱",
-                "box_type": "A1",
+                "temporary_code": "TEMP-001",
+                "box_type": "A1/0201 普通开槽箱",
                 "length_mm": 300,
                 "width_mm": 200,
                 "height_mm": 150,
+                "material_id": material_id,
+                "flute_type": "AB",
                 "quantity": 100,
                 "margin_rate": 20,
                 "final_unit_price": 2.5,
-            }
+            },
+            {
+                "product_name": "手工报价产品",
+                "box_type": "其他",
+                "quantity": 50,
+                "margin_rate": 20,
+                "final_unit_price": 1.2,
+            },
         ],
     }
 
@@ -74,6 +96,34 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             "/api/auth/login",
             json={"username": "quote-sales", "password": "QuotePass123!"},
         ).status_code == 200
+        preview = client.post(
+            "/api/quotations/preview",
+            json={
+                "box_type": "A1",
+                "length_mm": 300,
+                "width_mm": 200,
+                "height_mm": 150,
+                "material_id": material_id,
+                "flute_type": "AB",
+            },
+        )
+        assert preview.status_code == 200
+        assert preview.json()["estimated_unit_cost"] == "1.8000"
+        assert preview.json()["suggested_unit_price"] == "2.2500"
+        changed_margin = client.post(
+            "/api/quotations/preview",
+            json={
+                "box_type": "A1",
+                "length_mm": 300,
+                "width_mm": 200,
+                "height_mm": 150,
+                "material_id": material_id,
+                "flute_type": "AB",
+                "margin_rate": 25,
+            },
+        )
+        assert changed_margin.json()["suggested_unit_price"] == "2.4000"
+
         created = client.post(
             f"/api/quotations?customer_id={customer_id}",
             json=payload,
@@ -81,23 +131,103 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         assert created.status_code == 201
         quotation_id = created.json()["id"]
         assert created.json()["quotation_no"] == "QT-20260630-001"
-        assert created.json()["total_amount"] == "250.00"
+        assert created.json()["total_amount"] == "310.00"
+        assert len(created.json()["items"]) == 2
+        first_item_id = created.json()["items"][0]["id"]
+        second_item_id = created.json()["items"][1]["id"]
 
         generated = client.post(
             f"/api/quotations/{quotation_id}/generate"
         )
         assert generated.status_code == 200
         assert generated.json()["status"] == "quoted"
+        before_accept = client.post(
+            f"/api/quotations/items/{first_item_id}/convert-to-product",
+            json={"product_code": "Q-001"},
+        )
+        assert before_accept.status_code == 409
         accepted = client.post(
             f"/api/quotations/{quotation_id}/accept"
         )
         assert accepted.status_code == 200
         assert accepted.json()["status"] == "accepted"
+        assert client.put(
+            f"/api/quotations/{quotation_id}", json=payload
+        ).status_code == 409
+        assert client.post(
+            f"/api/quotations/{quotation_id}/generate"
+        ).status_code == 409
         printed = client.get(
             f"/api/quotations/{quotation_id}/print"
         )
         assert printed.status_code == 200
         assert printed.json()["items"][0]["product_name"] == "A1 测试纸箱"
+        for row in printed.json()["items"]:
+            assert "estimated_unit_cost" not in row
+            assert "margin_rate" not in row
+            assert "suggested_unit_price" not in row
+
+        assert client.post(
+            f"/api/quotations/items/{first_item_id}/convert-to-product",
+            json={"product_code": "   "},
+        ).status_code == 422
+        converted = client.post(
+            f"/api/quotations/items/{first_item_id}/convert-to-product",
+            json={"product_code": "Q-001", "product_name": "正式 A1 纸箱"},
+        )
+        assert converted.status_code == 201
+        assert converted.json()["quotation_status"] == "accepted"
+        assert client.post(
+            f"/api/quotations/{quotation_id}/void"
+        ).status_code == 409
+        assert client.post(
+            f"/api/quotations/items/{first_item_id}/convert-to-product",
+            json={"product_code": "Q-001"},
+        ).status_code == 409
+        assert client.post(
+            f"/api/quotations/items/{second_item_id}/convert-to-product",
+            json={"product_code": "Q-001"},
+        ).status_code == 409
+        converted_second = client.post(
+            f"/api/quotations/items/{second_item_id}/convert-to-product",
+            json={"product_code": "Q-002"},
+        )
+        assert converted_second.status_code == 201
+        assert converted_second.json()["quotation_status"] == "converted"
+
+        second_quote = client.post(
+            f"/api/quotations?customer_id={customer_id}",
+            json=payload,
+        )
+        assert second_quote.status_code == 201
+        assert second_quote.json()["quotation_no"] == "QT-20260630-002"
+        second_quote_id = second_quote.json()["id"]
+        void_item_id = second_quote.json()["items"][0]["id"]
+        assert client.post(
+            f"/api/quotations/{second_quote_id}/generate"
+        ).status_code == 200
+        assert client.post(
+            f"/api/quotations/{second_quote_id}/void"
+        ).json()["status"] == "voided"
+        assert client.post(
+            f"/api/quotations/items/{void_item_id}/convert-to-product",
+            json={"product_code": "Q-VOID"},
+        ).status_code == 409
+
+        history = client.get(
+            f"/api/quotations?customer_id={customer_id}"
+        )
+        assert history.status_code == 200
+        assert history.json()["total"] == 2
+        assert history.json()["items"][0]["quotation_no"] == "QT-20260630-002"
+
+    with factory() as db:
+        product = db.query(Product).filter(Product.product_code == "Q-001").one()
+        assert product.customer_id == customer_id
+        assert product.product_name == "正式 A1 纸箱"
+        assert product.sale_unit_price == Decimal("2.5000")
+        assert product.report_length_mm == 1030
+        assert product.report_width_mm == 355
 
     with TestClient(app) as client:
         assert client.post(
@@ -117,3 +247,17 @@ def test_quotation_print_page_calls_api():
     ).read_text(encoding="utf-8")
     assert "客户报价单" in html
     assert "/api/quotations/" in html
+    assert "estimated_unit_cost" not in html
+    assert "margin_rate" not in html
+    assert "suggested_unit_price" not in html
+
+    index_html = (
+        Path(__file__).resolve().parents[1]
+        / "static"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    assert 'activePage === \'quotations\'' in index_html
+    assert 'openCustomerQuotations(row)' in index_html
+    assert "生成报价单" in index_html
+    assert "转入常用箱" in index_html
+    assert "quotationEditable" in index_html

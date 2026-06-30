@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_db
@@ -146,6 +146,7 @@ def dashboard_overview(
             .where(
                 Order.status.notin_(["cancelled", "dead"]),
                 OrderItem.requisition_status == "未报料",
+                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
             )
         )
     )
@@ -158,6 +159,7 @@ def dashboard_overview(
                 Order.status.notin_(["cancelled", "dead"]),
                 OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
                 OrderItem.material_status == "pending",
+                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
             )
         )
     )
@@ -171,6 +173,7 @@ def dashboard_overview(
                 OrderItem.material_status == "received",
                 OrderItem.delivered_quantity < OrderItem.quantity,
                 OrderItem.is_force_closed.is_(False),
+                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
             )
         )
     )
@@ -286,6 +289,7 @@ def dashboard_overview(
         .where(
             Order.status.notin_(["cancelled", "dead"]),
             OrderItem.requisition_status == "未报料",
+            or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
         )
         .order_by(
             Order.delivery_date.is_(None),
@@ -310,6 +314,7 @@ def dashboard_overview(
             Order.status.notin_(["cancelled", "dead"]),
             OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
             OrderItem.material_status == "pending",
+            or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
         )
         .order_by(
             Order.delivery_date.is_(None),
@@ -335,6 +340,7 @@ def dashboard_overview(
             OrderItem.material_status == "received",
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
+            or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
         )
         .order_by(
             Order.delivery_date.is_(None),

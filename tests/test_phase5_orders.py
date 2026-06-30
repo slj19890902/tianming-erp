@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -962,6 +962,25 @@ def test_back_dated_pdf_order_surfaces_at_top_of_business(order_api_app) -> None
     assert first["id"] in ids
     # the most recently saved order ranks first despite its older order_date
     assert data["items"][0]["id"] == back_dated["id"]
+
+
+def test_business_orders_sort_by_latest_update(order_api_app) -> None:
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        first = _create_order(client, customer_po="PO-UPDATE-FIRST", order_date="2026-06-13")
+        second = _create_order(client, customer_po="PO-UPDATE-SECOND", order_date="2026-06-13")
+        with session_factory() as session:
+            first_order = session.get(Order, first["id"])
+            first_order.updated_at = datetime.now() + timedelta(minutes=5)
+            session.commit()
+        business = client.get("/api/orders", params={"status": "business"})
+
+    assert business.status_code == 200
+    assert business.json()["items"][0]["id"] == first["id"]
+    assert business.json()["items"][1]["id"] == second["id"]
 
 
 def test_dead_order_is_excluded_from_business(order_api_app) -> None:

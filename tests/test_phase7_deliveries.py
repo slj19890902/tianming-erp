@@ -240,8 +240,8 @@ def test_pending_items_use_strict_filter_and_remaining_quantity(
 
     assert response.status_code == 200
     items = response.json()["items"]
-    assert [item["item_id"] for item in items] == [1, 2, 5]
-    assert items[0]["remaining_quantity"] == 80
+    assert [item["item_id"] for item in items] == [5, 2, 1]
+    assert items[-1]["remaining_quantity"] == 80
 
 
 def test_create_combined_delivery_then_partial_dispatch_once(
@@ -465,6 +465,33 @@ def test_delivery_list_returns_customer_and_line_details(
     assert row["customer_name"]
     assert row["items"][0]["order_item_id"] == 1
     assert row["return_receipt_status"] is None
+
+
+def test_delivery_list_prioritizes_latest_operation(delivery_api_app) -> None:
+    app, _ = delivery_api_app
+    first_payload = {
+        "customer_id": 1,
+        "delivery_date": "2026-06-13",
+        "items": [{"order_item_id": 1, "delivered_quantity": 10}],
+    }
+    second_payload = {
+        "customer_id": 1,
+        "delivery_date": "2026-06-13",
+        "items": [{"order_item_id": 2, "delivered_quantity": 10}],
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        first = client.post("/api/deliveries", json=first_payload)
+        second = client.post("/api/deliveries", json=second_payload)
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+        dispatched = client.put(f"/api/deliveries/{first.json()['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        listed = client.get("/api/deliveries")
+
+    assert listed.status_code == 200
+    ids = [row["id"] for row in listed.json()["items"]]
+    assert ids[:2] == [first.json()["id"], second.json()["id"]]
 
 
 def test_phase7_migration_preserves_legacy_delivery_tables(

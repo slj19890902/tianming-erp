@@ -515,7 +515,10 @@ def list_orders(
     if status_filter == "history":
         ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
     else:
-        ids_query = ids_query.order_by(Order.created_at.desc(), Order.id.desc())
+        ids_query = ids_query.order_by(
+            func.coalesce(Order.updated_at, Order.created_at).desc(),
+            Order.id.desc(),
+        )
     total = db.scalar(select(func.count()).select_from(ids_query.subquery())) or 0
     page_ids = list(
         db.scalars(ids_query.offset((page - 1) * page_size).limit(page_size)).all()

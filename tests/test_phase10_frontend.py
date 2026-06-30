@@ -118,3 +118,43 @@ def test_frontend_has_safe_password_recovery_and_forced_change_flow() -> None:
     assert "/api/auth/password" in source
     assert "/reset-password" in source
     assert "must_change_password" in source
+
+
+def test_v0210_entry_efficiency_controls_are_visible() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+
+    assert 'placeholder="存货编码 / 款号"' in source
+    assert "showProductMoreFilters" in source
+    assert "更多筛选" in source
+    assert ".report-size-line .input { width: 94px; min-width: 82px; }" in source
+    assert "当前为手工尺寸" in source
+    assert "批量确认入库" in source
+    assert "/api/incoming/batch-receive" in source
+    assert "toggleAllIncoming" in source
+
+
+def test_pdf_import_confirmation_is_between_close_and_bulk_save() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+    footer_start = source.index('<div class="modal-foot">')
+    footer_end = source.index("</div>", footer_start)
+    footer = source[footer_start:footer_end]
+
+    close_index = footer.index("@click=\"closeModal\"")
+    confirm_index = footer.index("我已核对客户、产品、数量、材质、价格等信息")
+    save_index = footer.index("批量保存已确认草稿")
+    assert close_index < confirm_index < save_index
+    assert ':disabled="loading || !orderImportBatch.verified"' in footer
+
+
+def test_pdf_import_shows_customer_match_status_and_candidates() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+
+    for marker in (
+        "识别客户原文",
+        "系统匹配客户",
+        "候选客户",
+        "未匹配到客户，请手工选择",
+        "customer_match_status",
+        "customer_candidates",
+    ):
+        assert marker in source

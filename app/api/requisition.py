@@ -320,7 +320,7 @@ def pending_requisitions(
             OrderItem.material_status == "pending",
             Order.status != "cancelled",
         )
-        .order_by(Order.delivery_date, Order.order_number, OrderItem.id)
+        .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
     ).all()
     items = []
     for item, order, customer, product in rows:
@@ -489,7 +489,7 @@ def list_requisition_items(
         .join(Product, Product.id == OrderItem.product_id)
         .order_by(
             OrderItem.requisition_date.desc(),
-            Order.delivery_date,
+            OrderItem.created_at.desc(),
             OrderItem.id.desc(),
         )
     )
@@ -827,7 +827,7 @@ def merge_suggestions(
             OrderItem.material_status == "pending",
             Order.status != "cancelled",
         )
-        .order_by(Order.delivery_date, OrderItem.id)
+        .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
     ).all()
 
     def _merge_key(item: OrderItem) -> tuple:

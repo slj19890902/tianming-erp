@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import case, delete, func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -137,10 +137,9 @@ def _pending_query():
             OrderItem.is_force_closed.is_(False),
         )
         .order_by(
-            case((Order.delivery_date.is_(None), 1), else_=0),
-            Order.delivery_date.asc(),
-            Order.order_number.asc(),
-            OrderItem.id.asc(),
+            OrderItem.material_received_at.desc(),
+            OrderItem.created_at.desc(),
+            OrderItem.id.desc(),
         )
     )
 
@@ -368,7 +367,11 @@ def list_deliveries(
     _user: User = Depends(can_read),
 ) -> dict:
     query = select(Delivery.id).order_by(
-        Delivery.delivery_date.desc(),
+        func.coalesce(
+            Delivery.printed_at,
+            Delivery.dispatched_at,
+            Delivery.created_at,
+        ).desc(),
         Delivery.id.desc(),
     )
     if customer_id is not None:

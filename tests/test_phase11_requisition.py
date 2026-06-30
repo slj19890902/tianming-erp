@@ -278,6 +278,37 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
         assert changed_product.material_id == supplier_a_alt_id
 
 
+def test_pending_requisition_sorts_newest_record_first(requisition_app) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        first = session.get(OrderItem, 1)
+        first.created_at = datetime(2026, 6, 1, 8, 0, 0)
+        newest = OrderItem(
+            order_id=first.order_id,
+            product_id=first.product_id,
+            quantity=10,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("10"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_name="最近新增报料明细",
+            snapshot_material=first.snapshot_material,
+            created_at=datetime(2026, 6, 30, 8, 0, 0),
+        )
+        session.add(newest)
+        session.commit()
+        newest_id = newest.id
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/requisition/pending")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["item_id"] == newest_id
+
+
 
 def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
     from app.models.order import OrderItem

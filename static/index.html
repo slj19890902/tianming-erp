@@ -509,7 +509,7 @@
         gap: 6px;
         flex-wrap: nowrap;
       }
-      .report-size-line .input { width: 82px; min-width: 68px; }
+      .report-size-line .input { width: 94px; min-width: 82px; }
       .report-size-line .btn { flex: 0 0 auto; white-space: nowrap; padding-inline: 8px; }
       .crease-segments { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: nowrap; }
       .crease-segments .input {
@@ -789,11 +789,14 @@
                   <button v-if="user.role==='admin' && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
-                  <label><input type="checkbox" v-model="filters.showInactiveProducts" @change="pages.products=1; loadProducts()" /> 显示已停用纸箱</label>
                   <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @keyup.enter="pages.products=1; loadProducts()" />
-                  <input class="input" style="min-width:180px" placeholder="产品名称" v-model.trim="filters.productName" @keyup.enter="pages.products=1; loadProducts()" />
-                  <input class="input" style="min-width:180px" placeholder="规格 / 尺寸" v-model.trim="filters.productSpec" @keyup.enter="pages.products=1; loadProducts()" />
-                  <input class="input" style="min-width:180px" placeholder="材质" v-model.trim="filters.productMaterial" @keyup.enter="pages.products=1; loadProducts()" />
+                  <button class="btn" @click="showProductMoreFilters=!showProductMoreFilters">{{ showProductMoreFilters ? "收起筛选" : "更多筛选" }}</button>
+                  <template v-if="showProductMoreFilters">
+                    <label><input type="checkbox" v-model="filters.showInactiveProducts" @change="pages.products=1; loadProducts()" /> 显示已停用纸箱</label>
+                    <input class="input" style="min-width:180px" placeholder="产品名称" v-model.trim="filters.productName" @keyup.enter="pages.products=1; loadProducts()" />
+                    <input class="input" style="min-width:180px" placeholder="规格 / 尺寸" v-model.trim="filters.productSpec" @keyup.enter="pages.products=1; loadProducts()" />
+                    <input class="input" style="min-width:180px" placeholder="材质" v-model.trim="filters.productMaterial" @keyup.enter="pages.products=1; loadProducts()" />
+                  </template>
                   <button class="btn" @click="pages.products=1; loadProducts()">查询</button>
                   <button class="btn" @click="resetProductFilters">清空筛选</button>
                 </div>
@@ -1303,12 +1306,16 @@
                   <button :class="['btn',{primary:incomingTab==='received'}]" @click="incomingTab='received'">今日已入库 {{ incomingReceived.length }}</button>
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="incomingTab='history'; loadIncomingHistory()">历史入库</button>
                 </div>
-                <button class="btn" @click="loadIncoming()">刷新</button>
+                <div class="toolbar-group">
+                  <button v-if="incomingTab==='pending'" class="btn success" :disabled="!incomingSelectedCount()" @click="batchReceiveIncoming">批量确认入库（{{ incomingSelectedCount() }}）</button>
+                  <button class="btn" @click="loadIncoming()">刷新</button>
+                </div>
               </div>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length">
                 <table>
-                  <thead><tr><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>报料日期</th><th>PDF图纸</th><th>操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending'"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>报料日期</th><th>PDF图纸</th><th>操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.item_id">
+                    <td v-if="incomingTab==='pending'"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
                     <td>{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material || "-" }}</td>
                     <td><input v-if="incomingTab==='pending'" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
@@ -1857,11 +1864,12 @@
                   <div class="field"><label>文件</label><div>{{ draft.source_name }}</div></div>
                   <div class="field"><label>状态</label><div>{{ importStatusText(draft) }}</div></div>
                   <div class="field"><label>识别客户原文</label><div>{{ draft.customer_name_raw || draft.customer_name || "-" }}</div></div>
-                  <div class="field"><label>匹配客户</label><search-select v-model="draft.matched_customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="手动选择客户" @change="rematchImportDraft(draftIndex)"></search-select></div>
+                  <div class="field"><label>系统匹配客户</label><div :class="{'danger-text':!draft.matched_customer_id}">{{ importCustomerMatchText(draft) }}</div></div>
+                  <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" @change="rematchImportDraft(draftIndex)"></search-select></div>
                   <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft.customer_po" /></div>
                   <div class="field"><label>下单日期</label><input class="input" type="date" v-model="draft.order_date" /></div>
                   <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" /></div>
-                  <div class="field"><label>确认</label><input type="checkbox" v-model="draft.confirmed" :disabled="!canConfirmImportDraft(draft)" /> 已确认</div>
+                  <div class="field"><label>保存选择</label><button type="button" :class="['btn','small',draft.confirmed ? 'success' : '']" :disabled="!canConfirmImportDraft(draft)" @click="draft.confirmed=!draft.confirmed; orderImportBatch.verified=false">{{ draft.confirmed ? "已加入批量保存" : "加入批量保存" }}</button></div>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
                 <div v-if="draft.warnings?.length" style="margin-bottom:10px">
@@ -2761,7 +2769,8 @@
           </div>
           <div class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
-            <button v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length" class="btn primary" :disabled="loading" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
+            <label v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length" class="remember-line"><input type="checkbox" v-model="orderImportBatch.verified" /> 我已核对客户、产品、数量、材质、价格等信息</label>
+            <button v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length" class="btn primary" :disabled="loading || !orderImportBatch.verified" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
             <button v-if="canSaveModal" class="btn primary" :disabled="loading" @click="saveModal">保存</button>
           </div>
         </div>
@@ -2892,6 +2901,7 @@
             pages: { customers: 1, products: 1, orders: 1, deliveries: 1, statements: 1, invoices: 1 },
             productTab: "products", modal: null,
             selectedProductCustomer: null, productCustomerSearch: "",
+            showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [],
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"business", orderView:"customer_po" },
             orderStatusTabs: [
@@ -2928,8 +2938,9 @@
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
             orderEditGroup: null,
             orderNumberPreview: "",
-            orderImportBatch: { files: [], status: "idle" },
+            orderImportBatch: { files: [], status: "idle", verified: false },
             orderImportDrafts: [],
+            incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {}, remarks: {} },
@@ -3186,6 +3197,10 @@
             ];
           },
           allRequisitionSelected() { return this.filteredRequisitionPending.length > 0 && this.filteredRequisitionPending.every(row => this.requisitionSelected[row.item_id]); },
+          allIncomingSelected() {
+            const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row));
+            return rows.length > 0 && rows.every(row => this.incomingSelected[row.item_id]);
+          },
           allDeliverySelected() { return this.deliveryOptions.length > 0 && this.deliveryOptions.every(row => this.deliveryForm.selected[row.item_id]); },
           allStatementSelected() { return this.pendingStatements.length > 0 && this.pendingStatements.every(row => this.statementForm.selected[row.return_receipt_item_id]); }
         },
@@ -4016,6 +4031,49 @@
             ]);
             this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)}));
             this.incomingReceived=(received.data.items || []).map(row=>({...row,incoming_quantity:Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)}));
+            const pendingIds = new Set(this.incomingPending.map(row => row.item_id));
+            Object.keys(this.incomingSelected).forEach(itemId => {
+              if (!pendingIds.has(Number(itemId))) delete this.incomingSelected[itemId];
+            });
+          },
+          canReceiveIncoming(row) {
+            return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status);
+          },
+          incomingSelectedCount() {
+            return this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]).length;
+          },
+          toggleAllIncoming(checked) {
+            this.incomingPending.forEach(row => {
+              if (this.canReceiveIncoming(row)) this.incomingSelected[row.item_id] = checked;
+            });
+          },
+          async batchReceiveIncoming() {
+            const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]);
+            if (!rows.length) return;
+            for (const row of rows) {
+              const quantity = Number(row.incoming_quantity);
+              if (!Number.isInteger(quantity) || quantity <= 0) {
+                this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
+                return;
+              }
+            }
+            if (!confirm(`确认将选中的 ${rows.length} 条来料记录入库？`)) return;
+            try {
+              const { data } = await axios.put("/api/incoming/batch-receive", {
+                items: rows.map(row => ({
+                  item_id: row.item_id,
+                  received_quantity: Number(row.incoming_quantity),
+                })),
+              });
+              this.incomingSelected = {};
+              await Promise.all([this.loadIncoming(), this.loadKpi()]);
+              if (data.failed) {
+                const reasons = (data.results || []).filter(row => !row.success).slice(0, 3).map(row => `第${row.item_id}条：${row.message}`).join("；");
+                this.showToast(`成功 ${data.succeeded} 条，失败 ${data.failed} 条。${reasons}`, true);
+              } else {
+                this.showToast(`已批量入库 ${data.succeeded} 条来料记录`);
+              }
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async receiveIncoming(row) {
             const quantity=Number(row.incoming_quantity);
@@ -4474,6 +4532,7 @@
           },
           markProductReportManual() {
             this.productForm._report_dims_manual = true;
+            this.productForm._recommendation_message = "当前为手工尺寸；切换单拼/双拼不会覆盖，点击“重新推荐”可按当前公式更新。";
           },
           markProductCreaseManual() {
             this.productForm._crease_dims_manual = true;
@@ -4497,8 +4556,10 @@
               if (force || this.shouldAutoApplyRecommendation(form._report_dims_manual)) {
                 form.report_length_mm = board.board_length;
                 form.report_width_mm = board.board_width;
+                form._recommendation_message = board.formula_label;
+              } else {
+                form._recommendation_message = "当前为手工尺寸；切换单拼/双拼不会覆盖，点击“重新推荐”可按当前公式更新。";
               }
-              form._recommendation_message = board.formula_label;
             } else if (board && !board.board_length) {
               form._recommendation_message = board.formula_label;
             } else if (this.isA1BoxStyle(form.box_style)) {
@@ -4727,12 +4788,13 @@
             this.refreshOrderNumberPreview();
           },
           openOrderPdfImport() {
-            this.orderImportBatch = { files:[], status:"idle" };
+            this.orderImportBatch = { files:[], status:"idle", verified:false };
             this.orderImportDrafts = [];
             this.modal = { type:"orderPdfImport", title:"识别采购订单 PDF" };
           },
           onOrderPdfFileChange(event) {
             this.orderImportBatch.files = Array.from(event?.target?.files || []);
+            this.orderImportBatch.verified = false;
             this.orderImportDrafts = [];
           },
           async previewOrderPdfImport() {
@@ -4747,6 +4809,7 @@
               this.orderImportBatch.files.forEach(file => form.append("files", file));
               const { data } = await axios.post("/api/orders/pdf-preview-batch", form);
               this.orderImportDrafts = (data.drafts || []).map(draft => ({...draft, confirmed:false}));
+              this.orderImportBatch.verified = false;
               this.orderImportBatch.status = "recognized";
             } catch (error) {
               this.orderImportDrafts = [];
@@ -4765,6 +4828,20 @@
             if (draft.duplicate_status === "duplicate_skipped") return "重复已跳过";
             return ({recognizing:"识别中",recognized:"已识别",needs_confirmation:"需人工确认",failed:"识别失败"})[draft.recognition_status] || "需人工确认";
           },
+          importCustomerOptions(draft) {
+            const candidates = draft?.customer_candidates || [];
+            if (draft?.customer_match_status === "multiple_candidates" && candidates.length) return candidates;
+            return this.activeCustomerOptions;
+          },
+          importCustomerMatchText(draft) {
+            const matched = this.activeCustomerOptions.find(row => Number(row.id) === Number(draft?.matched_customer_id));
+            if (matched) return matched.name;
+            if (draft?.customer_match_status === "multiple_candidates") {
+              const names = (draft.customer_candidates || []).map(row => row.name).filter(Boolean);
+              return names.length ? `匹配到多个候选：${names.join("、")}` : "匹配到多个客户，请人工选择";
+            }
+            return "未匹配到客户，请手工选择";
+          },
           canConfirmImportDraft(draft) {
             if (!draft?.matched_customer_id || !draft?.items?.length) return false;
             if (draft.duplicate_status === "duplicate_skipped") return false;
@@ -4778,6 +4855,7 @@
             });
           },
           toggleNewProduct(item) {
+            this.orderImportBatch.verified = false;
             if (item.is_new_product) {
               item.matched_product_id = null;
               item.cost_status = "pending";
@@ -4789,6 +4867,7 @@
           async rematchImportDraft(index) {
             const draft = this.orderImportDrafts[index];
             if (!draft?.matched_customer_id) return;
+            this.orderImportBatch.verified = false;
             const preserved = draft.items.map(item => ({
               raw_product_code:item.raw_product_code, raw_product_name:item.raw_product_name,
               raw_spec_model:item.raw_spec_model, quantity:item.quantity, unit_price:item.unit_price
@@ -4798,6 +4877,7 @@
             this.orderImportDrafts[index] = {...data, confirmed:false};
           },
           async selectImportProduct(item) {
+            this.orderImportBatch.verified = false;
             const candidate = (item.product_candidates || []).find(row => row.id === item.matched_product_id);
             if (candidate) {
               item.matched_material_id = candidate.material_id || null;
@@ -4932,6 +5012,10 @@
             await this.refreshOrderNumberPreview();
           },
           async saveConfirmedImportDrafts() {
+            if (!this.orderImportBatch.verified) {
+              this.showToast("请先勾选“我已核对客户、产品、数量、材质、价格等信息”", true);
+              return;
+            }
             const drafts = this.orderImportDrafts.filter(draft => draft.confirmed && this.canConfirmImportDraft(draft));
             if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
             this.loading = true;

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -240,6 +240,105 @@ def test_dashboard_overview_returns_safe_empty_defaults(tmp_path: Path) -> None:
     assert len(body["cards"]) == 6
     assert {card["count"] for card in body["cards"]} == {0}
     assert body["todos"] == []
+
+
+def test_dashboard_overview_excludes_future_delivery_orders(tmp_path: Path) -> None:
+    from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "dashboard-future-delivery.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    today = date.today()
+    with factory() as session:
+        session.add(
+            User(
+                username="admin",
+                password_hash=hash_password("RolePass123!"),
+                role="admin",
+                real_name="管理员",
+                must_change_password=False,
+            )
+        )
+        customer = Customer(
+            customer_number=1,
+            customer_code="FUT",
+            name="交期提醒测试客户",
+            payment_term_days=30,
+            credit_limit=0,
+        )
+        session.add(customer)
+        session.flush()
+        product = Product(
+            customer_id=customer.id,
+            product_code="FUT-001",
+            customer_material_code="FUT-001",
+            product_name="提醒测试箱",
+            box_category="normal",
+        )
+        session.add(product)
+        session.flush()
+        for index, delivery_date in enumerate(
+            (today - timedelta(days=1), None, today + timedelta(days=1)),
+            start=1,
+        ):
+            order = Order(
+                order_number=f"PO-FUTURE-{index}",
+                customer_id=customer.id,
+                order_date=today,
+                delivery_date=delivery_date,
+                status="pending_production",
+                payment_status="unpaid",
+                total_amount=0,
+            )
+            session.add(order)
+            session.flush()
+            session.add(
+                OrderItem(
+                    order_id=order.id,
+                    product_id=product.id,
+                    quantity=10,
+                    unit_price=Decimal("1"),
+                    subtotal=Decimal("10"),
+                    material_status="pending",
+                    requisition_status="未报料",
+                    snapshot_product_name="提醒测试箱",
+                )
+            )
+        session.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "RolePass123!"},
+        ).status_code == 200
+        response = client.get("/api/dashboard/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    material_card = next(
+        card for card in body["cards"] if card["key"] == "pending_material"
+    )
+    assert material_card["count"] == 2
+    material_todo = next(todo for todo in body["todos"] if todo["type"] == "待报料")
+    assert material_todo["count"] == 2
 
 
 def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> None:

@@ -913,7 +913,54 @@
                     <button class="btn" @click="openCompare()">比价</button>
                     <button v-if="canAdmin" class="btn" @click="openFluteRuleModal()">楞型加价规则</button>
                     <button v-if="canAdmin" class="btn" @click="openPriceAdjust()">供应商调价</button>
+                    <button v-if="canAdmin" class="btn" @click="togglePaperCodePanel">基础纸种代码</button>
+                    <button v-if="canAdmin" class="btn primary" @click="toggleMaterialComposer">组合材质</button>
                     <button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button>
+                  </div>
+                </div>
+                <datalist id="material-composer-suppliers">
+                  <option v-for="supplier in materialSuppliers" :key="supplier" :value="supplier"></option>
+                </datalist>
+                <div v-if="showPaperCodePanel" class="panel" style="margin:10px 0;border-color:#93c5fd">
+                  <div class="toolbar">
+                    <strong>基础纸种代码维护</strong>
+                    <div class="toolbar-group">
+                      <input class="input" style="width:210px" list="material-composer-suppliers" v-model.trim="paperCodeSupplierFilter" placeholder="按供应商筛选" />
+                      <input class="input" style="width:170px" v-model.trim="paperCodeKeyword" placeholder="搜索代码/纸种/等级" @keyup.enter="loadPaperCodes" />
+                      <button class="btn small" @click="loadPaperCodes">查询</button>
+                      <button class="btn small" @click="resetPaperCodeForm">新增代码</button>
+                    </div>
+                  </div>
+                  <div class="form-grid" style="margin:10px 0">
+                    <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="paperCodeForm.supplier_name" /></div>
+                    <div class="field"><label>代码字符</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
+                    <div class="field"><label>纸种名称</label><input class="input" v-model.trim="paperCodeForm.paper_name" /></div>
+                    <div class="field"><label>克重(g)</label><input class="input" type="number" min="1" step="1" v-model.number="paperCodeForm.gram_weight" /></div>
+                    <div class="field"><label>等级/说明</label><input class="input" v-model.trim="paperCodeForm.paper_grade" /></div>
+                    <div class="field"><label>纸张用途</label><select class="select" v-model="paperCodeForm.paper_role"><option value="">通用</option><option>面纸</option><option>芯纸</option><option>中纸</option><option>里纸</option></select></div>
+                    <div class="field wide"><label>备注</label><input class="input" v-model.trim="paperCodeForm.remark" /></div>
+                    <div class="field"><label>操作</label><button class="btn primary" :disabled="loading" @click="savePaperCode">{{ paperCodeForm.id ? '保存修改' : '新增代码' }}</button></div>
+                  </div>
+                  <div class="table-wrap"><table><thead><tr><th>供应商</th><th>代码</th><th>纸种</th><th>克重</th><th>等级</th><th>用途</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ row.supplier_name }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" @click="togglePaperCodeStatus(row)">{{ row.is_active ? '停用' : '启用' }}</button></td></tr>
+                  </tbody></table><div v-if="!paperCodes.length" class="empty">当前没有基础纸种代码</div></div>
+                </div>
+                <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
+                  <div class="toolbar"><strong>组合材质</strong><span class="muted">只解析结构和克重，不自动推算平方价</span></div>
+                  <div class="form-grid" style="margin:10px 0">
+                    <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @change="previewMaterialComposition" /></div>
+                    <div class="field"><label>材质代码</label><input class="input" maxlength="5" placeholder="3位或5位，例如 J616J" v-model.trim="materialComposer.material_code" @input="materialComposer.material_code=materialComposer.material_code.toUpperCase()" @change="previewMaterialComposition" /></div>
+                    <div class="field"><label>楞型</label><select class="select" v-model="materialComposer.flute_type" @change="previewMaterialComposition"><option v-for="flute in materialComposerFluteOptions" :key="flute" :value="flute">{{ flute }}</option></select></div>
+                    <div class="field sensitive-price"><label>平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="未匹配时必须手工填写" /></div>
+                    <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
+                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerPreview?.valid" @click="saveMaterialComposition">保存为可用材质</button></div></div>
+                  </div>
+                  <div v-if="materialComposerPreview">
+                    <div :class="['notice',materialComposerPreview.valid?'success':'danger']">{{ materialComposerPreview.message }}</div>
+                    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>位置</th><th>代码</th><th>用途</th><th>纸种</th><th>克重</th></tr></thead><tbody>
+                      <tr v-for="layer in materialComposerPreview.layers" :key="layer.position" :style="layer.missing ? {background:'#fee2e2',color:'#991b1b'} : {}"><td>第{{ layer.position }}位</td><td><strong>{{ layer.code_char }}</strong></td><td>{{ layer.role }}</td><td>{{ layer.paper_name || '未维护' }}</td><td>{{ layer.gram_weight == null ? '-' : layer.gram_weight+'g' }}</td></tr>
+                    </tbody></table></div>
+                    <div style="margin-top:8px"><strong>层数：{{ materialComposerPreview.layer_count }}层　总克重：{{ materialComposerPreview.total_gram_weight == null ? '待补基础代码' : materialComposerPreview.total_gram_weight+'g' }}</strong><span v-if="materialComposerPreview.existing_material_id" class="status green" style="margin-left:10px">已匹配现有材质</span></div>
                   </div>
                 </div>
                 <div v-if="!displayedMaterials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
@@ -2894,6 +2941,14 @@
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
         supplier_name:"", quote_date:null, remarks:"", is_active:true
       });
+      const blankPaperCode = () => ({
+        id:null, supplier_name:"", code_char:"", paper_name:"",
+        gram_weight:null, paper_grade:"", paper_role:"", remark:"", is_active:true
+      });
+      const blankMaterialComposer = () => ({
+        supplier_name:"", material_code:"", flute_type:"AB",
+        quote_price:"", remarks:""
+      });
       let quotationLineKey = 0;
       const blankQuotationLine = () => ({
         _key: ++quotationLineKey,
@@ -2944,6 +2999,14 @@
             ],
             materialSupplierFilter: "",
             materialSuppliers: [],
+            showPaperCodePanel: false,
+            paperCodeSupplierFilter: "",
+            paperCodeKeyword: "",
+            paperCodes: [],
+            paperCodeForm: blankPaperCode(),
+            showMaterialComposer: false,
+            materialComposer: blankMaterialComposer(),
+            materialComposerPreview: null,
             showCompareModal: false,
             compareGroups: [], compareFlute: "A", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
@@ -3045,6 +3108,11 @@
             if (lc === 5) return ["AB", "BE"];
             if (lc === 7) return [];
             return ["AB", "BE", "A", "B", "E"];
+          },
+          materialComposerFluteOptions() {
+            return String(this.materialComposer.material_code || "").length === 3
+              ? ["B", "A", "E"]
+              : ["AB", "BE"];
           },
           // 楞型筛选 tab：三层 B/E/A；五层 AB/BE；七层无
           materialFluteTabs() {
@@ -4586,6 +4654,132 @@
           openMaterial(row=null) {
             this.materialForm = row ? {...blankMaterial(),...JSON.parse(JSON.stringify(row))} : blankMaterial();
             this.modal={type:"material",title:row ? "编辑材质" : "新增材质"};
+          },
+          async togglePaperCodePanel() {
+            this.showPaperCodePanel = !this.showPaperCodePanel;
+            if (this.showPaperCodePanel) {
+              this.showMaterialComposer = false;
+              await this.loadPaperCodes();
+            }
+          },
+          async loadPaperCodes() {
+            const params = {include_inactive:true};
+            if (this.paperCodeSupplierFilter) params.supplier_name = this.paperCodeSupplierFilter;
+            if (this.paperCodeKeyword) params.keyword = this.paperCodeKeyword;
+            const {data} = await axios.get("/api/master/materials/paper-codes", {params});
+            this.paperCodes = data.items || [];
+          },
+          resetPaperCodeForm() {
+            this.paperCodeForm = {
+              ...blankPaperCode(),
+              supplier_name:this.paperCodeSupplierFilter || this.materialSupplierFilter || "",
+            };
+          },
+          editPaperCode(row) {
+            this.paperCodeForm = JSON.parse(JSON.stringify(row));
+          },
+          paperCodePayload(row) {
+            return {
+              supplier_name:String(row.supplier_name || "").trim(),
+              code_char:String(row.code_char || "").trim().toUpperCase(),
+              paper_name:String(row.paper_name || "").trim(),
+              gram_weight:Number(row.gram_weight || 0),
+              paper_grade:String(row.paper_grade || "").trim() || null,
+              paper_role:String(row.paper_role || "").trim() || null,
+              remark:String(row.remark || "").trim() || null,
+              is_active:row.is_active !== false,
+            };
+          },
+          async savePaperCode() {
+            if (this.loading) return;
+            this.loading = true;
+            try {
+              const payload = this.paperCodePayload(this.paperCodeForm);
+              if (!payload.supplier_name) throw new Error("请填写供应商");
+              if (!/^[A-Z0-9]$/.test(payload.code_char)) throw new Error("基础代码必须是单个字母或数字");
+              if (!payload.paper_name) throw new Error("请填写纸种名称");
+              if (!(payload.gram_weight > 0)) throw new Error("克重必须大于0");
+              if (this.paperCodeForm.id) await axios.put(`/api/master/materials/paper-codes/${this.paperCodeForm.id}`,payload);
+              else await axios.post("/api/master/materials/paper-codes",payload);
+              this.paperCodeSupplierFilter = payload.supplier_name;
+              await this.loadPaperCodes();
+              this.resetPaperCodeForm();
+              this.showToast("基础纸种代码已保存");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.loading = false; }
+          },
+          async togglePaperCodeStatus(row) {
+            try {
+              await axios.put(`/api/master/materials/paper-codes/${row.id}`, {
+                ...this.paperCodePayload(row),
+                is_active:!row.is_active,
+              });
+              await this.loadPaperCodes();
+              this.showToast(row.is_active ? "基础代码已停用" : "基础代码已启用");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          toggleMaterialComposer() {
+            this.showMaterialComposer = !this.showMaterialComposer;
+            if (this.showMaterialComposer) {
+              this.showPaperCodePanel = false;
+              this.materialComposer = {
+                ...blankMaterialComposer(),
+                supplier_name:this.materialSupplierFilter || "",
+              };
+              this.materialComposerPreview = null;
+            }
+          },
+          async previewMaterialComposition() {
+            const code = String(this.materialComposer.material_code || "").trim().toUpperCase();
+            const supplier = String(this.materialComposer.supplier_name || "").trim();
+            if (!supplier || !code) return;
+            if (![3,5].includes(code.length)) {
+              this.materialComposerPreview = null;
+              this.showToast("材质代码需为3位或5位",true);
+              return;
+            }
+            const allowed = code.length === 3 ? ["B","A","E"] : ["AB","BE"];
+            if (!allowed.includes(this.materialComposer.flute_type)) {
+              this.materialComposer.flute_type = allowed[0];
+            }
+            try {
+              const {data} = await axios.post("/api/master/materials/compose/preview", {
+                supplier_name:supplier,
+                material_code:code,
+                flute_type:this.materialComposer.flute_type,
+              });
+              this.materialComposer.material_code = code;
+              this.materialComposerPreview = data;
+              this.materialComposer.quote_price = data.existing_square_price ?? "";
+            } catch(error) {
+              this.materialComposerPreview = null;
+              this.showToast(this.errorMessage(error),true);
+            }
+          },
+          async saveMaterialComposition() {
+            if (this.loading) return;
+            this.loading = true;
+            try {
+              await this.previewMaterialComposition();
+              if (!this.materialComposerPreview?.valid) throw new Error("请先补齐缺失的基础纸种代码");
+              if (!this.materialComposerPreview.existing_material_id && (this.materialComposer.quote_price === "" || this.materialComposer.quote_price === null)) {
+                throw new Error("当前组合没有已有平方价，请手工填写平方价");
+              }
+              const {data} = await axios.post("/api/master/materials/compose/save", {
+                supplier_name:this.materialComposer.supplier_name,
+                material_code:this.materialComposer.material_code,
+                flute_type:this.materialComposer.flute_type,
+                quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
+                remarks:String(this.materialComposer.remarks || "").trim() || null,
+              });
+              this.allMaterials = [];
+              this.materialSuppliers = [];
+              await this.loadMaterials();
+              this.showToast(data.message || "组合材质已保存");
+              this.materialComposerPreview.existing_material_id = data.material.id;
+              this.materialComposerPreview.existing_square_price = data.material.quote_price;
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.loading = false; }
           },
           recommendMaterialCode() {
             const weights=(this.materialForm.basis_weight_description.match(/\d+(?:\.\d+)?/g)||[]).join("-");

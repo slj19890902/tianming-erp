@@ -62,3 +62,8 @@ from app.models.tianhua_pre_delivery import (  # noqa: E402,F401
     TianhuaPreDeliveryImportBatch,
     TianhuaPreDeliveryImportItem,
 )
+from app.models.quotation import (  # noqa: E402,F401
+    QuotationDailySequence,
+    QuotationItem,
+    QuotationOrder,
+)

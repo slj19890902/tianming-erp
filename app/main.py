@@ -23,6 +23,7 @@ from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
 from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
+from app.api.quotations import router as quotations_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.system import router as system_router
 from app.api.tianhua_pre_delivery import (
@@ -108,6 +109,18 @@ def create_app() -> FastAPI:
         application.add_api_route(
             "/requisition-print.html",
             lambda: FileResponse(print_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/quotation-print.html" for route in application.routes):
+        quotation_print_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "quotation-print.html"
+        )
+        application.add_api_route(
+            "/quotation-print.html",
+            lambda: FileResponse(quotation_print_path),
             methods=["GET"],
             include_in_schema=False,
         )
@@ -225,6 +238,12 @@ def create_app() -> FastAPI:
             dashboard_router,
             prefix="/api/dashboard",
             tags=["dashboard"],
+        )
+    if not any(route.path == "/api/quotations" for route in application.routes):
+        application.include_router(
+            quotations_router,
+            prefix="/api/quotations",
+            tags=["quotations"],
         )
     if not any(route.path == "/api/system/backups" for route in application.routes):
         application.include_router(

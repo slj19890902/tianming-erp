@@ -103,6 +103,19 @@ class RequisitionLinePayload(BaseModel):
         return normalized
 
 
+class PendingMaterialUpdate(BaseModel):
+    material_id: int
+    layer_count: int | None = None
+    flute_type: str | None = None
+    sync_product: bool = True
+
+    @field_validator("flute_type")
+    @classmethod
+    def normalize_flute(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip().upper()
+        return normalized or None
+
+
 class RequisitionBatchCreate(BaseModel):
     supplier_name: str | None = None
     items: list[RequisitionLinePayload]
@@ -357,7 +370,91 @@ def pending_requisitions(
                 "snapshot_flap_mm": item.snapshot_flap_mm,
             }
         )
-    return {"items": items}
+    supplier_counts: dict[str, int] = {}
+    for row in items:
+        supplier = (row.get("snapshot_supplier_name") or "未设置供应商").strip()
+        supplier_counts[supplier] = supplier_counts.get(supplier, 0) + 1
+    return {
+        "items": items,
+        "total": len(items),
+        "supplier_counts": [
+            {"supplier_name": supplier, "count": count}
+            for supplier, count in sorted(
+                supplier_counts.items(), key=lambda entry: (-entry[1], entry[0])
+            )
+        ],
+    }
+
+
+@router.put("/pending/{item_id}/material")
+def update_pending_material(
+    item_id: int,
+    payload: PendingMaterialUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    item = _item_or_404(db, item_id)
+    if item.requisition_status != "未报料":
+        raise HTTPException(status_code=409, detail="已生成报料单的明细不能更换供应商或材质")
+    if item.material_status == "received":
+        raise HTTPException(status_code=409, detail="已入库明细不能更换供应商或材质")
+    material = db.get(Material, payload.material_id)
+    if material is None or not material.is_active:
+        raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
+    layer_count = payload.layer_count or material.layer_count
+    flute_type = payload.flute_type or item.flute_type
+    if layer_count == 3 and flute_type not in {"A", "B", "E"}:
+        raise HTTPException(status_code=400, detail="三层纸板楞型只能选择 A、B 或 E")
+    if layer_count == 5 and flute_type not in {"AB", "BE"}:
+        raise HTTPException(status_code=400, detail="五层纸板楞型只能选择 AB 或 BE")
+    before = {
+        "material_id": item.material_id,
+        "supplier_name": item.snapshot_supplier_name,
+        "layer_count": item.layer_count,
+        "flute_type": item.flute_type,
+    }
+    item.material_id = material.id
+    item.snapshot_material = material.code
+    item.snapshot_supplier_name = material.supplier_name
+    item.snapshot_weight = material.basis_weight_description
+    item.layer_count = layer_count
+    item.flute_type = flute_type
+    if payload.sync_product and item.product_id:
+        product = db.get(Product, item.product_id)
+        if product is not None:
+            product.material_id = material.id
+            product.layer_count = layer_count
+            product.flute_type = flute_type
+    _audit(
+        db,
+        user=user,
+        action="UPDATE_PENDING_MATERIAL",
+        entity_id=item.id,
+        details={
+            "before": before,
+            "after": {
+                "material_id": material.id,
+                "supplier_name": material.supplier_name,
+                "layer_count": layer_count,
+                "flute_type": flute_type,
+                "sync_product": payload.sync_product,
+            },
+        },
+        description="更换未报料明细供应商和材质",
+    )
+    db.commit()
+    return {
+        "item_id": item.id,
+        "material_id": material.id,
+        "material_code": material.code,
+        "supplier_name": material.supplier_name,
+        "layer_count": layer_count,
+        "flute_type": flute_type,
+        "message": (
+            f"已将该明细改为 {material.supplier_name or '未设置供应商'} / "
+            f"{material.code} / {flute_type or '-'}"
+        ),
+    }
 
 
 @router.get("/items")
@@ -746,9 +843,19 @@ def merge_suggestions(
             "customer_name": customer.name,
             "product_code": item.snapshot_product_code or product.product_code,
             "product_name": item.snapshot_product_name,
+            "specification": item.snapshot_spec,
+            "material_id": item.material_id,
+            "snapshot_supplier_name": item.snapshot_supplier_name,
+            "layer_count": item.layer_count,
+            "flute_type": item.flute_type,
             "quantity": item.quantity,
             "pieces_per_box": pieces_per_box,
             "required_piece_qty": _required_piece_qty(item.quantity, pieces_per_box),
+            "requisition_qty": _purchase_qty(
+                _required_piece_qty(item.quantity, pieces_per_box),
+                item.inventory_deducted_qty,
+                DEFAULT_CUTTING_MODE,
+            ),
             "delivery_date": order.delivery_date,
         })
 
@@ -799,12 +906,8 @@ def print_batch(
     rows = db.execute(
         select(
             RequisitionItem,
-            OrderItem.snapshot_production_notes.label("production_notes"),
-            OrderItem.layer_count.label("order_layer_count"),
-            OrderItem.flute_type.label("order_flute_type"),
-            Material.code.label("material_code"),
-            Material.layer_count.label("material_layer_count"),
-            Material.flute_type.label("material_flute_type"),
+            OrderItem,
+            Material,
         )
         .outerjoin(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
         .outerjoin(Material, Material.id == OrderItem.material_id)
@@ -814,12 +917,34 @@ def print_batch(
         )
         .order_by(RequisitionItem.id)
     ).all()
-    return {
-        "id": batch.id,
-        "requisition_number": batch.requisition_number,
-        "requisition_date": batch.requisition_date,
-        "supplier_name": batch.supplier_name,
-        "items": [
+    print_items = []
+    for row, order_item, material in rows:
+        order_layer_count = order_item.layer_count if order_item else None
+        order_flute_type = order_item.flute_type if order_item else None
+        material_code = material.code if material else None
+        material_layer_count = material.layer_count if material else None
+        material_flute_type = material.flute_type if material else None
+        crease_type = order_item.snapshot_crease_type if order_item else None
+        if crease_type == "压线" and order_item and order_item.snapshot_crease_middle_mm is not None:
+            crease_display = (
+                f"{order_item.snapshot_crease_left_mm or 0}+"
+                f"{order_item.snapshot_crease_middle_mm}+"
+                f"{order_item.snapshot_crease_right_mm or 0}"
+            )
+        elif crease_type == "毛片":
+            crease_display = "毛"
+        elif crease_type == "净料":
+            crease_display = "净"
+        else:
+            crease_display = crease_type or ""
+        remarks = []
+        if row.special_process and row.special_process != DEFAULT_CUTTING_MODE:
+            remarks.append(row.special_process)
+        if row.remark:
+            remarks.append(row.remark)
+        if order_item and order_item.snapshot_report_notes:
+            remarks.append(order_item.snapshot_report_notes)
+        print_items.append(
             {
                 "product_code": row.product_code_snapshot,
                 "product_name": row.product_name_snapshot,
@@ -833,23 +958,26 @@ def print_batch(
                     material_code or row.material_snapshot,
                     order_layer_count or material_layer_count,
                 ),
-                "flute_type": _clean_supplier_flute(order_flute_type or material_flute_type),
-                "specification": f"{_plain(row.cardboard_len)}?{_plain(row.cardboard_width)}",
+                "flute_type": _clean_supplier_flute(
+                    order_flute_type or material_flute_type
+                ),
+                "specification": f"{_plain(row.cardboard_len)}×{_plain(row.cardboard_width)}",
+                "crease_display": crease_display,
                 "quantity": row.requisition_qty,
                 "special_process": row.special_process,
                 "cutting_mode": row.special_process,
-                "production_notes": production_notes,
+                "production_notes": (
+                    order_item.snapshot_production_notes if order_item else None
+                ),
+                "report_remark": "；".join(dict.fromkeys(filter(None, remarks))),
             }
-            for (
-                row,
-                production_notes,
-                order_layer_count,
-                order_flute_type,
-                material_code,
-                material_layer_count,
-                material_flute_type,
-            ) in rows
-        ],
+        )
+    return {
+        "id": batch.id,
+        "requisition_number": batch.requisition_number,
+        "requisition_date": batch.requisition_date,
+        "supplier_name": batch.supplier_name,
+        "items": print_items,
         "total_quantity": sum(row.requisition_qty for row, *_ in rows),
     }
 

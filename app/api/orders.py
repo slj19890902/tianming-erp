@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -147,6 +147,15 @@ class OrderItemUpdate(BaseModel):
     snapshot_splice_mode: str | None = None
     snapshot_pieces_per_box: int | None = None
     snapshot_flap_mm: int | None = None
+    # v0.20.9: 订单编辑页中的常用箱生产字段；有关联产品时同事务同步。
+    sync_product: bool = True
+    box_style: str | None = None
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    production_process: str | None = None
+    print_content: str | None = None
+    product_remark: str | None = None
 
 
 class OrderCreate(BaseModel):
@@ -212,6 +221,31 @@ def _plain_decimal(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value, "f").rstrip("0").rstrip(".") or "0"
+
+
+def _order_item_cost_totals(
+    quantity: int,
+    unit_price: Decimal,
+    subtotal: Decimal,
+    unit_cost: Decimal,
+) -> dict[str, str]:
+    unit_gross_profit = unit_price - unit_cost
+    total_cost = unit_cost * Decimal(quantity)
+    total_gross_profit = subtotal - total_cost
+    return {
+        "estimated_gross_profit": str(
+            unit_gross_profit.quantize(Decimal("0.0001"))
+        ),
+        "unit_estimated_cost": str(unit_cost.quantize(Decimal("0.0001"))),
+        "unit_estimated_gross_profit": str(
+            unit_gross_profit.quantize(Decimal("0.0001"))
+        ),
+        "sale_amount": str(subtotal.quantize(MONEY_QUANTUM)),
+        "total_estimated_cost": str(total_cost.quantize(MONEY_QUANTUM)),
+        "total_estimated_gross_profit": str(
+            total_gross_profit.quantize(MONEY_QUANTUM)
+        ),
+    }
 
 
 def _snapshot_spec(product: Product) -> str | None:
@@ -285,7 +319,7 @@ def _order_response(
     }
     for item in order.items:
         cost_reference = (
-            calculate_draft_cost(db, item.product_id)
+            calculate_draft_cost(db, item.product_id, item.material_id)
             if db is not None and user.role != "workshop"
             else {}
         )
@@ -345,10 +379,24 @@ def _order_response(
                 **cost_reference,
         }
         if item_data.get("estimated_cost") is not None:
-            item_data["estimated_gross_profit"] = str(
-                (Decimal(str(item.unit_price)) - Decimal(item_data["estimated_cost"])).quantize(
-                    Decimal("0.0001")
+            unit_cost = Decimal(item_data["estimated_cost"])
+            item_data.update(
+                _order_item_cost_totals(
+                    item.quantity,
+                    Decimal(str(item.unit_price)),
+                    Decimal(str(item.subtotal)),
+                    unit_cost,
                 )
+            )
+        else:
+            item_data.update(
+                {
+                    "unit_estimated_cost": None,
+                    "unit_estimated_gross_profit": None,
+                    "sale_amount": str(Decimal(str(item.subtotal)).quantize(MONEY_QUANTUM)),
+                    "total_estimated_cost": None,
+                    "total_estimated_gross_profit": None,
+                }
             )
         data["items"].append(item_data)
     if user.role == "workshop":
@@ -1472,6 +1520,51 @@ def update_order_item(
         item.snapshot_pieces_per_box = payload.snapshot_pieces_per_box
     if payload.snapshot_flap_mm is not None:
         item.snapshot_flap_mm = payload.snapshot_flap_mm
+    if payload.sync_product and item.product_id:
+        product = db.get(Product, item.product_id)
+        if product is None:
+            raise HTTPException(status_code=409, detail="关联常用箱不存在，订单明细未保存")
+        if payload.material_id is not None:
+            product.material_id = payload.material_id
+        if payload.layer_count is not None:
+            product.layer_count = payload.layer_count
+        if payload.flute_type is not None:
+            product.flute_type = (payload.flute_type or "").strip().upper() or None
+        for field_name in (
+            "box_style",
+            "length_mm",
+            "width_mm",
+            "height_mm",
+            "production_process",
+            "print_content",
+        ):
+            value = getattr(payload, field_name)
+            if value is not None:
+                setattr(product, field_name, value)
+        product.splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
+        product.pieces_per_box = (
+            payload.snapshot_pieces_per_box
+            if payload.snapshot_pieces_per_box is not None
+            else (2 if product.splice_mode == "double" else 1)
+        )
+        if payload.snapshot_flap_mm is not None:
+            product.flap_mm = payload.snapshot_flap_mm
+        if payload.snapshot_report_length_mm is not None:
+            product.report_length_mm = payload.snapshot_report_length_mm
+        if payload.snapshot_report_width_mm is not None:
+            product.report_width_mm = payload.snapshot_report_width_mm
+        if payload.snapshot_crease_type is not None:
+            product.crease_type = payload.snapshot_crease_type or None
+        if payload.snapshot_crease_left_mm is not None:
+            product.crease_left_mm = payload.snapshot_crease_left_mm
+        if payload.snapshot_crease_middle_mm is not None:
+            product.crease_middle_mm = payload.snapshot_crease_middle_mm
+        if payload.snapshot_crease_right_mm is not None:
+            product.crease_right_mm = payload.snapshot_crease_right_mm
+        if payload.snapshot_report_notes is not None:
+            product.report_notes = payload.snapshot_report_notes or None
+        if payload.product_remark is not None:
+            product.remark = payload.product_remark.strip() or None
     _refresh_total(db, order)
     db.add(
         OperationLog(

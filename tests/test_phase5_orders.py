@@ -455,6 +455,59 @@ def test_sales_can_edit_and_delete_one_order_item(order_api_app) -> None:
     assert Decimal(str(refreshed["total_amount"])) == Decimal("777.00")
 
 
+def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> None:
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = client.post("/api/orders", json=_payload()).json()
+        item_id = created["items"][0]["id"]
+        edited = client.put(
+            f"/api/orders/items/{item_id}",
+            json={
+                "quantity": 500,
+                "unit_price": "3.92",
+                "product_code": "SME-001",
+                "product_name": "同步常用箱测试",
+                "material": "A6A",
+                "specification": "880×670×110mm",
+                "box_style": "A1/0201 普通开槽箱",
+                "length_mm": 880,
+                "width_mm": 670,
+                "height_mm": 110,
+                "snapshot_splice_mode": "double",
+                "snapshot_pieces_per_box": 2,
+                "snapshot_flap_mm": 30,
+                "snapshot_report_length_mm": 3130,
+                "snapshot_report_width_mm": 785,
+                "snapshot_crease_type": "压线",
+                "snapshot_crease_left_mm": 335,
+                "snapshot_crease_middle_mm": 110,
+                "snapshot_crease_right_mm": 335,
+                "production_process": "粘贴",
+                "print_content": "单色印刷",
+                "product_remark": "订单编辑同步",
+                "sync_product": True,
+            },
+        )
+        assert edited.status_code == 200, edited.text
+
+    with session_factory() as session:
+        product = session.get(Product, 1)
+        assert product.box_style == "A1/0201 普通开槽箱"
+        assert int(product.length_mm) == 880
+        assert int(product.width_mm) == 670
+        assert int(product.height_mm) == 110
+        assert product.splice_mode == "double"
+        assert product.pieces_per_box == 2
+        assert product.report_length_mm == 3130
+        assert product.crease_middle_mm == 110
+        assert product.production_process == "粘贴"
+        assert product.print_content == "单色印刷"
+        assert product.remark == "订单编辑同步"
+
+
 def test_order_models_use_new_tables_and_leave_legacy_name_free() -> None:
     from app.models.order import Order, OrderItem
 

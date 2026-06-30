@@ -130,6 +130,103 @@ def _batch_payload() -> dict:
     }
 
 
+def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
+    from app.models.material import Material
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        supplier_a = Material(
+            code="A6A",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="嘉林亿",
+        )
+        supplier_b = Material(
+            code="CCC-B",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="鸣朋",
+        )
+        session.add_all([supplier_a, supplier_b])
+        session.flush()
+        item.material_id = supplier_a.id
+        item.snapshot_material = supplier_a.code
+        item.snapshot_supplier_name = supplier_a.supplier_name
+        item.layer_count = 3
+        item.flute_type = "E"
+        order = session.get(Order, item.order_id)
+        for index in range(9):
+            session.add(
+                OrderItem(
+                    order_id=order.id,
+                    product_id=product.id,
+                    quantity=10,
+                    unit_price=Decimal("1"),
+                    subtotal=Decimal("10"),
+                    material_status="pending",
+                    requisition_status="未报料",
+                    snapshot_product_name=f"嘉林亿产品{index}",
+                    snapshot_material=supplier_a.code,
+                    snapshot_supplier_name=supplier_a.supplier_name,
+                    material_id=supplier_a.id,
+                    layer_count=3,
+                    flute_type="E",
+                )
+            )
+        supplier_b_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=10,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("10"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_name="鸣朋产品",
+            snapshot_material=supplier_b.code,
+            snapshot_supplier_name=supplier_b.supplier_name,
+            material_id=supplier_b.id,
+            layer_count=3,
+            flute_type="E",
+        )
+        session.add(supplier_b_item)
+        session.commit()
+        supplier_a_id = supplier_a.id
+        supplier_b_item_id = supplier_b_item.id
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200
+        counts = {
+            row["supplier_name"]: row["count"]
+            for row in pending.json()["supplier_counts"]
+        }
+        assert counts == {"嘉林亿": 10, "鸣朋": 1}
+        changed = client.put(
+            f"/api/requisition/pending/{supplier_b_item_id}/material",
+            json={
+                "material_id": supplier_a_id,
+                "layer_count": 3,
+                "flute_type": "E",
+                "sync_product": True,
+            },
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["supplier_name"] == "嘉林亿"
+        assert changed.json()["material_code"] == "A6A"
+
+    with session_factory() as session:
+        changed_item = session.get(OrderItem, supplier_b_item_id)
+        changed_product = session.get(Product, changed_item.product_id)
+        assert changed_item.snapshot_supplier_name == "嘉林亿"
+        assert changed_item.material_id == supplier_a_id
+        assert changed_product.material_id == supplier_a_id
+
+
 
 def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
     from app.models.order import OrderItem

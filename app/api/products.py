@@ -656,7 +656,7 @@ def sync_product_fields(
         "report_length_mm", "report_width_mm",
         "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm",
         "report_notes", "production_process", "product_name", "specification",
-        "splice_mode", "pieces_per_box", "flap_mm",
+        "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content",
     }
     product = _product_or_404(db, product_id)
     updated = []

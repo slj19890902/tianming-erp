@@ -56,3 +56,9 @@ from app.models.finance import (  # noqa: E402,F401
     StatementMonthlySequence,
 )
 from app.models.company_config import CompanyConfig  # noqa: E402,F401
+from app.models.tianhua_pre_delivery import (  # noqa: E402,F401
+    TianhuaPreDeliveryDraft,
+    TianhuaPreDeliveryDraftItem,
+    TianhuaPreDeliveryImportBatch,
+    TianhuaPreDeliveryImportItem,
+)

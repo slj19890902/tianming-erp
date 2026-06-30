@@ -25,6 +25,7 @@ from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.system import router as system_router
+from app.api.tianhua_pre_delivery import router as tianhua_pre_delivery_router
 from app.core.config import load_settings
 
 
@@ -173,6 +174,12 @@ def create_app() -> FastAPI:
             deliveries_router,
             prefix="/api/deliveries",
             tags=["deliveries"],
+        )
+    if not any(route.path == "/api/deliveries/tianhua-preimport/upload" for route in application.routes):
+        application.include_router(
+            tianhua_pre_delivery_router,
+            prefix="/api/deliveries",
+            tags=["tianhua-pre-delivery"],
         )
     if not any(
         route.path == "/api/orders/items/{item_id}/force_close"

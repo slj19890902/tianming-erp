@@ -603,6 +603,12 @@
       .order-detail-row td { padding: 0; background: #f7f7fa; }
       .order-detail-box { padding: 12px 16px 16px; }
       .warning-row { background: #fff7ed !important; }
+      .tianhua-row-ok { background: #ecfdf3 !important; }
+      .tianhua-row-duplicate_warning { background: #fef9c3 !important; }
+      .tianhua-row-qty_mismatch { background: #ffedd5 !important; }
+      .tianhua-row-stock_shortage { background: #fee2e2 !important; }
+      .tianhua-row-not_matched { background: #f1f5f9 !important; color: #64748b; }
+      .tianhua-row-ocr_failed { background: #fee2e2 !important; color: #991b1b; }
       .requisition-selected { background: #f0f5ff; }
 
       /* Remember line */
@@ -1337,7 +1343,7 @@
 
             <template v-else-if="activePage === 'deliveries'">
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
-              <div class="toolbar"><div><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
                 <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
@@ -2437,6 +2443,53 @@
               <div v-if="!deliveryOptions.length" class="status orange" style="margin-bottom:10px">只有已入库的订单明细才能生成送货单，请先去来料入库。</div>
               <table><thead><tr><th><input type="checkbox" :checked="allDeliverySelected" @change="toggleAllDelivery($event.target.checked)" /> 全选</th><th>订单号</th><th>品号/产品</th><th>剩余可发</th><th>本次送货</th><th>备注</th><th>提示</th></tr></thead><tbody><tr v-for="row in deliveryOptions" :key="row.item_id" :class="{'warning-row':Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity)}"><td><input type="checkbox" v-model="deliveryForm.selected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.remaining_quantity }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="deliveryForm.quantities[row.item_id]" /></td><td><input class="input" v-model.trim="deliveryForm.remarks[row.item_id]" placeholder="可选" /></td><td class="danger-text">{{ Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity) ? "超出可送数量，允许提交" : "" }}</td></tr></tbody></table>
             </div>
+            <div v-else-if="modal.type === 'tianhuaPreimport'">
+              <div class="panel" style="margin-bottom:12px">
+                <div class="section-title">上传天华预送货截图</div>
+                <div class="toolbar-group">
+                  <input class="input" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onTianhuaImageSelected" />
+                  <span class="muted">{{ tianhuaPreimport.fileName || "尚未选择图片" }}</span>
+                  <button class="btn primary" :disabled="!tianhuaPreimport.file || loading" @click="startTianhuaRecognition">开始识别</button>
+                </div>
+                <div v-if="tianhuaPreimport.batchId" class="muted" style="margin-top:8px">识别批次：{{ tianhuaPreimport.batchNumber }}（ID {{ tianhuaPreimport.batchId }}）</div>
+                <div v-if="tianhuaPreimport.batchId" class="toolbar-group" style="margin-top:8px">
+                  <span class="status blue">识别总数 {{ tianhuaPreimport.items.length }}</span>
+                  <span class="status green">可送货 {{ tianhuaPreimport.items.filter(row => row.status==='ok').length }}</span>
+                  <span class="status orange">需确认 {{ tianhuaPreimport.items.filter(row => ['duplicate_warning','qty_mismatch'].includes(row.status)).length }}</span>
+                  <span class="status blue">已选择 {{ tianhuaSelectedCount() }}</span>
+                  <span class="status green">可生成 {{ tianhuaGeneratableCount() }}</span>
+                  <span class="status red">异常不可生成 {{ tianhuaBlockedCount() }}</span>
+                </div>
+              </div>
+              <div class="toolbar" style="margin-bottom:8px">
+                <div class="section-title" style="margin:0">识别结果</div>
+                <div class="toolbar-group">
+                  <button class="btn small" :disabled="!tianhuaGeneratableCount()" @click="selectTianhuaRows('all')">全选可生成</button>
+                  <button class="btn small" :disabled="!tianhuaPreimport.items.some(row => row.status==='ok')" @click="selectTianhuaRows('ok')">只选正常可送</button>
+                  <button class="btn small" :disabled="!tianhuaSelectedCount()" @click="selectTianhuaRows('none')">取消全选</button>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>图片数量</th><th>系统未送数量</th><th>建议送货数量</th><th>产品名称</th><th>订单号</th><th>风险提示</th><th>操作</th></tr></thead>
+                  <tbody>
+                    <tr v-for="row in tianhuaPreimport.items" :key="row.row_no" :class="'tianhua-row-'+row.status">
+                      <td><input type="checkbox" v-model="row.selected" :disabled="!isTianhuaRowGeneratable(row)" :title="tianhuaRowDisabledReason(row)" /></td>
+                      <td>{{ row.status_label }}</td><td>{{ row.stock_code || "-" }}</td><td>{{ row.image_qty ?? "-" }}</td><td>{{ row.system_pending_qty ?? "-" }}</td>
+                      <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" :disabled="!isTianhuaRowGeneratable(row)" /></td>
+                      <td>{{ row.product_name || "-" }}</td><td>{{ row.order_no || "-" }}</td><td>{{ row.warning || "-" }}</td>
+                      <td class="toolbar-group"><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
+                    </tr>
+                    <tr v-if="!tianhuaPreimport.items.length"><td colspan="10" class="empty">上传图片并开始识别后，在这里显示预处理结果。</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="form-grid" style="margin-top:12px"><div class="field wide"><label>草稿备注</label><input class="input" v-model.trim="tianhuaPreimport.remark" /></div></div>
+              <div class="toolbar-group" style="justify-content:flex-end">
+                <button class="btn success" :disabled="!tianhuaSelectedCount() || loading" @click="createTianhuaDraft">{{ tianhuaPreimport.draft ? "保存草稿修改" : "生成送货单草稿" }}</button>
+              </div>
+              <div v-if="tianhuaPreimport.draft" class="status green" style="display:block;margin-top:10px">草稿 {{ tianhuaPreimport.draft.draft_number }} 已保存，状态为 draft；未出库、未发货。</div>
+            </div>
             <div v-else-if="modal.type === 'statement'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><search-select v-model="statementForm.customer_id" :options="statementCustomerOptions" label-key="name" value-key="id" placeholder="搜索有对账资格的客户" @change="loadPendingStatements"></search-select></div>
@@ -2870,6 +2923,7 @@
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {}, remarks: {} },
+            tianhuaPreimport: { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -5385,6 +5439,81 @@
               this.deliveryForm.remarks[row.item_id] = "";
             });
             this.modal = { type:"delivery", title:"新增送货单" };
+          },
+          openTianhuaPreimport() {
+            this.tianhuaPreimport = { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, remark:"天华邮件截图导入" };
+            this.modal = { type:"tianhuaPreimport", title:"导入天华预送货" };
+          },
+          onTianhuaImageSelected(event) {
+            const file = event.target.files?.[0] || null;
+            this.tianhuaPreimport.file = file;
+            this.tianhuaPreimport.fileName = file?.name || "";
+            this.tianhuaPreimport.batchId = null;
+            this.tianhuaPreimport.items = [];
+            this.tianhuaPreimport.draft = null;
+          },
+          async startTianhuaRecognition() {
+            if (!this.tianhuaPreimport.file) return this.showToast("请先选择天华预送货截图", true);
+            this.loading = true;
+            try {
+              const form = new FormData();
+              form.append("file", this.tianhuaPreimport.file);
+              const {data} = await axios.post("/api/deliveries/tianhua-preimport/upload", form, {headers:{"Content-Type":"multipart/form-data"}});
+              this.tianhuaPreimport.batchId = data.batch_id;
+              this.tianhuaPreimport.batchNumber = data.batch_number;
+              this.tianhuaPreimport.items = data.items || [];
+              this.tianhuaPreimport.draft = data.draft || null;
+              this.showToast(`已识别 ${data.total_rows} 行天华预送货明细`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          useTianhuaImageQty(row) { row.final_delivery_qty = row.image_qty; row.selected = true; },
+          useTianhuaPendingQty(row) { row.final_delivery_qty = row.system_pending_qty; row.selected = true; },
+          isTianhuaRowGeneratable(row) {
+            return ["ok","qty_mismatch","duplicate_warning","stock_shortage"].includes(row.status);
+          },
+          tianhuaRowDisabledReason(row) {
+            return {
+              not_matched:"未匹配订单，不能生成草稿",
+              ocr_failed:"识别失败，不能生成草稿",
+              created:"该批次已生成草稿，不能重复生成",
+              skipped:"该行已跳过，不能生成草稿",
+            }[row.status] || "";
+          },
+          tianhuaSelectedCount() {
+            return this.tianhuaPreimport.items.filter(row => row.selected && this.isTianhuaRowGeneratable(row)).length;
+          },
+          tianhuaGeneratableCount() {
+            return this.tianhuaPreimport.items.filter(row => this.isTianhuaRowGeneratable(row)).length;
+          },
+          tianhuaBlockedCount() {
+            return this.tianhuaPreimport.items.length - this.tianhuaGeneratableCount();
+          },
+          tianhuaAllGeneratableSelected() {
+            const rows = this.tianhuaPreimport.items.filter(row => this.isTianhuaRowGeneratable(row));
+            return rows.length > 0 && rows.every(row => row.selected);
+          },
+          selectTianhuaRows(mode) {
+            this.tianhuaPreimport.items.forEach(row => {
+              row.selected = mode === "all"
+                ? this.isTianhuaRowGeneratable(row)
+                : mode === "ok" && row.status === "ok";
+            });
+          },
+          toggleAllTianhuaRows(checked) {
+            this.selectTianhuaRows(checked ? "all" : "none");
+          },
+          async createTianhuaDraft() {
+            const payload = {remark:this.tianhuaPreimport.remark,items:this.tianhuaPreimport.items.map(row => ({item_id:row.item_id,row_no:row.row_no,selected:!!row.selected,final_delivery_qty:Number(row.final_delivery_qty || 0) || null}))};
+            this.loading = true;
+            try {
+              const updating = !!this.tianhuaPreimport.draft;
+              const url = `/api/deliveries/tianhua-preimport/${this.tianhuaPreimport.batchId}/${updating ? "update-draft" : "create-draft"}`;
+              const {data} = updating ? await axios.put(url, payload) : await axios.post(url, payload);
+              this.tianhuaPreimport.draft = data;
+              this.showToast(updating ? "天华预送货草稿修改已保存" : "天华预送货草稿已生成");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
           },
           async openStatement() {
             this.statementForm = { customer_id:null, statement_month:month(), selected:{} };

@@ -1014,3 +1014,12 @@ legacy_ruida_* 原始层
   - 维护本地设计说明 `docs/product_planning/FIGMA_UI_REDESIGN_20260628.md`
   - 维护审查记录 `docs/ui_audit/2026-06-27-figma-redesign/`
   - 等额度恢复后，回到同一个 Figma 文件继续补完未完成页面
+
+## 39. 天华预送货手机扫码拿货（2026-06-30）
+- 新增独立手机页面：`/mobile/tianhua-pick?token=...`，不加载 ERP 后台菜单。
+- 电脑端天华草稿支持生成 24 小时签名二维码，并刷新手机拿货状态。
+- 手机端支持已拿货、没货、部分拿货、实际数量和备注；库存不足行仍允许现场确认。
+- 手机实际数量同步到天华导入明细和独立草稿明细，不写正式送货、库存、回单或对账表。
+- 新增角色代码 `delivery_picker`（送货拿货员），现有业务 API 的角色白名单均不包含该角色。
+- 生产迁移版本：`x06r3s4t5u94`。
+- 迁移前备份：`data/backups/carton_erp_20260630_163846_069028_TIANHUA_MOBILE_PICK_BEFORE_MIGRATION.sqlite3`。

@@ -106,19 +106,27 @@ def preprocess_row(db: Session,row: RecognizedRow) -> dict:
     return data
 
 
-def item_dict(i):
-    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_no":i.order_number,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected}
+def item_dict(i, draft_item=None):
+    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_no":i.order_number,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item and draft_item.mobile_picked_at else None}
 
 
 def draft_dict(db,draft):
     items=db.scalars(select(TianhuaPreDeliveryDraftItem).where(TianhuaPreDeliveryDraftItem.draft_id==draft.id).order_by(TianhuaPreDeliveryDraftItem.row_no)).all()
-    return {"draft_id":draft.id,"draft_number":draft.draft_number,"batch_id":draft.batch_id,"status":draft.status,"remark":draft.remark,"items":[{"row_no":i.row_no,"stock_code":i.stock_code,"order_item_id":i.order_item_id,"delivery_qty":i.delivery_qty,"warning":i.warning or ""} for i in items]}
+    return {"draft_id":draft.id,"draft_number":draft.draft_number,"batch_id":draft.batch_id,"status":draft.status,"remark":draft.remark,"items":[{"item_id":i.id,"import_item_id":i.import_item_id,"row_no":i.row_no,"stock_code":i.stock_code,"order_item_id":i.order_item_id,"delivery_qty":i.delivery_qty,"warning":i.warning or "","mobile_pick_status":i.mobile_pick_status,"mobile_picked_qty":i.mobile_picked_qty,"mobile_pick_note":i.mobile_pick_note or "","mobile_picked_at":i.mobile_picked_at.isoformat() if i.mobile_picked_at else None} for i in items]}
 
 
 def batch_dict(db,batch):
     items=db.scalars(select(TianhuaPreDeliveryImportItem).where(TianhuaPreDeliveryImportItem.batch_id==batch.id).order_by(TianhuaPreDeliveryImportItem.row_no)).all()
     draft=db.scalar(select(TianhuaPreDeliveryDraft).where(TianhuaPreDeliveryDraft.batch_id==batch.id))
-    return {"batch_id":batch.id,"batch_number":batch.batch_number,"customer_id":batch.customer_id,"customer_name":batch.customer_name,"status":batch.status,"total_rows":len(items),"draft":draft_dict(db,draft) if draft else None,"items":[item_dict(i) for i in items]}
+    draft_items = {
+        value.import_item_id: value
+        for value in db.scalars(
+            select(TianhuaPreDeliveryDraftItem).where(
+                TianhuaPreDeliveryDraftItem.draft_id == draft.id
+            )
+        ).all()
+    } if draft else {}
+    return {"batch_id":batch.id,"batch_number":batch.batch_number,"customer_id":batch.customer_id,"customer_name":batch.customer_name,"status":batch.status,"total_rows":len(items),"draft":draft_dict(db,draft) if draft else None,"items":[item_dict(i,draft_items.get(i.id)) for i in items]}
 
 
 def create_batch(db,content,filename,user_id):
@@ -133,7 +141,8 @@ def create_batch(db,content,filename,user_id):
     db.commit(); db.refresh(batch); return batch
 
 
-def _selection(db,batch_id,submitted):
+def _selection(db,batch_id,submitted,zero_allowed=None):
+    zero_allowed=zero_allowed or set()
     stored={i.row_no:i for i in db.scalars(select(TianhuaPreDeliveryImportItem).where(TianhuaPreDeliveryImportItem.batch_id==batch_id)).all()}; result=[]; seen=set()
     for line in submitted:
         row_no=int(line["row_no"])
@@ -146,7 +155,7 @@ def _selection(db,batch_id,submitted):
         if not item.selected: continue
         if item.status not in GENERATABLE: raise ValueError(f"第 {item.row_no} 行为{STATUS_LABELS.get(item.status,item.status)}，不允许生成")
         qty=int(line.get("final_delivery_qty") or 0)
-        if qty<=0 or item.order_item_id is None or item.product_id is None: raise ValueError(f"第 {item.row_no} 行数据不完整")
+        if qty<0 or (qty==0 and item.id not in zero_allowed) or item.order_item_id is None or item.product_id is None: raise ValueError(f"第 {item.row_no} 行数据不完整")
         if item.system_pending_qty is not None and qty>item.system_pending_qty: raise ValueError(f"第 {item.row_no} 行数量超过系统未送数量")
         item.final_delivery_qty=qty; result.append((item,qty))
     if not result: raise ValueError("至少选择一条可生成明细")
@@ -159,12 +168,29 @@ def save_draft(db,batch,submitted,remark,user_id,update_existing=False):
         raise RuntimeError("该批次已生成草稿，不能重复生成")
     if draft and not update_existing: raise RuntimeError(f"该批次已生成草稿 {draft.draft_number}，不能重复生成")
     if not draft and update_existing: raise ValueError("该批次尚未生成草稿")
-    selected=_selection(db,batch.id,submitted)
+    previous={}
+    if draft:
+        previous={
+            value.import_item_id:value
+            for value in db.scalars(
+                select(TianhuaPreDeliveryDraftItem).where(
+                    TianhuaPreDeliveryDraftItem.draft_id==draft.id
+                )
+            ).all()
+        }
+    zero_allowed={
+        import_item_id
+        for import_item_id,value in previous.items()
+        if value.mobile_pick_status=="no_stock"
+    }
+    selected=_selection(db,batch.id,submitted,zero_allowed)
     if draft: db.execute(delete(TianhuaPreDeliveryDraftItem).where(TianhuaPreDeliveryDraftItem.draft_id==draft.id))
     else:
         draft=TianhuaPreDeliveryDraft(draft_number=f"THYSH-{datetime.now():%Y%m%d-%H%M%S}-{batch.id}",batch_id=batch.id,customer_id=batch.customer_id,created_by=user_id)
         db.add(draft); db.flush(); batch.status="draft_created"
     draft.remark=f"来源：天华预送货图片导入，批次 ID：{batch.id}"+(f"；{remark.strip()}" if remark and remark.strip() else "")
     draft.updated_at=datetime.utcnow()
-    for item,qty in selected: db.add(TianhuaPreDeliveryDraftItem(draft_id=draft.id,import_item_id=item.id,row_no=item.row_no,stock_code=item.stock_code or "",product_id=item.product_id,order_item_id=item.order_item_id,delivery_qty=qty,warning=item.warning))
+    for item,qty in selected:
+        old=previous.get(item.id)
+        db.add(TianhuaPreDeliveryDraftItem(draft_id=draft.id,import_item_id=item.id,row_no=item.row_no,stock_code=item.stock_code or "",product_id=item.product_id,order_item_id=item.order_item_id,delivery_qty=qty,warning=item.warning,mobile_pick_status=old.mobile_pick_status if old else "pending",mobile_picked_qty=old.mobile_picked_qty if old else None,mobile_pick_note=old.mobile_pick_note if old else None,mobile_picked_at=old.mobile_picked_at if old else None,mobile_picked_by=old.mobile_picked_by if old else None))
     db.commit(); db.refresh(draft); return draft

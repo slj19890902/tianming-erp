@@ -61,7 +61,14 @@ class TianhuaPreDeliveryDraft(Base):
 
 class TianhuaPreDeliveryDraftItem(Base):
     __tablename__ = "tianhua_pre_delivery_draft_items"
-    __table_args__ = (CheckConstraint("delivery_qty>0"), UniqueConstraint("draft_id", "import_item_id"))
+    __table_args__ = (
+        CheckConstraint("delivery_qty>=0"),
+        CheckConstraint(
+            "mobile_pick_status IN ('pending','picked','no_stock','partial')",
+            name="ck_tianhua_draft_item_mobile_pick_status",
+        ),
+        UniqueConstraint("draft_id", "import_item_id"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     draft_id: Mapped[int] = mapped_column(ForeignKey("tianhua_pre_delivery_drafts.id", ondelete="CASCADE"), nullable=False)
     import_item_id: Mapped[int] = mapped_column(ForeignKey("tianhua_pre_delivery_import_items.id"), nullable=False)
@@ -71,4 +78,9 @@ class TianhuaPreDeliveryDraftItem(Base):
     order_item_id: Mapped[int] = mapped_column(ForeignKey("sales_order_items.id"), nullable=False)
     delivery_qty: Mapped[int] = mapped_column(Integer, nullable=False)
     warning: Mapped[str | None] = mapped_column(Text)
+    mobile_pick_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    mobile_picked_qty: Mapped[int | None] = mapped_column(Integer)
+    mobile_pick_note: Mapped[str | None] = mapped_column(String(500))
+    mobile_picked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    mobile_picked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)

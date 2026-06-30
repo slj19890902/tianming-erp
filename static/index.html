@@ -2471,24 +2471,33 @@
               </div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>图片数量</th><th>系统未送数量</th><th>建议送货数量</th><th>产品名称</th><th>订单号</th><th>风险提示</th><th>操作</th></tr></thead>
+                  <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>图片数量</th><th>系统未送数量</th><th>建议送货数量</th><th>产品名称</th><th>订单号</th><th>手机拿货状态</th><th>实际拿货数量</th><th>拿货备注</th><th>拿货时间</th><th>风险提示</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr v-for="row in tianhuaPreimport.items" :key="row.row_no" :class="'tianhua-row-'+row.status">
                       <td><input type="checkbox" v-model="row.selected" :disabled="!isTianhuaRowGeneratable(row)" :title="tianhuaRowDisabledReason(row)" /></td>
                       <td>{{ row.status_label }}</td><td>{{ row.stock_code || "-" }}</td><td>{{ row.image_qty ?? "-" }}</td><td>{{ row.system_pending_qty ?? "-" }}</td>
                       <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" :disabled="!isTianhuaRowGeneratable(row)" /></td>
-                      <td>{{ row.product_name || "-" }}</td><td>{{ row.order_no || "-" }}</td><td>{{ row.warning || "-" }}</td>
+                      <td>{{ row.product_name || "-" }}</td><td>{{ row.order_no || "-" }}</td>
+                      <td>{{ tianhuaPickStatusLabel(row.mobile_pick_status) }}</td><td>{{ row.mobile_picked_qty ?? "-" }}</td><td>{{ row.mobile_pick_note || "-" }}</td><td>{{ row.mobile_picked_at ? formatTime(row.mobile_picked_at) : "-" }}</td><td>{{ row.warning || "-" }}</td>
                       <td class="toolbar-group"><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
                     </tr>
-                    <tr v-if="!tianhuaPreimport.items.length"><td colspan="10" class="empty">上传图片并开始识别后，在这里显示预处理结果。</td></tr>
+                    <tr v-if="!tianhuaPreimport.items.length"><td colspan="14" class="empty">上传图片并开始识别后，在这里显示预处理结果。</td></tr>
                   </tbody>
                 </table>
               </div>
               <div class="form-grid" style="margin-top:12px"><div class="field wide"><label>草稿备注</label><input class="input" v-model.trim="tianhuaPreimport.remark" /></div></div>
               <div class="toolbar-group" style="justify-content:flex-end">
+                <button v-if="tianhuaPreimport.draft" class="btn" :disabled="loading" @click="loadTianhuaBatch">刷新拿货状态</button>
+                <button v-if="tianhuaPreimport.draft" class="btn primary" :disabled="loading" @click="generateTianhuaMobileToken">生成手机拿货二维码</button>
                 <button class="btn success" :disabled="!tianhuaSelectedCount() || loading" @click="createTianhuaDraft">{{ tianhuaPreimport.draft ? "保存草稿修改" : "生成送货单草稿" }}</button>
               </div>
               <div v-if="tianhuaPreimport.draft" class="status green" style="display:block;margin-top:10px">草稿 {{ tianhuaPreimport.draft.draft_number }} 已保存，状态为 draft；未出库、未发货。</div>
+              <div v-if="tianhuaPreimport.mobileToken" class="panel" style="margin-top:12px;text-align:center">
+                <div class="section-title">手机拿货二维码</div>
+                <img :src="tianhuaPreimport.mobileToken.qr_data_url" alt="天华手机拿货二维码" style="width:280px;max-width:90%;border:1px solid var(--line);border-radius:12px" />
+                <div style="margin-top:8px"><a :href="tianhuaPreimport.mobileToken.url" target="_blank">{{ tianhuaPreimport.mobileToken.url }}</a></div>
+                <div class="muted" style="margin-top:6px">24 小时内有效，仅可操作当前天华草稿。</div>
+              </div>
             </div>
             <div v-else-if="modal.type === 'statement'">
               <div class="form-grid">
@@ -2786,7 +2795,8 @@
         admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "deliveries", "finance", "system"],
         finance: ["dashboard", "customers", "orders", "finance"],
         sales: ["dashboard", "customers", "orders", "requisition", "deliveries"],
-        workshop: ["dashboard", "orders", "incoming", "deliveries"]
+        workshop: ["dashboard", "orders", "incoming", "deliveries"],
+        delivery_picker: []
       };
       const blankCustomer = () => ({
         id: null, customer_number: 1, customer_code: "", name: "",
@@ -2923,7 +2933,7 @@
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {}, remarks: {} },
-            tianhuaPreimport: { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, remark:"天华邮件截图导入" },
+            tianhuaPreimport: { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -3212,7 +3222,7 @@
           });
         },
         methods: {
-          roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",workshop:"车间"})[role] || role; },
+          roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",workshop:"车间",delivery_picker:"送货拿货员"})[role] || role; },
           navIcon(key) {
             const icons = {
               dashboard: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
@@ -5441,7 +5451,7 @@
             this.modal = { type:"delivery", title:"新增送货单" };
           },
           openTianhuaPreimport() {
-            this.tianhuaPreimport = { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, remark:"天华邮件截图导入" };
+            this.tianhuaPreimport = { file:null, fileName:"", batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };
             this.modal = { type:"tianhuaPreimport", title:"导入天华预送货" };
           },
           onTianhuaImageSelected(event) {
@@ -5451,6 +5461,7 @@
             this.tianhuaPreimport.batchId = null;
             this.tianhuaPreimport.items = [];
             this.tianhuaPreimport.draft = null;
+            this.tianhuaPreimport.mobileToken = null;
           },
           async startTianhuaRecognition() {
             if (!this.tianhuaPreimport.file) return this.showToast("请先选择天华预送货截图", true);
@@ -5503,8 +5514,30 @@
           toggleAllTianhuaRows(checked) {
             this.selectTianhuaRows(checked ? "all" : "none");
           },
+          tianhuaPickStatusLabel(status) {
+            return ({pending:"待拿货",picked:"已拿货",no_stock:"没货",partial:"部分拿货"})[status] || "待拿货";
+          },
+          async loadTianhuaBatch() {
+            if (!this.tianhuaPreimport.batchId) return;
+            this.loading = true;
+            try {
+              const {data} = await axios.get(`/api/deliveries/tianhua-preimport/${this.tianhuaPreimport.batchId}`);
+              this.tianhuaPreimport.items = data.items || [];
+              this.tianhuaPreimport.draft = data.draft || null;
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async generateTianhuaMobileToken() {
+            this.loading = true;
+            try {
+              const {data} = await axios.post(`/api/deliveries/tianhua-preimport/${this.tianhuaPreimport.batchId}/mobile-token`);
+              this.tianhuaPreimport.mobileToken = data;
+              this.showToast("手机拿货二维码已生成，24 小时内有效");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
           async createTianhuaDraft() {
-            const payload = {remark:this.tianhuaPreimport.remark,items:this.tianhuaPreimport.items.map(row => ({item_id:row.item_id,row_no:row.row_no,selected:!!row.selected,final_delivery_qty:Number(row.final_delivery_qty || 0) || null}))};
+            const payload = {remark:this.tianhuaPreimport.remark,items:this.tianhuaPreimport.items.map(row => ({item_id:row.item_id,row_no:row.row_no,selected:!!row.selected,final_delivery_qty:row.final_delivery_qty===null || row.final_delivery_qty===undefined ? null : Number(row.final_delivery_qty)}))};
             this.loading = true;
             try {
               const updating = !!this.tianhuaPreimport.draft;

@@ -25,7 +25,10 @@ from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.system import router as system_router
-from app.api.tianhua_pre_delivery import router as tianhua_pre_delivery_router
+from app.api.tianhua_pre_delivery import (
+    mobile_router as tianhua_mobile_router,
+    router as tianhua_pre_delivery_router,
+)
 from app.core.config import load_settings
 
 
@@ -108,6 +111,18 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/tianhua-pick" for route in application.routes):
+        mobile_pick_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_tianhua_pick.html"
+        )
+        application.add_api_route(
+            "/mobile/tianhua-pick",
+            lambda: FileResponse(mobile_pick_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
 
     application.router.routes[:] = [
         route
@@ -180,6 +195,12 @@ def create_app() -> FastAPI:
             tianhua_pre_delivery_router,
             prefix="/api/deliveries",
             tags=["tianhua-pre-delivery"],
+        )
+    if not any(route.path == "/api/mobile/tianhua-pick" for route in application.routes):
+        application.include_router(
+            tianhua_mobile_router,
+            prefix="/api/mobile",
+            tags=["tianhua-mobile-pick"],
         )
     if not any(
         route.path == "/api/orders/items/{item_id}/force_close"

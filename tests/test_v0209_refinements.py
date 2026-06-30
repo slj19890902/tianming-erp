@@ -42,13 +42,31 @@ def test_requisition_ui_prioritizes_supplier_and_purchase_quantity():
     assert "客户 / 存货编码 / 产品" in INDEX
     assert "<th>需求小片</th>" not in INDEX
     assert "purchase-qty-cell" in INDEX
+    assert "pieces-per-box-cell" in INDEX
+    assert "{{ m.pieces_per_box }}片" in INDEX
+    assert "{{ line.pieces_per_box }}片" in INDEX
+    assert "m.material_display" in INDEX
+    assert "line.material_display" in INDEX
 
 
 def test_supplier_purchase_print_uses_legacy_columns_without_total():
-    for label in ("序号", "纸板规格（mm）", "压线", "材质", "数量", "报料备注"):
+    for label in ("序号", "纸板长宽（mm）", "压线(mm）", "材质/楞型", "数量", "报料备注"):
         assert label in PRINT
     assert "苏州工业园区天明纸品包装厂" in PRINT
     assert "采购单" in PRINT
     assert "存货编码 / 产品" not in PRINT
     assert "总张数" not in PRINT
     assert "row.specification" in PRINT
+    assert 'class="title"' in PRINT
+    assert 'class="head"' in PRINT
+    assert PRINT.index('class="title"') < PRINT.index('class="head"')
+    assert "data.sender?.address" in PRINT
+    assert "data.sender?.phone" in PRINT
+
+
+def test_supplier_purchase_preview_uses_company_sender_and_new_columns():
+    for label in ("纸板长宽（mm）", "压线(mm）", "材质/楞型"):
+        assert label in INDEX
+    assert "modal.data.sender?.company_name" in INDEX
+    assert "modal.data.sender?.address" in INDEX
+    assert "modal.data.sender?.phone" in INDEX

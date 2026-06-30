@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_db
 from app.models.audit import OperationLog
+from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.material import Material
 from app.models.order import Order, OrderItem
@@ -83,6 +84,15 @@ def _format_supplier_material(
     if code and flute:
         return f"{code} / {flute}"
     return code or flute
+
+
+def _company_sender(db: Session) -> dict:
+    company = db.get(CompanyConfig, 1)
+    return {
+        "company_name": company.company_name if company else "",
+        "address": company.address if company else None,
+        "phone": company.phone if company else None,
+    }
 
 
 class RequisitionLinePayload(BaseModel):
@@ -316,6 +326,7 @@ def pending_requisitions(
     for item, order, customer, product in rows:
         if is_history_order_number(order.order_number):
             continue
+        material = db.get(Material, item.material_id) if item.material_id else None
         pieces_per_box = _pieces_per_box(item)
         cutting_mode = item.special_process if item.special_process in CUTTING_MODE_FACTORS else DEFAULT_CUTTING_MODE
         required_piece_qty = _required_piece_qty(item.quantity, pieces_per_box)
@@ -338,6 +349,12 @@ def pending_requisitions(
                 "product_name": item.snapshot_product_name,
                 "specification": item.snapshot_spec,
                 "material": item.snapshot_material,
+                "material_display": _format_supplier_material(
+                    material.code if material else item.snapshot_material,
+                    item.layer_count or (material.layer_count if material else None),
+                    item.flute_type or (material.flute_type if material else None),
+                    fallback_text=item.snapshot_material,
+                ),
                 "quantity": item.quantity,
                 "delivery_date": order.delivery_date,
                 "inventory_deducted_qty": item.inventory_deducted_qty,
@@ -836,6 +853,7 @@ def merge_suggestions(
             continue
         if not (item.snapshot_report_length_mm and item.snapshot_report_width_mm):
             continue
+        material = db.get(Material, item.material_id) if item.material_id else None
         pieces_per_box = _pieces_per_box(item)
         groups[_merge_key(item)].append({
             "item_id": item.id,
@@ -845,6 +863,12 @@ def merge_suggestions(
             "product_name": item.snapshot_product_name,
             "specification": item.snapshot_spec,
             "material_id": item.material_id,
+            "material_display": _format_supplier_material(
+                material.code if material else item.snapshot_material,
+                item.layer_count or (material.layer_count if material else None),
+                item.flute_type or (material.flute_type if material else None),
+                fallback_text=item.snapshot_material,
+            ),
             "snapshot_supplier_name": item.snapshot_supplier_name,
             "layer_count": item.layer_count,
             "flute_type": item.flute_type,
@@ -864,8 +888,9 @@ def merge_suggestions(
         if len(members) < 2:
             continue
         supplier_name, material_id, layer_count, flute_type, report_len, report_width, pieces_per_box, splice_mode, crease_type, crease_left, crease_middle, crease_right = key
+        material = db.get(Material, material_id) if material_id else None
         crease_display = (
-            f"{crease_left}?{crease_middle}?{crease_right}"
+            f"{crease_left}+{crease_middle}+{crease_right}"
             if crease_type == "压线" and crease_middle
             else crease_type or "-"
         )
@@ -873,6 +898,12 @@ def merge_suggestions(
             "key": str(key),
             "supplier_name": supplier_name,
             "material_id": material_id,
+            "material_display": _format_supplier_material(
+                material.code if material else None,
+                layer_count or (material.layer_count if material else None),
+                flute_type or (material.flute_type if material else None),
+                fallback_text=material.paper_composition if material else None,
+            ),
             "layer_count": layer_count,
             "flute_type": flute_type,
             "report_length_mm": report_len,
@@ -977,6 +1008,7 @@ def print_batch(
         "requisition_number": batch.requisition_number,
         "requisition_date": batch.requisition_date,
         "supplier_name": batch.supplier_name,
+        "sender": _company_sender(db),
         "items": print_items,
         "total_quantity": sum(row.requisition_qty for row, *_ in rows),
     }
@@ -1042,6 +1074,7 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "id": order.id,
         "order_number": order.order_number,
         "supplier_name": order.supplier_name,
+        "sender": _company_sender(db),
         "material_id": order.material_id,
         "material_code": _clean_supplier_material_code(material_code, material_layer_count),
         "material_display": _format_supplier_material(

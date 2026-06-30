@@ -7,9 +7,10 @@
   <style>
     *{box-sizing:border-box}body{margin:0;background:#eef2f5;color:#111;font:14px/1.35 "Microsoft YaHei",sans-serif}
     .sheet{width:900px;margin:18px auto;padding:20px 24px;background:#fff;box-shadow:0 4px 18px #0002}
-    .head{display:grid;grid-template-columns:1fr 1.5fr 1fr;align-items:start;margin-bottom:14px}.title{text-align:center}.title h1{margin:0;font-size:21px}.title div{margin-top:3px;font-size:21px;letter-spacing:8px}.meta{text-align:right;line-height:1.7}
+    .title{text-align:center}.title h1{margin:0;font-size:21px}.title div{margin-top:3px;font-size:21px;letter-spacing:8px}
+    .head{display:flex;justify-content:space-between;align-items:flex-end;margin:8px 0 10px}.meta{text-align:right;line-height:1.7}
     table{width:100%;border-collapse:collapse}th,td{border:1px solid #111;padding:6px;text-align:center}th{background:#f3f4f6}
-    .left{text-align:left}.actions{text-align:center;margin:15px}
+    .left{text-align:left}.footer{margin-top:12px;text-align:right;font-size:12px;line-height:1.7}.actions{text-align:center;margin:15px}
     button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700}
     @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions{display:none}@page{size:A4 landscape;margin:10mm}}
   </style>
@@ -17,8 +18,10 @@
 <body>
   <div class="actions"><button onclick="window.print()">打印 / 保存为 PDF</button></div>
   <main class="sheet">
-    <div class="head"><div id="supplier"></div><div class="title"><h1>苏州工业园区天明纸品包装厂</h1><div>采购单</div></div><div class="meta"><div id="number"></div><div id="date"></div></div></div>
-    <table><thead><tr><th>序号</th><th>纸板规格（mm）</th><th>压线</th><th>材质</th><th>数量</th><th>报料备注</th></tr></thead><tbody id="rows"></tbody></table>
+    <div class="title"><h1 id="company-name">苏州工业园区天明纸品包装厂</h1><div>采购单</div></div>
+    <div class="head"><div id="supplier"></div><div class="meta"><div id="number"></div><div id="date"></div></div></div>
+    <table><thead><tr><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead><tbody id="rows"></tbody></table>
+    <div id="company-footer" class="footer"></div>
   </main>
   <script>
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[char]));
@@ -36,6 +39,7 @@
         return;
       }
       const data = await response.json();
+      document.getElementById("company-name").textContent = data.sender?.company_name || "苏州工业园区天明纸品包装厂";
       number.textContent = `NO：${data.requisition_number}`;
       date.textContent = `日期：${shortDate(data.requisition_date)}`;
       supplier.textContent = `TO：${data.supplier_name || "未指定供应商"}`;
@@ -49,6 +53,10 @@
           <td class="left">${escapeHtml(row.report_remark || "")}</td>
         </tr>
       `).join("");
+      const footerLines = [];
+      if (data.sender?.address) footerLines.push(`地址：${escapeHtml(data.sender.address)}`);
+      if (data.sender?.phone) footerLines.push(`电话：${escapeHtml(data.sender.phone)}`);
+      document.getElementById("company-footer").innerHTML = footerLines.join("<br>");
     })();
   </script>
 </body>

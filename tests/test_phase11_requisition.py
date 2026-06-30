@@ -151,7 +151,13 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
             flute_type="E",
             supplier_name="鸣朋",
         )
-        session.add_all([supplier_a, supplier_b])
+        supplier_a_alt = Material(
+            code="BC14C",
+            layer_count=5,
+            flute_type="AB",
+            supplier_name="嘉林亿",
+        )
+        session.add_all([supplier_a, supplier_b, supplier_a_alt])
         session.flush()
         item.material_id = supplier_a.id
         item.snapshot_material = supplier_a.code
@@ -195,6 +201,7 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
         session.add(supplier_b_item)
         session.commit()
         supplier_a_id = supplier_a.id
+        supplier_a_alt_id = supplier_a_alt.id
         supplier_b_item_id = supplier_b_item.id
 
     with TestClient(app) as client:
@@ -218,13 +225,57 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
         assert changed.status_code == 200, changed.text
         assert changed.json()["supplier_name"] == "嘉林亿"
         assert changed.json()["material_code"] == "A6A"
+        pending_after_supplier_change = client.get("/api/requisition/pending")
+        assert pending_after_supplier_change.status_code == 200
+        counts_after_supplier_change = {
+            row["supplier_name"]: row["count"]
+            for row in pending_after_supplier_change.json()["supplier_counts"]
+        }
+        assert counts_after_supplier_change == {"嘉林亿": 11}
+        changed_row = next(
+            row
+            for row in pending_after_supplier_change.json()["items"]
+            if row["item_id"] == supplier_b_item_id
+        )
+        assert changed_row["requisition_status"] == "未报料"
+        assert changed_row["material_display"] == "A6A / E"
+
+        same_supplier_change = client.put(
+            f"/api/requisition/pending/{supplier_b_item_id}/material",
+            json={
+                "material_id": supplier_a_alt_id,
+                "layer_count": 5,
+                "flute_type": "AB",
+                "sync_product": True,
+            },
+        )
+        assert same_supplier_change.status_code == 200, same_supplier_change.text
+        assert same_supplier_change.json()["supplier_name"] == "嘉林亿"
+        assert same_supplier_change.json()["material_code"] == "BC14C"
+        pending_after_material_change = client.get("/api/requisition/pending")
+        assert pending_after_material_change.status_code == 200
+        same_supplier_row = next(
+            row
+            for row in pending_after_material_change.json()["items"]
+            if row["item_id"] == supplier_b_item_id
+        )
+        assert same_supplier_row["snapshot_supplier_name"] == "嘉林亿"
+        assert same_supplier_row["material_display"] == "BC14C / AB"
+        assert {
+            row["supplier_name"]: row["count"]
+            for row in pending_after_material_change.json()["supplier_counts"]
+        } == {"嘉林亿": 11}
 
     with session_factory() as session:
         changed_item = session.get(OrderItem, supplier_b_item_id)
         changed_product = session.get(Product, changed_item.product_id)
         assert changed_item.snapshot_supplier_name == "嘉林亿"
-        assert changed_item.material_id == supplier_a_id
-        assert changed_product.material_id == supplier_a_id
+        assert changed_item.snapshot_material == "BC14C"
+        assert changed_item.flute_type == "AB"
+        assert changed_item.requisition_status == "未报料"
+        assert changed_item.material_status == "pending"
+        assert changed_item.material_id == supplier_a_alt_id
+        assert changed_product.material_id == supplier_a_alt_id
 
 
 
@@ -455,7 +506,19 @@ def test_history_search_returns_latest_successful_requisition(requisition_app) -
 
 
 def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> None:
-    app, _ = requisition_app
+    from app.models.company_config import CompanyConfig
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        session.add(
+            CompanyConfig(
+                id=1,
+                company_name="测试纸品包装厂",
+                address="测试路88号",
+                phone="0512-12345678",
+            )
+        )
+        session.commit()
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/requisition/batches", json=_batch_payload())
@@ -464,6 +527,11 @@ def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> 
         )
 
     assert response.status_code == 200
+    assert response.json()["sender"] == {
+        "company_name": "测试纸品包装厂",
+        "address": "测试路88号",
+        "phone": "0512-12345678",
+    }
     serialized = str(response.json()).lower()
     for forbidden in ("unit_price", "subtotal", "cost", "amount"):
         assert forbidden not in serialized

@@ -201,6 +201,11 @@ class TestSupplierOrders:
         data = r.json()
         assert data["order_number"].startswith("SRO-")
         assert data["supplier_name"] == "天意纸板厂"
+        assert data["sender"] == {
+            "company_name": "",
+            "address": None,
+            "phone": None,
+        }
         assert data["material_code"] == "A416D"
         assert data["material_display"] == "A416D / AB"
         assert data["total_quantity"] == 8

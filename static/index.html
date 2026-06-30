@@ -437,12 +437,14 @@
         border-right: 2px solid #8fc5f4 !important;
       }
       .purchase-qty-input { width: 82px !important; min-width: 82px !important; font-size: 17px; font-weight: 700; text-align: center; }
+      .pieces-per-box-cell { width: 64px; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
       .supplier-print-sheet { font-family: "SimSun", serif; color: #111; }
-      .supplier-print-head { display: grid; grid-template-columns: 1fr 1.4fr 1fr; align-items: start; margin-bottom: 12px; }
       .supplier-print-title { text-align: center; }
       .supplier-print-title h2 { margin: 0; font-size: 22px; font-weight: 700; }
       .supplier-print-title div { margin-top: 4px; font-size: 20px; letter-spacing: 8px; }
+      .supplier-print-head { display: flex; justify-content: space-between; align-items: flex-end; margin: 8px 0 10px; }
       .supplier-print-meta { text-align: right; line-height: 1.7; }
+      .supplier-print-footer { margin-top: 12px; text-align: right; font-size: 12px; line-height: 1.7; }
       .product-form-row {
         display: grid;
         gap: 10px 12px;
@@ -2349,7 +2351,7 @@
                   <strong>{{ sg.report_width_mm }}×{{ sg.report_length_mm }} mm</strong>
                   <span v-if="sg.crease_type==='压线'" class="status blue">压线：{{ sg.crease_left_mm }}+{{ sg.crease_middle_mm }}+{{ sg.crease_right_mm }}</span>
                   <span v-else-if="sg.crease_type" class="status orange">{{ sg.crease_type }}</span>
-                  <span class="muted">{{ sg.supplier_name || '未设供应商' }} / {{ sg.layer_count || '' }}{{ sg.flute_type || '-' }}</span>
+                  <span class="muted">{{ sg.supplier_name || '未设供应商' }}｜{{ sg.material_display || '-' }}</span>
                   <span class="status green">{{ sg.member_count }}款</span>
                   <div style="display:flex;align-items:center;gap:6px">
                     <label style="font-size:12px;white-space:nowrap">库存抵扣：</label>
@@ -2364,13 +2366,14 @@
                 </div>
                 <div v-if="mergeSuggestionsExpanded[sgIndex]">
                   <table style="font-size:12px">
-                    <thead><tr><th>客户 / 存货编码</th><th>产品 / 规格</th><th>订单数量</th><th>每箱片数</th><th>采购张数</th><th>交期</th><th>操作</th></tr></thead>
+                    <thead><tr><th>客户 / 存货编码</th><th>产品 / 规格</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>采购张数</th><th>交期</th><th>操作</th></tr></thead>
                     <tbody>
                       <tr v-for="m in sg.members" :key="m.item_id">
                         <td>{{ shortCustomerName(m.customer_name) }}<br><strong>{{ m.product_code }}</strong></td>
                         <td class="requisition-product-cell"><div class="requisition-product-name" :title="m.product_name">{{ m.product_name }}</div><span class="muted">{{ m.specification || "-" }}</span></td>
+                        <td>{{ m.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ m.material_display || '-' }}</span></td>
                         <td>{{ m.quantity }}</td>
-                        <td>{{ m.pieces_per_box }}</td>
+                        <td class="pieces-per-box-cell">{{ m.pieces_per_box }}片</td>
                         <td><strong>{{ m.requisition_qty }}</strong></td>
                         <td>{{ m.delivery_date || '-' }}</td>
                         <td><button class="btn small" @click="openRequisitionMaterialChange(m)">更换供应商/材质</button></td>
@@ -2383,15 +2386,19 @@
             <!-- 供应商报料单打印预览 -->
             <div v-else-if="modal.type === 'supplierOrderPrint' && modal.data" style="max-width:900px;margin:0 auto">
               <div id="supplier-order-print-area" class="supplier-print-sheet" style="font-size:14px;padding:20px">
+                <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || "苏州工业园区天明纸品包装厂" }}</h2><div>采购单</div></div>
                 <div class="supplier-print-head">
                   <div><strong>TO：{{ modal.data.supplier_name || "未指定供应商" }}</strong></div>
-                  <div class="supplier-print-title"><h2>苏州工业园区天明纸品包装厂</h2><div>采购单</div></div>
                   <div class="supplier-print-meta"><div>NO：{{ modal.data.order_number }}</div><div>日期：{{ supplierPrintDate(modal.data.created_at) }}</div></div>
                 </div>
                 <table style="width:100%;border-collapse:collapse;font-size:14px">
-                  <thead><tr style="background:#f0f0f0"><th>序号</th><th>纸板规格（mm）</th><th>压线</th><th>材质</th><th>数量</th><th>报料备注</th></tr></thead>
+                  <thead><tr style="background:#f0f0f0"><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead>
                   <tbody><tr><td>1</td><td>{{ modal.data.report_length_mm }}×{{ modal.data.report_width_mm }}</td><td>{{ modal.data.crease_display === "-" ? "" : modal.data.crease_display }}</td><td>{{ modal.data.material_display || modal.data.material_code || '-' }}</td><td><strong>{{ modal.data.requisition_qty }}</strong></td><td style="text-align:left">{{ supplierOrderRemark(modal.data) }}</td></tr></tbody>
                 </table>
+                <div v-if="modal.data.sender?.address || modal.data.sender?.phone" class="supplier-print-footer">
+                  <div v-if="modal.data.sender?.address">地址：{{ modal.data.sender.address }}</div>
+                  <div v-if="modal.data.sender?.phone">电话：{{ modal.data.sender.phone }}</div>
+                </div>
               </div>
               <div style="text-align:center;margin-top:12px">
                 <button class="btn primary" @click="printSupplierOrderArea()">打印</button>
@@ -2414,7 +2421,7 @@
             </div>
             <div v-else-if="modal.type === 'requisition'">
               <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
-              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>订单数量</th><th>每箱片数</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.quantity }}</td><td>{{ line.pieces_per_box }}</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
+              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
               <div class="muted" style="margin-top:8px">订单数量仍是成品数量；采购张数是本次向供应商报料和入库的主数量。</div>
             </div>
             <div v-else-if="modal.type === 'receipt'">
@@ -5304,6 +5311,11 @@
             this.requisitionForm = { supplier_name:suppliers[0] || "", items:rows.map(row => ({
               order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_name:row.customer_name,
               product_code:row.product_code, product_name:row.product_name, specification:row.specification || "", quantity:Number(row.quantity || 0),
+              material_id:row.material_id || null,
+              snapshot_supplier_name:row.snapshot_supplier_name || "",
+              material_display:row.material_display || row.material || "",
+              layer_count:row.layer_count || null,
+              flute_type:row.flute_type || null,
               inventory_deducted_qty:Number(row.inventory_deducted_qty || 0),
               requisition_qty:Number(row.requisition_qty ?? 0),
               cardboard_len:row.suggested_cardboard_len, cardboard_width:row.suggested_cardboard_width,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import RoleChecker, get_db
 from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
@@ -40,6 +42,47 @@ CUTTING_MODE_FACTORS = {
 }
 DEFAULT_CUTTING_MODE = "一开一"
 SPECIAL_PROCESSES = {"无", "大做小", "双拼", "多拼"}
+SUPPLIER_MATERIAL_FLUTES = {"AB", "E", "BE", "B", "C", "A"}
+
+
+def _clean_supplier_material_code(value: str | None, layer_count: int | None) -> str:
+    """清洗供应商报料材质代码，去掉楞型和历史组合尾巴。"""
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return ""
+    tokens = re.findall(r"[A-Z0-9]+", raw)
+    candidates = [token for token in tokens if any(char.isalpha() for char in token)]
+    if not candidates:
+        return ""
+    # AB/BE、B/E 等只有楞型的组合不是材质代码。
+    if len(candidates) > 1 and all(token in SUPPLIER_MATERIAL_FLUTES for token in candidates):
+        return ""
+    code = candidates[0]
+    expected_length = 5 if layer_count == 5 else 3 if layer_count == 3 else None
+    return code[:expected_length] if expected_length else code
+
+
+def _clean_supplier_flute(value: str | None) -> str:
+    flute = re.sub(r"\s+", "", str(value or "").strip().upper())
+    return flute if flute in SUPPLIER_MATERIAL_FLUTES else ""
+
+
+def _format_supplier_material(
+    material_code: str | None,
+    layer_count: int | None,
+    flute_type: str | None,
+    fallback_text: str | None = None,
+) -> str:
+    """供应商采购报料单材质统一显示为“材质代码 / 楞型”."""
+    code = _clean_supplier_material_code(material_code, layer_count)
+    if not code and fallback_text:
+        code = _clean_supplier_material_code(fallback_text, layer_count)
+        if not code:
+            code = str(fallback_text).strip()
+    flute = _clean_supplier_flute(flute_type)
+    if code and flute:
+        return f"{code} / {flute}"
+    return code or flute
 
 
 class RequisitionLinePayload(BaseModel):
@@ -757,8 +800,14 @@ def print_batch(
         select(
             RequisitionItem,
             OrderItem.snapshot_production_notes.label("production_notes"),
+            OrderItem.layer_count.label("order_layer_count"),
+            OrderItem.flute_type.label("order_flute_type"),
+            Material.code.label("material_code"),
+            Material.layer_count.label("material_layer_count"),
+            Material.flute_type.label("material_flute_type"),
         )
         .outerjoin(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .outerjoin(Material, Material.id == OrderItem.material_id)
         .where(
             RequisitionItem.requisition_id == batch.id,
             RequisitionItem.status == "有效",
@@ -774,16 +823,34 @@ def print_batch(
             {
                 "product_code": row.product_code_snapshot,
                 "product_name": row.product_name_snapshot,
-                "material": row.material_snapshot,
+                "material": _format_supplier_material(
+                    material_code or row.material_snapshot,
+                    order_layer_count or material_layer_count,
+                    order_flute_type or material_flute_type,
+                    fallback_text=row.material_snapshot,
+                ),
+                "material_code": _clean_supplier_material_code(
+                    material_code or row.material_snapshot,
+                    order_layer_count or material_layer_count,
+                ),
+                "flute_type": _clean_supplier_flute(order_flute_type or material_flute_type),
                 "specification": f"{_plain(row.cardboard_len)}?{_plain(row.cardboard_width)}",
                 "quantity": row.requisition_qty,
                 "special_process": row.special_process,
                 "cutting_mode": row.special_process,
                 "production_notes": production_notes,
             }
-            for row, production_notes in rows
+            for (
+                row,
+                production_notes,
+                order_layer_count,
+                order_flute_type,
+                material_code,
+                material_layer_count,
+                material_flute_type,
+            ) in rows
         ],
-        "total_quantity": sum(row.requisition_qty for row, _ in rows),
+        "total_quantity": sum(row.requisition_qty for row, *_ in rows),
     }
 
 
@@ -833,7 +900,11 @@ def _supplier_order_number(db: Session) -> str:
     return f"{prefix}{count + 1:04d}"
 
 
-def _supplier_order_dict(order: SupplierRequisitionOrder) -> dict:
+def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
+    material = db.get(Material, order.material_id) if order.material_id else None
+    material_code = material.code if material else None
+    material_layer_count = order.layer_count or (material.layer_count if material else None)
+    material_flute_type = order.flute_type or (material.flute_type if material else None)
     crease_display = (
         f"{order.crease_left_mm}+{order.crease_middle_mm}+{order.crease_right_mm}"
         if order.crease_type == "压线" and order.crease_middle_mm
@@ -844,8 +915,15 @@ def _supplier_order_dict(order: SupplierRequisitionOrder) -> dict:
         "order_number": order.order_number,
         "supplier_name": order.supplier_name,
         "material_id": order.material_id,
+        "material_code": _clean_supplier_material_code(material_code, material_layer_count),
+        "material_display": _format_supplier_material(
+            material_code,
+            material_layer_count,
+            material_flute_type,
+            fallback_text=material.paper_composition if material else None,
+        ),
         "layer_count": order.layer_count,
-        "flute_type": order.flute_type,
+        "flute_type": _clean_supplier_flute(material_flute_type),
         "report_length_mm": order.report_length_mm,
         "report_width_mm": order.report_width_mm,
         "crease_type": order.crease_type,
@@ -954,7 +1032,7 @@ def create_supplier_order(
 
     db.commit()
     db.refresh(order)
-    return _supplier_order_dict(order)
+    return _supplier_order_dict(order, db)
 
 
 @router.get("/supplier-orders")
@@ -979,7 +1057,7 @@ def list_supplier_orders(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [_supplier_order_dict(o) for o in orders],
+        "items": [_supplier_order_dict(o, db) for o in orders],
     }
 
 
@@ -992,7 +1070,7 @@ def get_supplier_order(
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="供应商报料单不存在")
-    return _supplier_order_dict(order)
+    return _supplier_order_dict(order, db)
 
 
 @router.put("/supplier-orders/{order_id}/void")
@@ -1022,4 +1100,4 @@ def void_supplier_order(
 
     db.commit()
     db.refresh(order)
-    return _supplier_order_dict(order)
+    return _supplier_order_dict(order, db)

@@ -1219,14 +1219,14 @@
               <!-- 供应商报料单列表 -->
               <data-panel v-else-if="requisitionTab==='supplierOrders'" :empty="!supplierOrders.length">
                 <table>
-                  <thead><tr><th>报料单号</th><th>供应商</th><th>规格(宽×长)</th><th>压线</th><th>楞型</th><th>总数量</th><th>库存抵扣</th><th>实际报料数</th><th>状态</th><th>日期</th><th>操作</th></tr></thead>
+                  <thead><tr><th>报料单号</th><th>供应商</th><th>规格(宽×长)</th><th>压线</th><th>材质</th><th>总数量</th><th>库存抵扣</th><th>实际报料数</th><th>状态</th><th>日期</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr v-for="so in supplierOrders" :key="so.id" :class="{'row-voided': so.status==='voided'}">
                       <td><strong>{{ so.order_number }}</strong></td>
                       <td>{{ so.supplier_name || '-' }}</td>
                       <td>{{ so.report_width_mm && so.report_length_mm ? so.report_width_mm + '×' + so.report_length_mm + ' mm' : '-' }}</td>
                       <td style="font-size:12px">{{ so.crease_display }}</td>
-                      <td>{{ so.layer_count || '' }}{{ so.flute_type || '' }}</td>
+                      <td>{{ so.material_display || so.material_code || '-' }}</td>
                       <td>{{ so.total_quantity }}</td>
                       <td>{{ so.stock_deduction_qty }}</td>
                       <td><strong>{{ so.requisition_qty }}</strong></td>
@@ -2309,7 +2309,7 @@
                 <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
                   <tr>
                     <td style="width:50%;padding:4px 8px;border:1px solid #999"><strong>供应商：</strong>{{ modal.data.supplier_name || '-' }}</td>
-                    <td style="width:50%;padding:4px 8px;border:1px solid #999"><strong>楞型：</strong>{{ modal.data.layer_count || '' }}{{ modal.data.flute_type || '-' }}</td>
+                    <td style="width:50%;padding:4px 8px;border:1px solid #999"><strong>材质：</strong>{{ modal.data.material_display || modal.data.material_code || '-' }}</td>
                   </tr>
                   <tr>
                     <td style="padding:4px 8px;border:1px solid #999"><strong>规格（宽×长）：</strong>{{ modal.data.report_width_mm }}×{{ modal.data.report_length_mm }} mm</td>

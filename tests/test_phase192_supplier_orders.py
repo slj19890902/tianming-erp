@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -10,6 +11,35 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, ".")
 
 import app.models  # noqa: F401
+from app.api.requisition import _format_supplier_material
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "layer_count", "flute_type", "expected"),
+    [
+        ("A416D", 5, "AB", "A416D / AB"),
+        ("BC14C", 5, "AB", "BC14C / AB"),
+        ("CCC-B", 3, "E", "CCC / E"),
+        ("A6A", 3, "E", "A6A / E"),
+        ("A414B-AB/EB", 5, "AB", "A414B / AB"),
+        ("CCC-B", 3, None, "CCC"),
+    ],
+)
+def test_supplier_material_display_rules(raw_code, layer_count, flute_type, expected):
+    assert _format_supplier_material(raw_code, layer_count, flute_type) == expected
+
+
+def test_supplier_material_display_rejects_flute_combinations_as_material_code():
+    displayed = _format_supplier_material("AB/BE", 5, "E")
+    assert displayed == "E"
+    assert "AB/BE" not in displayed
+    assert "B/E" not in displayed
+
+
+def test_supplier_order_frontend_uses_clean_material_display():
+    html = Path("static/index.html").read_text(encoding="utf-8")
+    assert "{{ so.material_display || so.material_code || '-' }}" in html
+    assert "{{ modal.data.material_display || modal.data.material_code || '-' }}" in html
 
 
 @pytest.fixture(scope="module")
@@ -103,12 +133,29 @@ class TestSupplierOrders:
         )
         assert r.status_code == 400
 
-    def test_create_supplier_order(self, client, admin_cookies):
+    def test_create_supplier_order(self, client, admin_cookies, session_factory):
         global _created_id, _created_number
+        from app.models.material import Material
+
+        db = session_factory()
+        try:
+            material = Material(
+                code="A416D",
+                layer_count=5,
+                flute_type="AB",
+                supplier_name="天意纸板厂",
+            )
+            db.add(material)
+            db.commit()
+            db.refresh(material)
+            material_id = material.id
+        finally:
+            db.close()
         payload = {
             "supplier_name": "天意纸板厂",
+            "material_id": material_id,
             "layer_count": 5,
-            "flute_type": "BC",
+            "flute_type": "AB",
             "report_length_mm": 800,
             "report_width_mm": 200,
             "crease_type": "压线",
@@ -154,6 +201,8 @@ class TestSupplierOrders:
         data = r.json()
         assert data["order_number"].startswith("SRO-")
         assert data["supplier_name"] == "天意纸板厂"
+        assert data["material_code"] == "A416D"
+        assert data["material_display"] == "A416D / AB"
         assert data["total_quantity"] == 8
         assert data["stock_deduction_qty"] == 0
         assert data["requisition_qty"] == 6
@@ -171,6 +220,7 @@ class TestSupplierOrders:
         r = client.get("/api/requisition/supplier-orders", cookies=admin_cookies)
         assert r.status_code == 200
         assert r.json()["total"] == 1
+        assert r.json()["items"][0]["material_display"] == "A416D / AB"
 
     def test_get_by_id(self, client, admin_cookies):
         r = client.get(f"/api/requisition/supplier-orders/{_created_id}", cookies=admin_cookies)

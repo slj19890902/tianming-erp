@@ -105,7 +105,7 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
     effective = material_pricing.get_effective_material_price(
         db,
         material=material,
-        flute_type=payload.flute_type or material.flute_type,
+        flute_type=payload.flute_type,
     )
     square_price = effective.get("effective_price")
     if square_price is None:
@@ -196,7 +196,7 @@ def _replace_items(
             material_id=material.id if material else None,
             material_supplier=material.supplier_name if material else None,
             material_code=material.code if material else None,
-            flute_type=payload.flute_type or (material.flute_type if material else None),
+            flute_type=payload.flute_type,
             quantity=payload.quantity,
             estimated_unit_cost=preview["estimated_unit_cost"],
             margin_rate=payload.margin_rate,

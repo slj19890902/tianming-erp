@@ -26,6 +26,13 @@
 - This release does not alter historical orders.
 - This release does not modify `legacy_*` tables.
 - This release does not run any migration against the formal database.
+
+## Material Dictionary Flute Boundary
+
+- 材质字典只保存供应商、层数、材质代码、纸张/克重结构和价格，不绑定楞型。
+- 楞型只保存在常用箱、订单明细、报价明细和报料明细等具体使用场景。
+- 材质重复判断使用“供应商 + 层数 + 清洗后的材质代码”，不得因 A/B/E 或 AB/BE 不同重复建立材质。
+- 供应商报料单仍显示“材质代码 / 楞型”，其中楞型必须来自订单或常用箱明细，不能从材质字典回填。
 # 嘉林亿材质计价规则（2026-07-01）
 
 - 2026-04-14报价表为规则基准价；2026-06-26统一涨价5%为当前调价，不得用旧基准价覆盖当前材质价格。

@@ -158,7 +158,7 @@ def _response(product: Product, user: User) -> dict:
         data["material_code"] = code
         data["material_supplier_name"] = m.supplier_name
         data["material_weight"] = m.basis_weight_description
-        data["material_flute_type"] = m.flute_type  # 材质自身报价楞型（B/E），供参考
+        data["material_flute_type"] = None
     else:
         data["material_code"] = None
         data["material_supplier_name"] = None

@@ -150,9 +150,13 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
             "/api/master/materials/compose/save",
             json={
                 "supplier_name": "供应商A",
+                "layer_count": 5,
                 "material_code": "J616X",
-                "flute_type": "AB",
                 "quote_price": 2.5,
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 5,
+                "parsed_material_code": "J616X",
+                "price_source": "manual",
             },
         ).status_code == 400
 
@@ -160,8 +164,12 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
             "/api/master/materials/compose/preview",
             json={
                 "supplier_name": "供应商A",
+                "layer_count": 3,
                 "material_code": "A6A",
-                "flute_type": "B",
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 3,
+                "parsed_material_code": "A6A",
+                "price_source": "manual",
             },
         )
         assert three_layer.status_code == 200
@@ -209,8 +217,12 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
             "/api/master/materials/compose/save",
             json={
                 "supplier_name": "供应商A",
+                "layer_count": 3,
                 "material_code": "A6A",
-                "flute_type": "B",
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 3,
+                "parsed_material_code": "A6A",
+                "price_source": "manual",
             },
         )
         assert no_price.status_code == 400
@@ -218,9 +230,13 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
             "/api/master/materials/compose/save",
             json={
                 "supplier_name": "供应商A",
+                "layer_count": 3,
                 "material_code": "A6A",
-                "flute_type": "B",
                 "quote_price": 1.56,
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 3,
+                "parsed_material_code": "A6A",
+                "price_source": "manual",
                 "remarks": "人工确认平方价",
             },
         )

@@ -101,6 +101,7 @@ class SupplierPaperCodePayload(BaseModel):
 class MaterialComposePreviewPayload(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=200)
     material_code: str = Field(min_length=1, max_length=5)
+    layer_count: int | None = Field(default=None, ge=3, le=5)
     usage_flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
 
@@ -122,6 +123,10 @@ class MaterialComposePreviewPayload(BaseModel):
 
 class MaterialComposeSavePayload(MaterialComposePreviewPayload):
     remarks: str | None = None
+    parsed_supplier_name: str = Field(min_length=1, max_length=200)
+    parsed_material_code: str = Field(min_length=1, max_length=5)
+    parsed_layer_count: int = Field(ge=3, le=5)
+    price_source: Literal["manual", "suggested"]
 
 
 WORKSHOP_FIELDS = (
@@ -632,6 +637,36 @@ def _paper_code_dict(row: SupplierPaperCode) -> dict:
     }
 
 
+def _dictionary_material_code(value: str | None, layer_count: int) -> str:
+    compact = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    return compact[:layer_count]
+
+
+def _find_dictionary_duplicate(
+    db: Session,
+    *,
+    supplier_name: str,
+    layer_count: int,
+    material_code: str,
+    exclude_material_id: int | None = None,
+) -> Material | None:
+    normalized = _dictionary_material_code(material_code, layer_count)
+    rows = db.scalars(
+        select(Material).where(
+            Material.supplier_name == supplier_name,
+            Material.layer_count == layer_count,
+        )
+    ).all()
+    return next(
+        (
+            row for row in rows
+            if row.id != exclude_material_id
+            and _dictionary_material_code(row.code, layer_count) == normalized
+        ),
+        None,
+    )
+
+
 def _compose_preview(
     db: Session,
     *,
@@ -639,8 +674,14 @@ def _compose_preview(
     material_code: str,
     usage_flute_type: str | None = None,
     manual_quote_price: Decimal | None = None,
+    requested_layer_count: int | None = None,
 ) -> dict:
     layer_count = len(material_code)
+    if requested_layer_count is not None and requested_layer_count != layer_count:
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前选择{requested_layer_count}层，但材质代码为{layer_count}位，请检查后重新解析",
+        )
     roles = (
         ["面纸", "瓦楞纸", "里纸"]
         if layer_count == 3
@@ -677,11 +718,11 @@ def _compose_preview(
                 "missing": paper is None,
             }
         )
-    existing = db.scalar(
-        select(Material).where(
-            func.upper(Material.code) == material_code,
-            Material.supplier_name == supplier_name,
-        )
+    existing = _find_dictionary_duplicate(
+        db,
+        supplier_name=supplier_name,
+        layer_count=layer_count,
+        material_code=material_code,
     )
     valid = not missing_codes
     pricing = (
@@ -697,7 +738,11 @@ def _compose_preview(
     if missing_codes:
         message = f"该供应商下不存在基础代码：{'、'.join(missing_codes)}"
     elif existing is not None:
-        message = "已匹配现有材质，平方价已带出"
+        layer_label = {3: "三层", 5: "五层"}.get(layer_count, f"{layer_count}层")
+        message = (
+            f"该供应商下已存在{layer_label}材质代码 {material_code}，"
+            "不能重复保存。楞型请在常用箱中选择。"
+        )
     elif manual_quote_price is not None:
         message = "已手工填写平方价，可保存为可用材质"
     elif pricing.get("calculable"):
@@ -714,6 +759,7 @@ def _compose_preview(
         "missing_codes": missing_codes,
         "valid": valid,
         "existing_material_id": existing.id if existing else None,
+        "duplicate_material": existing is not None,
         "existing_square_price": existing.quote_price if existing else None,
         "quotation_base_price": pricing.get("quotation_base_price"),
         "usage_base_price": pricing.get("usage_base_price"),
@@ -722,6 +768,7 @@ def _compose_preview(
         "adjustment_effective_date": pricing.get("adjustment_effective_date"),
         "price_calculation": pricing,
         "message": message,
+        "parse_key": f"{supplier_name}|{layer_count}|{material_code}",
     }
 
 
@@ -832,6 +879,7 @@ def preview_material_composition(
         material_code=payload.material_code,
         usage_flute_type=payload.usage_flute_type,
         manual_quote_price=payload.quote_price,
+        requested_layer_count=payload.layer_count,
     )
 
 
@@ -847,18 +895,40 @@ def save_material_composition(
         material_code=payload.material_code,
         usage_flute_type=payload.usage_flute_type,
         manual_quote_price=payload.quote_price,
+        requested_layer_count=payload.layer_count,
     )
+    if (
+        payload.parsed_supplier_name.strip() != payload.supplier_name
+        or payload.parsed_material_code.strip().upper() != payload.material_code
+        or payload.parsed_layer_count != payload.layer_count
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="当前输入已发生变化，旧解析结果已失效，请重新解析后保存",
+        )
     if not preview["valid"]:
         raise HTTPException(status_code=400, detail=preview["message"])
-    existing = (
-        db.get(Material, preview["existing_material_id"])
-        if preview["existing_material_id"] is not None
-        else None
+    existing = _find_dictionary_duplicate(
+        db,
+        supplier_name=payload.supplier_name,
+        layer_count=payload.layer_count,
+        material_code=payload.material_code,
     )
+    if existing is not None:
+        layer_label = {3: "三层", 5: "五层"}.get(
+            payload.layer_count, f"{payload.layer_count}层"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"该供应商下已存在{layer_label}材质代码 "
+                f"{payload.material_code}，不能重复保存。楞型请在常用箱中选择。"
+            ),
+        )
     conflict = db.scalar(
         select(Material).where(func.upper(Material.code) == payload.material_code)
     )
-    if existing is None and conflict is not None:
+    if conflict is not None:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -867,7 +937,7 @@ def save_material_composition(
             ),
         )
     suggested_price = preview.get("current_suggested_price")
-    if existing is None and payload.quote_price is None and suggested_price is None:
+    if payload.quote_price is None and suggested_price is None:
         raise HTTPException(
             status_code=400,
             detail="当前组合没有已有平方价，请手工填写平方价",
@@ -880,18 +950,21 @@ def save_material_composition(
         )
         for layer in preview["layers"]
     )
-    if existing is None:
-        material = Material(
+    if payload.price_source == "suggested":
+        if suggested_price is None:
+            raise HTTPException(status_code=409, detail="当前材质没有可用建议价，请重新解析或手工填写平方价")
+        final_price = suggested_price
+    else:
+        if payload.quote_price is None:
+            raise HTTPException(status_code=400, detail="请填写当前材质的手工平方价")
+        final_price = payload.quote_price
+    material = Material(
             code=payload.material_code,
             paper_composition=composition,
             layer_count=preview["layer_count"],
             flute_type=None,
             basis_weight_description="/".join(f"{weight}g" for weight in weights),
-            quote_price=(
-                payload.quote_price
-                if payload.quote_price is not None
-                else suggested_price
-            ),
+            quote_price=final_price,
             rule_base_price=preview.get("quotation_base_price"),
             price_source=(
                 f"供应商规则基准价 {preview.get('quotation_base_price')}；"
@@ -904,30 +977,9 @@ def save_material_composition(
             remarks=(payload.remarks or "").strip() or None,
             is_active=True,
         )
-        db.add(material)
-        action = "CREATE"
-        before = None
-    else:
-        material = existing
-        before = _response(material, user)
-        material.paper_composition = composition
-        material.layer_count = preview["layer_count"]
-        material.flute_type = None
-        material.basis_weight_description = "/".join(
-            f"{weight}g" for weight in weights
-        )
-        if payload.quote_price is not None:
-            material.quote_price = payload.quote_price
-        if preview.get("quotation_base_price") is not None:
-            material.rule_base_price = preview["quotation_base_price"]
-            material.price_source = (
-                f"供应商规则基准价 {preview['quotation_base_price']}；"
-                f"当前调价 {preview.get('adjustment_percent') or 0}%"
-            )
-        material.price_unit = material.price_unit or "元/㎡"
-        material.remarks = (payload.remarks or "").strip() or material.remarks
-        material.is_active = True
-        action = "UPDATE"
+    db.add(material)
+    action = "CREATE"
+    before = None
     try:
         db.flush()
         audit_master_change(
@@ -1006,12 +1058,23 @@ def create_material(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
-    _validate_layer_flute(payload.layer_count, payload.flute_type)
     data = payload.model_dump()
     data["code"] = clean_code(payload.code)
+    data["flute_type"] = None
     data["basis_weight_description"] = normalize_basis_weight(
         payload.basis_weight_description
     )
+    duplicate = _find_dictionary_duplicate(
+        db,
+        supplier_name=(payload.supplier_name or "").strip(),
+        layer_count=payload.layer_count or len(data["code"]),
+        material_code=data["code"],
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {data['code']}，不能重复保存",
+        )
     material = Material(**data)
     try:
         db.add(material)
@@ -1040,11 +1103,23 @@ def update_material(
     user: User = Depends(can_write),
 ) -> dict:
     material = _material_or_404(db, material_id)
-    _validate_layer_flute(payload.layer_count, payload.flute_type)
     before = MaterialResponse.model_validate(material).model_dump()
+    duplicate = _find_dictionary_duplicate(
+        db,
+        supplier_name=(payload.supplier_name or "").strip(),
+        layer_count=payload.layer_count or len(payload.code),
+        material_code=payload.code,
+        exclude_material_id=material_id,
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {payload.code}，不能重复保存",
+        )
     for key, value in payload.model_dump().items():
         setattr(material, key, value)
     material.code = clean_code(payload.code)
+    material.flute_type = None
     material.basis_weight_description = normalize_basis_weight(
         payload.basis_weight_description
     )

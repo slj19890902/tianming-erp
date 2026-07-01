@@ -89,6 +89,9 @@ def test_corrugated_structure_prices_and_save(tmp_path):
             ("6", 130, "国产A级施胶高瓦"),
             ("J", 190, "国产AA级牛卡"),
             ("1", 50, "国产普瓦"),
+            ("A", 150, "国产A级牛卡"),
+            ("4", 100, "国产A级施胶高瓦"),
+            ("D", 130, "国产A级牛卡"),
         ):
             db.add(
                 SupplierPaperCode(
@@ -97,6 +100,16 @@ def test_corrugated_structure_prices_and_save(tmp_path):
                 )
             )
         _seed_rules(db)
+        db.add(
+            Material(
+                code="A416D-AB/EB",
+                supplier_name=SUPPLIER,
+                layer_count=5,
+                flute_type="AB",
+                quote_price=Decimal("2.27"),
+                is_active=True,
+            )
+        )
         db.add(
             SupplierFlutePriceRule(
                 supplier_name=SUPPLIER,
@@ -155,12 +168,89 @@ def test_corrugated_structure_prices_and_save(tmp_path):
         assert preview.json()["current_suggested_price"] == "1.38"
         saved = client.post(
             "/api/master/materials/compose/save",
-            json={"supplier_name": SUPPLIER, "material_code": "C6C"},
+            json={
+                "supplier_name": SUPPLIER,
+                "layer_count": 3,
+                "material_code": "C6C",
+                "parsed_supplier_name": SUPPLIER,
+                "parsed_layer_count": 3,
+                "parsed_material_code": "C6C",
+                "price_source": "suggested",
+            },
         )
         assert saved.status_code == 200
         assert saved.json()["material"]["flute_type"] is None
         assert saved.json()["material"]["rule_base_price"] == "1.3100"
         assert saved.json()["material"]["quote_price"] == "1.3800"
+        duplicate = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": SUPPLIER,
+                "layer_count": 3,
+                "material_code": "C6C",
+                "parsed_supplier_name": SUPPLIER,
+                "parsed_layer_count": 3,
+                "parsed_material_code": "C6C",
+                "price_source": "suggested",
+            },
+        )
+        assert duplicate.status_code == 409
+        assert "不能重复保存。楞型请在常用箱中选择" in duplicate.json()["detail"]
+        normalized_duplicate = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": SUPPLIER,
+                "layer_count": 5,
+                "material_code": "A416D",
+                "quote_price": 2.27,
+                "parsed_supplier_name": SUPPLIER,
+                "parsed_layer_count": 5,
+                "parsed_material_code": "A416D",
+                "price_source": "manual",
+            },
+        )
+        assert normalized_duplicate.status_code == 409
+        assert "五层材质代码 A416D" in normalized_duplicate.json()["detail"]
+
+        stale = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": SUPPLIER,
+                "layer_count": 5,
+                "material_code": "J616J",
+                "quote_price": 1.38,
+                "parsed_supplier_name": SUPPLIER,
+                "parsed_layer_count": 3,
+                "parsed_material_code": "C6C",
+                "price_source": "suggested",
+            },
+        )
+        assert stale.status_code == 409
+        assert "旧解析结果已失效" in stale.json()["detail"]
+        current = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": SUPPLIER,
+                "layer_count": 5,
+                "material_code": "J616J",
+            },
+        )
+        assert current.json()["current_suggested_price"] == "3.00"
+        saved_j = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": SUPPLIER,
+                "layer_count": 5,
+                "material_code": "J616J",
+                "quote_price": 1.38,
+                "parsed_supplier_name": SUPPLIER,
+                "parsed_layer_count": 5,
+                "parsed_material_code": "J616J",
+                "price_source": "suggested",
+            },
+        )
+        assert saved_j.status_code == 200
+        assert saved_j.json()["material"]["quote_price"] == "3.0000"
 
     with factory() as db:
         from app.services.material_pricing import get_effective_material_price
@@ -264,3 +354,15 @@ def test_corrugated_rules_frontend_copy():
     assert "输入材质代码" in html
     assert "输入总克重" in html
     assert "分纸加价金额待确认，暂不参与自动报价" in html
+    assert "warning-input" in html
+    assert "当前解析结果已失效，请重新解析" in html
+    assert "materialComposerCanSave" in html
+    material_editor = html.split(
+        'modal.type === \'material\'', 1
+    )[1].split('modal.type === \'orderPdfImport\'', 1)[0]
+    assert "<label>楞型" not in material_editor
+    composer = html.split(
+        'v-if="showMaterialComposer"', 1
+    )[1].split('v-if="!displayedMaterials.length"', 1)[0]
+    assert "<label>楞型" not in composer
+    assert 'v-model="productForm.flute_type"' in html

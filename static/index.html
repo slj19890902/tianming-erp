@@ -443,6 +443,7 @@
       .quotation-edit-table .select { min-height: 32px; }
       .quotation-number-input { width: 78px !important; min-width: 78px !important; }
       .quotation-price-input { width: 94px !important; min-width: 94px !important; font-weight: 700; }
+      .warning-input { background:#fef3c7 !important; border-color:#f59e0b !important; }
       .pieces-per-box-cell { width: 64px; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
       .supplier-print-sheet { font-family: "SimSun", serif; color: #111; }
       .supplier-print-title { text-align: center; }
@@ -947,12 +948,14 @@
                 <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
                   <div class="toolbar"><strong>新增/组合材质</strong><span class="muted">选择供应商并输入3位或5位材质代码，系统自动解析和推算建议价</span></div>
                   <div class="form-grid" style="margin:10px 0">
-                    <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @change="previewMaterialComposition" /></div>
-                    <div class="field"><label>材质代码</label><input class="input" maxlength="5" placeholder="3位或5位，例如 J616J" v-model.trim="materialComposer.material_code" @input="materialComposer.material_code=materialComposer.material_code.toUpperCase()" @change="previewMaterialComposition" /></div>
-                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @change="previewMaterialComposition" /></div>
+                    <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
+                    <div class="field"><label>层数</label><select class="select" v-model.number="materialComposer.layer_count" @change="invalidateMaterialComposer"><option :value="3">三层</option><option :value="5">五层</option></select></div>
+                    <div class="field"><label>材质代码</label><input class="input" maxlength="5" placeholder="3位或5位，例如 J616J" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
+                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
                     <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
-                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerPreview?.valid" @click="saveMaterialComposition">保存为可用材质</button></div></div>
+                    <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerCanSave" @click="saveMaterialComposition">保存为可用材质</button></div></div>
                   </div>
+                  <div v-if="materialComposerInvalidReason" class="notice danger">{{ materialComposerInvalidReason }}</div>
                   <div v-if="materialComposerPreview">
                     <div :class="['notice',materialComposerPreview.valid?'success':'danger']">{{ materialComposerPreview.message }}</div>
                     <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>位置</th><th>代码</th><th>用途</th><th>纸种</th><th>克重</th></tr></thead><tbody>
@@ -1944,7 +1947,6 @@
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
               <div class="field"><label>层数</label><select class="select" v-model.number="materialForm.layer_count" @change="onMaterialLayerChange"><option :value="3">三层（单瓦楞）</option><option :value="5">五层（双瓦楞）</option><option :value="7">七层</option></select></div>
-              <div class="field"><label>楞型</label><select class="select" v-model="materialForm.flute_type" :disabled="materialForm.layer_count===7"><option v-for="opt in materialFluteOptions" :key="opt" :value="opt">{{ opt }}</option></select><div v-if="materialForm.layer_count===7" class="muted">七层楞型规则待维护，暂不支持新增/编辑。</div></div>
               <div class="field wide"><label>克重组合</label><input class="input" placeholder="170g/130g/80g/170g/150g" v-model.trim="materialForm.basis_weight_description" @change="recommendMaterialCode" /></div>
               <div class="field"><label>配纸</label><input class="input" v-model.trim="materialForm.paper_composition" /></div>
               <div class="field sensitive-price"><label>平方报价</label><input class="input" type="number" step="0.0001" v-model="materialForm.quote_price" /></div>
@@ -2540,7 +2542,7 @@
             </div>
             <div v-else-if="modal.type === 'requisition'">
               <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
-              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
+              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
               <div class="muted" style="margin-top:8px">订单数量仍是成品数量；采购张数是本次向供应商报料和入库的主数量。</div>
             </div>
             <div v-else-if="modal.type === 'receipt'">
@@ -2938,7 +2940,7 @@
         _recommendation_message: "",
       });
       const blankMaterial = () => ({
-        id:null, code:"", paper_composition:"", layer_count:5, flute_type:"AB",
+        id:null, code:"", paper_composition:"", layer_count:5, flute_type:null,
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
         supplier_name:"", quote_date:null, remarks:"", is_active:true
       });
@@ -2947,7 +2949,7 @@
         gram_weight:null, paper_grade:"", paper_role:"", remark:"", is_active:true
       });
       const blankMaterialComposer = () => ({
-        supplier_name:"", material_code:"",
+        supplier_name:"", layer_count:5, material_code:"",
         quote_price:"", remarks:""
       });
       let quotationLineKey = 0;
@@ -3010,6 +3012,9 @@
             showMaterialComposer: false,
             materialComposer: blankMaterialComposer(),
             materialComposerPreview: null,
+            materialComposerParseKey: "",
+            materialComposerInvalidReason: "",
+            materialComposerPriceSource: "",
             showCompareModal: false,
             compareGroups: [], compareFlute: "", compareKeyword: "", compareWeight: "", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
@@ -3227,6 +3232,17 @@
           },
           quotationEditable() {
             return !this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status);
+          },
+          materialComposerCanSave() {
+            const currentKey = `${String(this.materialComposer.supplier_name || "").trim()}|${Number(this.materialComposer.layer_count || 0)}|${String(this.materialComposer.material_code || "").trim().toUpperCase()}`;
+            return !!(
+              this.materialComposerPreview?.valid
+              && !this.materialComposerPreview?.duplicate_material
+              && this.materialComposerParseKey === currentKey
+              && this.materialComposer.quote_price !== ""
+              && this.materialComposer.quote_price !== null
+              && this.materialComposerPriceSource
+            );
           },
           canFinance() { return ["admin", "finance"].includes(this.user?.role); },
           canDelivery() { return ["admin", "sales"].includes(this.user?.role); },
@@ -3481,7 +3497,7 @@
             const m = this._findMaterial(row.material_id);
             if (m) {
               const code = this.materialBaseCode(m);
-              const flute = row.flute_type || m.flute_type || "";
+              const flute = row.flute_type || "";
               const codeFlute = flute ? `${code}/${flute}` : code;
               const weights = this.pureWeights(m.basis_weight_description) || this.pureWeights(this.materialWeightStructure(m));
               const parts = [m.supplier_name || "-", codeFlute];
@@ -3500,7 +3516,7 @@
             const m = this._findMaterial(row.material_id);
             if (!m) return "";
             const code = this.materialBaseCode(m);
-            const flute = row.flute_type || m.flute_type || "";
+            const flute = row.flute_type || "";
             const struct = this.materialWeightStructure(m) || "";
             return `${code}${flute ? "/" + flute : ""}　${struct}`;
           },
@@ -3508,7 +3524,7 @@
           productLayerFluteText(row) {
             const m = this._findMaterial(row.material_id);
             const layer = row.layer_count || m?.layer_count;
-            const flute = row.flute_type || m?.flute_type;
+            const flute = row.flute_type;
             if (!layer && !flute) return "-";
             return `${layer ? layer + "层" : "?"} / ${flute || "?"}`;
           },
@@ -4396,7 +4412,6 @@
             const material = this._findMaterial(line.material_id);
             line.material_supplier = material?.supplier_name || "";
             line.material_code = material?.code || "";
-            if (material?.flute_type) line.flute_type = material.flute_type;
             line._final_manual = false;
             this.refreshQuotationLine(line);
           },
@@ -4739,30 +4754,54 @@
                 supplier_name:this.materialSupplierFilter || "",
               };
               this.materialComposerPreview = null;
+              this.materialComposerParseKey = "";
+              this.materialComposerInvalidReason = "";
+              this.materialComposerPriceSource = "";
             }
+          },
+          invalidateMaterialComposer() {
+            this.materialComposerPreview = null;
+            this.materialComposerParseKey = "";
+            this.materialComposerInvalidReason = "当前解析结果已失效，请重新解析";
+            this.materialComposer.quote_price = "";
+            this.materialComposerPriceSource = "";
+          },
+          onMaterialComposerCodeInput() {
+            this.materialComposer.material_code = String(this.materialComposer.material_code || "").toUpperCase();
+            this.invalidateMaterialComposer();
           },
           async previewMaterialComposition() {
             const code = String(this.materialComposer.material_code || "").trim().toUpperCase();
             const supplier = String(this.materialComposer.supplier_name || "").trim();
+            const layerCount = Number(this.materialComposer.layer_count || 0);
             if (!supplier || !code) return;
-            if (![3,5].includes(code.length)) {
+            if (![3,5].includes(layerCount) || code.length !== layerCount) {
               this.materialComposerPreview = null;
-              this.showToast("材质代码需为3位或5位",true);
+              this.materialComposerInvalidReason = `当前选择${layerCount}层，材质代码必须为${layerCount}位`;
+              this.showToast(this.materialComposerInvalidReason,true);
               return;
             }
             try {
               const {data} = await axios.post("/api/master/materials/compose/preview", {
                 supplier_name:supplier,
+                layer_count:layerCount,
                 material_code:code,
-                quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
               });
               this.materialComposer.material_code = code;
               this.materialComposerPreview = data;
-              if (this.materialComposer.quote_price === "") {
-                this.materialComposer.quote_price = data.existing_square_price ?? data.current_suggested_price ?? "";
+              this.materialComposerParseKey = data.parse_key;
+              this.materialComposerInvalidReason = data.duplicate_material ? data.message : "";
+              if (!data.duplicate_material && data.current_suggested_price != null) {
+                this.materialComposer.quote_price = data.current_suggested_price;
+                this.materialComposerPriceSource = "suggested";
+              } else {
+                this.materialComposer.quote_price = "";
+                this.materialComposerPriceSource = "";
               }
             } catch(error) {
               this.materialComposerPreview = null;
+              this.materialComposerParseKey = "";
+              this.materialComposerInvalidReason = this.errorMessage(error);
               this.showToast(this.errorMessage(error),true);
             }
           },
@@ -4770,29 +4809,29 @@
             if (this.loading) return;
             this.loading = true;
             try {
-              await this.previewMaterialComposition();
-              if (!this.materialComposerPreview?.valid) throw new Error("请先补齐缺失的基础纸种代码");
-              if (!this.materialComposerPreview.existing_material_id && (this.materialComposer.quote_price === "" || this.materialComposer.quote_price === null)) {
-                throw new Error("当前组合没有已有平方价，请手工填写平方价");
-              }
+              if (!this.materialComposerCanSave) throw new Error("当前输入与最近解析结果不一致，请重新解析后保存");
               const {data} = await axios.post("/api/master/materials/compose/save", {
                 supplier_name:this.materialComposer.supplier_name,
+                layer_count:Number(this.materialComposer.layer_count),
                 material_code:this.materialComposer.material_code,
                 quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
+                parsed_supplier_name:this.materialComposerPreview.supplier_name,
+                parsed_layer_count:this.materialComposerPreview.layer_count,
+                parsed_material_code:this.materialComposerPreview.material_code,
+                price_source:this.materialComposerPriceSource,
                 remarks:String(this.materialComposer.remarks || "").trim() || null,
               });
               this.allMaterials = [];
               this.materialSuppliers = [];
               await this.loadMaterials();
               this.showToast(data.message || "组合材质已保存");
-              this.materialComposerPreview.existing_material_id = data.material.id;
-              this.materialComposerPreview.existing_square_price = data.material.quote_price;
+              this.toggleMaterialComposer();
             } catch(error) { this.showToast(this.errorMessage(error),true); }
             finally { this.loading = false; }
           },
           recommendMaterialCode() {
             const weights=(this.materialForm.basis_weight_description.match(/\d+(?:\.\d+)?/g)||[]).join("-");
-            if (weights) this.materialForm.code=`M${weights}-${this.materialForm.flute_type}`;
+            if (weights) this.materialForm.code=`M${weights}`;
           },
           weightFromMaterialCode() {
             const values=(this.materialForm.code.match(/\d+(?:\.\d+)?/g)||[]);
@@ -5079,7 +5118,6 @@
               form._material_display = this.buildMaterialDisplay(mat);
               form._material_supplier = mat.supplier_name || "";
               if (!form.layer_count) form.layer_count = mat.layer_count;
-              if (!form.flute_type) form.flute_type = mat.flute_type;
               this.recalculateOrderItemCost(form);
             }
           },
@@ -5089,7 +5127,6 @@
             if (mat) {
               editObj._material_display = this.buildMaterialDisplay(mat);
               if (!editObj.layer_count) editObj.layer_count = mat.layer_count;
-              if (!editObj.flute_type) editObj.flute_type = mat.flute_type;
             }
           },
           startEditImportItem(draft, item) {
@@ -5911,7 +5948,7 @@
             if (length > 0 && length < 500) warnings.push(`采购长 ${length}mm 低于供应商最小切长 500mm，请调整报料尺寸或人工确认。`);
             if (width > 0 && width < 270) {
               let text = `采购宽 ${width}mm 低于供应商最小切宽 270mm，建议调整开料方式。`;
-              if (this.cuttingModeFactor(line.special_process) === 1) text += `一开二后采购宽 = ${width * 2}mm${width * 2 >= 270 ? "，满足最小切宽。" : "，仍低于最小切宽。"}`;
+              if (this.cuttingModeFactor(line.special_process) === 1) text += `建议改为一开二后采购宽 = ${width * 2}mm${width * 2 >= 270 ? "，满足最小切宽。" : "，仍低于最小切宽。"}`;
               warnings.push(text);
             }
             return warnings;
@@ -6235,6 +6272,7 @@
               }
               if (this.modal.type === "material") {
                 const payload={...this.materialForm}; delete payload.id;
+                payload.flute_type = null;
                 if (payload.quote_price==="") payload.quote_price=null;
                 if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
                 else await axios.post("/api/master/materials",payload);
@@ -6588,12 +6626,7 @@
             if (single.includes(ft) && this.productForm.layer_count !== 3) this.productForm.layer_count = 3;
           },
           onMaterialLayerChange() {
-            const lc = this.materialForm.layer_count;
-            if (lc === 7) { this.materialForm.flute_type = null; return; }
-            const opts = lc === 3 ? ["B", "A", "E"] : (lc === 5 ? ["AB", "BE"] : ["AB", "BE", "A", "B", "E"]);
-            if (!opts.includes(this.materialForm.flute_type)) {
-              this.materialForm.flute_type = opts[0];
-            }
+            this.materialForm.flute_type = null;
           },
           onProductLayerChange() {
             // 当切换层数时，如果楞型与新层数不兼容则清空

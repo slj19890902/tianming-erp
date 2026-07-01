@@ -240,7 +240,7 @@ def _supplier_dimension_warnings(
         )
         if _cutting_factor(cutting_mode) == 1:
             doubled = width * 2
-            message += f"一开二后采购宽 = {_plain(doubled)}mm"
+            message += f"建议改为一开二后采购宽 = {_plain(doubled)}mm"
             message += "，满足最小切宽。" if doubled >= 270 else "，仍低于最小切宽。"
         warnings.append(message)
     return warnings
@@ -380,7 +380,7 @@ def pending_requisitions(
                 "material_display": _format_supplier_material(
                     material.code if material else item.snapshot_material,
                     item.layer_count or (material.layer_count if material else None),
-                    item.flute_type or (material.flute_type if material else None),
+                    item.flute_type,
                     fallback_text=item.snapshot_material,
                 ),
                 "quantity": item.quantity,
@@ -900,7 +900,7 @@ def merge_suggestions(
             "material_display": _format_supplier_material(
                 material.code if material else item.snapshot_material,
                 item.layer_count or (material.layer_count if material else None),
-                item.flute_type or (material.flute_type if material else None),
+                item.flute_type,
                 fallback_text=item.snapshot_material,
             ),
             "snapshot_supplier_name": item.snapshot_supplier_name,
@@ -935,7 +935,7 @@ def merge_suggestions(
             "material_display": _format_supplier_material(
                 material.code if material else None,
                 layer_count or (material.layer_count if material else None),
-                flute_type or (material.flute_type if material else None),
+                flute_type,
                 fallback_text=material.paper_composition if material else None,
             ),
             "layer_count": layer_count,
@@ -994,7 +994,7 @@ def print_batch(
         order_flute_type = order_item.flute_type if order_item else None
         material_code = material.code if material else None
         material_layer_count = material.layer_count if material else None
-        material_flute_type = material.flute_type if material else None
+        material_flute_type = None
         crease_type = order_item.snapshot_crease_type if order_item else None
         if crease_type == "压线" and order_item and order_item.snapshot_crease_middle_mm is not None:
             crease_display = (
@@ -1104,7 +1104,7 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
     material = db.get(Material, order.material_id) if order.material_id else None
     material_code = material.code if material else None
     material_layer_count = order.layer_count or (material.layer_count if material else None)
-    material_flute_type = order.flute_type or (material.flute_type if material else None)
+    material_flute_type = order.flute_type
     crease_display = (
         f"{order.crease_left_mm}+{order.crease_middle_mm}+{order.crease_right_mm}"
         if order.crease_type == "压线" and order.crease_middle_mm

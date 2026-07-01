@@ -181,7 +181,8 @@ class CancelPayload(BaseModel):
 def _plain(value: Decimal | None) -> str | None:
     if value is None:
         return None
-    return format(value, "f").rstrip("0").rstrip(".") or "0"
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _pieces_per_box(item: OrderItem) -> int:
@@ -216,6 +217,33 @@ def _purchase_dimensions(
         return None, None
     factor = _cutting_factor(cutting_mode)
     return Decimal(report_length_mm), Decimal(report_width_mm * factor)
+
+
+def _supplier_dimension_warnings(
+    supplier_name: str | None,
+    cardboard_len: Decimal | int | None,
+    cardboard_width: Decimal | int | None,
+    cutting_mode: str | None = None,
+) -> list[str]:
+    if "嘉林亿" not in (supplier_name or ""):
+        return []
+    warnings = []
+    length = Decimal(cardboard_len or 0)
+    width = Decimal(cardboard_width or 0)
+    if length and length < 500:
+        warnings.append(
+            f"采购长 {_plain(length)}mm 低于供应商最小切长 500mm，请调整报料尺寸或人工确认。"
+        )
+    if width and width < 270:
+        message = (
+            f"采购宽 {_plain(width)}mm 低于供应商最小切宽 270mm，建议调整开料方式。"
+        )
+        if _cutting_factor(cutting_mode) == 1:
+            doubled = width * 2
+            message += f"一开二后采购宽 = {_plain(doubled)}mm"
+            message += "，满足最小切宽。" if doubled >= 270 else "，仍低于最小切宽。"
+        warnings.append(message)
+    return warnings
 
 
 def _suggested_dimensions(product: Product) -> tuple[Decimal | None, Decimal | None]:
@@ -385,6 +413,12 @@ def pending_requisitions(
                 "snapshot_splice_mode": item.snapshot_splice_mode,
                 "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
                 "snapshot_flap_mm": item.snapshot_flap_mm,
+                "dimension_warnings": _supplier_dimension_warnings(
+                    item.snapshot_supplier_name,
+                    item.cardboard_len or suggested_len,
+                    item.cardboard_width or suggested_width,
+                    cutting_mode,
+                ),
             }
         )
     supplier_counts: dict[str, int] = {}
@@ -920,6 +954,12 @@ def merge_suggestions(
             "total_required_piece_qty": sum(m["required_piece_qty"] for m in members),
             "member_count": len(members),
             "members": members,
+            "dimension_warnings": _supplier_dimension_warnings(
+                supplier_name,
+                report_len,
+                report_width,
+                DEFAULT_CUTTING_MODE,
+            ),
         })
 
     return {"suggestions": suggestions}

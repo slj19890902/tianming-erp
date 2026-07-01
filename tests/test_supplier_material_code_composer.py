@@ -127,9 +127,9 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
         ]
         assert [row["role"] for row in result["layers"]] == [
             "面纸",
+            "B楞瓦纸",
             "芯纸",
-            "中纸",
-            "芯纸",
+            "A楞瓦纸",
             "里纸",
         ]
         assert result["total_gram_weight"] == 690
@@ -168,10 +168,20 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
         assert three_layer.json()["layer_count"] == 3
         assert [row["role"] for row in three_layer.json()["layers"]] == [
             "面纸",
-            "芯纸",
+            "瓦楞纸",
             "里纸",
         ]
         assert three_layer.json()["existing_square_price"] is None
+        manual_preview = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": "供应商A",
+                "material_code": "A6A",
+                "quote_price": 1.56,
+            },
+        )
+        assert manual_preview.status_code == 200
+        assert manual_preview.json()["message"] == "已手工填写平方价，可保存为可用材质"
 
         for code, weight in [("6", 120), ("1", 45)]:
             assert client.post(
@@ -258,18 +268,18 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
 def test_supplier_material_composer_frontend_and_migration_chain():
     root = Path(__file__).resolve().parents[1]
     html = (root / "static" / "index.html").read_text(encoding="utf-8")
-    assert "基础纸种代码维护" in html
-    assert "组合材质" in html
+    assert "供应商材质规则维护" in html
+    assert "新增/组合材质" in html
     assert "/api/master/materials/paper-codes" in html
     assert "/api/master/materials/compose/preview" in html
     assert "/api/master/materials/compose/save" in html
-    assert "只解析结构和克重，不自动推算平方价" in html
+    assert "系统自动解析和推算建议价" in html
 
     migration = (
         root
         / "alembic"
         / "versions"
-        / "a18t5u6v7w17_supplier_material_code_composer.py"
+        / "b19t6u7v8w18_corrugated_material_pricing_rules.py"
     ).read_text(encoding="utf-8")
-    assert 'down_revision = "y17s4t5u6v05"' in migration
-    assert '"supplier_paper_codes"' in migration
+    assert 'down_revision = "a18t5u6v7w17"' in migration
+    assert '"supplier_material_base_prices"' in migration

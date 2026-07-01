@@ -23,6 +23,7 @@ from app.models.user import User
 from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services import material_price_adjust as price_adjust
 from app.services import material_pricing
+from app.services.corrugated_material_pricing import estimate_material_price
 from app.services.flute_mapping import validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 
@@ -37,9 +38,11 @@ class MaterialPayload(BaseModel):
     code: str = Field(min_length=1, max_length=100)
     paper_composition: str | None = None
     layer_count: int | None = Field(default=None, ge=1)
-    flute_type: Literal["AB", "BE", "A", "B", "E"] = "AB"
+    flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
     basis_weight_description: str | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
+    rule_base_price: Decimal | None = Field(default=None, ge=0)
+    price_source: str | None = None
     price_unit: str | None = None
     supplier_name: str | None = None
     quote_date: date | None = None
@@ -68,7 +71,7 @@ class MaterialResponse(MaterialPayload):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    flute_type: str
+    flute_type: str | None
 
 
 class SupplierPaperCodePayload(BaseModel):
@@ -98,7 +101,8 @@ class SupplierPaperCodePayload(BaseModel):
 class MaterialComposePreviewPayload(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=200)
     material_code: str = Field(min_length=1, max_length=5)
-    flute_type: Literal["AB", "BE", "A", "B", "E"]
+    usage_flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
+    quote_price: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("supplier_name")
     @classmethod
@@ -117,7 +121,6 @@ class MaterialComposePreviewPayload(BaseModel):
 
 
 class MaterialComposeSavePayload(MaterialComposePreviewPayload):
-    quote_price: Decimal | None = Field(default=None, ge=0)
     remarks: str | None = None
 
 
@@ -584,9 +587,22 @@ def compare_materials_endpoint(
     stmt = select(Material).where(Material.is_active.is_(True))
     if layer_count is not None:
         stmt = stmt.where(Material.layer_count == layer_count)
-    if weight:
+    if payload.supplier_name:
+        stmt = stmt.where(Material.supplier_name == payload.supplier_name)
+    numeric_total = None
+    if weight and re.fullmatch(r"\d+(?:\.\d+)?", str(weight).strip()):
+        numeric_total = Decimal(str(weight).strip())
+    elif weight:
         stmt = stmt.where(Material.basis_weight_description == weight)
     candidates = list(db.scalars(stmt).all())
+    if numeric_total is not None:
+        candidates = [
+            material
+            for material in candidates
+            if sum(Decimal(str(value)) for value in _parse_layer_weights(
+                material.basis_weight_description
+            )) == numeric_total
+        ]
     groups = material_pricing.compare_materials(
         db,
         candidates=candidates,
@@ -621,14 +637,14 @@ def _compose_preview(
     *,
     supplier_name: str,
     material_code: str,
-    flute_type: str,
+    usage_flute_type: str | None = None,
+    manual_quote_price: Decimal | None = None,
 ) -> dict:
     layer_count = len(material_code)
-    _validate_layer_flute(layer_count, flute_type)
     roles = (
-        ["面纸", "芯纸", "里纸"]
+        ["面纸", "瓦楞纸", "里纸"]
         if layer_count == 3
-        else ["面纸", "芯纸", "中纸", "芯纸", "里纸"]
+        else ["面纸", "B楞瓦纸", "芯纸", "A楞瓦纸", "里纸"]
     )
     rows = list(
         db.scalars(
@@ -668,23 +684,43 @@ def _compose_preview(
         )
     )
     valid = not missing_codes
+    pricing = (
+        estimate_material_price(
+            db,
+            supplier_name=supplier_name,
+            material_code=material_code,
+            usage_flute_type=usage_flute_type,
+        )
+        if valid
+        else {"calculable": False}
+    )
     if missing_codes:
         message = f"该供应商下不存在基础代码：{'、'.join(missing_codes)}"
     elif existing is not None:
         message = "已匹配现有材质，平方价已带出"
+    elif manual_quote_price is not None:
+        message = "已手工填写平方价，可保存为可用材质"
+    elif pricing.get("calculable"):
+        message = "已按供应商基准报价和当前调价规则推算，可保存为可用材质"
     else:
         message = "当前组合未找到已有平方价，请手工填写平方价"
     return {
         "supplier_name": supplier_name,
         "material_code": material_code,
         "layer_count": layer_count,
-        "flute_type": flute_type,
+        "usage_flute_type": usage_flute_type,
         "layers": layers,
         "total_gram_weight": total_weight if valid else None,
         "missing_codes": missing_codes,
         "valid": valid,
         "existing_material_id": existing.id if existing else None,
         "existing_square_price": existing.quote_price if existing else None,
+        "quotation_base_price": pricing.get("quotation_base_price"),
+        "usage_base_price": pricing.get("usage_base_price"),
+        "current_suggested_price": pricing.get("current_suggested_price"),
+        "adjustment_percent": pricing.get("adjustment_percent"),
+        "adjustment_effective_date": pricing.get("adjustment_effective_date"),
+        "price_calculation": pricing,
         "message": message,
     }
 
@@ -794,7 +830,8 @@ def preview_material_composition(
         db,
         supplier_name=payload.supplier_name,
         material_code=payload.material_code,
-        flute_type=payload.flute_type,
+        usage_flute_type=payload.usage_flute_type,
+        manual_quote_price=payload.quote_price,
     )
 
 
@@ -808,7 +845,8 @@ def save_material_composition(
         db,
         supplier_name=payload.supplier_name,
         material_code=payload.material_code,
-        flute_type=payload.flute_type,
+        usage_flute_type=payload.usage_flute_type,
+        manual_quote_price=payload.quote_price,
     )
     if not preview["valid"]:
         raise HTTPException(status_code=400, detail=preview["message"])
@@ -828,7 +866,8 @@ def save_material_composition(
                 f"“{conflict.supplier_name or '未设置'}”使用；当前全局唯一约束下不能重复保存"
             ),
         )
-    if existing is None and payload.quote_price is None:
+    suggested_price = preview.get("current_suggested_price")
+    if existing is None and payload.quote_price is None and suggested_price is None:
         raise HTTPException(
             status_code=400,
             detail="当前组合没有已有平方价，请手工填写平方价",
@@ -846,9 +885,20 @@ def save_material_composition(
             code=payload.material_code,
             paper_composition=composition,
             layer_count=preview["layer_count"],
-            flute_type=payload.flute_type,
+            flute_type=None,
             basis_weight_description="/".join(f"{weight}g" for weight in weights),
-            quote_price=payload.quote_price,
+            quote_price=(
+                payload.quote_price
+                if payload.quote_price is not None
+                else suggested_price
+            ),
+            rule_base_price=preview.get("quotation_base_price"),
+            price_source=(
+                f"供应商规则基准价 {preview.get('quotation_base_price')}；"
+                f"当前调价 {preview.get('adjustment_percent') or 0}%"
+                if preview.get("quotation_base_price") is not None
+                else "人工填写"
+            ),
             price_unit="元/㎡",
             supplier_name=payload.supplier_name,
             remarks=(payload.remarks or "").strip() or None,
@@ -862,12 +912,18 @@ def save_material_composition(
         before = _response(material, user)
         material.paper_composition = composition
         material.layer_count = preview["layer_count"]
-        material.flute_type = payload.flute_type
+        material.flute_type = None
         material.basis_weight_description = "/".join(
             f"{weight}g" for weight in weights
         )
         if payload.quote_price is not None:
             material.quote_price = payload.quote_price
+        if preview.get("quotation_base_price") is not None:
+            material.rule_base_price = preview["quotation_base_price"]
+            material.price_source = (
+                f"供应商规则基准价 {preview['quotation_base_price']}；"
+                f"当前调价 {preview.get('adjustment_percent') or 0}%"
+            )
         material.price_unit = material.price_unit or "元/㎡"
         material.remarks = (payload.remarks or "").strip() or material.remarks
         material.is_active = True

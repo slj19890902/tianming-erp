@@ -902,20 +902,16 @@
                             @click="onMaterialLayerFilter(tab.value)">{{ tab.label }}</button>
                   </div>
                 </div>
-                <!-- 排序 + 操作按钮（材质字典不再按楞型筛选，楞型只在常用箱/订单选择） -->
+                <!-- 常用筛选 + 操作按钮 -->
                 <div class="toolbar">
-                  <div class="order-status-tabs">
-                    <button v-for="st in materialSortTabs" :key="st.value"
-                            :class="['status-tab-btn', {active: materialSort === st.value}]"
-                            @click="materialSort=st.value; loadMaterials()">{{ st.label }}</button>
+                  <div class="toolbar-group">
+                    <input class="input" style="width:170px" v-model.trim="materialCodeFilter" placeholder="输入材质代码" />
+                    <input class="input" style="width:150px" v-model.trim="materialWeightFilter" placeholder="输入总克重" />
                   </div>
                   <div class="toolbar-group">
                     <button class="btn" @click="openCompare()">比价</button>
-                    <button v-if="canAdmin" class="btn" @click="openFluteRuleModal()">楞型加价规则</button>
-                    <button v-if="canAdmin" class="btn" @click="openPriceAdjust()">供应商调价</button>
-                    <button v-if="canAdmin" class="btn" @click="togglePaperCodePanel">基础纸种代码</button>
-                    <button v-if="canAdmin" class="btn primary" @click="toggleMaterialComposer">组合材质</button>
-                    <button v-if="canAdmin" class="btn success" @click="openMaterial()">新增材质</button>
+                    <button v-if="canAdmin" class="btn" @click="togglePaperCodePanel">材质规则维护</button>
+                    <button v-if="canAdmin" class="btn success" @click="toggleMaterialComposer">新增/组合材质</button>
                   </div>
                 </div>
                 <datalist id="material-composer-suppliers">
@@ -923,14 +919,17 @@
                 </datalist>
                 <div v-if="showPaperCodePanel" class="panel" style="margin:10px 0;border-color:#93c5fd">
                   <div class="toolbar">
-                    <strong>基础纸种代码维护</strong>
+                    <strong>供应商材质规则维护</strong>
                     <div class="toolbar-group">
+                      <button class="btn small" @click="openFluteRuleModal()">楞型加价规则</button>
+                      <button class="btn small" @click="openPriceAdjust()">供应商调价</button>
                       <input class="input" style="width:210px" list="material-composer-suppliers" v-model.trim="paperCodeSupplierFilter" placeholder="按供应商筛选" />
                       <input class="input" style="width:170px" v-model.trim="paperCodeKeyword" placeholder="搜索代码/纸种/等级" @keyup.enter="loadPaperCodes" />
                       <button class="btn small" @click="loadPaperCodes">查询</button>
                       <button class="btn small" @click="resetPaperCodeForm">新增代码</button>
                     </div>
                   </div>
+                  <div class="notice" style="margin:8px 0">嘉林亿规则：最小修边225mm；最小切宽270mm；最小切长500mm；100米以下接受随机配料并按牌价计价；分纸加价金额待确认，暂不参与自动报价。</div>
                   <div class="form-grid" style="margin:10px 0">
                     <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="paperCodeForm.supplier_name" /></div>
                     <div class="field"><label>代码字符</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
@@ -946,12 +945,11 @@
                   </tbody></table><div v-if="!paperCodes.length" class="empty">当前没有基础纸种代码</div></div>
                 </div>
                 <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
-                  <div class="toolbar"><strong>组合材质</strong><span class="muted">只解析结构和克重，不自动推算平方价</span></div>
+                  <div class="toolbar"><strong>新增/组合材质</strong><span class="muted">选择供应商并输入3位或5位材质代码，系统自动解析和推算建议价</span></div>
                   <div class="form-grid" style="margin:10px 0">
                     <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @change="previewMaterialComposition" /></div>
                     <div class="field"><label>材质代码</label><input class="input" maxlength="5" placeholder="3位或5位，例如 J616J" v-model.trim="materialComposer.material_code" @input="materialComposer.material_code=materialComposer.material_code.toUpperCase()" @change="previewMaterialComposition" /></div>
-                    <div class="field"><label>楞型</label><select class="select" v-model="materialComposer.flute_type" @change="previewMaterialComposition"><option v-for="flute in materialComposerFluteOptions" :key="flute" :value="flute">{{ flute }}</option></select></div>
-                    <div class="field sensitive-price"><label>平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="未匹配时必须手工填写" /></div>
+                    <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @change="previewMaterialComposition" /></div>
                     <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
                     <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerPreview?.valid" @click="saveMaterialComposition">保存为可用材质</button></div></div>
                   </div>
@@ -961,6 +959,11 @@
                       <tr v-for="layer in materialComposerPreview.layers" :key="layer.position" :style="layer.missing ? {background:'#fee2e2',color:'#991b1b'} : {}"><td>第{{ layer.position }}位</td><td><strong>{{ layer.code_char }}</strong></td><td>{{ layer.role }}</td><td>{{ layer.paper_name || '未维护' }}</td><td>{{ layer.gram_weight == null ? '-' : layer.gram_weight+'g' }}</td></tr>
                     </tbody></table></div>
                     <div style="margin-top:8px"><strong>层数：{{ materialComposerPreview.layer_count }}层　总克重：{{ materialComposerPreview.total_gram_weight == null ? '待补基础代码' : materialComposerPreview.total_gram_weight+'g' }}</strong><span v-if="materialComposerPreview.existing_material_id" class="status green" style="margin-left:10px">已匹配现有材质</span></div>
+                    <div v-if="materialComposerPreview.quotation_base_price != null" class="toolbar-group sensitive-price" style="margin-top:8px">
+                      <span class="status blue">报价表基准价：￥{{ money(materialComposerPreview.quotation_base_price) }}</span>
+                      <span class="status green">当前使用建议价：￥{{ money(materialComposerPreview.current_suggested_price) }}</span>
+                      <span class="muted">调价来源：{{ materialComposerPreview.adjustment_effective_date || '-' }} 嘉林亿统一涨价 {{ materialComposerPreview.adjustment_percent || 0 }}%</span>
+                    </div>
                   </div>
                 </div>
                 <div v-if="!displayedMaterials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
@@ -984,19 +987,16 @@
                   <div style="padding:12px">
                     <div class="toolbar" style="gap:10px;align-items:center;margin-bottom:8px">
                       <span style="font-size:13px">层数：<strong>{{ materialLayerFilter }}层</strong>　供应商：<strong>{{ materialSupplierFilter || '全部' }}</strong></span>
-                      <span style="font-size:13px">楞型：</span>
-                      <div class="order-status-tabs">
-                        <button v-for="ft in compareFluteOptions()" :key="ft"
-                                :class="['status-tab-btn', {active: compareFlute===ft}]"
-                                @click="compareFlute=ft; loadCompare()">{{ ft }}瓦</button>
-                      </div>
+                      <input class="input" style="width:160px" v-model.trim="compareKeyword" placeholder="输入材质代码" />
+                      <input class="input" style="width:140px" v-model.trim="compareWeight" placeholder="输入克重结构" />
+                      <button class="btn small" @click="loadCompare">查询比价</button>
                     </div>
-                    <p style="color:#666;font-size:12px">⚠️ 同克重多供应商比价，最终可比价 = 基础平方价 + 楞型加价（{{ compareFlute }}瓦）。纸种类别/进口不同仅供参考，不能直接换算。</p>
+                    <p style="color:#666;font-size:12px">同克重多供应商比价；楞型不作为主筛选条件，纸种类别或进口来源不同仅供参考。</p>
                     <div v-if="compareLoading" class="muted" style="text-align:center;padding:20px">加载中…</div>
                     <div v-else-if="compareError" style="color:#dc2626;text-align:center;padding:20px">{{ compareError }}</div>
                     <div v-for="(group, gi) in compareGroups" :key="gi" style="margin-bottom:20px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
                       <div :style="{background: group.status==='可比价'?'#f0fdf4':'#fffbeb', padding:'8px 12px', fontWeight:600, fontSize:'13px'}">
-                        {{ group.layer_count }}层 ｜ 克重 {{ group.weight_structure || '?' }} ｜ {{ compareFlute }}瓦
+                        {{ group.layer_count }}层 ｜ 克重 {{ group.weight_structure || '?' }}
                         <span style="margin-left:12px;padding:2px 8px;border-radius:4px;font-size:12px;background:#e5e7eb;color:#374151">{{ group.status }}</span>
                       </div>
                       <table style="width:100%;font-size:13px">
@@ -1374,7 +1374,7 @@
                   :class="['btn','small','supplier-count-button',{active:requisitionSupplierFilter===row.supplier_name}]"
                   @click="requisitionSupplierFilter=row.supplier_name">{{ row.supplier_name }}（{{ row.count }}）</button>
               </div>
-              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>报料尺寸</th><th>压线</th><th>供应商 / 材质</th><th>订单数</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}</td><td style="font-size:12px">{{ formatCrease(row) }}</td><td>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td><td><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>报料尺寸</th><th>压线</th><th>供应商 / 材质</th><th>订单数</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}<div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td style="font-size:12px">{{ formatCrease(row) }}</td><td>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td><td><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
               <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>开料方式</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.cutting_mode || row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
               <!-- 供应商报料单列表 -->
               <data-panel v-else-if="requisitionTab==='supplierOrders'" :empty="!supplierOrders.length">
@@ -2471,6 +2471,7 @@
                   <span v-else-if="sg.crease_type" class="status orange">{{ sg.crease_type }}</span>
                   <span class="muted">{{ sg.supplier_name || '未设供应商' }}｜{{ sg.material_display || '-' }}</span>
                   <span class="status green">{{ sg.member_count }}款</span>
+                  <span v-for="warning in sg.dimension_warnings || []" :key="warning" class="status orange">{{ warning }}</span>
                   <div style="display:flex;align-items:center;gap:6px">
                     <label style="font-size:12px;white-space:nowrap">库存抵扣：</label>
                     <input type="number" class="input" style="width:70px;padding:2px 6px" min="0" :max="sg.total_quantity"
@@ -2539,7 +2540,7 @@
             </div>
             <div v-else-if="modal.type === 'requisition'">
               <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
-              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
+              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input class="input compact-input" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
               <div class="muted" style="margin-top:8px">订单数量仍是成品数量；采购张数是本次向供应商报料和入库的主数量。</div>
             </div>
             <div v-else-if="modal.type === 'receipt'">
@@ -2946,7 +2947,7 @@
         gram_weight:null, paper_grade:"", paper_role:"", remark:"", is_active:true
       });
       const blankMaterialComposer = () => ({
-        supplier_name:"", material_code:"", flute_type:"AB",
+        supplier_name:"", material_code:"",
         quote_price:"", remarks:""
       });
       let quotationLineKey = 0;
@@ -2998,6 +2999,8 @@
               { value: "price", label: "价格从低到高" }
             ],
             materialSupplierFilter: "",
+            materialCodeFilter: "",
+            materialWeightFilter: "",
             materialSuppliers: [],
             showPaperCodePanel: false,
             paperCodeSupplierFilter: "",
@@ -3008,7 +3011,7 @@
             materialComposer: blankMaterialComposer(),
             materialComposerPreview: null,
             showCompareModal: false,
-            compareGroups: [], compareFlute: "A", compareLoading: false, compareError: "",
+            compareGroups: [], compareFlute: "", compareKeyword: "", compareWeight: "", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "苏州嘉林亿", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
@@ -3109,11 +3112,6 @@
             if (lc === 7) return [];
             return ["AB", "BE", "A", "B", "E"];
           },
-          materialComposerFluteOptions() {
-            return String(this.materialComposer.material_code || "").length === 3
-              ? ["B", "A", "E"]
-              : ["AB", "BE"];
-          },
           // 楞型筛选 tab：三层 B/E/A；五层 AB/BE；七层无
           materialFluteTabs() {
             if (this.materialLayerFilter === 5) {
@@ -3127,8 +3125,16 @@
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
-            // 材质字典不再按楞型拆分/过滤：直接展示当前供应商+层数下的全部材质。
-            return this.materials;
+            const code = String(this.materialCodeFilter || "").trim().toUpperCase();
+            const weight = String(this.materialWeightFilter || "").replace(/[^\d.]/g, "");
+            return this.materials.filter(row => {
+              if (code && !String(row.code || "").toUpperCase().includes(code)) return false;
+              if (weight) {
+                const total = (String(row.basis_weight_description || "").match(/\d+(?:\.\d+)?/g) || []).reduce((sum,value)=>sum+Number(value),0);
+                if (String(total) !== weight && !String(row.basis_weight_description || "").includes(weight)) return false;
+              }
+              return true;
+            });
           },
           // 供应商调价可选供应商（标准名）
           priceAdjustSuppliers() {
@@ -4050,8 +4056,9 @@
             return layer === 5 ? "AB" : "A";
           },
           openCompare() {
-            // 比价：调用后端 /compare，按 当前供应商筛选 + 当前层数 + 选定楞型 比价
-            this.compareFlute = this.defaultCompareFlute(this.materialLayerFilter);
+            this.compareFlute = "";
+            this.compareKeyword = this.materialCodeFilter || "";
+            this.compareWeight = this.materialWeightFilter || "";
             this.showCompareModal = true;
             this.loadCompare();
           },
@@ -4059,10 +4066,15 @@
             this.compareLoading = true;
             this.compareError = "";
             try {
+              const source = this.allMaterials.length ? this.allMaterials : this.materials;
+              const keyword = String(this.compareKeyword || "").trim().toUpperCase();
+              const matched = keyword ? source.find(row => String(row.code || "").toUpperCase().includes(keyword)) : null;
               const body = {
                 supplier_name: this.materialSupplierFilter || null,
                 layer_count: this.materialLayerFilter || null,
-                flute_type: this.compareFlute || null,
+                material_id: matched?.id || null,
+                basis_weight_description: matched?.basis_weight_description || this.compareWeight || null,
+                flute_type: null,
               };
               const data = (await axios.post("/api/master/materials/compare", body)).data;
               this.compareGroups = data.groups || [];
@@ -4738,19 +4750,17 @@
               this.showToast("材质代码需为3位或5位",true);
               return;
             }
-            const allowed = code.length === 3 ? ["B","A","E"] : ["AB","BE"];
-            if (!allowed.includes(this.materialComposer.flute_type)) {
-              this.materialComposer.flute_type = allowed[0];
-            }
             try {
               const {data} = await axios.post("/api/master/materials/compose/preview", {
                 supplier_name:supplier,
                 material_code:code,
-                flute_type:this.materialComposer.flute_type,
+                quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
               });
               this.materialComposer.material_code = code;
               this.materialComposerPreview = data;
-              this.materialComposer.quote_price = data.existing_square_price ?? "";
+              if (this.materialComposer.quote_price === "") {
+                this.materialComposer.quote_price = data.existing_square_price ?? data.current_suggested_price ?? "";
+              }
             } catch(error) {
               this.materialComposerPreview = null;
               this.showToast(this.errorMessage(error),true);
@@ -4768,7 +4778,6 @@
               const {data} = await axios.post("/api/master/materials/compose/save", {
                 supplier_name:this.materialComposer.supplier_name,
                 material_code:this.materialComposer.material_code,
-                flute_type:this.materialComposer.flute_type,
                 quote_price:this.materialComposer.quote_price === "" ? null : Number(this.materialComposer.quote_price),
                 remarks:String(this.materialComposer.remarks || "").trim() || null,
               });
@@ -5893,6 +5902,19 @@
           },
           normalizeCuttingMode(mode) {
             return ({ "一开一": 1, "一开二": 2, "一开三": 3, "一开四": 4, "一开五": 5 }[mode]) ? mode : "一开一";
+          },
+          requisitionDimensionWarnings(line) {
+            if (!String(line.snapshot_supplier_name || this.requisitionForm.supplier_name || "").includes("嘉林亿")) return [];
+            const warnings = [];
+            const length = Number(line.cardboard_len || 0);
+            const width = Number(line.cardboard_width || 0);
+            if (length > 0 && length < 500) warnings.push(`采购长 ${length}mm 低于供应商最小切长 500mm，请调整报料尺寸或人工确认。`);
+            if (width > 0 && width < 270) {
+              let text = `采购宽 ${width}mm 低于供应商最小切宽 270mm，建议调整开料方式。`;
+              if (this.cuttingModeFactor(line.special_process) === 1) text += `一开二后采购宽 = ${width * 2}mm${width * 2 >= 270 ? "，满足最小切宽。" : "，仍低于最小切宽。"}`;
+              warnings.push(text);
+            }
+            return warnings;
           },
           recalculateRequisitionLine(line, { preserveManualQty = false } = {}) {
             line.special_process = this.normalizeCuttingMode(line.special_process || line.cutting_mode);

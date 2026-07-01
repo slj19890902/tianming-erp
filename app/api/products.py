@@ -142,6 +142,21 @@ PRICE_FIELDS = {
     "board_price",
     "suggested_price",
 }
+
+
+def _product_payload_snapshot(product: Product) -> dict:
+    """Serialize stored product values without applying write-time validators.
+
+    Historical products may contain incomplete or legacy layer/flute values.
+    Reads must remain available so an operator can inspect and correct them;
+    create/update requests still use ProductPayload and its strict validators.
+    """
+    return {
+        field_name: getattr(product, field_name, None)
+        for field_name in ProductPayload.model_fields
+    }
+
+
 def _product_or_404(db: Session, product_id: int) -> Product:
     product = db.get(Product, product_id)
     if product is None:
@@ -150,7 +165,17 @@ def _product_or_404(db: Session, product_id: int) -> Product:
 
 
 def _response(product: Product, user: User) -> dict:
-    data = ProductResponse.model_validate(product).model_dump()
+    data = {
+        **_product_payload_snapshot(product),
+        "id": product.id,
+        "deleted_at": product.deleted_at,
+        "deleted_by": product.deleted_by,
+        "purged_at": product.purged_at,
+        "drawings": [
+            ProductDrawingResponse.model_validate(drawing).model_dump()
+            for drawing in product.drawings
+        ],
+    }
     # v0.19.2-B: 注入材质快照，供订单自动带出用
     if product.material is not None:
         m = product.material
@@ -523,7 +548,7 @@ def update_product(
         material_id=payload.material_id,
     )
     product = _product_or_404(db, product_id)
-    before = ProductResponse.model_validate(product).model_dump()
+    before = _product_payload_snapshot(product)
     for key, value in payload.model_dump().items():
         setattr(product, key, value)
     product.product_code = clean_code(payload.product_code)

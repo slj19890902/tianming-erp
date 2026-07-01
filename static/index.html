@@ -4545,12 +4545,20 @@
               product_code:code.trim(),
               product_name:(productName || item.product_name).trim(),
             };
-            if (!String(item.flute_type || "").trim()) {
-              const fluteType = prompt("该报价明细尚未确认楞型，请输入 A、B、E、AB 或 BE：", "");
+            const material = this._findMaterial(item.material_id);
+            const layerCount = Number(material?.layer_count || 0);
+            const allowedFlutes = layerCount === 3 ? ["A","B","E"]
+              : (layerCount === 5 ? ["AB","BE"] : ["A","B","E","AB","BE"]);
+            const currentFlute = String(item.flute_type || "").trim().toUpperCase();
+            if (!allowedFlutes.includes(currentFlute)) {
+              const fluteType = prompt(
+                `该报价明细的楞型未确认或与${layerCount || "当前"}层材质不匹配，请输入 ${allowedFlutes.join("、")}：`,
+                ""
+              );
               if (fluteType === null) return;
               const normalizedFlute = String(fluteType).trim().toUpperCase();
-              if (!["A","B","E","AB","BE"].includes(normalizedFlute)) {
-                this.showToast("楞型只能填写 A、B、E、AB 或 BE", true);
+              if (!allowedFlutes.includes(normalizedFlute)) {
+                this.showToast(`当前材质楞型只能填写 ${allowedFlutes.join("、")}`, true);
                 return;
               }
               payload.flute_type = normalizedFlute;

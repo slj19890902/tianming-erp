@@ -27,6 +27,12 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             name="报价测试客户",
             credit_limit=Decimal("0"),
         )
+        other_customer = Customer(
+            customer_number=2,
+            customer_code="WXTH",
+            name="无锡市天华超净科技有限公司",
+            credit_limit=Decimal("0"),
+        )
         sales = User(
             username="quote-sales",
             password_hash=hash_password("QuotePass123!"),
@@ -41,7 +47,7 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             real_name="报价无权限",
             must_change_password=False,
         )
-        db.add_all([customer, sales, workshop])
+        db.add_all([customer, other_customer, sales, workshop])
         material = Material(
             code="A416D",
             layer_count=5,
@@ -51,9 +57,37 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             is_active=True,
         )
         db.add(material)
+        db.flush()
+        historical_products = [
+            Product(
+                customer_id=customer.id,
+                product_code=f"TH-HISTORY-{index}",
+                customer_material_code=f"TH-HISTORY-{index}",
+                product_name=f"天华历史常用箱{index}",
+                box_category="normal",
+                is_active=True,
+                layer_count=3 if index == 1 else None,
+                flute_type="AB" if index == 1 else None,
+            )
+            for index in range(1, 4)
+        ]
+        other_product = Product(
+            customer_id=other_customer.id,
+            product_code="WXTH-001",
+            customer_material_code="WXTH-001",
+            product_name="无锡天华常用箱",
+            box_category="normal",
+            is_active=True,
+        )
+        db.add_all([*historical_products, other_product])
         db.commit()
         customer_id = customer.id
+        other_customer_id = other_customer.id
         material_id = material.id
+        historical_snapshot = {
+            row.product_code: (row.customer_id, row.product_name, row.layer_count, row.flute_type)
+            for row in historical_products
+        }
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -176,6 +210,12 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             f"/api/quotations/items/{first_item_id}/convert-to-product",
             json={"product_code": "   "},
         ).status_code == 422
+        duplicate_history = client.post(
+            f"/api/quotations/items/{first_item_id}/convert-to-product",
+            json={"product_code": "TH-HISTORY-1"},
+        )
+        assert duplicate_history.status_code == 409
+        assert "相同存货编码" in duplicate_history.json()["detail"]
         converted = client.post(
             f"/api/quotations/items/{first_item_id}/convert-to-product",
             json={"product_code": "Q-001", "product_name": "正式 A1 纸箱"},
@@ -238,6 +278,8 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         assert history.json()["items"][0]["quotation_no"] == "QT-20260630-002"
 
     with factory() as db:
+        from app.api.products import list_products
+
         product = db.query(Product).filter(Product.product_code == "Q-001").one()
         assert product.customer_id == customer_id
         assert product.product_name == "正式 A1 纸箱"
@@ -250,6 +292,40 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         assert second_product.report_length_mm == 600
         assert second_product.report_width_mm == 300
         assert second_product.flute_type == "BE"
+        current_history = {
+            row.product_code: (row.customer_id, row.product_name, row.layer_count, row.flute_type)
+            for row in db.query(Product)
+            .filter(Product.product_code.like("TH-HISTORY-%"))
+            .order_by(Product.product_code)
+            .all()
+        }
+        assert current_history == historical_snapshot
+        assert db.query(Product).filter(Product.customer_id == customer_id).count() == 5
+        sales_user = db.query(User).filter(User.username == "quote-sales").one()
+        tianhua_list = list_products(
+            customer_id=customer_id,
+            page=1,
+            page_size=200,
+            db=db,
+            user=sales_user,
+        )
+        wuxi_list = list_products(
+            customer_id=other_customer_id,
+            page=1,
+            page_size=200,
+            db=db,
+            user=sales_user,
+        )
+        assert tianhua_list["total"] == 5
+        assert {row["product_code"] for row in tianhua_list["items"]} >= {
+            "TH-HISTORY-1",
+            "TH-HISTORY-2",
+            "TH-HISTORY-3",
+            "Q-001",
+            "Q-002",
+        }
+        assert wuxi_list["total"] == 1
+        assert [row["product_code"] for row in wuxi_list["items"]] == ["WXTH-001"]
 
     with TestClient(app) as client:
         assert client.post(

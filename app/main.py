@@ -26,6 +26,7 @@ from app.api.requisition import router as requisition_router
 from app.api.quotations import router as quotations_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.system import router as system_router
+from app.api.warehouse import router as warehouse_router
 from app.api.tianhua_pre_delivery import (
     mobile_router as tianhua_mobile_router,
     router as tianhua_pre_delivery_router,
@@ -133,6 +134,18 @@ def create_app() -> FastAPI:
         application.add_api_route(
             "/mobile/tianhua-pick",
             lambda: FileResponse(mobile_pick_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/warehouse.html" for route in application.routes):
+        warehouse_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "warehouse.html"
+        )
+        application.add_api_route(
+            "/warehouse.html",
+            lambda: FileResponse(warehouse_path),
             methods=["GET"],
             include_in_schema=False,
         )
@@ -256,6 +269,12 @@ def create_app() -> FastAPI:
             pdf_training_router,
             prefix="/api/pdf-training",
             tags=["pdf-training"],
+        )
+    if not any(route.path == "/api/warehouse/locations" for route in application.routes):
+        application.include_router(
+            warehouse_router,
+            prefix="/api/warehouse",
+            tags=["warehouse"],
         )
 
     application.user_middleware = [

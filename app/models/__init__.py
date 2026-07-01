@@ -73,3 +73,11 @@ from app.models.quotation import (  # noqa: E402,F401
     QuotationItem,
     QuotationOrder,
 )
+from app.models.warehouse_inventory import (  # noqa: E402,F401
+    FinishedGoodsInventoryDetail,
+    InventoryLot,
+    InventoryMovement,
+    InventoryReservation,
+    SemiFinishedInventoryDetail,
+    WarehouseLocation,
+)

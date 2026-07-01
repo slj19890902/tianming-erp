@@ -757,6 +757,7 @@
                   <button class="btn" @click="go('deliveries')">送货管理</button>
                   <button v-if="canFinance" class="btn" @click="go('finance')">月结对账</button>
                   <button v-if="isWorkshop || canAdmin" class="btn" @click="go('incoming')">仓库来料入库</button>
+                  <a v-if="isWorkshop || canAdmin" class="btn" href="/warehouse.html">仓库库存管理</a>
                   <button v-if="isWorkshop || canAdmin" class="btn" @click="openMobileEntry">手机扫码入口</button>
                 </div></div>
                 <div class="panel"><div class="section-title">最近业务摘要</div><div class="section-body">

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>仓库库存管理 - 天明ERP</title>
+  <style>
+    :root{--blue:#2563eb;--line:#dbe3ef;--bg:#f3f6fb;--text:#182235;--muted:#64748b;--red:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Arial,"Microsoft YaHei",sans-serif}
+    header{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:5}
+    h1{font-size:20px;margin:0}.wrap{max-width:1500px;margin:18px auto;padding:0 18px}.tabs,.toolbar,.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .tabs{margin-bottom:12px}.btn{border:1px solid #bdc9db;background:#fff;color:#26354d;border-radius:7px;padding:7px 12px;cursor:pointer;text-decoration:none}
+    .btn:hover{border-color:var(--blue)}.btn.primary,.tabs .active{background:var(--blue);border-color:var(--blue);color:#fff}.btn.danger{color:var(--red)}
+    .panel{background:#fff;border:1px solid var(--line);border-radius:10px;margin-bottom:14px;padding:14px}.panel h2{font-size:16px;margin:0 0 12px}
+    .grid{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+    input,select,textarea{width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:7px 8px;background:#fff}textarea{min-height:38px;resize:vertical}
+    table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;padding:9px;border-bottom:1px solid #e8edf4;vertical-align:top}th{background:#f7f9fc;color:#475569}
+    .table-wrap{overflow:auto}.tag{display:inline-block;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.tag.warn{background:#fff2cf;color:#92400e}.tag.red{background:#fee2e2;color:#991b1b}
+    .muted{color:var(--muted)}.message{position:fixed;right:20px;bottom:20px;max-width:420px;background:#172033;color:#fff;border-radius:8px;padding:11px 16px;z-index:10}.hidden{display:none!important}
+    .summary{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0}.summary strong{font-size:18px}.empty{text-align:center;color:var(--muted);padding:26px}
+    @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(130px,1fr))}header{padding:0 12px}.wrap{padding:0 8px}.desktop-note{display:none}}
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>仓库库存管理</h1><span class="muted desktop-note">阶段 A：手工入库、冻结、报损、调整与流水</span></div>
+    <div class="actions"><span id="userName"></span><a class="btn" href="/">返回 ERP</a></div>
+  </header>
+  <main class="wrap">
+    <div class="tabs">
+      <button class="btn active" data-tab="finished">成品库存</button>
+      <button class="btn" data-tab="semi_finished">半成品库存</button>
+      <button class="btn" data-tab="movements">库存流水</button>
+      <button class="btn admin-only" data-tab="locations">库位管理</button>
+    </div>
+
+    <section id="inventorySection">
+      <div class="panel">
+        <div class="toolbar">
+          <button id="openInForm" class="btn primary">手工入库</button>
+          <select id="statusFilter" style="width:140px"><option value="">全部状态</option><option value="active">正常</option><option value="frozen">冻结</option><option value="closed">关闭</option></select>
+          <select id="locationFilter" style="width:180px"><option value="">全部库位</option></select>
+          <select id="staleFilter" style="width:180px"><option value="">全部库龄</option><option value="attention">超过1年</option><option value="handling">超过18个月</option><option value="cleanup">超过2年</option></select>
+          <input id="keywordFilter" style="width:220px" placeholder="输入库存批次号">
+          <button id="refreshLots" class="btn">查询</button>
+        </div>
+        <div id="lotSummary" class="summary"></div>
+      </div>
+
+      <form id="finishedForm" class="panel hidden">
+        <h2>手工成品入库</h2>
+        <div class="grid">
+          <div class="field"><label>客户</label><select id="fgCustomer" required></select></div>
+          <div class="field"><label>常用箱 / 产品</label><select id="fgProduct" required></select></div>
+          <div class="field"><label>库位</label><select id="fgLocation" required></select></div>
+          <div class="field"><label>实际成品数量（个）</label><input id="fgQuantity" type="number" min="1" required></div>
+          <div class="field"><label>入库日期</label><input id="fgDate" type="date" required></div>
+          <div class="field"><label>来源</label><select id="fgSource"><option value="manual">手工入库</option><option value="production_surplus">生产余量</option><option value="stocktake">盘点录入</option><option value="transfer">调拨转入</option></select></div>
+          <div class="field" style="grid-column:span 3"><label>备注</label><input id="fgRemarks" placeholder="说明库存来源或现场情况"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">确认入库</button></div>
+        </div>
+      </form>
+
+      <form id="semiForm" class="panel hidden">
+        <h2>手工半成品入库</h2>
+        <p class="muted">按实际物理张/片记录。未分切大张按实际长宽和张数入库；本阶段不做一开几换算，也不旋转尺寸匹配。</p>
+        <div class="grid">
+          <div class="field"><label>材质代码</label><input id="siMaterial" required></div>
+          <div class="field"><label>层数</label><select id="siLayer"><option value="3">三层</option><option value="5">五层</option></select></div>
+          <div class="field"><label>楞型</label><select id="siFlute"></select></div>
+          <div class="field"><label>实际长（mm）</label><input id="siLength" type="number" min="1" required></div>
+          <div class="field"><label>实际宽（mm）</label><input id="siWidth" type="number" min="1" required></div>
+          <div class="field"><label>实际张/片数</label><input id="siQuantity" type="number" min="1" required></div>
+          <div class="field"><label>片料类型</label><select id="siSheetType"><option value="raw_board">未分切大张</option><option value="net_sheet">已开净片</option><option value="creased_sheet">已压线片料</option></select></div>
+          <div class="field"><label>库位</label><select id="siLocation" required></select></div>
+          <div class="field"><label>入库日期</label><input id="siDate" type="date" required></div>
+          <div class="field"><label>供应商</label><input id="siSupplier"></div>
+          <div class="field"><label>归属客户（可空）</label><select id="siCustomer"></select></div>
+          <div class="field"><label>来源</label><select id="siSource"><option value="manual">手工入库</option><option value="purchase_surplus">采购余量</option><option value="production_surplus">生产余量</option><option value="stocktake">盘点录入</option><option value="transfer">调拨转入</option></select></div>
+          <div class="field" style="grid-column:span 2"><label>开料说明 / 可开料数备注</label><input id="siCuttingNote" placeholder="例如：宽向一开三；本阶段仅记录，不自动抵扣"></div>
+          <div class="field" style="grid-column:span 2"><label>备注</label><input id="siRemarks"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">确认入库</button></div>
+        </div>
+      </form>
+
+      <div class="panel table-wrap">
+        <table>
+          <thead id="lotHead"></thead>
+          <tbody id="lotBody"></tbody>
+        </table>
+        <div id="lotEmpty" class="empty hidden">暂无库存记录</div>
+      </div>
+    </section>
+
+    <section id="movementSection" class="hidden">
+      <div class="panel toolbar">
+        <input id="movementLot" style="width:220px" placeholder="库存批次号">
+        <select id="movementType" style="width:180px"><option value="">全部流水类型</option><option value="manual_in">手工入库</option><option value="adjust">库存调整</option><option value="freeze">冻结</option><option value="unfreeze">解冻</option><option value="damage">报损</option><option value="scrap">报废</option><option value="transfer_to_general">转通用库存</option></select>
+        <button id="refreshMovements" class="btn">查询</button>
+      </div>
+      <div class="panel table-wrap"><table><thead><tr><th>时间</th><th>流水号</th><th>库存批次</th><th>类型</th><th>数量</th><th>可用数量变化</th><th>原因</th></tr></thead><tbody id="movementBody"></tbody></table></div>
+    </section>
+
+    <section id="locationSection" class="hidden">
+      <form id="locationForm" class="panel">
+        <h2>新增 / 编辑库位</h2><input id="locationId" type="hidden">
+        <div class="grid">
+          <div class="field"><label>库位编码</label><input id="locationCode" required></div>
+          <div class="field"><label>库位名称</label><input id="locationName" required></div>
+          <div class="field"><label>类型</label><select id="locationType"><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="shared">共用</option></select></div>
+          <div class="field"><label>备注</label><input id="locationRemarks"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存库位</button></div>
+        </div>
+      </form>
+      <div class="panel table-wrap"><table><thead><tr><th>编码</th><th>名称</th><th>类型</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody id="locationBody"></tbody></table></div>
+    </section>
+  </main>
+  <div id="message" class="message hidden"></div>
+  <script>
+    const state={user:null,tab:"finished",locations:[],customers:[],lots:[]};
+    const $=id=>document.getElementById(id);
+    const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
+    async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok)throw new Error(typeof body.detail==="string"?body.detail:"操作失败，请刷新后重试");return body}
+    function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
+    function today(){return new Date().toISOString().slice(0,10)}
+    function options(select,items,placeholder){select.innerHTML=`<option value="">${placeholder}</option>`+items.map(x=>`<option value="${x.id}">${x.label}</option>`).join("")}
+    async function init(){
+      try{state.user=await api("/api/auth/me")}catch{location.href="/";return}
+      if(!["admin","workshop"].includes(state.user.role)){location.href="/";return}
+      $("userName").textContent=state.user.real_name||state.user.username;
+      if(state.user.role!=="admin")document.querySelectorAll(".admin-only").forEach(x=>x.classList.add("hidden"));
+      $("fgDate").value=$("siDate").value=today();
+      bind();await Promise.all([loadLocations(),loadCustomers()]);await loadLots();
+    }
+    function bind(){
+      document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
+      $("refreshLots").onclick=loadLots;$("refreshMovements").onclick=loadMovements;
+      $("openInForm").onclick=()=>{(state.tab==="finished"?$("finishedForm"):$("semiForm")).classList.toggle("hidden")};
+      $("fgCustomer").onchange=loadProducts;$("siLayer").onchange=updateFlutes;updateFlutes();
+      $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;
+    }
+    function switchTab(tab){
+      state.tab=tab;document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x.dataset.tab===tab));
+      $("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab));
+      $("movementSection").classList.toggle("hidden",tab!=="movements");$("locationSection").classList.toggle("hidden",tab!=="locations");
+      $("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
+      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="movements")loadMovements();else loadLocations(true);
+    }
+    async function loadLocations(includeInactive=false){
+      const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;
+      const active=data.items.filter(x=>x.is_active), all=active.map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`}));
+      options($("locationFilter"),all,"全部库位");
+      options($("fgLocation"),active.filter(x=>["finished","shared"].includes(x.warehouse_type)).map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`})),"请选择");
+      options($("siLocation"),active.filter(x=>["semi_finished","shared"].includes(x.warehouse_type)).map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`})),"请选择");
+      if(includeInactive)renderLocations();
+    }
+    async function loadCustomers(){
+      const data=await api("/api/warehouse/references/customers");state.customers=data.items;
+      const rows=data.items.map(x=>({id:x.id,label:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");
+    }
+    async function loadProducts(){
+      if(!$("fgCustomer").value){options($("fgProduct"),[],"先选客户");return}
+      const data=await api(`/api/warehouse/references/products?customer_id=${$("fgCustomer").value}`);
+      options($("fgProduct"),data.items.map(x=>({id:x.id,label:`${x.product_code} · ${x.product_name}${x.specification?" · "+x.specification:""}`})),"请选择产品");
+    }
+    function updateFlutes(){$("siFlute").innerHTML=($("siLayer").value==="3"?["A","B","E"]:["AB","BE"]).map(x=>`<option>${x}</option>`).join("")}
+    async function saveFinished(e){
+      e.preventDefault();try{await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:+$("fgCustomer").value,product_id:+$("fgProduct").value,location_id:+$("fgLocation").value,quantity:+$("fgQuantity").value,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:crypto.randomUUID()})});toast("成品入库成功");e.target.reset();$("fgDate").value=today();await loadLots()}catch(err){toast(err.message,true)}
+    }
+    async function saveSemi(e){
+      e.preventDefault();try{await api("/api/warehouse/semi-finished/manual-in",{method:"POST",body:JSON.stringify({location_id:+$("siLocation").value,quantity:+$("siQuantity").value,stock_date:$("siDate").value,source_type:$("siSource").value,material_code:$("siMaterial").value,layer_count:+$("siLayer").value,flute_type:$("siFlute").value,board_length_mm:+$("siLength").value,board_width_mm:+$("siWidth").value,sheet_type:$("siSheetType").value,supplier_name:$("siSupplier").value||null,customer_id:$("siCustomer").value?+$("siCustomer").value:null,cutting_note:$("siCuttingNote").value||null,remarks:$("siRemarks").value||null,idempotency_key:crypto.randomUUID()})});toast("半成品入库成功");e.target.reset();$("siDate").value=today();updateFlutes();await loadLots()}catch(err){toast(err.message,true)}
+    }
+    async function loadLots(){
+      const p=new URLSearchParams({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
+      const data=await api("/api/warehouse/lots?"+p);state.lots=data.items;renderLots();
+    }
+    function renderLots(){
+      const finished=state.tab==="finished";
+      $("lotHead").innerHTML=finished?`<tr><th>批次/状态</th><th>客户</th><th>存货编码/产品</th><th>规格</th><th>材质/楞型</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`:`<tr><th>批次/状态</th><th>供应商/客户</th><th>材质/楞型</th><th>实际尺寸</th><th>片料类型/说明</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`;
+      $("lotBody").innerHTML=state.lots.map(row=>{
+        const d=row.detail,w=row.age_warning_level?`<span class="tag ${row.age_warning_level==="cleanup"?"red":"warn"}" title="${row.age_warning_text}">${row.age_days}天</span>`:`${row.age_days}天`;
+        const common=`<td><b>${row.lot_number}</b><br><span class="tag">${labels[row.status]||row.status}</span></td>`;
+        const detail=finished?`<td>${d.is_general?"通用库存":(d.owner_customer_name||"-")}</td><td>${d.inventory_code||"-"}<br>${d.product_name||"-"}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td>${d.material_code||"-"} / ${d.flute_type||"-"}</td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
+        return `<tr>${common}${detail}<td>${row.location.location_code}</td><td><b>${row.quantity_available}</b> ${labels[row.unit]}</td><td>${w}</td><td class="actions">${actionButtons(row)}</td></tr>`}).join("");
+      $("lotEmpty").classList.toggle("hidden",state.lots.length>0);
+      const available=state.lots.reduce((n,x)=>n+x.quantity_available,0),frozen=state.lots.filter(x=>x.status==="frozen").length;
+      $("lotSummary").innerHTML=`<span>批次 <strong>${state.lots.length}</strong></span><span>当前可用 <strong>${available}</strong> ${finished?"个":"张/片"}</span><span>冻结批次 <strong>${frozen}</strong></span>`;
+    }
+    function actionButtons(row){
+      const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
+      const normal=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button><button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
+      const general=state.user.role==="admin"&&row.inventory_type==="finished"&&!row.detail.is_general&&row.status==="active"?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
+      return freeze+normal+general;
+    }
+    async function operate(id,operation,version){
+      let body={expected_version:version,idempotency_key:crypto.randomUUID()},label=operation;
+      if(operation==="adjust"){const value=prompt("输入调整数量：增加填正数，减少填负数");if(value===null)return;body.quantity_delta=+value;body.reason=prompt("请输入调整原因")||""}
+      if(["damage","scrap"].includes(operation)){const value=prompt(operation==="damage"?"输入报损数量":"输入报废数量");if(value===null)return;body.quantity=+value;body.reason=prompt("请输入原因")||""}
+      if(operation==="transfer-to-general"){if(!confirm("确认转为通用成品库存？后续跨客户使用仍需人工确认。"))return;body.reason=prompt("请输入转通用原因")||""}
+      try{await api(`/api/warehouse/lots/${id}/${operation}`,{method:"POST",body:JSON.stringify(body)});toast("库存操作成功");await loadLots()}catch(err){toast(err.message,true)}
+    }
+    async function loadMovements(){
+      const p=new URLSearchParams({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"});
+      const data=await api("/api/warehouse/movements?"+p);
+      $("movementBody").innerHTML=data.items.map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("");
+    }
+    function renderLocations(){
+      $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${x.location_code}</td><td>${x.location_name}</td><td>${labels[x.warehouse_type]}</td><td>${x.is_active?"启用":"停用"}</td><td>${x.remarks||"-"}</td><td><button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button></td></tr>`).join("")
+    }
+    function editLocation(id){const x=state.locations.find(v=>v.id===id);$("locationId").value=x.id;$("locationCode").value=x.location_code;$("locationName").value=x.location_name;$("locationType").value=x.warehouse_type;$("locationRemarks").value=x.remarks||""}
+    async function saveLocation(e){
+      e.preventDefault();const id=$("locationId").value,payload={location_code:$("locationCode").value,location_name:$("locationName").value,warehouse_type:$("locationType").value,remarks:$("locationRemarks").value||null};
+      try{await api(`/api/warehouse/locations${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("库位保存成功");e.target.reset();$("locationId").value="";await loadLocations(true)}catch(err){toast(err.message,true)}
+    }
+    async function toggleLocation(id,active){try{await api(`/api/warehouse/locations/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadLocations(true)}catch(err){toast(err.message,true)}}
+    init();
+  </script>
+</body>
+</html>

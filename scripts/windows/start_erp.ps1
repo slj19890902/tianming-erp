@@ -102,7 +102,7 @@ try {
         "-X", "utf8",
         "-m", "uvicorn",
         "app.main:app",
-        "--host", "127.0.0.1",
+        "--host", "0.0.0.0",
         "--port", "8000",
         "--workers", "1"
     )

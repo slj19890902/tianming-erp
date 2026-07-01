@@ -40,6 +40,8 @@ def test_supplier_order_frontend_uses_clean_material_display():
     html = Path("static/index.html").read_text(encoding="utf-8")
     assert "{{ so.material_display || so.material_code || '-' }}" in html
     assert "{{ modal.data.material_display || modal.data.material_code || '-' }}" in html
+    assert "当前报料单存在低于供应商最小切宽/切长的明细" in html
+    assert "so.dimension_warnings" in html
 
 
 @pytest.fixture(scope="module")

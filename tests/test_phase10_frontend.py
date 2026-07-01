@@ -133,17 +133,20 @@ def test_v0210_entry_efficiency_controls_are_visible() -> None:
     assert "toggleAllIncoming" in source
 
 
-def test_pdf_import_confirmation_is_between_close_and_bulk_save() -> None:
+def test_pdf_import_uses_join_button_without_duplicate_confirmation_checkbox() -> None:
     source = INDEX.read_text(encoding="utf-8")
     footer_start = source.index('<div class="modal-foot">')
     footer_end = source.index("</div>", footer_start)
     footer = source[footer_start:footer_end]
 
     close_index = footer.index("@click=\"closeModal\"")
-    confirm_index = footer.index("我已核对客户、产品、数量、材质、价格等信息")
+    confirm_index = footer.index("加入批量保存")
     save_index = footer.index("批量保存已确认草稿")
     assert close_index < confirm_index < save_index
-    assert ':disabled="loading || !orderImportBatch.verified"' in footer
+    assert "我已核对客户、产品、数量、材质、价格等信息" not in source
+    assert ':disabled="loading || !confirmedImportDraftCount"' in footer
+    assert "已加入批量保存：{{ confirmedImportDraftCount }} 条" in footer
+    assert "toggleConfirmableImportDrafts" in source
 
 
 def test_pdf_import_shows_customer_match_status_and_candidates() -> None:

@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, inspect, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -28,6 +28,7 @@ from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
+from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
 from app.models.user import User
 from app.services.history_orders import (
     build_display_registry,
@@ -215,6 +216,11 @@ class OrderStatusRequest(BaseModel):
 
 class WorkflowRollbackRequest(BaseModel):
     reason: str
+
+
+class OrderGroupDeleteRequest(BaseModel):
+    order_ids: list[int] = Field(min_length=1, max_length=200)
+    confirm: bool = False
 
 
 def _plain_decimal(value: Decimal | None) -> str | None:
@@ -825,15 +831,100 @@ async def upload_order_item_drawing(
     return {"drawing_file": item.drawing_file, "saved_to_product": save_to_product}
 
 
-def _order_has_flow_records(db: Session, order_id: int) -> bool:
-    return bool(
-        db.scalar(
-            select(func.count())
-            .select_from(DeliveryItem)
-            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .where(OrderItem.order_id == order_id)
+def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
+    labels: list[str] = []
+    if db.scalar(
+        select(func.count())
+        .select_from(DeliveryItem)
+        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .where(OrderItem.order_id.in_(order_ids))
+    ):
+        labels.append("送货")
+    if db.scalar(
+        select(func.count())
+        .select_from(RequisitionItem)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .where(OrderItem.order_id.in_(order_ids))
+    ):
+        labels.append("报料")
+    if db.scalar(
+        select(func.count())
+        .select_from(SupplierRequisitionOrderItem)
+        .join(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
+        .where(OrderItem.order_id.in_(order_ids))
+    ):
+        labels.append("供应商采购单")
+
+    # Optional pre-delivery tables are checked only as foreign-key blockers.
+    # This does not change or delete any pre-delivery data.
+    bind = db.get_bind()
+    table_inspector = inspect(bind)
+    placeholders = ", ".join(f":order_id_{index}" for index in range(len(order_ids)))
+    params = {f"order_id_{index}": value for index, value in enumerate(order_ids)}
+    for table_name in (
+        "tianhua_pre_delivery_import_items",
+        "tianhua_pre_delivery_draft_items",
+    ):
+        if not table_inspector.has_table(table_name):
+            continue
+        count = db.scalar(
+            text(
+                f"SELECT COUNT(*) FROM {table_name} "
+                f"WHERE order_id IN ({placeholders})"
+            ),
+            params,
         )
-    )
+        if count:
+            labels.append("预送货")
+            break
+    return labels
+
+
+def _flow_delete_message(labels: list[str]) -> str:
+    flow_text = "/".join(dict.fromkeys(labels))
+    return f"该订单已进入{flow_text}流程，不能直接删除。"
+
+
+def _delete_orders_in_transaction(
+    db: Session,
+    *,
+    orders: list[Order],
+    user: User,
+) -> None:
+    dependencies = _order_flow_dependencies(db, [order.id for order in orders])
+    if dependencies:
+        raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))
+    for order in orders:
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="DELETE",
+                resource="Order",
+                details=json.dumps(
+                    {
+                        "order_number": order.order_number,
+                        "customer_id": order.customer_id,
+                        "customer_po": order.customer_po,
+                        "item_count": len(order.items),
+                    },
+                    ensure_ascii=False,
+                ),
+                username=user.username,
+                role=user.role,
+                entity_type="order",
+                entity_id=order.id,
+                description="删除无业务关联订单",
+            )
+        )
+        db.delete(order)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="订单存在关联业务记录，不能直接删除。请刷新页面后检查报料、送货或对账状态。",
+        ) from error
 
 
 @router.put("/{order_id}/status")
@@ -901,33 +992,31 @@ def delete_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
-    if _order_has_flow_records(db, order.id):
-        raise HTTPException(
-            status_code=409,
-            detail="该订单已有送货、开票或收款关联，不能直接删除；请标记死单或已结档。",
-        )
-    details = {
-        "order_number": order.order_number,
-        "customer_id": order.customer_id,
-        "customer_po": order.customer_po,
-        "item_count": len(order.items),
-    }
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="DELETE",
-            resource="Order",
-            details=json.dumps(details, ensure_ascii=False),
-            username=user.username,
-            role=user.role,
-            entity_type="order",
-            entity_id=order.id,
-            description="删除无业务关联订单",
-        )
-    )
-    db.delete(order)
-    db.commit()
+    _delete_orders_in_transaction(db, orders=[order], user=user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/group-delete")
+def delete_order_group(
+    payload: OrderGroupDeleteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="删除订单组需要二次确认")
+    order_ids = list(dict.fromkeys(payload.order_ids))
+    orders = db.scalars(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id.in_(order_ids))
+        .order_by(Order.id)
+    ).all()
+    if len(orders) != len(order_ids):
+        raise HTTPException(status_code=404, detail="订单组中有订单不存在，请刷新后重试")
+    if len({_order_group_key(order) for order in orders}) != 1:
+        raise HTTPException(status_code=400, detail="所选订单不属于同一订单组，请刷新后重试")
+    _delete_orders_in_transaction(db, orders=orders, user=user)
+    return {"deleted_count": len(orders)}
 
 
 @router.put("/{order_id}/rollback-workflow")

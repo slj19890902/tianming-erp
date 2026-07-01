@@ -1127,6 +1127,12 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "flute_type": _clean_supplier_flute(material_flute_type),
         "report_length_mm": order.report_length_mm,
         "report_width_mm": order.report_width_mm,
+        "dimension_warnings": _supplier_dimension_warnings(
+            order.supplier_name,
+            order.report_length_mm,
+            order.report_width_mm,
+            order.cutting_mode or DEFAULT_CUTTING_MODE,
+        ),
         "crease_type": order.crease_type,
         "crease_left_mm": order.crease_left_mm,
         "crease_middle_mm": order.crease_middle_mm,

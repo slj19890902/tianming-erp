@@ -309,6 +309,74 @@ def test_pending_requisition_sorts_newest_record_first(requisition_app) -> None:
     assert response.json()["items"][0]["item_id"] == newest_id
 
 
+def test_merge_suggestions_never_merge_different_flute_types(requisition_app) -> None:
+    from app.models.material import Material
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        source = session.get(OrderItem, 1)
+        material = Material(
+            code="A416D",
+            layer_count=5,
+            supplier_name="苏州嘉林亿",
+            is_active=True,
+        )
+        session.add(material)
+        session.flush()
+        common = {
+            "order_id": source.order_id,
+            "product_id": source.product_id,
+            "quantity": 10,
+            "unit_price": Decimal("1"),
+            "subtotal": Decimal("10"),
+            "material_status": "pending",
+            "requisition_status": "未报料",
+            "snapshot_material": "A416D",
+            "snapshot_supplier_name": "苏州嘉林亿",
+            "material_id": material.id,
+            "layer_count": 5,
+            "snapshot_report_length_mm": 800,
+            "snapshot_report_width_mm": 300,
+            "snapshot_splice_mode": "single",
+            "snapshot_pieces_per_box": 1,
+        }
+        session.add_all(
+            [
+                OrderItem(
+                    **common,
+                    snapshot_product_name="AB楞产品1",
+                    flute_type="AB",
+                ),
+                OrderItem(
+                    **common,
+                    snapshot_product_name="AB楞产品2",
+                    flute_type="AB",
+                ),
+                OrderItem(
+                    **common,
+                    snapshot_product_name="BE楞产品",
+                    flute_type="BE",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/requisition/merge-suggestions")
+
+    assert response.status_code == 200
+    matching = [
+        row for row in response.json()["suggestions"]
+        if row["material_display"].startswith("A416D")
+    ]
+    assert len(matching) == 1
+    assert matching[0]["flute_type"] == "AB"
+    assert matching[0]["member_count"] == 2
+    assert all(member["flute_type"] == "AB" for member in matching[0]["members"])
+
+
 
 def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
     from app.models.order import OrderItem

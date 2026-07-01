@@ -561,6 +561,75 @@ def test_order_delete_requires_double_confirmation_and_does_not_reuse_number(
     assert second["order_number"] == "TM20260613002"
 
 
+def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
+    order_api_app,
+) -> None:
+    from app.models.order import Order
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = order_api_app
+    first_payload = _payload()
+    first_payload["customer_po"] = "PDF-GROUP-001"
+    first_payload["remark"] = "PDF识别草稿：first.pdf"
+    second_payload = _payload()
+    second_payload["customer_po"] = "PDF-GROUP-001"
+    second_payload["remark"] = "PDF识别草稿：second.pdf"
+    second_payload["items"][0]["quantity"] = 201
+    with TestClient(app) as client:
+        _login(client)
+        first = client.post("/api/orders", json=first_payload).json()
+        second = client.post("/api/orders", json=second_payload).json()
+        deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [first["id"], second["id"]], "confirm": True},
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_count"] == 2
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Order)) == 0
+
+    blocked_payload = _payload()
+    blocked_payload["customer_po"] = "PDF-GROUP-BLOCKED"
+    blocked_payload["remark"] = "PDF识别草稿：blocked.pdf"
+    with TestClient(app) as client:
+        _login(client)
+        blocked_order = client.post("/api/orders", json=blocked_payload).json()
+        blocked_item = blocked_order["items"][0]
+        with session_factory() as session:
+            requisition = Requisition(
+                requisition_number="MR-PDF-BLOCK",
+                requisition_date=date(2026, 6, 13),
+                status="已报料",
+            )
+            session.add(requisition)
+            session.flush()
+            session.add(
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=blocked_item["id"],
+                    inventory_deducted_qty=0,
+                    requisition_qty=200,
+                    cardboard_len=Decimal("1000"),
+                    cardboard_width=Decimal("500"),
+                    special_process="一开一",
+                    product_name_snapshot="五层加强纸箱",
+                    status="有效",
+                )
+            )
+            session.commit()
+        blocked = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [blocked_order["id"]], "confirm": True},
+        )
+
+    assert blocked.status_code == 409
+    assert "报料" in blocked.json()["detail"]
+    assert "不能直接删除" in blocked.json()["detail"]
+    with session_factory() as session:
+        assert session.get(Order, blocked_order["id"]) is not None
+
+
 def test_duplicate_formal_order_is_not_generated_twice(order_api_app) -> None:
     app, _ = order_api_app
     with TestClient(app) as client:

@@ -45,7 +45,7 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         material = Material(
             code="A416D",
             layer_count=5,
-            flute_type="AB",
+            flute_type=None,
             quote_price=Decimal("5.0000"),
             supplier_name="报价测试纸板厂",
             is_active=True,
@@ -84,6 +84,11 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             {
                 "product_name": "手工报价产品",
                 "box_type": "其他",
+                "length_mm": 200,
+                "width_mm": 100,
+                "height_mm": 50,
+                "material_id": material_id,
+                "flute_type": None,
                 "quantity": 50,
                 "margin_rate": 20,
                 "final_unit_price": 1.2,
@@ -188,9 +193,20 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             f"/api/quotations/items/{second_item_id}/convert-to-product",
             json={"product_code": "Q-001"},
         ).status_code == 409
+        missing_manual_report_size = client.post(
+            f"/api/quotations/items/{second_item_id}/convert-to-product",
+            json={"product_code": "Q-002", "flute_type": "BE"},
+        )
+        assert missing_manual_report_size.status_code == 400
+        assert "报料长宽" in missing_manual_report_size.json()["detail"]
         converted_second = client.post(
             f"/api/quotations/items/{second_item_id}/convert-to-product",
-            json={"product_code": "Q-002"},
+            json={
+                "product_code": "Q-002",
+                "flute_type": "BE",
+                "report_length_mm": 600,
+                "report_width_mm": 300,
+            },
         )
         assert converted_second.status_code == 201
         assert converted_second.json()["quotation_status"] == "converted"
@@ -228,6 +244,12 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         assert product.sale_unit_price == Decimal("2.5000")
         assert product.report_length_mm == 1030
         assert product.report_width_mm == 355
+        assert product.flute_type == "AB"
+        assert product.material.flute_type is None
+        second_product = db.query(Product).filter(Product.product_code == "Q-002").one()
+        assert second_product.report_length_mm == 600
+        assert second_product.report_width_mm == 300
+        assert second_product.flute_type == "BE"
 
     with TestClient(app) as client:
         assert client.post(

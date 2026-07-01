@@ -60,6 +60,9 @@ class QuotationPayload(BaseModel):
 class ConvertPayload(BaseModel):
     product_code: str = Field(min_length=1, max_length=150)
     product_name: str | None = Field(default=None, max_length=250)
+    flute_type: str | None = Field(default=None, max_length=20)
+    report_length_mm: int | None = Field(default=None, gt=0)
+    report_width_mm: int | None = Field(default=None, gt=0)
 
     @field_validator("product_code")
     @classmethod
@@ -424,12 +427,33 @@ def convert_to_product(
     if duplicate is not None:
         raise HTTPException(status_code=409, detail="该客户已存在相同存货编码")
     material = _material_or_none(db, item.material_id)
+    if material is None:
+        raise HTTPException(status_code=400, detail="请先在报价明细中选择材质")
+    if not (material.supplier_name or "").strip():
+        raise HTTPException(status_code=400, detail="所选材质缺少供应商，请先完善材质资料")
+    if material.layer_count not in {3, 5}:
+        raise HTTPException(status_code=400, detail="所选材质缺少有效层数，请先完善材质资料")
+    flute_type = (payload.flute_type or item.flute_type or "").strip().upper()
+    allowed_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
+    if flute_type not in allowed_flutes[material.layer_count]:
+        expected = "A、B 或 E" if material.layer_count == 3 else "AB 或 BE"
+        raise HTTPException(
+            status_code=400,
+            detail=f"报价明细缺少有效楞型，请先选择{expected}后再转入常用箱",
+        )
+    if item.final_unit_price is None:
+        raise HTTPException(status_code=400, detail="报价明细缺少最终单价，不能转入常用箱")
     is_a1 = _is_a1(item.box_type)
-    report_length = None
-    report_width = None
+    report_length = payload.report_length_mm
+    report_width = payload.report_width_mm
     if is_a1 and item.length_mm and item.width_mm and item.height_mm:
         report_length = round(2 * (item.length_mm + item.width_mm) + 30)
         report_width = round(item.width_mm + item.height_mm + 5)
+    if report_length is None or report_width is None:
+        raise HTTPException(
+            status_code=400,
+            detail="当前箱型没有自动报料公式，请确认报料长宽后再转入常用箱",
+        )
     product = Product(
         customer_id=quotation.customer_id,
         product_code=product_code,
@@ -447,8 +471,8 @@ def convert_to_product(
         cost_unit_price=item.estimated_unit_cost,
         board_price=material.quote_price if material else None,
         suggested_price=item.suggested_unit_price,
-        flute_type=item.flute_type,
-        layer_count=material.layer_count if material else None,
+        flute_type=flute_type,
+        layer_count=material.layer_count,
         report_length_mm=report_length,
         report_width_mm=report_width,
         splice_mode="single",

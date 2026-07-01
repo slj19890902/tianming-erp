@@ -1975,7 +1975,7 @@
                   <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft.customer_po" /></div>
                   <div class="field"><label>下单日期</label><input class="input" type="date" v-model="draft.order_date" /></div>
                   <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" /></div>
-                  <div class="field"><label>保存选择</label><button type="button" :class="['btn','small',draft.confirmed ? 'success' : '']" :disabled="!canConfirmImportDraft(draft)" @click="draft.confirmed=!draft.confirmed; orderImportBatch.verified=false">{{ draft.confirmed ? "已加入批量保存" : "加入批量保存" }}</button></div>
+                  <div class="field"><label>保存状态</label><span :class="['status',draft.confirmed ? 'green' : 'orange']">{{ draft.confirmed ? "已加入批量保存" : "待核对" }}</span></div>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
                 <div v-if="draft.warnings?.length" style="margin-bottom:10px">
@@ -2877,8 +2877,11 @@
           </div>
           <div class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
-            <label v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length" class="remember-line"><input type="checkbox" v-model="orderImportBatch.verified" /> 我已核对客户、产品、数量、材质、价格等信息</label>
-            <button v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length" class="btn primary" :disabled="loading || !orderImportBatch.verified" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
+            <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
+              <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
+              <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
+              <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
+            </template>
             <button v-if="canSaveModal" class="btn primary" :disabled="loading" @click="saveModal">保存</button>
           </div>
         </div>
@@ -3093,7 +3096,7 @@
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
             orderEditGroup: null,
             orderNumberPreview: "",
-            orderImportBatch: { files: [], status: "idle", verified: false },
+            orderImportBatch: { files: [], status: "idle" },
             orderImportDrafts: [],
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
@@ -3232,6 +3235,14 @@
           },
           quotationEditable() {
             return !this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status);
+          },
+          confirmableImportDraftCount() {
+            return this.orderImportDrafts.filter(draft => this.canConfirmImportDraft(draft)).length;
+          },
+          confirmedImportDraftCount() {
+            return this.orderImportDrafts.filter(
+              draft => draft.confirmed && this.canConfirmImportDraft(draft)
+            ).length;
           },
           materialComposerCanSave() {
             const currentKey = `${String(this.materialComposer.supplier_name || "").trim()}|${Number(this.materialComposer.layer_count || 0)}|${String(this.materialComposer.material_code || "").trim().toUpperCase()}`;
@@ -4530,12 +4541,37 @@
             }
             const productName = prompt("请确认产品名称：", item.product_name || "");
             if (productName === null) return;
+            const payload = {
+              product_code:code.trim(),
+              product_name:(productName || item.product_name).trim(),
+            };
+            if (!String(item.flute_type || "").trim()) {
+              const fluteType = prompt("该报价明细尚未确认楞型，请输入 A、B、E、AB 或 BE：", "");
+              if (fluteType === null) return;
+              const normalizedFlute = String(fluteType).trim().toUpperCase();
+              if (!["A","B","E","AB","BE"].includes(normalizedFlute)) {
+                this.showToast("楞型只能填写 A、B、E、AB 或 BE", true);
+                return;
+              }
+              payload.flute_type = normalizedFlute;
+            }
+            const isA1 = String(item.box_type || "").toUpperCase().includes("A1")
+              || String(item.box_type || "").includes("0201");
+            if (!isA1) {
+              const reportLength = prompt("当前箱型没有自动报料公式，请输入并确认报料长(mm)：", "");
+              if (reportLength === null) return;
+              const reportWidth = prompt("请输入并确认报料宽(mm)：", "");
+              if (reportWidth === null) return;
+              if (!(Number(reportLength) > 0) || !(Number(reportWidth) > 0)) {
+                this.showToast("报料长宽必须为大于0的整数", true);
+                return;
+              }
+              payload.report_length_mm = Math.round(Number(reportLength));
+              payload.report_width_mm = Math.round(Number(reportWidth));
+            }
             if (!confirm(`确认将“${productName || item.product_name}”以存货编码 ${code.trim()} 转入常用箱吗？`)) return;
             try {
-              await axios.post(`/api/quotations/items/${item.id}/convert-to-product`, {
-                product_code:code.trim(),
-                product_name:(productName || item.product_name).trim(),
-              });
+              await axios.post(`/api/quotations/items/${item.id}/convert-to-product`, payload);
               await Promise.all([this.loadQuotationHistory(),this.loadProducts()]);
               this.showToast("已转入常用箱，可在新建订单时直接选择");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
@@ -4944,6 +4980,10 @@
             } catch(e) { this.supplierOrders = []; }
           },
           openSupplierOrderPrint(so) {
+            const warnings = so.dimension_warnings || [];
+            if (warnings.length && !confirm(
+              `当前报料单存在低于供应商最小切宽/切长的明细，请确认后再打印。\n\n${warnings.join("\n")}\n\n继续打开打印预览吗？`
+            )) return;
             this.modal = { type: 'supplierOrderPrint', title: `供应商报料单 ${so.order_number}`, data: so };
           },
           printSupplierOrderArea() {
@@ -5295,13 +5335,12 @@
             this.refreshOrderNumberPreview();
           },
           openOrderPdfImport() {
-            this.orderImportBatch = { files:[], status:"idle", verified:false };
+            this.orderImportBatch = { files:[], status:"idle" };
             this.orderImportDrafts = [];
             this.modal = { type:"orderPdfImport", title:"识别采购订单 PDF" };
           },
           onOrderPdfFileChange(event) {
             this.orderImportBatch.files = Array.from(event?.target?.files || []);
-            this.orderImportBatch.verified = false;
             this.orderImportDrafts = [];
           },
           async previewOrderPdfImport() {
@@ -5316,7 +5355,6 @@
               this.orderImportBatch.files.forEach(file => form.append("files", file));
               const { data } = await axios.post("/api/orders/pdf-preview-batch", form);
               this.orderImportDrafts = (data.drafts || []).map(draft => ({...draft, confirmed:false}));
-              this.orderImportBatch.verified = false;
               this.orderImportBatch.status = "recognized";
             } catch (error) {
               this.orderImportDrafts = [];
@@ -5361,8 +5399,18 @@
               return !item.matched_product_id;
             });
           },
+          toggleConfirmableImportDrafts() {
+            const confirmable = this.orderImportDrafts.filter(
+              draft => this.canConfirmImportDraft(draft)
+            );
+            if (!confirmable.length) {
+              this.showToast("当前没有可以加入批量保存的完整草稿", true);
+              return;
+            }
+            const shouldConfirm = !confirmable.every(draft => draft.confirmed);
+            confirmable.forEach(draft => { draft.confirmed = shouldConfirm; });
+          },
           toggleNewProduct(item) {
-            this.orderImportBatch.verified = false;
             if (item.is_new_product) {
               item.matched_product_id = null;
               item.cost_status = "pending";
@@ -5374,7 +5422,6 @@
           async rematchImportDraft(index) {
             const draft = this.orderImportDrafts[index];
             if (!draft?.matched_customer_id) return;
-            this.orderImportBatch.verified = false;
             const preserved = draft.items.map(item => ({
               raw_product_code:item.raw_product_code, raw_product_name:item.raw_product_name,
               raw_spec_model:item.raw_spec_model, quantity:item.quantity, unit_price:item.unit_price
@@ -5384,7 +5431,6 @@
             this.orderImportDrafts[index] = {...data, confirmed:false};
           },
           async selectImportProduct(item) {
-            this.orderImportBatch.verified = false;
             const candidate = (item.product_candidates || []).find(row => row.id === item.matched_product_id);
             if (candidate) {
               item.matched_material_id = candidate.material_id || null;
@@ -5519,10 +5565,6 @@
             await this.refreshOrderNumberPreview();
           },
           async saveConfirmedImportDrafts() {
-            if (!this.orderImportBatch.verified) {
-              this.showToast("请先勾选“我已核对客户、产品、数量、材质、价格等信息”", true);
-              return;
-            }
             const drafts = this.orderImportDrafts.filter(draft => draft.confirmed && this.canConfirmImportDraft(draft));
             if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
             this.loading = true;
@@ -5642,8 +5684,23 @@
           async dangerDeleteOrderGroup() {
             const orders = this.orderEditGroup?.orders || [];
             if (!orders.length) return;
-            for (const order of orders) { await this.deleteWholeOrder(order); }
-            this.closeModal();
+            const groupName = this.orderEditGroup?.customer_po || this.displayOrderNumber(orders[0]);
+            if (!confirm(`确认删除订单组 ${groupName} 吗？删除后不可恢复。`)) return;
+            if (!confirm("请再次确认：已进入报料、送货或对账流程的订单组不能直接删除。")) return;
+            this.loading = true;
+            try {
+              const {data} = await axios.post("/api/orders/group-delete", {
+                order_ids: orders.map(order => order.id),
+                confirm: true,
+              });
+              await this.loadOrders();
+              this.closeModal();
+              this.showToast(`订单组已删除，共 ${data.deleted_count} 张订单`);
+            } catch(error) {
+              this.showToast(this.errorMessage(error), true);
+            } finally {
+              this.loading = false;
+            }
           },
           async handleOrderCustomerChange() {
             if (!this.orderForm.items.length) this.addOrderItem();

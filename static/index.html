@@ -2913,10 +2913,10 @@
       };
       const month = () => today().slice(0, 7);
       const roleMenus = {
-        admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "deliveries", "finance", "system"],
+        admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "warehouse", "deliveries", "finance", "system"],
         finance: ["dashboard", "customers", "orders", "finance"],
         sales: ["dashboard", "customers", "orders", "requisition", "deliveries"],
-        workshop: ["dashboard", "orders", "incoming", "deliveries"],
+        workshop: ["dashboard", "orders", "incoming", "warehouse", "deliveries"],
         delivery_picker: []
       };
       const blankCustomer = () => ({
@@ -3281,6 +3281,7 @@
               { key: "orders", label: "订单管理", count: this.ordersUnfinishedTotal },
               { key: "requisition", label: "报料管理", count: this.requisitionPending.length },
               { key: "incoming", label: "仓库来料入库", count: this.incomingPending.length },
+              { key: "warehouse", label: "仓库库存管理" },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
               { key: "customers", label: "客户管理" },
@@ -3442,6 +3443,7 @@
               orders_legacy: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>`,
               requisition: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3 3h18v4H3z"/><path d="M3 10h18v4H3z"/><path d="M3 17h12v4H3z"/></svg>`,
               incoming: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
+              warehouse: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3 10l9-7 9 7v10H3z"/><path d="M8 20v-7h8v7M3 10h18"/></svg>`,
               deliveries: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`,
               finance: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>`,
               system: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>`,
@@ -3766,7 +3768,14 @@
             if (!this.isWorkshop) tasks.unshift(this.loadCustomers(), this.loadCustomerOptions());
             await Promise.all(tasks);
           },
-          async go(page) { this.activePage = page; await this.loadPage(page); },
+          async go(page) {
+            if (page === "warehouse") {
+              window.location.href = "/warehouse.html";
+              return;
+            }
+            this.activePage = page;
+            await this.loadPage(page);
+          },
           async loadPage(page) {
             this.loading = true;
             try {

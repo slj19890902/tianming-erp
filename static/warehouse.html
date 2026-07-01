@@ -28,11 +28,12 @@
   </header>
   <main class="wrap">
     <div class="tabs">
-      <button class="btn active" data-tab="finished">成品库存</button>
-      <button class="btn" data-tab="semi_finished">半成品库存</button>
+      <button class="btn active" data-tab="finished">成品仓</button>
+      <button class="btn" data-tab="semi_finished">半成品仓</button>
       <button class="btn" data-tab="movements">库存流水</button>
       <button class="btn admin-only" data-tab="locations">库位管理</button>
     </div>
+    <div id="pageError" class="panel hidden" style="border-color:#fecaca;color:#991b1b"></div>
 
     <section id="inventorySection">
       <div class="panel">
@@ -120,17 +121,39 @@
     const state={user:null,tab:"finished",locations:[],customers:[],lots:[]};
     const $=id=>document.getElementById(id);
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
-    async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok)throw new Error(typeof body.detail==="string"?body.detail:"操作失败，请刷新后重试");return body}
+    async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok){const error=new Error(typeof body.detail==="string"?body.detail:"操作失败，请刷新后重试");error.status=r.status;throw error}return body}
     function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
     function today(){return new Date().toISOString().slice(0,10)}
     function options(select,items,placeholder){select.innerHTML=`<option value="">${placeholder}</option>`+items.map(x=>`<option value="${x.id}">${x.label}</option>`).join("")}
+    function showPageError(message){
+      $("pageError").textContent=message;
+      $("pageError").classList.remove("hidden");
+      $("inventorySection").classList.add("hidden");
+      document.querySelector(".tabs").classList.add("hidden");
+    }
     async function init(){
-      try{state.user=await api("/api/auth/me")}catch{location.href="/";return}
-      if(!["admin","workshop"].includes(state.user.role)){location.href="/";return}
+      try{
+        const authResponse=await api("/api/auth/me");
+        state.user=authResponse.user;
+      }catch(error){
+        if(error.status===401){location.href="/?next=%2Fwarehouse.html";return}
+        showPageError(`登录状态检查失败：${error.message}`);
+        return;
+      }
+      if(!state.user||!["admin","workshop"].includes(state.user.role)){
+        showPageError("当前账号没有仓库库存管理权限，请联系管理员。");
+        return;
+      }
       $("userName").textContent=state.user.real_name||state.user.username;
       if(state.user.role!=="admin")document.querySelectorAll(".admin-only").forEach(x=>x.classList.add("hidden"));
       $("fgDate").value=$("siDate").value=today();
-      bind();await Promise.all([loadLocations(),loadCustomers()]);await loadLots();
+      bind();
+      try{
+        await Promise.all([loadLocations(),loadCustomers()]);
+        await loadLots();
+      }catch(error){
+        showPageError(`仓库页面初始化失败：${error.message}`);
+      }
     }
     function bind(){
       document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));

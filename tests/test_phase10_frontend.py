@@ -85,7 +85,7 @@ def test_phase10_frontend_enforces_auth_and_workshop_finance_masking() -> None:
     assert "sensitive-price" in source
     assert 'finance: ["dashboard", "customers", "orders", "finance"]' in source
     assert 'sales: ["dashboard", "customers", "orders", "requisition", "deliveries"]' in source
-    assert 'workshop: ["dashboard", "orders", "incoming", "deliveries"]' in source
+    assert 'workshop: ["dashboard", "orders", "incoming", "warehouse", "deliveries"]' in source
     assert 'v-if="isWorkshop || canAdmin"' in source
 
 

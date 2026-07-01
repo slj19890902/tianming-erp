@@ -91,12 +91,16 @@
         </table>
         <div id="lotEmpty" class="empty hidden">暂无库存记录</div>
       </div>
+      <div id="reservationPanel" class="panel table-wrap hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center"><h2 id="reservationTitle">成品库存预占记录</h2><button class="btn" onclick="$('reservationPanel').classList.add('hidden')">关闭</button></div>
+        <table><thead><tr><th>预占时间</th><th>订单</th><th>客户/产品</th><th>预占数量</th><th>状态</th><th>释放时间/原因</th></tr></thead><tbody id="reservationBody"></tbody></table>
+      </div>
     </section>
 
     <section id="movementSection" class="hidden">
       <div class="panel toolbar">
         <input id="movementLot" style="width:220px" placeholder="库存批次号">
-        <select id="movementType" style="width:180px"><option value="">全部流水类型</option><option value="manual_in">手工入库</option><option value="adjust">库存调整</option><option value="freeze">冻结</option><option value="unfreeze">解冻</option><option value="damage">报损</option><option value="scrap">报废</option><option value="transfer_to_general">转通用库存</option></select>
+        <select id="movementType" style="width:180px"><option value="">全部流水类型</option><option value="manual_in">手工入库</option><option value="reserve">成品预占</option><option value="release_reserve">释放预占</option><option value="adjust">库存调整</option><option value="freeze">冻结</option><option value="unfreeze">解冻</option><option value="damage">报损</option><option value="scrap">报废</option><option value="transfer_to_general">转通用库存</option></select>
         <button id="refreshMovements" class="btn">查询</button>
       </div>
       <div class="panel table-wrap"><table><thead><tr><th>时间</th><th>流水号</th><th>库存批次</th><th>类型</th><th>数量</th><th>可用数量变化</th><th>原因</th></tr></thead><tbody id="movementBody"></tbody></table></div>
@@ -120,7 +124,7 @@
   <script>
     const state={user:null,tab:"finished",locations:[],customers:[],lots:[]};
     const $=id=>document.getElementById(id);
-    const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
+    const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
     async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok){const error=new Error(typeof body.detail==="string"?body.detail:"操作失败，请刷新后重试");error.status=r.status;throw error}return body}
     function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
     function today(){return new Date().toISOString().slice(0,10)}
@@ -199,15 +203,24 @@
     }
     function renderLots(){
       const finished=state.tab==="finished";
-      $("lotHead").innerHTML=finished?`<tr><th>批次/状态</th><th>客户</th><th>存货编码/产品</th><th>规格</th><th>材质/楞型</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`:`<tr><th>批次/状态</th><th>供应商/客户</th><th>材质/楞型</th><th>实际尺寸</th><th>片料类型/说明</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`;
+      $("lotHead").innerHTML=finished?`<tr><th>批次/状态</th><th>客户</th><th>存货编码/产品</th><th>规格</th><th>材质/楞型</th><th>库位</th><th>可用</th><th>已预占</th><th>已消耗</th><th>库龄</th><th>操作</th></tr>`:`<tr><th>批次/状态</th><th>供应商/客户</th><th>材质/楞型</th><th>实际尺寸</th><th>片料类型/说明</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`;
       $("lotBody").innerHTML=state.lots.map(row=>{
         const d=row.detail,w=row.age_warning_level?`<span class="tag ${row.age_warning_level==="cleanup"?"red":"warn"}" title="${row.age_warning_text}">${row.age_days}天</span>`:`${row.age_days}天`;
         const common=`<td><b>${row.lot_number}</b><br><span class="tag">${labels[row.status]||row.status}</span></td>`;
         const detail=finished?`<td>${d.is_general?"通用库存":(d.owner_customer_name||"-")}</td><td>${d.inventory_code||"-"}<br>${d.product_name||"-"}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td>${d.material_code||"-"} / ${d.flute_type||"-"}</td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
-        return `<tr>${common}${detail}<td>${row.location.location_code}</td><td><b>${row.quantity_available}</b> ${labels[row.unit]}</td><td>${w}</td><td class="actions">${actionButtons(row)}</td></tr>`}).join("");
+        const balances=finished?`<td><b>${row.quantity_available}</b> 个</td><td><button class="btn" onclick="showLotReservations(${row.id},'${row.lot_number}')">${row.quantity_reserved} 个</button></td><td>${row.quantity_consumed} 个</td>`:`<td><b>${row.quantity_available}</b> ${labels[row.unit]}</td>`;
+        return `<tr>${common}${detail}<td>${row.location.location_code}</td>${balances}<td>${w}</td><td class="actions">${actionButtons(row)}</td></tr>`}).join("");
       $("lotEmpty").classList.toggle("hidden",state.lots.length>0);
       const available=state.lots.reduce((n,x)=>n+x.quantity_available,0),frozen=state.lots.filter(x=>x.status==="frozen").length;
       $("lotSummary").innerHTML=`<span>批次 <strong>${state.lots.length}</strong></span><span>当前可用 <strong>${available}</strong> ${finished?"个":"张/片"}</span><span>冻结批次 <strong>${frozen}</strong></span>`;
+    }
+    async function showLotReservations(lotId,lotNumber){
+      try{
+        const data=await api(`/api/warehouse/reservations?inventory_lot_id=${lotId}`);
+        $("reservationTitle").textContent=`${lotNumber} 成品库存预占记录`;
+        $("reservationBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${x.reserved_at?new Date(x.reserved_at).toLocaleString():"-"}</td><td>${x.order_number||"-"}</td><td>${x.customer_name||"-"}<br>${x.product_name||"-"}</td><td><b>${x.reserved_stock_quantity}</b> 个</td><td>${labels[x.status]||x.status}</td><td>${x.released_at?new Date(x.released_at).toLocaleString():"-"}<br>${x.release_reason||""}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无预占记录</td></tr>`;
+        $("reservationPanel").classList.remove("hidden");
+      }catch(err){toast(err.message,true)}
     }
     function actionButtons(row){
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";

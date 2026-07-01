@@ -1378,12 +1378,12 @@
                   :class="['btn','small','supplier-count-button',{active:requisitionSupplierFilter===row.supplier_name}]"
                   @click="requisitionSupplierFilter=row.supplier_name">{{ row.supplier_name }}（{{ row.count }}）</button>
               </div>
-              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品</th><th>规格</th><th>报料尺寸</th><th>压线</th><th>供应商 / 材质</th><th>订单数</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ row.specification }}</td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}<div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td style="font-size:12px">{{ formatCrease(row) }}</td><td>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></td><td>{{ row.quantity }}</td><td>{{ row.delivery_date || "-" }}</td><td><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求小片数</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="row.item_id" :class="{ 'requisition-selected': requisitionSelected[row.item_id] }"><td><input type="checkbox" v-model="requisitionSelected[row.item_id]" :disabled="row.fully_covered_by_finished_inventory" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></td><td style="font-size:12px;white-space:nowrap">{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}<div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td>{{ row.required_piece_qty }}</td><td>{{ row.delivery_date || "-" }}</td><td><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
               <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>材质</th><th>纸板规格</th><th>报料数</th><th>开料方式</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.item_id"><td>{{ displayOrderNumber(row) }}</td><td>{{ row.customer_name }}</td><td>{{ plainProductText(row.product_code) }} · {{ plainProductText(row.product_name) }}</td><td>{{ row.material }}</td><td>{{ formatBoardSpec(row.cardboard_len, row.cardboard_width) }}</td><td>{{ row.requisition_qty }}</td><td>{{ row.cutting_mode || row.special_process }}</td><td><status-tag :value="row.requisition_status"></status-tag></td><td><div class="toolbar-group"><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="user.role==='admin' && row.requisition_status !== '已结算'" class="btn small danger" @click="cancelRequisition(row)">取消报料</button></div></td></tr></tbody></table></data-panel>
               <!-- 供应商报料单列表 -->
               <data-panel v-else-if="requisitionTab==='supplierOrders'" :empty="!supplierOrders.length">
                 <table>
-                  <thead><tr><th>报料单号</th><th>供应商</th><th>规格(宽×长)</th><th>压线</th><th>材质</th><th>总数量</th><th>库存抵扣</th><th>实际报料数</th><th>状态</th><th>日期</th><th>操作</th></tr></thead>
+                  <thead><tr><th>报料单号</th><th>供应商</th><th>规格(宽×长)</th><th>压线</th><th>材质</th><th>需生产数量</th><th>实际报料数</th><th>状态</th><th>日期</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr v-for="so in supplierOrders" :key="so.id" :class="{'row-voided': so.status==='voided'}">
                       <td><strong>{{ so.order_number }}</strong></td>
@@ -1392,7 +1392,6 @@
                       <td style="font-size:12px">{{ so.crease_display }}</td>
                       <td>{{ so.material_display || so.material_code || '-' }}</td>
                       <td>{{ so.total_quantity }}</td>
-                      <td>{{ so.stock_deduction_qty }}</td>
                       <td><strong>{{ so.requisition_qty }}</strong></td>
                       <td><span :class="['status', so.status==='voided'?'red':'green']">{{ so.status==='voided'?'已作废':'有效' }}</span></td>
                       <td style="font-size:12px">{{ so.created_at ? so.created_at.slice(0,10) : '-' }}</td>
@@ -2409,6 +2408,32 @@
                 <div class="cost-metric primary"><label>总预估毛利</label><strong>{{ orderItemForm.cost_status === "calculated" ? `¥ ${money(orderItemTotalGrossProfit(orderItemForm))}` : "待计算" }}</strong></div>
                 <div class="cost-metric"><label>图纸</label><a v-if="orderItemForm.drawing_file" class="btn small" :href="orderItemForm.drawing_file" target="_blank">查看图纸</a><span v-else class="muted">无图纸</span></div>
               </div>
+              <div class="panel" style="margin:10px 0;padding:12px">
+                <div class="section-title">成品库存抵扣</div>
+                <div class="summary" style="margin-bottom:10px">
+                  <span>订单数量：<strong>{{ orderItemForm.quantity }}</strong></span>
+                  <span>已预占成品库存：<strong>{{ orderItemForm.finished_inventory_reserved_qty || 0 }}</strong></span>
+                  <span>需生产数量：<strong>{{ orderItemForm.production_required_qty ?? orderItemForm.quantity }}</strong></span>
+                  <span>需报料数量：<strong>{{ orderItemForm.production_required_qty ?? orderItemForm.quantity }}</strong></span>
+                </div>
+                <div class="toolbar-group">
+                  <button v-if="canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small" @click="loadFinishedInventoryCandidates()">查看可用成品库存</button>
+                  <span v-else-if="orderItemForm.requisition_status!=='未报料'" class="status orange">订单已进入报料，如需抵扣请先取消报料</span>
+                </div>
+                <div v-if="finishedInventoryCandidatesLoaded && !finishedInventoryCandidates.length" class="muted" style="margin-top:8px">暂无可用成品库存</div>
+                <table v-if="finishedInventoryCandidates.length" style="margin-top:8px">
+                  <thead><tr><th>批次</th><th>客户归属</th><th>库位</th><th>规格/材质</th><th>可用</th><th>抵扣数量</th><th>操作</th></tr></thead>
+                  <tbody><tr v-for="candidate in finishedInventoryCandidates" :key="candidate.lot_id">
+                    <td>{{ candidate.lot_number }}</td><td>{{ candidate.is_general ? "通用库存" : candidate.customer_name }}<div v-for="message in candidate.warning_messages" :key="message" class="status orange">{{ message }}</div></td><td>{{ candidate.warehouse_location }}</td><td>{{ candidate.specification }}<br>{{ candidate.material_display }}</td><td>{{ candidate.quantity_available }}</td>
+                    <td><input class="input compact-input" type="number" min="1" :max="Math.min(candidate.quantity_available,finishedInventoryRemainingRequirement)" v-model.number="candidate._reserve_qty" /></td>
+                    <td><button type="button" class="btn small primary" @click="confirmFinishedInventoryReservation(candidate)">人工确认抵扣</button></td>
+                  </tr></tbody>
+                </table>
+                <table v-if="finishedInventoryReservations.length" style="margin-top:10px">
+                  <thead><tr><th>库存批次</th><th>预占数量</th><th>状态</th><th>预占时间</th><th>操作</th></tr></thead>
+                  <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small danger" @click="releaseFinishedInventoryReservation(reservation)">取消抵扣</button></td></tr></tbody>
+                </table>
+              </div>
               <div :class="['status',orderItemForm.product_id?'blue':'orange']">{{ orderItemForm.product_id ? "保存后将同步更新该常用箱资料。" : "当前明细未关联常用箱，本次只保存订单明细。" }}</div>
               <div v-if="canSales" class="danger-zone">
                 <div class="danger-zone-head" @click="showOrderItemDanger=!showOrderItemDanger">
@@ -2435,7 +2460,7 @@
               <div class="section-title">只读订单详情</div>
               <table><thead><tr>
                 <th>明细编号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
-                <th>材质</th><th>生产说明</th><th>数量</th>
+                <th>材质</th><th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                 <th>报料尺寸</th><th>压线</th>
                 <th v-if="!isWorkshop" class="sensitive-price">单价</th>
                 <th v-if="!isWorkshop" class="sensitive-price">金额</th>
@@ -2449,6 +2474,8 @@
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}</td>
                 <td>{{ item.quantity }}</td>
+                <td>{{ item.finished_inventory_reserved_qty || 0 }}</td>
+                <td><strong>{{ item.production_required_qty }}</strong></td>
                 <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
                 <td style="font-size:12px">{{ formatCrease(item) }}</td>
                 <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td>
@@ -2475,12 +2502,7 @@
                   <span class="muted">{{ sg.supplier_name || '未设供应商' }}｜{{ sg.material_display || '-' }}</span>
                   <span class="status green">{{ sg.member_count }}款</span>
                   <span v-for="warning in sg.dimension_warnings || []" :key="warning" class="status orange">{{ warning }}</span>
-                  <div style="display:flex;align-items:center;gap:6px">
-                    <label style="font-size:12px;white-space:nowrap">库存抵扣：</label>
-                    <input type="number" class="input" style="width:70px;padding:2px 6px" min="0" :max="sg.total_quantity"
-                           v-model.number="mergeSuggestionsDeduction[sgIndex]" @input="updateSgReqQty(sg, sgIndex)" />
-                    <span class="purchase-qty-cell" style="padding:5px 9px;border-radius:7px">采购张数：<strong style="font-size:18px">{{ supplierSuggestionPurchaseQty(sg, sgIndex) }}</strong></span>
-                  </div>
+                  <span class="purchase-qty-cell" style="padding:5px 9px;border-radius:7px">采购张数：<strong style="font-size:18px">{{ supplierSuggestionPurchaseQty(sg, sgIndex) }}</strong></span>
                   <button class="btn small primary" :disabled="loading" @click="generateSupplierOrder(sg, sgIndex)">生成供应商报料单</button>
                   <button class="btn small" @click="mergeSuggestionsExpanded[sgIndex] = !mergeSuggestionsExpanded[sgIndex]">
                     {{ mergeSuggestionsExpanded[sgIndex] ? '收起' : '展开明细' }}
@@ -2488,13 +2510,15 @@
                 </div>
                 <div v-if="mergeSuggestionsExpanded[sgIndex]">
                   <table style="font-size:12px">
-                    <thead><tr><th>客户 / 存货编码</th><th>产品 / 规格</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>采购张数</th><th>交期</th><th>操作</th></tr></thead>
+                    <thead><tr><th>客户 / 存货编码</th><th>产品 / 规格</th><th>供应商 / 材质</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th><th class="pieces-per-box-cell">每箱</th><th>采购张数</th><th>交期</th><th>操作</th></tr></thead>
                     <tbody>
                       <tr v-for="m in sg.members" :key="m.item_id">
                         <td>{{ shortCustomerName(m.customer_name) }}<br><strong>{{ m.product_code }}</strong></td>
                         <td class="requisition-product-cell"><div class="requisition-product-name" :title="m.product_name">{{ m.product_name }}</div><span class="muted">{{ m.specification || "-" }}</span></td>
                         <td>{{ m.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ m.material_display || '-' }}</span></td>
                         <td>{{ m.quantity }}</td>
+                        <td>{{ m.finished_inventory_reserved_qty || 0 }}</td>
+                        <td><strong>{{ m.production_required_qty }}</strong></td>
                         <td class="pieces-per-box-cell">{{ m.pieces_per_box }}片</td>
                         <td><strong>{{ m.requisition_qty }}</strong></td>
                         <td>{{ m.delivery_date || '-' }}</td>
@@ -2543,7 +2567,7 @@
             </div>
             <div v-else-if="modal.type === 'requisition'">
               <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
-              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th class="pieces-per-box-cell">每箱</th><th>抵扣库存(小片)</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td><input class="input compact-input" type="number" min="0" step="1" v-model.number="line.inventory_deducted_qty" @input="autoRequisitionQty(line)" /></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
+              <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th><th class="pieces-per-box-cell">每箱</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="line.order_item_id" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span><br><button class="btn small" type="button" @click="openRequisitionMaterialChange({...line,item_id:line.order_item_id})">更换材质</button></td><td>{{ line.quantity }}</td><td>{{ line.finished_inventory_reserved_qty || 0 }}</td><td><strong>{{ line.production_required_qty }}</strong></td><td class="pieces-per-box-cell">{{ line.pieces_per_box }}片</td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.requisition_qty" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
               <div class="muted" style="margin-top:8px">订单数量仍是成品数量；采购张数是本次向供应商报料和入库的主数量。</div>
             </div>
             <div v-else-if="modal.type === 'receipt'">
@@ -3055,6 +3079,8 @@
             productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
+            finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
+            finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             statementsTotal: 0, invoicesTotal: 0, pageSize: 25,
             pages: { customers: 1, products: 1, orders: 1, deliveries: 1, statements: 1, invoices: 1 },
@@ -3398,6 +3424,13 @@
             return rows.length > 0 && rows.every(row => this.incomingSelected[row.item_id]);
           },
           allDeliverySelected() { return this.deliveryOptions.length > 0 && this.deliveryOptions.every(row => this.deliveryForm.selected[row.item_id]); },
+          finishedInventoryRemainingRequirement() {
+            return Math.max(
+              Number(this.orderItemForm.quantity || 0)
+              - Number(this.orderItemForm.finished_inventory_reserved_qty || 0),
+              0
+            );
+          },
           allStatementSelected() { return this.pendingStatements.length > 0 && this.pendingStatements.every(row => this.statementForm.selected[row.return_receipt_item_id]); }
         },
         watch: {
@@ -4891,7 +4924,7 @@
             const values=(this.materialForm.code.match(/\d+(?:\.\d+)?/g)||[]);
             if (values.length>=3) this.materialForm.basis_weight_description=values.map(value=>`${value}g`).join("/");
           },
-          toggleAllRequisition(checked) { this.filteredRequisitionPending.forEach(row=>this.requisitionSelected[row.item_id]=checked); },
+          toggleAllRequisition(checked) { this.filteredRequisitionPending.forEach(row=>this.requisitionSelected[row.item_id]=checked && !row.fully_covered_by_finished_inventory); },
           // ===== 报料合并建议 =====
           openMergeSuggestions() {
             this.mergeSuggestionsDeduction = {};
@@ -4926,21 +4959,17 @@
             sg._deduction = deduct;
           },
           supplierSuggestionPurchaseQty(sg, sgIndex) {
-            const deduct = Number(this.mergeSuggestionsDeduction[sgIndex] || 0);
-            const remainingPieces = Math.max(Number(sg.total_required_piece_qty || 0) - deduct, 0);
-            return Math.ceil(remainingPieces / this.cuttingModeFactor(sg.cutting_mode || "一开一"));
+            return Math.ceil(Number(sg.total_required_piece_qty || 0) / this.cuttingModeFactor(sg.cutting_mode || "一开一"));
           },
           async generateSupplierOrder(sg, sgIndex) {
             if (this.loading) return;
-            const deduct = this.mergeSuggestionsDeduction[sgIndex] || 0;
-            // 均摊库存抵扣到各明细（按数量比例，或全扣最后一条）
             const factor = this.cuttingModeFactor(sg.cutting_mode || "一开一");
             const members = sg.members.map(m => ({
               item_id: m.item_id,
               order_number: m.order_number,
               product_code: m.product_code,
               product_name: m.product_name,
-              quantity: m.quantity,
+              quantity: m.production_required_qty,
               pieces_per_box: m.pieces_per_box,
               required_piece_qty: m.required_piece_qty,
               cutting_mode: sg.cutting_mode || "一开一",
@@ -4966,18 +4995,6 @@
               required_piece_qty: sg.total_required_piece_qty || 0,
               members,
             };
-            // 调整 requisition_qty：全部合计后减去库存抵扣
-            // 库存按小片口径依次抵扣，再按开料数向上换算采购张数。
-            let remaining = deduct;
-            for (const m of payload.members) {
-              const d = Math.min(remaining, Number(m.required_piece_qty || 0));
-              m.stock_deduction_qty = d;
-              m.requisition_qty = Math.ceil(
-                Math.max(Number(m.required_piece_qty || 0) - d, 0) / factor
-              );
-              remaining -= d;
-              if (remaining <= 0) break;
-            }
             this.loading = true;
             try {
               const resp = await axios.post('/api/requisition/supplier-orders', payload);
@@ -5919,6 +5936,9 @@
           async openOrderItem(order, item) {
             this.orderItemOrder = order;
             this.showOrderItemDanger = false;
+            this.finishedInventoryCandidates = [];
+            this.finishedInventoryCandidatesLoaded = false;
+            this.finishedInventoryReservations = [];
             const mat = this.allMaterials.find(m => m.id === item.material_id);
             let product = {};
             if (item.product_id) {
@@ -5934,6 +5954,9 @@
               product_name:item.snapshot_product_name || "", material:item.display_material || this.displayMaterialText(item.snapshot_material) || "",
               specification:item.snapshot_spec || "", production_notes:item.snapshot_production_notes || "",
               quantity:item.quantity, unit_price:this.money(item.unit_price),
+              requisition_status:item.requisition_status || "未报料",
+              finished_inventory_reserved_qty:Number(item.finished_inventory_reserved_qty || 0),
+              production_required_qty:Number(item.production_required_qty ?? item.quantity),
               cost_status:item.cost_status || "pending", estimated_cost:item.estimated_cost || null,
               material_id: item.material_id || null,
               layer_count: item.layer_count || null,
@@ -5961,6 +5984,78 @@
               _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
             };
             this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
+            await this.loadFinishedInventoryReservations(item.id);
+          },
+          async loadFinishedInventoryCandidates() {
+            try {
+              const {data}=await axios.get("/api/warehouse/finished/candidates",{params:{order_item_id:this.orderItemForm.id}});
+              this.finishedInventoryCandidates=(data.items||[]).map(row=>({
+                ...row,
+                _reserve_qty:Math.min(Number(row.quantity_available||0),Number(data.remaining_requirement||0)),
+              }));
+              this.finishedInventoryCandidatesLoaded=true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async loadFinishedInventoryReservations(itemId=this.orderItemForm.id) {
+            if (!itemId) return;
+            try {
+              const {data}=await axios.get("/api/warehouse/reservations",{params:{order_item_id:itemId}});
+              this.finishedInventoryReservations=data.items||[];
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async refreshOrderItemInventorySummary() {
+            if (!this.orderItemOrder?.id) return;
+            const {data}=await axios.get(`/api/orders/${this.orderItemOrder.id}`);
+            const item=data.items.find(row=>row.id===this.orderItemForm.id);
+            if (item) {
+              this.orderItemForm.finished_inventory_reserved_qty=Number(item.finished_inventory_reserved_qty||0);
+              this.orderItemForm.production_required_qty=Number(item.production_required_qty??item.quantity);
+              this.orderItemForm.requisition_status=item.requisition_status||"未报料";
+            }
+          },
+          async confirmFinishedInventoryReservation(candidate) {
+            const quantity=Number(candidate._reserve_qty||0);
+            if (!Number.isInteger(quantity)||quantity<=0) { this.showToast("抵扣数量必须是大于0的整数",true); return; }
+            const general=candidate.warning_codes?.includes("GENERAL_FINISHED_STOCK");
+            if (general&&!confirm("这是通用库存，请确认箱型、尺寸、材质和楞型均适用于当前客户订单。")) return;
+            if (!confirm(`确认用成品库存批次 ${candidate.lot_number} 抵扣 ${quantity} 个订单数量吗？`)) return;
+            try {
+              await axios.post("/api/warehouse/finished/reservations",{
+                order_item_id:this.orderItemForm.id,
+                inventory_lot_id:candidate.lot_id,
+                quantity,
+                expected_version:candidate.version,
+                idempotency_key:crypto.randomUUID(),
+                warning_acknowledged_codes:general?["GENERAL_FINISHED_STOCK"]:[],
+              });
+              await Promise.all([
+                this.refreshOrderItemInventorySummary(),
+                this.loadFinishedInventoryReservations(),
+                this.loadFinishedInventoryCandidates(),
+                this.loadOrders(),
+                this.loadRequisition(),
+              ]);
+              this.showToast("成品库存已确认预占");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async releaseFinishedInventoryReservation(reservation) {
+            const reason=prompt("请输入取消成品库存抵扣原因");
+            if (!reason?.trim()) return;
+            if (!confirm(`确认释放批次 ${reservation.lot_number} 的 ${reservation.reserved_stock_quantity} 个预占吗？`)) return;
+            try {
+              await axios.post(`/api/warehouse/reservations/${reservation.id}/release`,{
+                release_reason:reason.trim(),
+                idempotency_key:crypto.randomUUID(),
+              });
+              await Promise.all([
+                this.refreshOrderItemInventorySummary(),
+                this.loadFinishedInventoryReservations(),
+                this.loadFinishedInventoryCandidates(),
+                this.loadOrders(),
+                this.loadRequisition(),
+              ]);
+              this.showToast("成品库存抵扣已取消");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async deleteCurrentOrderItem() {
             const order = this.orderItemOrder;
@@ -6033,18 +6128,19 @@
             line.cutting_mode = line.special_process;
             line.cutting_factor = this.cuttingModeFactor(line.special_process);
             line.pieces_per_box = Number(line.pieces_per_box || 1);
-            line.required_piece_qty = Math.max(Number(line.quantity || 0) * Number(line.pieces_per_box || 1), 0);
+            line.production_required_qty = Math.max(Number(line.production_required_qty ?? line.quantity ?? 0),0);
+            line.required_piece_qty = Math.max(line.production_required_qty * Number(line.pieces_per_box || 1), 0);
+            line.inventory_deducted_qty = 0;
             const reportLength = Number(line.snapshot_report_length_mm || 0);
             const reportWidth = Number(line.snapshot_report_width_mm || 0);
             if (reportLength > 0) line.cardboard_len = reportLength;
             if (reportWidth > 0) line.cardboard_width = reportWidth * line.cutting_factor;
             if (!preserveManualQty || line.requisition_qty === null || line.requisition_qty === undefined || line.requisition_qty === "") {
-              const remaining = Math.max(line.required_piece_qty - Number(line.inventory_deducted_qty || 0), 0);
-              line.requisition_qty = Math.ceil(remaining / line.cutting_factor);
+              line.requisition_qty = Math.ceil(line.required_piece_qty / line.cutting_factor);
             }
           },
           async openRequisition() {
-            const rows = this.requisitionPending.filter(row => this.requisitionSelected[row.item_id]);
+            const rows = this.requisitionPending.filter(row => this.requisitionSelected[row.item_id] && !row.fully_covered_by_finished_inventory);
             if (!rows.length) { this.showToast("请先勾选待报料明细", true); return; }
             const suppliers = [...new Set(rows.map(row => row.snapshot_supplier_name).filter(Boolean))];
             if (suppliers.length > 1) {
@@ -6060,6 +6156,8 @@
               layer_count:row.layer_count || null,
               flute_type:row.flute_type || null,
               inventory_deducted_qty:Number(row.inventory_deducted_qty || 0),
+              finished_inventory_reserved_qty:Number(row.finished_inventory_reserved_qty || 0),
+              production_required_qty:Number(row.production_required_qty ?? row.quantity ?? 0),
               requisition_qty:Number(row.requisition_qty ?? 0),
               cardboard_len:row.suggested_cardboard_len, cardboard_width:row.suggested_cardboard_width,
               special_process:this.normalizeCuttingMode(row.cutting_mode || row.special_process),

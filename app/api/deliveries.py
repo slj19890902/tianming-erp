@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,9 @@ from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
+from app.models.warehouse_inventory import InventoryReservation
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.warehouse_inventory import active_finished_reserved_qty
 
 
 router = APIRouter()
@@ -108,6 +110,20 @@ def _next_delivery_number(db: Session, delivery_date: date) -> str:
 
 
 def _pending_query():
+    active_finished_reserved = (
+        select(
+            func.coalesce(
+                func.sum(InventoryReservation.credited_requirement_quantity), 0
+            )
+        )
+        .where(
+            InventoryReservation.order_item_id == OrderItem.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status == "active",
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
     return (
         select(
             OrderItem.id.label("item_id"),
@@ -132,7 +148,10 @@ def _pending_query():
         .join(Customer, Customer.id == Order.customer_id)
         .join(Product, Product.id == OrderItem.product_id)
         .where(
-            OrderItem.material_status == "received",
+            or_(
+                OrderItem.material_status == "received",
+                active_finished_reserved >= OrderItem.quantity,
+            ),
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
@@ -312,8 +331,15 @@ def _collect_delivery_lines(
                 status_code=400,
                 detail=f"第{index}条订单明细不属于当前客户",
             )
+        full_finished_reservation = (
+            active_finished_reserved_qty(db, order_item.id)
+            >= order_item.quantity
+        )
         if (
-            order_item.material_status != "received"
+            (
+                order_item.material_status != "received"
+                and not full_finished_reservation
+            )
             or order_item.is_force_closed
             or remaining <= 0
         ):

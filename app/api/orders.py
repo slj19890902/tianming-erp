@@ -58,6 +58,12 @@ from app.services.product_import import (
     parse_dimensions,
     resolve_or_create_product,
 )
+from app.services.warehouse_inventory import (
+    WarehouseInventoryError,
+    active_finished_reserved_qty,
+    active_finished_reservations_by_item_ids,
+    release_active_finished_reservations_for_items,
+)
 
 
 router = APIRouter()
@@ -308,6 +314,13 @@ def _order_response(
     customer_name: str | None = None,
     display_registry=None,
 ) -> dict:
+    reservation_map = (
+        active_finished_reservations_by_item_ids(
+            db, [item.id for item in order.items]
+        )
+        if db is not None
+        else {}
+    )
     data = {
         "id": order.id,
         **serialize_order_number_fields(order, display_registry),
@@ -324,6 +337,10 @@ def _order_response(
         "items": [],
     }
     for item in order.items:
+        finished_reserved_quantity = reservation_map.get(item.id, 0)
+        production_required_quantity = max(
+            item.quantity - finished_reserved_quantity, 0
+        )
         cost_reference = (
             calculate_draft_cost(db, item.product_id, item.material_id)
             if db is not None and user.role != "workshop"
@@ -375,6 +392,11 @@ def _order_response(
                     else None
                 ),
                 "inventory_deducted_qty": item.inventory_deducted_qty,
+                "finished_inventory_reserved_qty": finished_reserved_quantity,
+                "production_required_qty": production_required_quantity,
+                "fully_covered_by_finished_inventory": (
+                    production_required_quantity == 0
+                ),
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": item.requisition_status,
                 "special_process": item.special_process,
@@ -885,6 +907,31 @@ def _flow_delete_message(labels: list[str]) -> str:
     return f"该订单已进入{flow_text}流程，不能直接删除。"
 
 
+def _release_order_reservations(
+    db: Session,
+    *,
+    order_item_ids: list[int],
+    operator_id: int | None,
+    reason: str,
+    idempotency_prefix: str,
+    allow_downstream: bool = False,
+) -> None:
+    try:
+        release_active_finished_reservations_for_items(
+            db,
+            order_item_ids=order_item_ids,
+            operator_id=operator_id,
+            reason=reason,
+            idempotency_prefix=idempotency_prefix,
+            allow_downstream=allow_downstream,
+        )
+    except WarehouseInventoryError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+
+
 def _delete_orders_in_transaction(
     db: Session,
     *,
@@ -894,6 +941,14 @@ def _delete_orders_in_transaction(
     dependencies = _order_flow_dependencies(db, [order.id for order in orders])
     if dependencies:
         raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))
+    item_ids = [item.id for order in orders for item in order.items]
+    _release_order_reservations(
+        db,
+        order_item_ids=item_ids,
+        operator_id=user.id,
+        reason="删除订单前自动释放成品库存预占",
+        idempotency_prefix="delete-order-reservation",
+    )
     for order in orders:
         db.add(
             OperationLog(
@@ -950,6 +1005,13 @@ def update_order_status(
     if remark:
         order.remark = remark
     if target in FINAL_ORDER_STATUSES:
+        _release_order_reservations(
+            db,
+            order_item_ids=[item.id for item in order.items],
+            operator_id=user.id,
+            reason=f"订单状态变更为{target}，自动释放成品库存预占",
+            idempotency_prefix=f"order-status-{order.id}-{target}",
+        )
         for item in order.items:
             item.is_force_closed = True
     db.add(
@@ -1141,6 +1203,14 @@ def rollback_order_workflow(
             item.supplier_delivery_time = None
             item.supplier_order_number = None
             item.requisition_remark = None
+        _release_order_reservations(
+            db,
+            order_item_ids=item_ids,
+            operator_id=user.id,
+            reason="订单流程撤回，自动释放成品库存预占",
+            idempotency_prefix=f"rollback-order-{order.id}",
+            allow_downstream=True,
+        )
         order.status = "pending_production"
         order.payment_status = "unpaid"
         db.add(
@@ -1550,6 +1620,15 @@ def update_order_item(
         raise HTTPException(status_code=409, detail="已发货明细禁止修改")
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改")
+    finished_reserved_qty = active_finished_reserved_qty(db, item.id)
+    if payload.quantity < finished_reserved_qty:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"订单数量不能小于已预占成品库存 {finished_reserved_qty}，"
+                "请先取消成品库存抵扣"
+            ),
+        )
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="请先取消报料再修改订单明细")
     if payload.quantity <= 0:
@@ -1731,6 +1810,13 @@ def delete_order_item(
         "product_name": item.snapshot_product_name,
         "quantity": item.quantity,
     }
+    _release_order_reservations(
+        db,
+        order_item_ids=[item.id],
+        operator_id=user.id,
+        reason="删除订单明细前自动释放成品库存预占",
+        idempotency_prefix=f"delete-order-item-{item.id}",
+    )
     db.delete(item)
     db.flush()
     _refresh_total(db, order)

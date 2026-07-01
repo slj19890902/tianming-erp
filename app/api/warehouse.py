@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
@@ -12,17 +13,23 @@ from app.api.deps import RoleChecker, get_db
 from app.models.user import User
 from app.models.customer import Customer
 from app.models.product import Product
+from app.models.order import Order, OrderItem
 from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryMovement,
+    InventoryReservation,
     WarehouseLocation,
 )
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
+    active_finished_reserved_qty,
+    finished_inventory_candidates,
     inventory_age_warning,
     manual_finished_in,
     manual_semi_finished_in,
     mutate_lot,
+    release_finished_reservation,
+    reserve_finished_inventory,
 )
 
 
@@ -30,6 +37,8 @@ router = APIRouter()
 can_read = RoleChecker(["admin", "workshop"])
 can_operate = RoleChecker(["admin", "workshop"])
 admin_only = RoleChecker(["admin"])
+can_reserve = RoleChecker(["admin", "sales"])
+can_view_reservations = RoleChecker(["admin", "sales", "workshop"])
 VALID_SOURCE_TYPES = {
     "manual",
     "production_surplus",
@@ -140,6 +149,28 @@ class AdjustPayload(VersionPayload):
         return value.strip()
 
 
+class FinishedReservationPayload(BaseModel):
+    order_item_id: int
+    inventory_lot_id: int
+    quantity: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+
+
+class ReleaseReservationPayload(BaseModel):
+    release_reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+
+    @field_validator("release_reason")
+    @classmethod
+    def strip_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("取消抵扣必须填写原因")
+        return reason
+
+
 def _handle(error: WarehouseInventoryError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
@@ -248,6 +279,175 @@ def _movement_dict(row: InventoryMovement) -> dict:
         "operator_id": row.operator_id,
         "created_at": row.created_at,
     }
+
+
+def _reservation_dict(
+    row: InventoryReservation,
+    db: Session,
+) -> dict:
+    item = db.get(OrderItem, row.order_item_id) if row.order_item_id else None
+    order = db.get(Order, row.order_id) if row.order_id else None
+    lot = db.get(InventoryLot, row.inventory_lot_id)
+    customer = db.get(Customer, order.customer_id) if order else None
+    warning_codes: list[str] = []
+    if row.warning_codes:
+        try:
+            parsed = json.loads(row.warning_codes)
+            warning_codes = parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            warning_codes = [row.warning_codes]
+    return {
+        "id": row.id,
+        "reservation_number": row.reservation_number,
+        "reservation_type": row.reservation_type,
+        "inventory_lot_id": row.inventory_lot_id,
+        "lot_number": lot.lot_number if lot else None,
+        "order_id": row.order_id,
+        "order_item_id": row.order_item_id,
+        "order_number": order.order_number if order else None,
+        "customer_name": customer.name if customer else None,
+        "product_name": item.snapshot_product_name if item else None,
+        "reserved_stock_quantity": row.reserved_stock_quantity,
+        "credited_requirement_quantity": row.credited_requirement_quantity,
+        "status": row.status,
+        "warning_codes": warning_codes,
+        "reserved_at": row.reserved_at,
+        "released_at": row.released_at,
+        "release_reason": row.release_reason,
+    }
+
+
+@router.get("/finished/candidates")
+def finished_candidates(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        item = db.get(OrderItem, order_item_id)
+        if item is None:
+            raise WarehouseInventoryError("订单明细不存在", 404)
+        reserved = active_finished_reserved_qty(db, order_item_id)
+        rows = finished_inventory_candidates(db, order_item_id)
+        return {
+            "order_item_id": order_item_id,
+            "order_quantity": item.quantity,
+            "finished_reserved_quantity": reserved,
+            "remaining_requirement": max(item.quantity - reserved, 0),
+            "items": [
+                {
+                    "lot_id": lot.id,
+                    "lot_number": lot.lot_number,
+                    "version": lot.version,
+                    "customer_name": lot.finished_detail.owner_customer_name_snapshot,
+                    "is_general": lot.finished_detail.is_general,
+                    "inventory_code": lot.finished_detail.inventory_code_snapshot,
+                    "product_name": lot.finished_detail.product_name_snapshot,
+                    "specification": " × ".join(
+                        str(value)
+                        for value in (
+                            lot.finished_detail.length_mm,
+                            lot.finished_detail.width_mm,
+                            lot.finished_detail.height_mm,
+                        )
+                        if value is not None
+                    ),
+                    "material_display": " / ".join(
+                        value
+                        for value in (
+                            lot.finished_detail.material_code_snapshot,
+                            lot.finished_detail.flute_type_snapshot,
+                        )
+                        if value
+                    ),
+                    "warehouse_location": (
+                        f"{lot.location.location_code} {lot.location.location_name}"
+                    ),
+                    "quantity_available": lot.quantity_available,
+                    "stock_date": lot.stock_date,
+                    "last_movement_at": lot.last_movement_at,
+                    "warning_codes": (
+                        ["GENERAL_FINISHED_STOCK"]
+                        if lot.finished_detail.is_general
+                        else []
+                    ),
+                    "warning_messages": (
+                        ["通用库存，请人工确认是否用于该客户订单。"]
+                        if lot.finished_detail.is_general
+                        else []
+                    ),
+                }
+                for lot in rows
+            ],
+        }
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/finished/reservations")
+def create_finished_reservation(
+    payload: FinishedReservationPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    try:
+        row = reserve_finished_inventory(
+            db,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return _reservation_dict(row, db)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+
+
+@router.get("/reservations")
+def list_reservations(
+    order_item_id: int | None = None,
+    inventory_lot_id: int | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    query = select(InventoryReservation).where(
+        InventoryReservation.reservation_type == "finished_order"
+    )
+    if order_item_id:
+        query = query.where(InventoryReservation.order_item_id == order_item_id)
+    if inventory_lot_id:
+        query = query.where(
+            InventoryReservation.inventory_lot_id == inventory_lot_id
+        )
+    if status_filter:
+        query = query.where(InventoryReservation.status == status_filter)
+    rows = db.scalars(
+        query.order_by(InventoryReservation.id.desc()).limit(500)
+    ).all()
+    return {"items": [_reservation_dict(row, db) for row in rows]}
+
+
+@router.post("/reservations/{reservation_id}/release")
+def release_reservation(
+    reservation_id: int,
+    payload: ReleaseReservationPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    try:
+        row = release_finished_reservation(
+            db,
+            reservation_id=reservation_id,
+            operator_id=user.id,
+            release_reason=payload.release_reason,
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+        return _reservation_dict(row, db)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
 
 
 @router.get("/locations")
@@ -426,6 +626,14 @@ def get_lot(
             .options(selectinload(InventoryMovement.lot))
             .where(InventoryMovement.inventory_lot_id == lot_id)
             .order_by(InventoryMovement.id.desc())
+        ).all()
+    ]
+    result["reservations"] = [
+        _reservation_dict(item, db)
+        for item in db.scalars(
+            select(InventoryReservation)
+            .where(InventoryReservation.inventory_lot_id == lot_id)
+            .order_by(InventoryReservation.id.desc())
         ).all()
     ]
     return result

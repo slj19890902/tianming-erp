@@ -119,7 +119,7 @@ def _batch_payload() -> dict:
         "items": [
             {
                 "order_item_id": 1,
-                "inventory_deducted_qty": 20,
+                "inventory_deducted_qty": 0,
                 "requisition_qty": 27,
                 "cardboard_len": "1756",
                 "cardboard_width": "1962",
@@ -469,12 +469,12 @@ def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> No
     assert created.json()["requisition_number"].startswith(
         f"BL-{date.today():%Y%m%d}-"
     )
-    assert created.json()["items"][0]["requisition_qty"] == 27
+    assert created.json()["items"][0]["requisition_qty"] == 34
     assert created.json()["items"][0]["cutting_mode"] == "一开三"
     with session_factory() as session:
         item = session.get(OrderItem, 1)
-        assert item.inventory_deducted_qty == 20
-        assert item.requisition_qty == 27
+        assert item.inventory_deducted_qty == 0
+        assert item.requisition_qty == 34
         assert item.requisition_status == "已报料"
         assert item.special_process == "一开三"
         assert session.scalar(select(Requisition)) is not None
@@ -673,13 +673,13 @@ def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> No
     assert row["pieces_per_box"] == 2
     assert row["required_piece_qty"] == 200
     assert created.status_code == 201, created.text
-    assert created.json()["items"][0]["requisition_qty"] == 4
+    assert created.json()["items"][0]["requisition_qty"] == 67
     assert created.json()["items"][0]["cardboard_len"] == "800"
     assert created.json()["items"][0]["cardboard_width"] == "600"
 
     with session_factory() as session:
         item = session.get(OrderItem, 1)
-        assert item.requisition_qty == 4
+        assert item.requisition_qty == 67
         assert item.special_process == "一开三"
 
 

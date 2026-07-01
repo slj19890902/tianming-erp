@@ -215,7 +215,7 @@ class TestSupplierOrders:
         assert data["requisition_qty"] == 6
         assert data["cutting_mode"] == "一开三"
         assert data["pieces_per_box"] == 2
-        assert data["required_piece_qty"] == 10
+        assert data["required_piece_qty"] == 16
         assert len(data["items"]) == 2
         assert data["status"] == "confirmed"
         assert data["crease_display"] == "130+360+130"

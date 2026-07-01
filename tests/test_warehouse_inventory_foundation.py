@@ -332,5 +332,7 @@ def test_schema_and_frontend_expose_foundation_without_deduction_endpoints(tmp_p
     assert "按实际物理张/片记录" in html
     assert "本阶段不做一开几换算" in html
     assert "转为半成品库存" not in api_source
-    assert '@router.post("/reserv' not in api_source
+    assert '@router.post("/finished/reservations")' in api_source
+    assert '@router.post("/semi-finished/reservations")' not in api_source
+    assert "/semi-finished/candidates" not in api_source
     assert "仓库库存管理" in index_html

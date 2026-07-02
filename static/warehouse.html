@@ -89,7 +89,7 @@
           <thead id="lotHead"></thead>
           <tbody id="lotBody"></tbody>
         </table>
-        <div id="lotEmpty" class="empty hidden">暂无库存记录</div>
+        <div id="lotEmpty" class="empty hidden">暂无库存批次</div>
       </div>
       <div id="reservationPanel" class="panel table-wrap hidden">
         <div style="display:flex;justify-content:space-between;align-items:center"><h2 id="reservationTitle">成品库存预占记录</h2><button class="btn" onclick="$('reservationPanel').classList.add('hidden')">关闭</button></div>
@@ -125,7 +125,16 @@
     const state={user:null,tab:"finished",locations:[],customers:[],lots:[]};
     const $=id=>document.getElementById(id);
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
-    async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok){const error=new Error(typeof body.detail==="string"?body.detail:"操作失败，请刷新后重试");error.status=r.status;throw error}return body}
+    function apiErrorMessage(body,status,url){
+      if(typeof body.detail==="string"&&body.detail.trim())return body.detail;
+      if(Array.isArray(body.detail)&&body.detail.length){
+        const fields={location_id:"库位",inventory_type:"库存类型",status:"状态",stale_level:"库龄",keyword:"关键词",page:"页码",page_size:"每页数量"};
+        return body.detail.map(item=>{const field=item.loc&&item.loc.length?item.loc[item.loc.length-1]:"";return `${fields[field]||field||"请求参数"}输入有误`}).join("；");
+      }
+      return `仓库接口请求失败（HTTP ${status}）：${url}`;
+    }
+    async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok){const error=new Error(apiErrorMessage(body,r.status,url));error.status=r.status;throw error}return body}
+    function queryString(values){const p=new URLSearchParams();Object.entries(values).forEach(([key,value])=>{if(value!==""&&value!==null&&value!==undefined)p.set(key,value)});return p.toString()}
     function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
     function today(){return new Date().toISOString().slice(0,10)}
     function options(select,items,placeholder){select.innerHTML=`<option value="">${placeholder}</option>`+items.map(x=>`<option value="${x.id}">${x.label}</option>`).join("")}
@@ -153,8 +162,9 @@
       $("fgDate").value=$("siDate").value=today();
       bind();
       try{
-        await Promise.all([loadLocations(),loadCustomers()]);
-        await loadLots();
+        try{await loadLocations()}catch(error){throw new Error(`库位加载失败：${error.message}`)}
+        try{await loadCustomers()}catch(error){throw new Error(`客户资料加载失败：${error.message}`)}
+        try{await loadLots()}catch(error){throw new Error(`库存批次加载失败：${error.message}`)}
       }catch(error){
         showPageError(`仓库页面初始化失败：${error.message}`);
       }
@@ -198,8 +208,8 @@
       e.preventDefault();try{await api("/api/warehouse/semi-finished/manual-in",{method:"POST",body:JSON.stringify({location_id:+$("siLocation").value,quantity:+$("siQuantity").value,stock_date:$("siDate").value,source_type:$("siSource").value,material_code:$("siMaterial").value,layer_count:+$("siLayer").value,flute_type:$("siFlute").value,board_length_mm:+$("siLength").value,board_width_mm:+$("siWidth").value,sheet_type:$("siSheetType").value,supplier_name:$("siSupplier").value||null,customer_id:$("siCustomer").value?+$("siCustomer").value:null,cutting_note:$("siCuttingNote").value||null,remarks:$("siRemarks").value||null,idempotency_key:crypto.randomUUID()})});toast("半成品入库成功");e.target.reset();$("siDate").value=today();updateFlutes();await loadLots()}catch(err){toast(err.message,true)}
     }
     async function loadLots(){
-      const p=new URLSearchParams({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
-      const data=await api("/api/warehouse/lots?"+p);state.lots=data.items;renderLots();
+      const p=queryString({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
+      const data=await api("/api/warehouse/lots?"+p);state.lots=data.items||[];renderLots();
     }
     function renderLots(){
       const finished=state.tab==="finished";
@@ -236,12 +246,12 @@
       try{await api(`/api/warehouse/lots/${id}/${operation}`,{method:"POST",body:JSON.stringify(body)});toast("库存操作成功");await loadLots()}catch(err){toast(err.message,true)}
     }
     async function loadMovements(){
-      const p=new URLSearchParams({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"});
+      const p=queryString({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"});
       const data=await api("/api/warehouse/movements?"+p);
-      $("movementBody").innerHTML=data.items.map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("");
+      $("movementBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库存流水</td></tr>`;
     }
     function renderLocations(){
-      $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${x.location_code}</td><td>${x.location_name}</td><td>${labels[x.warehouse_type]}</td><td>${x.is_active?"启用":"停用"}</td><td>${x.remarks||"-"}</td><td><button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button></td></tr>`).join("")
+      $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${x.location_code}</td><td>${x.location_name}</td><td>${labels[x.warehouse_type]}</td><td>${x.is_active?"启用":"停用"}</td><td>${x.remarks||"-"}</td><td><button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button></td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无库位</td></tr>`
     }
     function editLocation(id){const x=state.locations.find(v=>v.id===id);$("locationId").value=x.id;$("locationCode").value=x.location_code;$("locationName").value=x.location_name;$("locationType").value=x.warehouse_type;$("locationRemarks").value=x.remarks||""}
     async function saveLocation(e){

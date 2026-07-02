@@ -6,6 +6,10 @@ from pathlib import Path
 import subprocess
 import sys
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WAREHOUSE_HTML = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
@@ -72,6 +76,10 @@ def test_warehouse_page_unauthenticated_and_initialization_failures_are_explicit
     assert 'if(error.status===401){location.href="/?next=%2Fwarehouse.html";return}' in WAREHOUSE_HTML
     assert "登录状态检查失败" in WAREHOUSE_HTML
     assert "仓库页面初始化失败" in WAREHOUSE_HTML
+    assert "库位加载失败" in WAREHOUSE_HTML
+    assert "客户资料加载失败" in WAREHOUSE_HTML
+    assert "库存批次加载失败" in WAREHOUSE_HTML
+    assert "apiErrorMessage" in WAREHOUSE_HTML
     assert 'id="pageError"' in WAREHOUSE_HTML
 
 
@@ -81,6 +89,71 @@ def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
     assert "<script src=" not in WAREHOUSE_HTML
     assert "<link rel=" not in WAREHOUSE_HTML
     assert 'href="/"' in WAREHOUSE_HTML
+    for empty_text in ("暂无库存批次", "暂无库位", "暂无库存流水"):
+        assert empty_text in WAREHOUSE_HTML
+
+
+def test_warehouse_initialization_apis_return_empty_structures(tmp_path: Path) -> None:
+    from app.api import warehouse
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "empty-warehouse.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        admin = User(
+            username="warehouse-admin",
+            password_hash="test",
+            role="admin",
+            real_name="仓库管理员",
+            must_change_password=False,
+        )
+        db.add(admin)
+        db.commit()
+        admin_id = admin.id
+
+    app = FastAPI()
+    app.include_router(warehouse.router, prefix="/api/warehouse")
+
+    def override_get_db():
+        with factory() as db:
+            yield db
+
+    def override_can_read():
+        with factory() as db:
+            return db.get(User, admin_id)
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[warehouse.can_read] = override_can_read
+    with TestClient(app) as client:
+        locations = client.get("/api/warehouse/locations")
+        lots = client.get(
+            "/api/warehouse/lots",
+            params={"inventory_type": "finished", "page_size": 200},
+        )
+        movements = client.get(
+            "/api/warehouse/movements",
+            params={"page_size": 200},
+        )
+
+    assert locations.status_code == 200
+    assert locations.json() == {"items": []}
+    assert lots.status_code == 200
+    assert lots.json()["items"] == []
+    assert lots.json()["total"] == 0
+    assert movements.status_code == 200
+    assert movements.json()["items"] == []
+    assert movements.json()["total"] == 0
+
+
+def test_warehouse_filters_do_not_send_empty_integer_query_values() -> None:
+    assert "function queryString(values)" in WAREHOUSE_HTML
+    assert 'location_id:$("locationFilter").value' in WAREHOUSE_HTML
+    assert 'if(value!==""&&value!==null&&value!==undefined)' in WAREHOUSE_HTML
+    assert "new URLSearchParams({inventory_type:state.tab" not in WAREHOUSE_HTML
 
 
 def test_existing_home_and_incoming_pages_remain_served() -> None:

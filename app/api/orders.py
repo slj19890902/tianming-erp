@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, inspect, or_, select, text
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -29,6 +29,11 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+from app.models.tianhua_pre_delivery import (
+    TianhuaPreDeliveryDraft,
+    TianhuaPreDeliveryDraftItem,
+    TianhuaPreDeliveryImportItem,
+)
 from app.models.user import User
 from app.services.history_orders import (
     build_display_registry,
@@ -853,6 +858,82 @@ async def upload_order_item_drawing(
     return {"drawing_file": item.drawing_file, "saved_to_product": save_to_product}
 
 
+PREDELIVERY_INVALIDATION_ACTIONS = {
+    "ROLLBACK_WORKFLOW",
+    "CANCEL_PRE_DELIVERY",
+    "VOID_PRE_DELIVERY",
+    "CANCEL_TIANHUA_PRE_DELIVERY",
+    "VOID_TIANHUA_PRE_DELIVERY",
+}
+
+
+def _latest_predelivery_invalidations(
+    db: Session,
+    order_ids: list[int],
+) -> dict[int, datetime]:
+    rows = db.execute(
+        select(OperationLog.entity_id, func.max(OperationLog.created_at))
+        .where(
+            OperationLog.entity_type == "order",
+            OperationLog.entity_id.in_(order_ids),
+            OperationLog.action.in_(PREDELIVERY_INVALIDATION_ACTIONS),
+        )
+        .group_by(OperationLog.entity_id)
+    ).all()
+    return {
+        int(order_id): created_at
+        for order_id, created_at in rows
+        if order_id is not None
+    }
+
+
+def _active_predelivery_order_ids(db: Session, order_ids: list[int]) -> set[int]:
+    invalidated_at = _latest_predelivery_invalidations(db, order_ids)
+    rows = db.execute(
+        select(TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryDraft)
+        .join(
+            TianhuaPreDeliveryDraft,
+            TianhuaPreDeliveryDraft.id == TianhuaPreDeliveryDraftItem.draft_id,
+        )
+        .where(TianhuaPreDeliveryDraftItem.order_id.in_(order_ids))
+    ).all()
+    active: set[int] = set()
+    for item, draft in rows:
+        rollback_at = invalidated_at.get(item.order_id)
+        activity_at = draft.updated_at or item.created_at
+        if rollback_at is None or activity_at is None or activity_at > rollback_at:
+            active.add(item.order_id)
+    return active
+
+
+def _unlink_predelivery_order_bindings(
+    db: Session,
+    *,
+    order_ids: list[int],
+    reason: str,
+) -> None:
+    draft_items = db.scalars(
+        select(TianhuaPreDeliveryDraftItem).where(
+            TianhuaPreDeliveryDraftItem.order_id.in_(order_ids)
+        )
+    ).all()
+    for item in draft_items:
+        db.delete(item)
+
+    import_items = db.scalars(
+        select(TianhuaPreDeliveryImportItem).where(
+            TianhuaPreDeliveryImportItem.order_id.in_(order_ids)
+        )
+    ).all()
+    for item in import_items:
+        item.order_item_id = None
+        item.order_id = None
+        item.order_number = None
+        item.selected = False
+        item.status = "not_matched"
+        item.warning = reason
+
+
 def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     labels: list[str] = []
     if db.scalar(
@@ -877,32 +958,14 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     ):
         labels.append("供应商采购单")
 
-    # Optional pre-delivery tables are checked only as foreign-key blockers.
-    # This does not change or delete any pre-delivery data.
-    bind = db.get_bind()
-    table_inspector = inspect(bind)
-    placeholders = ", ".join(f":order_id_{index}" for index in range(len(order_ids)))
-    params = {f"order_id_{index}": value for index, value in enumerate(order_ids)}
-    for table_name in (
-        "tianhua_pre_delivery_import_items",
-        "tianhua_pre_delivery_draft_items",
-    ):
-        if not table_inspector.has_table(table_name):
-            continue
-        count = db.scalar(
-            text(
-                f"SELECT COUNT(*) FROM {table_name} "
-                f"WHERE order_id IN ({placeholders})"
-            ),
-            params,
-        )
-        if count:
-            labels.append("预送货")
-            break
+    if _active_predelivery_order_ids(db, order_ids):
+        labels.append("有效预送货")
     return labels
 
 
 def _flow_delete_message(labels: list[str]) -> str:
+    if "有效预送货" in labels:
+        return "该订单仍存在有效预送货流程，请先撤回或作废预送货后再删除。"
     flow_text = "/".join(dict.fromkeys(labels))
     return f"该订单已进入{flow_text}流程，不能直接删除。"
 
@@ -942,6 +1005,11 @@ def _delete_orders_in_transaction(
     if dependencies:
         raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))
     item_ids = [item.id for order in orders for item in order.items]
+    _unlink_predelivery_order_bindings(
+        db,
+        order_ids=[order.id for order in orders],
+        reason="原订单已撤回或删除，历史预送货绑定已解除。",
+    )
     _release_order_reservations(
         db,
         order_item_ids=item_ids,
@@ -1171,6 +1239,11 @@ def rollback_order_workflow(
         if delivery_ids:
             db.execute(delete(DeliveryItem).where(DeliveryItem.delivery_id.in_(delivery_ids)))
             db.execute(delete(Delivery).where(Delivery.id.in_(delivery_ids)))
+        _unlink_predelivery_order_bindings(
+            db,
+            order_ids=[order.id],
+            reason="订单流程已撤回，历史预送货绑定已解除。",
+        )
         requisition_ids = set(
             db.scalars(
                 select(RequisitionItem.requisition_id).where(

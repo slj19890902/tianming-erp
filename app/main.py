@@ -23,8 +23,14 @@ from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
 from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
+from app.api.quotations import router as quotations_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.system import router as system_router
+from app.api.warehouse import router as warehouse_router
+from app.api.tianhua_pre_delivery import (
+    mobile_router as tianhua_mobile_router,
+    router as tianhua_pre_delivery_router,
+)
 from app.core.config import load_settings
 
 
@@ -107,6 +113,42 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/quotation-print.html" for route in application.routes):
+        quotation_print_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "quotation-print.html"
+        )
+        application.add_api_route(
+            "/quotation-print.html",
+            lambda: FileResponse(quotation_print_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/mobile/tianhua-pick" for route in application.routes):
+        mobile_pick_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_tianhua_pick.html"
+        )
+        application.add_api_route(
+            "/mobile/tianhua-pick",
+            lambda: FileResponse(mobile_pick_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/warehouse.html" for route in application.routes):
+        warehouse_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "warehouse.html"
+        )
+        application.add_api_route(
+            "/warehouse.html",
+            lambda: FileResponse(warehouse_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
 
     application.router.routes[:] = [
         route
@@ -174,6 +216,18 @@ def create_app() -> FastAPI:
             prefix="/api/deliveries",
             tags=["deliveries"],
         )
+    if not any(route.path == "/api/deliveries/tianhua-preimport/upload" for route in application.routes):
+        application.include_router(
+            tianhua_pre_delivery_router,
+            prefix="/api/deliveries",
+            tags=["tianhua-pre-delivery"],
+        )
+    if not any(route.path == "/api/mobile/tianhua-pick" for route in application.routes):
+        application.include_router(
+            tianhua_mobile_router,
+            prefix="/api/mobile",
+            tags=["tianhua-mobile-pick"],
+        )
     if not any(
         route.path == "/api/orders/items/{item_id}/force_close"
         for route in application.routes
@@ -198,6 +252,12 @@ def create_app() -> FastAPI:
             prefix="/api/dashboard",
             tags=["dashboard"],
         )
+    if not any(route.path == "/api/quotations" for route in application.routes):
+        application.include_router(
+            quotations_router,
+            prefix="/api/quotations",
+            tags=["quotations"],
+        )
     if not any(route.path == "/api/system/backups" for route in application.routes):
         application.include_router(
             system_router,
@@ -209,6 +269,12 @@ def create_app() -> FastAPI:
             pdf_training_router,
             prefix="/api/pdf-training",
             tags=["pdf-training"],
+        )
+    if not any(route.path == "/api/warehouse/locations" for route in application.routes):
+        application.include_router(
+            warehouse_router,
+            prefix="/api/warehouse",
+            tags=["warehouse"],
         )
 
     application.user_middleware = [

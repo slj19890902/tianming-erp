@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -28,6 +28,12 @@ from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
+from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+from app.models.tianhua_pre_delivery import (
+    TianhuaPreDeliveryDraft,
+    TianhuaPreDeliveryDraftItem,
+    TianhuaPreDeliveryImportItem,
+)
 from app.models.user import User
 from app.services.history_orders import (
     build_display_registry,
@@ -56,6 +62,12 @@ from app.services.product_import import (
     NewProductInput,
     parse_dimensions,
     resolve_or_create_product,
+)
+from app.services.warehouse_inventory import (
+    WarehouseInventoryError,
+    active_finished_reserved_qty,
+    active_finished_reservations_by_item_ids,
+    release_active_finished_reservations_for_items,
 )
 
 
@@ -144,6 +156,18 @@ class OrderItemUpdate(BaseModel):
     snapshot_crease_middle_mm: int | None = None
     snapshot_crease_right_mm: int | None = None
     snapshot_report_notes: str | None = None
+    snapshot_splice_mode: str | None = None
+    snapshot_pieces_per_box: int | None = None
+    snapshot_flap_mm: int | None = None
+    # v0.20.9: 订单编辑页中的常用箱生产字段；有关联产品时同事务同步。
+    sync_product: bool = True
+    box_style: str | None = None
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    production_process: str | None = None
+    print_content: str | None = None
+    product_remark: str | None = None
 
 
 class OrderCreate(BaseModel):
@@ -205,10 +229,40 @@ class WorkflowRollbackRequest(BaseModel):
     reason: str
 
 
+class OrderGroupDeleteRequest(BaseModel):
+    order_ids: list[int] = Field(min_length=1, max_length=200)
+    confirm: bool = False
+
+
 def _plain_decimal(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value, "f").rstrip("0").rstrip(".") or "0"
+
+
+def _order_item_cost_totals(
+    quantity: int,
+    unit_price: Decimal,
+    subtotal: Decimal,
+    unit_cost: Decimal,
+) -> dict[str, str]:
+    unit_gross_profit = unit_price - unit_cost
+    total_cost = unit_cost * Decimal(quantity)
+    total_gross_profit = subtotal - total_cost
+    return {
+        "estimated_gross_profit": str(
+            unit_gross_profit.quantize(Decimal("0.0001"))
+        ),
+        "unit_estimated_cost": str(unit_cost.quantize(Decimal("0.0001"))),
+        "unit_estimated_gross_profit": str(
+            unit_gross_profit.quantize(Decimal("0.0001"))
+        ),
+        "sale_amount": str(subtotal.quantize(MONEY_QUANTUM)),
+        "total_estimated_cost": str(total_cost.quantize(MONEY_QUANTUM)),
+        "total_estimated_gross_profit": str(
+            total_gross_profit.quantize(MONEY_QUANTUM)
+        ),
+    }
 
 
 def _snapshot_spec(product: Product) -> str | None:
@@ -265,6 +319,13 @@ def _order_response(
     customer_name: str | None = None,
     display_registry=None,
 ) -> dict:
+    reservation_map = (
+        active_finished_reservations_by_item_ids(
+            db, [item.id for item in order.items]
+        )
+        if db is not None
+        else {}
+    )
     data = {
         "id": order.id,
         **serialize_order_number_fields(order, display_registry),
@@ -281,8 +342,12 @@ def _order_response(
         "items": [],
     }
     for item in order.items:
+        finished_reserved_quantity = reservation_map.get(item.id, 0)
+        production_required_quantity = max(
+            item.quantity - finished_reserved_quantity, 0
+        )
         cost_reference = (
-            calculate_draft_cost(db, item.product_id)
+            calculate_draft_cost(db, item.product_id, item.material_id)
             if db is not None and user.role != "workshop"
             else {}
         )
@@ -320,6 +385,9 @@ def _order_response(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_splice_mode": item.snapshot_splice_mode,
+                "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
+                "snapshot_flap_mm": item.snapshot_flap_mm,
                 # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
                 "product_drawing_file": (
                     item.product.drawings[0].image_path
@@ -329,6 +397,11 @@ def _order_response(
                     else None
                 ),
                 "inventory_deducted_qty": item.inventory_deducted_qty,
+                "finished_inventory_reserved_qty": finished_reserved_quantity,
+                "production_required_qty": production_required_quantity,
+                "fully_covered_by_finished_inventory": (
+                    production_required_quantity == 0
+                ),
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": item.requisition_status,
                 "special_process": item.special_process,
@@ -339,10 +412,24 @@ def _order_response(
                 **cost_reference,
         }
         if item_data.get("estimated_cost") is not None:
-            item_data["estimated_gross_profit"] = str(
-                (Decimal(str(item.unit_price)) - Decimal(item_data["estimated_cost"])).quantize(
-                    Decimal("0.0001")
+            unit_cost = Decimal(item_data["estimated_cost"])
+            item_data.update(
+                _order_item_cost_totals(
+                    item.quantity,
+                    Decimal(str(item.unit_price)),
+                    Decimal(str(item.subtotal)),
+                    unit_cost,
                 )
+            )
+        else:
+            item_data.update(
+                {
+                    "unit_estimated_cost": None,
+                    "unit_estimated_gross_profit": None,
+                    "sale_amount": str(Decimal(str(item.subtotal)).quantize(MONEY_QUANTUM)),
+                    "total_estimated_cost": None,
+                    "total_estimated_gross_profit": None,
+                }
             )
         data["items"].append(item_data)
     if user.role == "workshop":
@@ -461,7 +548,10 @@ def list_orders(
     if status_filter == "history":
         ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
     else:
-        ids_query = ids_query.order_by(Order.created_at.desc(), Order.id.desc())
+        ids_query = ids_query.order_by(
+            func.coalesce(Order.updated_at, Order.created_at).desc(),
+            Order.id.desc(),
+        )
     total = db.scalar(select(func.count()).select_from(ids_query.subquery())) or 0
     page_ids = list(
         db.scalars(ids_query.offset((page - 1) * page_size).limit(page_size)).all()
@@ -768,15 +858,196 @@ async def upload_order_item_drawing(
     return {"drawing_file": item.drawing_file, "saved_to_product": save_to_product}
 
 
-def _order_has_flow_records(db: Session, order_id: int) -> bool:
-    return bool(
-        db.scalar(
-            select(func.count())
-            .select_from(DeliveryItem)
-            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .where(OrderItem.order_id == order_id)
+PREDELIVERY_INVALIDATION_ACTIONS = {
+    "ROLLBACK_WORKFLOW",
+    "CANCEL_PRE_DELIVERY",
+    "VOID_PRE_DELIVERY",
+    "CANCEL_TIANHUA_PRE_DELIVERY",
+    "VOID_TIANHUA_PRE_DELIVERY",
+}
+
+
+def _latest_predelivery_invalidations(
+    db: Session,
+    order_ids: list[int],
+) -> dict[int, datetime]:
+    rows = db.execute(
+        select(OperationLog.entity_id, func.max(OperationLog.created_at))
+        .where(
+            OperationLog.entity_type == "order",
+            OperationLog.entity_id.in_(order_ids),
+            OperationLog.action.in_(PREDELIVERY_INVALIDATION_ACTIONS),
         )
+        .group_by(OperationLog.entity_id)
+    ).all()
+    return {
+        int(order_id): created_at
+        for order_id, created_at in rows
+        if order_id is not None
+    }
+
+
+def _active_predelivery_order_ids(db: Session, order_ids: list[int]) -> set[int]:
+    invalidated_at = _latest_predelivery_invalidations(db, order_ids)
+    rows = db.execute(
+        select(TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryDraft)
+        .join(
+            TianhuaPreDeliveryDraft,
+            TianhuaPreDeliveryDraft.id == TianhuaPreDeliveryDraftItem.draft_id,
+        )
+        .where(TianhuaPreDeliveryDraftItem.order_id.in_(order_ids))
+    ).all()
+    active: set[int] = set()
+    for item, draft in rows:
+        rollback_at = invalidated_at.get(item.order_id)
+        activity_at = draft.updated_at or item.created_at
+        if rollback_at is None or activity_at is None or activity_at > rollback_at:
+            active.add(item.order_id)
+    return active
+
+
+def _unlink_predelivery_order_bindings(
+    db: Session,
+    *,
+    order_ids: list[int],
+    reason: str,
+) -> None:
+    draft_items = db.scalars(
+        select(TianhuaPreDeliveryDraftItem).where(
+            TianhuaPreDeliveryDraftItem.order_id.in_(order_ids)
+        )
+    ).all()
+    for item in draft_items:
+        db.delete(item)
+
+    import_items = db.scalars(
+        select(TianhuaPreDeliveryImportItem).where(
+            TianhuaPreDeliveryImportItem.order_id.in_(order_ids)
+        )
+    ).all()
+    for item in import_items:
+        item.order_item_id = None
+        item.order_id = None
+        item.order_number = None
+        item.selected = False
+        item.status = "not_matched"
+        item.warning = reason
+
+
+def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
+    labels: list[str] = []
+    if db.scalar(
+        select(func.count())
+        .select_from(DeliveryItem)
+        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .where(OrderItem.order_id.in_(order_ids))
+    ):
+        labels.append("送货")
+    if db.scalar(
+        select(func.count())
+        .select_from(RequisitionItem)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .where(OrderItem.order_id.in_(order_ids))
+    ):
+        labels.append("报料")
+    if db.scalar(
+        select(func.count())
+        .select_from(SupplierRequisitionOrderItem)
+        .join(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
+        .where(OrderItem.order_id.in_(order_ids))
+    ):
+        labels.append("供应商采购单")
+
+    if _active_predelivery_order_ids(db, order_ids):
+        labels.append("有效预送货")
+    return labels
+
+
+def _flow_delete_message(labels: list[str]) -> str:
+    if "有效预送货" in labels:
+        return "该订单仍存在有效预送货流程，请先撤回或作废预送货后再删除。"
+    flow_text = "/".join(dict.fromkeys(labels))
+    return f"该订单已进入{flow_text}流程，不能直接删除。"
+
+
+def _release_order_reservations(
+    db: Session,
+    *,
+    order_item_ids: list[int],
+    operator_id: int | None,
+    reason: str,
+    idempotency_prefix: str,
+    allow_downstream: bool = False,
+) -> None:
+    try:
+        release_active_finished_reservations_for_items(
+            db,
+            order_item_ids=order_item_ids,
+            operator_id=operator_id,
+            reason=reason,
+            idempotency_prefix=idempotency_prefix,
+            allow_downstream=allow_downstream,
+        )
+    except WarehouseInventoryError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+
+
+def _delete_orders_in_transaction(
+    db: Session,
+    *,
+    orders: list[Order],
+    user: User,
+) -> None:
+    dependencies = _order_flow_dependencies(db, [order.id for order in orders])
+    if dependencies:
+        raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))
+    item_ids = [item.id for order in orders for item in order.items]
+    _unlink_predelivery_order_bindings(
+        db,
+        order_ids=[order.id for order in orders],
+        reason="原订单已撤回或删除，历史预送货绑定已解除。",
     )
+    _release_order_reservations(
+        db,
+        order_item_ids=item_ids,
+        operator_id=user.id,
+        reason="删除订单前自动释放成品库存预占",
+        idempotency_prefix="delete-order-reservation",
+    )
+    for order in orders:
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="DELETE",
+                resource="Order",
+                details=json.dumps(
+                    {
+                        "order_number": order.order_number,
+                        "customer_id": order.customer_id,
+                        "customer_po": order.customer_po,
+                        "item_count": len(order.items),
+                    },
+                    ensure_ascii=False,
+                ),
+                username=user.username,
+                role=user.role,
+                entity_type="order",
+                entity_id=order.id,
+                description="删除无业务关联订单",
+            )
+        )
+        db.delete(order)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="订单存在关联业务记录，不能直接删除。请刷新页面后检查报料、送货或对账状态。",
+        ) from error
 
 
 @router.put("/{order_id}/status")
@@ -802,6 +1073,13 @@ def update_order_status(
     if remark:
         order.remark = remark
     if target in FINAL_ORDER_STATUSES:
+        _release_order_reservations(
+            db,
+            order_item_ids=[item.id for item in order.items],
+            operator_id=user.id,
+            reason=f"订单状态变更为{target}，自动释放成品库存预占",
+            idempotency_prefix=f"order-status-{order.id}-{target}",
+        )
         for item in order.items:
             item.is_force_closed = True
     db.add(
@@ -844,33 +1122,31 @@ def delete_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
-    if _order_has_flow_records(db, order.id):
-        raise HTTPException(
-            status_code=409,
-            detail="该订单已有送货、开票或收款关联，不能直接删除；请标记死单或已结档。",
-        )
-    details = {
-        "order_number": order.order_number,
-        "customer_id": order.customer_id,
-        "customer_po": order.customer_po,
-        "item_count": len(order.items),
-    }
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="DELETE",
-            resource="Order",
-            details=json.dumps(details, ensure_ascii=False),
-            username=user.username,
-            role=user.role,
-            entity_type="order",
-            entity_id=order.id,
-            description="删除无业务关联订单",
-        )
-    )
-    db.delete(order)
-    db.commit()
+    _delete_orders_in_transaction(db, orders=[order], user=user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/group-delete")
+def delete_order_group(
+    payload: OrderGroupDeleteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="删除订单组需要二次确认")
+    order_ids = list(dict.fromkeys(payload.order_ids))
+    orders = db.scalars(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id.in_(order_ids))
+        .order_by(Order.id)
+    ).all()
+    if len(orders) != len(order_ids):
+        raise HTTPException(status_code=404, detail="订单组中有订单不存在，请刷新后重试")
+    if len({_order_group_key(order) for order in orders}) != 1:
+        raise HTTPException(status_code=400, detail="所选订单不属于同一订单组，请刷新后重试")
+    _delete_orders_in_transaction(db, orders=orders, user=user)
+    return {"deleted_count": len(orders)}
 
 
 @router.put("/{order_id}/rollback-workflow")
@@ -963,6 +1239,11 @@ def rollback_order_workflow(
         if delivery_ids:
             db.execute(delete(DeliveryItem).where(DeliveryItem.delivery_id.in_(delivery_ids)))
             db.execute(delete(Delivery).where(Delivery.id.in_(delivery_ids)))
+        _unlink_predelivery_order_bindings(
+            db,
+            order_ids=[order.id],
+            reason="订单流程已撤回，历史预送货绑定已解除。",
+        )
         requisition_ids = set(
             db.scalars(
                 select(RequisitionItem.requisition_id).where(
@@ -995,6 +1276,14 @@ def rollback_order_workflow(
             item.supplier_delivery_time = None
             item.supplier_order_number = None
             item.requisition_remark = None
+        _release_order_reservations(
+            db,
+            order_item_ids=item_ids,
+            operator_id=user.id,
+            reason="订单流程撤回，自动释放成品库存预占",
+            idempotency_prefix=f"rollback-order-{order.id}",
+            allow_downstream=True,
+        )
         order.status = "pending_production"
         order.payment_status = "unpaid"
         db.add(
@@ -1308,6 +1597,9 @@ def create_order(
                 snapshot_crease_middle_mm=product.crease_middle_mm,
                 snapshot_crease_right_mm=product.crease_right_mm,
                 snapshot_report_notes=product.report_notes,
+                snapshot_splice_mode=product.splice_mode or "single",
+                snapshot_pieces_per_box=product.pieces_per_box or (2 if (product.splice_mode or "").lower() == "double" else 1),
+                snapshot_flap_mm=product.flap_mm or 30,
                 requisition_status="未报料",
             )
             # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细
@@ -1401,6 +1693,15 @@ def update_order_item(
         raise HTTPException(status_code=409, detail="已发货明细禁止修改")
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改")
+    finished_reserved_qty = active_finished_reserved_qty(db, item.id)
+    if payload.quantity < finished_reserved_qty:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"订单数量不能小于已预占成品库存 {finished_reserved_qty}，"
+                "请先取消成品库存抵扣"
+            ),
+        )
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="请先取消报料再修改订单明细")
     if payload.quantity <= 0:
@@ -1457,6 +1758,57 @@ def update_order_item(
         item.snapshot_crease_right_mm = payload.snapshot_crease_right_mm
     if payload.snapshot_report_notes is not None:
         item.snapshot_report_notes = payload.snapshot_report_notes or None
+    if payload.snapshot_splice_mode is not None:
+        item.snapshot_splice_mode = payload.snapshot_splice_mode or None
+    if payload.snapshot_pieces_per_box is not None:
+        item.snapshot_pieces_per_box = payload.snapshot_pieces_per_box
+    if payload.snapshot_flap_mm is not None:
+        item.snapshot_flap_mm = payload.snapshot_flap_mm
+    if payload.sync_product and item.product_id:
+        product = db.get(Product, item.product_id)
+        if product is None:
+            raise HTTPException(status_code=409, detail="关联常用箱不存在，订单明细未保存")
+        if payload.material_id is not None:
+            product.material_id = payload.material_id
+        if payload.layer_count is not None:
+            product.layer_count = payload.layer_count
+        if payload.flute_type is not None:
+            product.flute_type = (payload.flute_type or "").strip().upper() or None
+        for field_name in (
+            "box_style",
+            "length_mm",
+            "width_mm",
+            "height_mm",
+            "production_process",
+            "print_content",
+        ):
+            value = getattr(payload, field_name)
+            if value is not None:
+                setattr(product, field_name, value)
+        product.splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
+        product.pieces_per_box = (
+            payload.snapshot_pieces_per_box
+            if payload.snapshot_pieces_per_box is not None
+            else (2 if product.splice_mode == "double" else 1)
+        )
+        if payload.snapshot_flap_mm is not None:
+            product.flap_mm = payload.snapshot_flap_mm
+        if payload.snapshot_report_length_mm is not None:
+            product.report_length_mm = payload.snapshot_report_length_mm
+        if payload.snapshot_report_width_mm is not None:
+            product.report_width_mm = payload.snapshot_report_width_mm
+        if payload.snapshot_crease_type is not None:
+            product.crease_type = payload.snapshot_crease_type or None
+        if payload.snapshot_crease_left_mm is not None:
+            product.crease_left_mm = payload.snapshot_crease_left_mm
+        if payload.snapshot_crease_middle_mm is not None:
+            product.crease_middle_mm = payload.snapshot_crease_middle_mm
+        if payload.snapshot_crease_right_mm is not None:
+            product.crease_right_mm = payload.snapshot_crease_right_mm
+        if payload.snapshot_report_notes is not None:
+            product.report_notes = payload.snapshot_report_notes or None
+        if payload.product_remark is not None:
+            product.remark = payload.product_remark.strip() or None
     _refresh_total(db, order)
     db.add(
         OperationLog(
@@ -1491,6 +1843,16 @@ def update_order_item(
         "snapshot_spec": item.snapshot_spec,
         "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
         "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
+        "snapshot_report_length_mm": item.snapshot_report_length_mm,
+        "snapshot_report_width_mm": item.snapshot_report_width_mm,
+        "snapshot_crease_type": item.snapshot_crease_type,
+        "snapshot_crease_left_mm": item.snapshot_crease_left_mm,
+        "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
+        "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
+        "snapshot_report_notes": item.snapshot_report_notes,
+        "snapshot_splice_mode": item.snapshot_splice_mode,
+        "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
+        "snapshot_flap_mm": item.snapshot_flap_mm,
     }
 
 
@@ -1521,6 +1883,13 @@ def delete_order_item(
         "product_name": item.snapshot_product_name,
         "quantity": item.quantity,
     }
+    _release_order_reservations(
+        db,
+        order_item_ids=[item.id],
+        operator_id=user.id,
+        reason="删除订单明细前自动释放成品库存预占",
+        idempotency_prefix=f"delete-order-item-{item.id}",
+    )
     db.delete(item)
     db.flush()
     _refresh_total(db, order)

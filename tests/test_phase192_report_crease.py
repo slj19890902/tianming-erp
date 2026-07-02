@@ -317,7 +317,8 @@ class TestOrderReportSnapshot:
         for field in ("snapshot_report_length_mm", "snapshot_report_width_mm",
                       "snapshot_crease_type", "snapshot_crease_left_mm",
                       "snapshot_crease_middle_mm", "snapshot_crease_right_mm",
-                      "snapshot_report_notes"):
+                      "snapshot_report_notes", "snapshot_splice_mode",
+                      "snapshot_pieces_per_box", "snapshot_flap_mm"):
             assert field in item, f"missing {field}"
 
     def test_order_detail_has_report_snapshot(self, client, admin_cookies, order_resp):
@@ -345,6 +346,9 @@ class TestRequisitionReportFields:
             assert "snapshot_report_length_mm" in item
             assert "snapshot_report_width_mm" in item
             assert "snapshot_crease_type" in item
+            assert "pieces_per_box" in item
+            assert "required_piece_qty" in item
+            assert "cutting_mode" in item
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,10 +391,16 @@ class TestMergeSuggestions:
             assert "report_width_mm" in s
             assert "crease_display" in s
             assert "total_quantity" in s
+            assert "pieces_per_box" in s
+            assert "splice_mode" in s
+            assert "cutting_mode" in s
+            assert "total_required_piece_qty" in s
             assert "members" in s
             for m in s["members"]:
                 assert "product_code" in m
                 assert "quantity" in m
+                assert "pieces_per_box" in m
+                assert "required_piece_qty" in m
 
 
 # ─────────────────────────────────────────────────────────────────────────────

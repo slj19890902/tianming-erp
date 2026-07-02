@@ -6,10 +6,11 @@
   <title>供应商采购报料单</title>
   <style>
     *{box-sizing:border-box}body{margin:0;background:#eef2f5;color:#111;font:14px/1.35 "Microsoft YaHei",sans-serif}
-    .sheet{width:900px;margin:18px auto;padding:18px 20px;background:#fff;box-shadow:0 4px 18px #0002}
-    h1{margin:0;text-align:center;font-size:25px;letter-spacing:6px}.meta{display:flex;justify-content:space-between;margin:10px 0}
+    .sheet{width:900px;margin:18px auto;padding:20px 24px;background:#fff;box-shadow:0 4px 18px #0002}
+    .title{text-align:center}.title h1{margin:0;font-size:21px}.title div{margin-top:3px;font-size:21px;letter-spacing:8px}
+    .head{display:flex;justify-content:space-between;align-items:flex-end;margin:8px 0 10px}.meta{text-align:right;line-height:1.7}
     table{width:100%;border-collapse:collapse}th,td{border:1px solid #111;padding:6px;text-align:center}th{background:#f3f4f6}
-    .left{text-align:left}.total{margin-top:10px;text-align:right;font-size:17px;font-weight:700}.actions{text-align:center;margin:15px}
+    .left{text-align:left}.footer{margin-top:12px;text-align:right;font-size:12px;line-height:1.7}.actions{text-align:center;margin:15px}
     button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700}
     @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions{display:none}@page{size:A4 landscape;margin:10mm}}
   </style>
@@ -17,29 +18,45 @@
 <body>
   <div class="actions"><button onclick="window.print()">打印 / 保存为 PDF</button></div>
   <main class="sheet">
-    <h1>供应商采购报料单</h1>
-    <div class="meta"><span id="number"></span><span id="date"></span><span id="supplier"></span></div>
-    <table><thead><tr><th>序号</th><th>存货编码 / 产品</th><th>材质</th><th>纸板规格(mm)</th><th>张数</th><th>特殊处理</th><th>生产说明</th></tr></thead><tbody id="rows"></tbody></table>
-    <div class="total" id="total"></div>
+    <div class="title"><h1 id="company-name">苏州工业园区天明纸品包装厂</h1><div>采购单</div></div>
+    <div class="head"><div id="supplier"></div><div class="meta"><div id="number"></div><div id="date"></div></div></div>
+    <table><thead><tr><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead><tbody id="rows"></tbody></table>
+    <div id="company-footer" class="footer"></div>
   </main>
   <script>
-    const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
-    const cleanCode=value=>String(value||"-").split(" / ",1)[0].trim();
-    const cleanName=value=>{
-      let text=String(value||"-").trim();
-      if(text.includes(" / ")) text=text.split(" / ",2)[1].trim();
-      return text.replace(/\s+(WCX1|WZX|NZX|CTSNH)\b.*$/i,"").trim();
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[char]));
+    const shortDate = value => {
+      const dateValue = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(dateValue.getTime())) return String(value || "");
+      return `${String(dateValue.getFullYear()).slice(-2)}.${dateValue.getMonth()+1}.${dateValue.getDate()}`;
     };
-    (async()=>{
-      const id=new URLSearchParams(location.search).get("id");
-      const response=await fetch(`/api/requisition/batches/${encodeURIComponent(id)}/print`,{credentials:"include"});
-      if(!response.ok){document.body.innerHTML="<p>无法读取报料单，请确认登录状态。</p>";return}
-      const data=await response.json();
-      number.textContent=`报料单号：${data.requisition_number}`;
-      date.textContent=`日期：${data.requisition_date}`;
-      supplier.textContent=`供应商：${data.supplier_name||"未指定"}`;
-      rows.innerHTML=data.items.map((row,index)=>`<tr><td>${index+1}</td><td class="left">${escapeHtml(cleanCode(row.product_code))} / ${escapeHtml(cleanName(row.product_name))}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.special_process||"无")}</td><td class="left">${escapeHtml(row.production_notes||"")}</td></tr>`).join("");
-      total.textContent=`总张数：${data.total_quantity}`;
+
+    (async () => {
+      const id = new URLSearchParams(location.search).get("id");
+      const response = await fetch(`/api/requisition/batches/${encodeURIComponent(id)}/print`, { credentials: "include" });
+      if (!response.ok) {
+        document.body.innerHTML = "<p>无法读取报料单，请确认登录状态。</p>";
+        return;
+      }
+      const data = await response.json();
+      document.getElementById("company-name").textContent = data.sender?.company_name || "苏州工业园区天明纸品包装厂";
+      number.textContent = `NO：${data.requisition_number}`;
+      date.textContent = `日期：${shortDate(data.requisition_date)}`;
+      supplier.textContent = `TO：${data.supplier_name || "未指定供应商"}`;
+      rows.innerHTML = data.items.map((row, index) => `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(row.specification)}</td>
+          <td>${escapeHtml(row.crease_display || "")}</td>
+          <td>${escapeHtml(row.material)}</td>
+          <td>${escapeHtml(row.quantity)}</td>
+          <td class="left">${escapeHtml(row.report_remark || "")}</td>
+        </tr>
+      `).join("");
+      const footerLines = [];
+      if (data.sender?.address) footerLines.push(`地址：${escapeHtml(data.sender.address)}`);
+      if (data.sender?.phone) footerLines.push(`电话：${escapeHtml(data.sender.phone)}`);
+      document.getElementById("company-footer").innerHTML = footerLines.join("<br>");
     })();
   </script>
 </body>

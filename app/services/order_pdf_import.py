@@ -271,6 +271,10 @@ def _company_name_key(value: str | None) -> str:
     return text.casefold()
 
 
+def _full_company_name_key(value: str | None) -> str:
+    return re.sub(r"[（）()\-—_·,，.。/\\\s]", "", value or "").casefold()
+
+
 def _normalized_text(value: str | None) -> str:
     return re.sub(r"[\s（）()\-—_·,，.。/\\\"'×xX*]", "", value or "").casefold()
 
@@ -878,12 +882,24 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
 def _customer_match(db: Session, raw_name: str | None) -> tuple[str, int | None, list[dict]]:
     if not raw_name:
         return "unmatched", None, []
+    full_target = _full_company_name_key(raw_name)
     target = _company_name_key(raw_name)
-    candidates = []
-    for customer in db.scalars(select(Customer).order_by(Customer.id)).all():
+    exact_candidates = []
+    normalized_candidates = []
+    partial_candidates = []
+    for customer in db.scalars(
+        select(Customer).where(Customer.is_active.is_(True)).order_by(Customer.id)
+    ).all():
+        candidate = {"id": customer.id, "name": customer.name}
+        full_key = _full_company_name_key(customer.name)
         key = _company_name_key(customer.name)
-        if key and (key == target or key in target or target in key):
-            candidates.append({"id": customer.id, "name": customer.name})
+        if full_key and full_key == full_target:
+            exact_candidates.append(candidate)
+        elif key and key == target:
+            normalized_candidates.append(candidate)
+        elif key and target and (key in target or target in key):
+            partial_candidates.append(candidate)
+    candidates = exact_candidates or normalized_candidates or partial_candidates
     if len(candidates) == 1:
         return "matched", candidates[0]["id"], candidates
     if len(candidates) > 1:

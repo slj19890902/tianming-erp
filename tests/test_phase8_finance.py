@@ -254,6 +254,203 @@ def test_receipt_can_be_edited_before_statement_but_not_after(
     assert locked.status_code == 409
 
 
+def test_confirmed_receipt_can_be_cancelled_and_reconfirmed(finance_api_app) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+        receipt_id = created.json()["id"]
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+        reopened = client.put(
+            f"/api/finance/return_receipts/{receipt_id}",
+            json={
+                "actual_received_date": "2026-06-14",
+                "signed_by": "李经理",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 78,
+                        "difference_reason": "压坏拒收 2 个",
+                    }
+                ],
+            },
+        )
+        refreshed = client.get(f"/api/finance/return_receipts/{receipt_id}")
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert reopened.status_code == 200, reopened.text
+    assert refreshed.json()["status"] == "confirmed"
+    assert refreshed.json()["signed_by"] == "李经理"
+
+
+def test_cancelled_receipt_is_blocked_when_statement_exists(finance_api_app) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+        receipt_id = created.json()["id"]
+        receipt_item_id = created.json()["items"][0]["id"]
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [receipt_item_id],
+            },
+        )
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+
+    assert statement.status_code == 201, statement.text
+    assert cancelled.status_code == 409
+    assert "对账" in cancelled.json()["detail"]
+
+
+def test_statement_detail_endpoint_returns_items_and_summary(finance_api_app) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        statement = _create_statement(client)
+        response = client.get(f"/api/finance/statements/{statement['id']}")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["statement_number"] == statement["statement_number"]
+    assert body["customer_name"] == "苏州思迈尔包装有限公司"
+    assert body["status"] == "unsettled"
+    assert body["items"][0]["receivable_amount"] == "280.80"
+
+
+def test_statement_customer_options_cover_eligible_customers(finance_api_app) -> None:
+    app, session_factory = finance_api_app
+    with session_factory() as session:
+        from app.models.customer import Customer
+        from app.models.delivery import Delivery, DeliveryItem
+        from app.models.order import Order, OrderItem
+        from app.models.product import Product
+
+        customer = Customer(
+            customer_number=2,
+            customer_code="HT",
+            name="昆山宏泰包装有限公司",
+            payment_term_days=30,
+        )
+        session.add(customer)
+        session.flush()
+        product = Product(
+            customer_id=customer.id,
+            product_code="HT-001",
+            customer_material_code="HT-001",
+            product_name="五层纸箱",
+            legacy_material_text="K=A",
+            box_category="normal",
+            cost_unit_price=Decimal("1.20"),
+        )
+        session.add(product)
+        session.flush()
+        order = Order(
+            order_number="PO-20260613-002",
+            customer_id=customer.id,
+            customer_po="HT-PO-001",
+            order_date=date(2026, 6, 2),
+            delivery_date=date(2026, 6, 14),
+            status="partially_delivered",
+            payment_status="unpaid",
+            total_amount=Decimal("120"),
+        )
+        session.add(order)
+        session.flush()
+        order_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=50,
+            delivered_quantity=50,
+            unit_price=Decimal("2.40"),
+            subtotal=Decimal("120"),
+            material_status="received",
+            snapshot_product_name="五层纸箱",
+            snapshot_spec="520×350×300mm",
+            snapshot_material="K=A",
+        )
+        session.add(order_item)
+        session.flush()
+        delivery = Delivery(
+            delivery_number="DH-20260614-002",
+            customer_id=customer.id,
+            delivery_date=date(2026, 6, 14),
+            vehicle_number="苏E·54321",
+            status="dispatched",
+            total_quantity=50,
+            dispatched_at=datetime(2026, 6, 14, 10, 0, 0),
+        )
+        session.add(delivery)
+        session.flush()
+        session.add(
+            DeliveryItem(
+                delivery_id=delivery.id,
+                order_item_id=order_item.id,
+                delivered_quantity=50,
+                remarks="第二批",
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "finance")
+        first_receipt = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": 2,
+                "actual_received_date": "2026-06-15",
+                "signed_by": "王经理",
+                "items": [
+                    {
+                        "delivery_item_id": 2,
+                        "actual_received_quantity": 50,
+                        "difference_reason": None,
+                    }
+                ],
+            },
+        )
+        response = client.get("/api/finance/statement-customers", params={"statement_month": "2026-06"})
+
+    assert first_receipt.status_code == 201, first_receipt.text
+    assert receipt.status_code == 201, receipt.text
+    assert response.status_code == 200, response.text
+    customer_names = {row["name"] for row in response.json()["items"]}
+    assert "苏州思迈尔包装有限公司" in customer_names
+    assert "昆山宏泰包装有限公司" in customer_names
+
+
+def test_statement_edit_and_cancel_endpoints_exist_for_frontend_controls(finance_api_app) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        statement = _create_statement(client)
+        edited = client.put(
+            f"/api/finance/statements/{statement['id']}",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+            },
+        )
+        cancelled = client.post(f"/api/finance/statements/{statement['id']}/cancel")
+
+    assert edited.status_code == 200, edited.text
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+
+
 @pytest.mark.parametrize("role", ["sales", "workshop"])
 def test_finance_routes_reject_non_finance_roles(
     finance_api_app,

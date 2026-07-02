@@ -20,16 +20,19 @@ class Material(Base):
     code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     paper_composition: Mapped[str | None] = mapped_column(String(200), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    flute_type: Mapped[str] = mapped_column(
+    flute_type: Mapped[str | None] = mapped_column(
         String(50),
-        default="AB",
-        nullable=False,
+        nullable=True,
     )
     basis_weight_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     quote_price: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 4),
         nullable=True,
     )
+    rule_base_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
+    )
+    price_source: Mapped[str | None] = mapped_column(String(250), nullable=True)
     price_unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
     supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     quote_date: Mapped[date | None] = mapped_column(Date, nullable=True)

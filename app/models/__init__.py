@@ -36,6 +36,12 @@ from app.models.material_price_history import (  # noqa: E402,F401
 from app.models.supplier_flute_price_rule import (  # noqa: E402,F401
     SupplierFlutePriceRule,
 )
+from app.models.supplier_paper_code import SupplierPaperCode  # noqa: E402,F401
+from app.models.supplier_material_rule import (  # noqa: E402,F401
+    SupplierMaterialBasePrice,
+    SupplierMaterialRuleConfig,
+    SupplierMaterialSubstitutionRule,
+)
 from app.models.pdf_training import (  # noqa: E402,F401
     PdfOrderTrainingBatch,
     PdfOrderTrainingSample,
@@ -54,4 +60,24 @@ from app.models.finance import (  # noqa: E402,F401
     Statement,
     StatementItem,
     StatementMonthlySequence,
+)
+from app.models.company_config import CompanyConfig  # noqa: E402,F401
+from app.models.tianhua_pre_delivery import (  # noqa: E402,F401
+    TianhuaPreDeliveryDraft,
+    TianhuaPreDeliveryDraftItem,
+    TianhuaPreDeliveryImportBatch,
+    TianhuaPreDeliveryImportItem,
+)
+from app.models.quotation import (  # noqa: E402,F401
+    QuotationDailySequence,
+    QuotationItem,
+    QuotationOrder,
+)
+from app.models.warehouse_inventory import (  # noqa: E402,F401
+    FinishedGoodsInventoryDetail,
+    InventoryLot,
+    InventoryMovement,
+    InventoryReservation,
+    SemiFinishedInventoryDetail,
+    WarehouseLocation,
 )

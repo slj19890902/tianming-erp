@@ -173,7 +173,18 @@ def test_requisition_page_keeps_pending_and_submitted_views() -> None:
 
 def test_finance_settlement_no_longer_prompts_for_account() -> None:
     assert 'prompt("请输入收款账户")' not in INDEX
-    assert 'axios.put(`/api/finance/statements/${row.id}/settle`, { amount, settlement_date:today(), account:"" })' in INDEX
+    assert 'axios.put(`/api/finance/statements/${row.id}/settle`, { amount, settlement_date:today() })' in INDEX
+
+
+def test_delivery_and_statement_controls_show_undo_and_edit_cancel_actions() -> None:
+    assert "取消回单" in INDEX
+    assert "/api/finance/return_receipts/${this.receiptForm.id}/cancel" in INDEX
+    assert "statementCustomerOptions" in INDEX
+    assert "/api/finance/statement-customers" in INDEX
+    assert "/api/finance/statements/${row.id}/cancel" in INDEX
+    assert "/api/finance/statements/${row.id}" in INDEX
+    assert "编辑" in INDEX
+    assert "取消" in INDEX
 
 
 def test_board_dimensions_render_as_integer_mm_in_daily_pages() -> None:

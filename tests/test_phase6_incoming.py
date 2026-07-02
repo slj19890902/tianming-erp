@@ -198,7 +198,7 @@ def _login(client: TestClient, role: str) -> None:
 
 
 @pytest.mark.parametrize("role", ["admin", "workshop"])
-def test_only_admin_and_workshop_can_read_pending_sorted_by_delivery(
+def test_only_admin_and_workshop_can_read_pending_sorted_by_recent_record(
     incoming_api_app,
     role: str,
 ) -> None:
@@ -216,6 +216,24 @@ def test_only_admin_and_workshop_can_read_pending_sorted_by_delivery(
     assert items[0]["customer_name"] == "苏州思迈尔包装有限公司"
     assert items[0]["specification"] == "520×350×300mm"
     assert items[0]["material"] == "K=A-BC"
+
+
+def test_pending_incoming_prioritizes_latest_requisition_operation(
+    incoming_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_date = date(2026, 6, 30)
+        session.get(OrderItem, 2).requisition_date = date(2026, 6, 29)
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    assert response.status_code == 200
+    assert [row["item_id"] for row in response.json()["items"]] == [1, 2]
 
 
 def test_incoming_api_hides_legacy_history_prefix_in_order_number(
@@ -288,6 +306,67 @@ def test_workshop_receive_is_conditional_and_audited(incoming_api_app) -> None:
     assert item is not None
     assert item.material_received_by is not None
     assert user_id == item.material_received_by
+
+
+def test_batch_receive_supports_partial_success_and_backend_validation(
+    incoming_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        response = client.put(
+            "/api/incoming/batch-receive",
+            json={
+                "items": [
+                    {"item_id": 1, "received_quantity": 95},
+                    {"item_id": 3, "received_quantity": 25},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["succeeded"] == 1
+    assert body["failed"] == 1
+    assert body["results"][0]["success"] is True
+    assert body["results"][1]["success"] is False
+    assert "不可入库" in body["results"][1]["message"]
+    with session_factory() as session:
+        received = session.get(OrderItem, 1)
+        already_received = session.get(OrderItem, 3)
+        assert received.material_status == "received"
+        assert received.requisition_status == "已入库"
+        assert received.requisition_qty == 95
+        assert already_received.material_received_at is not None
+
+
+def test_batch_receive_rejects_invalid_quantity_and_duplicate_items(
+    incoming_api_app,
+) -> None:
+    app, _ = incoming_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        invalid_quantity = client.put(
+            "/api/incoming/batch-receive",
+            json={"items": [{"item_id": 1, "received_quantity": 0}]},
+        )
+        duplicate = client.put(
+            "/api/incoming/batch-receive",
+            json={
+                "items": [
+                    {"item_id": 1, "received_quantity": 100},
+                    {"item_id": 1, "received_quantity": 100},
+                ]
+            },
+        )
+
+    assert invalid_quantity.status_code == 422
+    assert duplicate.status_code == 200
+    assert duplicate.json()["succeeded"] == 1
+    assert duplicate.json()["failed"] == 1
+    assert duplicate.json()["results"][1]["message"] == "同一明细不能重复提交"
 
 
 @pytest.mark.parametrize("role", ["sales", "finance"])

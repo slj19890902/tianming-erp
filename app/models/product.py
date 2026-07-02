@@ -127,6 +127,9 @@ class Product(Base):
     crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crease_right_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     report_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    splice_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime,

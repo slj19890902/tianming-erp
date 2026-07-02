@@ -6,7 +6,7 @@ import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -18,10 +18,12 @@ from app.models.material_price_history import (
     MaterialPriceAdjustmentBatch,
     MaterialPriceHistory,
 )
+from app.models.supplier_paper_code import SupplierPaperCode
 from app.models.user import User
 from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services import material_price_adjust as price_adjust
 from app.services import material_pricing
+from app.services.corrugated_material_pricing import estimate_material_price
 from app.services.flute_mapping import validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 
@@ -36,9 +38,11 @@ class MaterialPayload(BaseModel):
     code: str = Field(min_length=1, max_length=100)
     paper_composition: str | None = None
     layer_count: int | None = Field(default=None, ge=1)
-    flute_type: Literal["AB", "BE", "A", "B", "E"] = "AB"
+    flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
     basis_weight_description: str | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
+    rule_base_price: Decimal | None = Field(default=None, ge=0)
+    price_source: str | None = None
     price_unit: str | None = None
     supplier_name: str | None = None
     quote_date: date | None = None
@@ -67,7 +71,62 @@ class MaterialResponse(MaterialPayload):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    flute_type: str
+    flute_type: str | None
+
+
+class SupplierPaperCodePayload(BaseModel):
+    supplier_name: str = Field(min_length=1, max_length=200)
+    code_char: str = Field(min_length=1, max_length=1)
+    paper_name: str = Field(min_length=1, max_length=250)
+    gram_weight: int = Field(gt=0, le=2000)
+    paper_grade: str | None = Field(default=None, max_length=100)
+    paper_role: str | None = Field(default=None, max_length=50)
+    remark: str | None = None
+    is_active: bool = True
+
+    @field_validator("supplier_name", "paper_name")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("code_char")
+    @classmethod
+    def normalize_code_char(cls, value: str) -> str:
+        code = value.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]", code):
+            raise ValueError("基础代码必须是单个字母或数字")
+        return code
+
+
+class MaterialComposePreviewPayload(BaseModel):
+    supplier_name: str = Field(min_length=1, max_length=200)
+    material_code: str = Field(min_length=1, max_length=5)
+    layer_count: int | None = Field(default=None, ge=3, le=5)
+    usage_flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
+    quote_price: Decimal | None = Field(default=None, ge=0)
+
+    @field_validator("supplier_name")
+    @classmethod
+    def strip_supplier_name(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("material_code")
+    @classmethod
+    def normalize_material_code(cls, value: str) -> str:
+        code = value.strip().upper()
+        if len(code) not in {3, 5}:
+            raise ValueError("材质代码需为3位或5位")
+        if not re.fullmatch(r"[A-Z0-9]+", code):
+            raise ValueError("材质代码只能包含字母和数字")
+        return code
+
+
+class MaterialComposeSavePayload(MaterialComposePreviewPayload):
+    remarks: str | None = None
+    parsed_supplier_name: str = Field(min_length=1, max_length=200)
+    parsed_material_code: str = Field(min_length=1, max_length=5)
+    parsed_layer_count: int = Field(ge=3, le=5)
+    price_source: Literal["manual", "suggested"]
 
 
 WORKSHOP_FIELDS = (
@@ -533,9 +592,22 @@ def compare_materials_endpoint(
     stmt = select(Material).where(Material.is_active.is_(True))
     if layer_count is not None:
         stmt = stmt.where(Material.layer_count == layer_count)
-    if weight:
+    if payload.supplier_name:
+        stmt = stmt.where(Material.supplier_name == payload.supplier_name)
+    numeric_total = None
+    if weight and re.fullmatch(r"\d+(?:\.\d+)?", str(weight).strip()):
+        numeric_total = Decimal(str(weight).strip())
+    elif weight:
         stmt = stmt.where(Material.basis_weight_description == weight)
     candidates = list(db.scalars(stmt).all())
+    if numeric_total is not None:
+        candidates = [
+            material
+            for material in candidates
+            if sum(Decimal(str(value)) for value in _parse_layer_weights(
+                material.basis_weight_description
+            )) == numeric_total
+        ]
     groups = material_pricing.compare_materials(
         db,
         candidates=candidates,
@@ -546,6 +618,392 @@ def compare_materials_endpoint(
         "layer_count": layer_count,
         "flute_type": (payload.flute_type or "").strip().upper() or None,
         "groups": groups,
+    }
+
+
+def _paper_code_dict(row: SupplierPaperCode) -> dict:
+    return {
+        "id": row.id,
+        "supplier_name": row.supplier_name,
+        "code_char": row.code_char,
+        "paper_name": row.paper_name,
+        "gram_weight": row.gram_weight,
+        "paper_grade": row.paper_grade,
+        "paper_role": row.paper_role,
+        "remark": row.remark,
+        "is_active": row.is_active,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _dictionary_material_code(value: str | None, layer_count: int) -> str:
+    compact = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    return compact[:layer_count]
+
+
+def _find_dictionary_duplicate(
+    db: Session,
+    *,
+    supplier_name: str,
+    layer_count: int,
+    material_code: str,
+    exclude_material_id: int | None = None,
+) -> Material | None:
+    normalized = _dictionary_material_code(material_code, layer_count)
+    rows = db.scalars(
+        select(Material).where(
+            Material.supplier_name == supplier_name,
+            Material.layer_count == layer_count,
+        )
+    ).all()
+    return next(
+        (
+            row for row in rows
+            if row.id != exclude_material_id
+            and _dictionary_material_code(row.code, layer_count) == normalized
+        ),
+        None,
+    )
+
+
+def _compose_preview(
+    db: Session,
+    *,
+    supplier_name: str,
+    material_code: str,
+    usage_flute_type: str | None = None,
+    manual_quote_price: Decimal | None = None,
+    requested_layer_count: int | None = None,
+) -> dict:
+    layer_count = len(material_code)
+    if requested_layer_count is not None and requested_layer_count != layer_count:
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前选择{requested_layer_count}层，但材质代码为{layer_count}位，请检查后重新解析",
+        )
+    roles = (
+        ["面纸", "瓦楞纸", "里纸"]
+        if layer_count == 3
+        else ["面纸", "B楞瓦纸", "芯纸", "A楞瓦纸", "里纸"]
+    )
+    rows = list(
+        db.scalars(
+            select(SupplierPaperCode).where(
+                SupplierPaperCode.supplier_name == supplier_name,
+                SupplierPaperCode.code_char.in_(set(material_code)),
+                SupplierPaperCode.is_active.is_(True),
+            )
+        ).all()
+    )
+    code_map = {row.code_char: row for row in rows}
+    missing_codes = list(
+        dict.fromkeys(char for char in material_code if char not in code_map)
+    )
+    layers = []
+    total_weight = 0
+    for index, (char, role) in enumerate(zip(material_code, roles), start=1):
+        paper = code_map.get(char)
+        if paper is not None:
+            total_weight += paper.gram_weight
+        layers.append(
+            {
+                "position": index,
+                "role": role,
+                "code_char": char,
+                "paper_name": paper.paper_name if paper else None,
+                "gram_weight": paper.gram_weight if paper else None,
+                "paper_grade": paper.paper_grade if paper else None,
+                "configured_role": paper.paper_role if paper else None,
+                "missing": paper is None,
+            }
+        )
+    existing = _find_dictionary_duplicate(
+        db,
+        supplier_name=supplier_name,
+        layer_count=layer_count,
+        material_code=material_code,
+    )
+    valid = not missing_codes
+    pricing = (
+        estimate_material_price(
+            db,
+            supplier_name=supplier_name,
+            material_code=material_code,
+            usage_flute_type=usage_flute_type,
+        )
+        if valid
+        else {"calculable": False}
+    )
+    if missing_codes:
+        message = f"该供应商下不存在基础代码：{'、'.join(missing_codes)}"
+    elif existing is not None:
+        layer_label = {3: "三层", 5: "五层"}.get(layer_count, f"{layer_count}层")
+        message = (
+            f"该供应商下已存在{layer_label}材质代码 {material_code}，"
+            "不能重复保存。楞型请在常用箱中选择。"
+        )
+    elif manual_quote_price is not None:
+        message = "已手工填写平方价，可保存为可用材质"
+    elif pricing.get("calculable"):
+        message = "已按供应商基准报价和当前调价规则推算，可保存为可用材质"
+    else:
+        message = "当前组合未找到已有平方价，请手工填写平方价"
+    return {
+        "supplier_name": supplier_name,
+        "material_code": material_code,
+        "layer_count": layer_count,
+        "usage_flute_type": usage_flute_type,
+        "layers": layers,
+        "total_gram_weight": total_weight if valid else None,
+        "missing_codes": missing_codes,
+        "valid": valid,
+        "existing_material_id": existing.id if existing else None,
+        "duplicate_material": existing is not None,
+        "existing_square_price": existing.quote_price if existing else None,
+        "quotation_base_price": pricing.get("quotation_base_price"),
+        "usage_base_price": pricing.get("usage_base_price"),
+        "current_suggested_price": pricing.get("current_suggested_price"),
+        "adjustment_percent": pricing.get("adjustment_percent"),
+        "adjustment_effective_date": pricing.get("adjustment_effective_date"),
+        "price_calculation": pricing,
+        "message": message,
+        "parse_key": f"{supplier_name}|{layer_count}|{material_code}",
+    }
+
+
+@router.get("/paper-codes")
+def list_supplier_paper_codes(
+    supplier_name: str | None = None,
+    keyword: str | None = None,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    query = select(SupplierPaperCode)
+    if supplier_name:
+        query = query.where(
+            SupplierPaperCode.supplier_name == supplier_name.strip()
+        )
+    if not include_inactive:
+        query = query.where(SupplierPaperCode.is_active.is_(True))
+    if keyword:
+        pattern = f"%{keyword.strip()}%"
+        query = query.where(
+            SupplierPaperCode.code_char.ilike(pattern)
+            | SupplierPaperCode.paper_name.ilike(pattern)
+            | SupplierPaperCode.paper_grade.ilike(pattern)
+        )
+    rows = list(
+        db.scalars(
+            query.order_by(
+                SupplierPaperCode.supplier_name,
+                SupplierPaperCode.code_char,
+            )
+        ).all()
+    )
+    return {"items": [_paper_code_dict(row) for row in rows], "total": len(rows)}
+
+
+@router.post("/paper-codes", status_code=status.HTTP_201_CREATED)
+def create_supplier_paper_code(
+    payload: SupplierPaperCodePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    row = SupplierPaperCode(**payload.model_dump())
+    try:
+        db.add(row)
+        db.flush()
+        audit_master_change(
+            db,
+            user=user,
+            action="CREATE",
+            resource="SupplierPaperCode",
+            resource_id=row.id,
+            details=payload.model_dump(),
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="该供应商已存在相同基础代码",
+        ) from error
+    db.refresh(row)
+    return _paper_code_dict(row)
+
+
+@router.put("/paper-codes/{paper_code_id}")
+def update_supplier_paper_code(
+    paper_code_id: int,
+    payload: SupplierPaperCodePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    row = db.get(SupplierPaperCode, paper_code_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="基础纸种代码不存在")
+    before = _paper_code_dict(row)
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    try:
+        audit_master_change(
+            db,
+            user=user,
+            action="UPDATE",
+            resource="SupplierPaperCode",
+            resource_id=row.id,
+            details={"before": before, "after": payload.model_dump()},
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="该供应商已存在相同基础代码",
+        ) from error
+    db.refresh(row)
+    return _paper_code_dict(row)
+
+
+@router.post("/compose/preview")
+def preview_material_composition(
+    payload: MaterialComposePreviewPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_write),
+) -> dict:
+    return _compose_preview(
+        db,
+        supplier_name=payload.supplier_name,
+        material_code=payload.material_code,
+        usage_flute_type=payload.usage_flute_type,
+        manual_quote_price=payload.quote_price,
+        requested_layer_count=payload.layer_count,
+    )
+
+
+@router.post("/compose/save")
+def save_material_composition(
+    payload: MaterialComposeSavePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    preview = _compose_preview(
+        db,
+        supplier_name=payload.supplier_name,
+        material_code=payload.material_code,
+        usage_flute_type=payload.usage_flute_type,
+        manual_quote_price=payload.quote_price,
+        requested_layer_count=payload.layer_count,
+    )
+    if (
+        payload.parsed_supplier_name.strip() != payload.supplier_name
+        or payload.parsed_material_code.strip().upper() != payload.material_code
+        or payload.parsed_layer_count != payload.layer_count
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="当前输入已发生变化，旧解析结果已失效，请重新解析后保存",
+        )
+    if not preview["valid"]:
+        raise HTTPException(status_code=400, detail=preview["message"])
+    existing = _find_dictionary_duplicate(
+        db,
+        supplier_name=payload.supplier_name,
+        layer_count=payload.layer_count,
+        material_code=payload.material_code,
+    )
+    if existing is not None:
+        layer_label = {3: "三层", 5: "五层"}.get(
+            payload.layer_count, f"{payload.layer_count}层"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"该供应商下已存在{layer_label}材质代码 "
+                f"{payload.material_code}，不能重复保存。楞型请在常用箱中选择。"
+            ),
+        )
+    conflict = db.scalar(
+        select(Material).where(func.upper(Material.code) == payload.material_code)
+    )
+    if conflict is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"材质代码 {payload.material_code} 已被供应商"
+                f"“{conflict.supplier_name or '未设置'}”使用；当前全局唯一约束下不能重复保存"
+            ),
+        )
+    suggested_price = preview.get("current_suggested_price")
+    if payload.quote_price is None and suggested_price is None:
+        raise HTTPException(
+            status_code=400,
+            detail="当前组合没有已有平方价，请手工填写平方价",
+        )
+    weights = [str(layer["gram_weight"]) for layer in preview["layers"]]
+    composition = " | ".join(
+        (
+            f'{layer["role"]}:{layer["code_char"]}='
+            f'{layer["gram_weight"]}g {layer["paper_name"]}'
+        )
+        for layer in preview["layers"]
+    )
+    if payload.price_source == "suggested":
+        if suggested_price is None:
+            raise HTTPException(status_code=409, detail="当前材质没有可用建议价，请重新解析或手工填写平方价")
+        final_price = suggested_price
+    else:
+        if payload.quote_price is None:
+            raise HTTPException(status_code=400, detail="请填写当前材质的手工平方价")
+        final_price = payload.quote_price
+    material = Material(
+            code=payload.material_code,
+            paper_composition=composition,
+            layer_count=preview["layer_count"],
+            flute_type=None,
+            basis_weight_description="/".join(f"{weight}g" for weight in weights),
+            quote_price=final_price,
+            rule_base_price=preview.get("quotation_base_price"),
+            price_source=(
+                f"供应商规则基准价 {preview.get('quotation_base_price')}；"
+                f"当前调价 {preview.get('adjustment_percent') or 0}%"
+                if preview.get("quotation_base_price") is not None
+                else "人工填写"
+            ),
+            price_unit="元/㎡",
+            supplier_name=payload.supplier_name,
+            remarks=(payload.remarks or "").strip() or None,
+            is_active=True,
+        )
+    db.add(material)
+    action = "CREATE"
+    before = None
+    try:
+        db.flush()
+        audit_master_change(
+            db,
+            user=user,
+            action=action,
+            resource="Material",
+            resource_id=material.id,
+            details={
+                "before": before,
+                "composer": payload.model_dump(),
+                "total_gram_weight": preview["total_gram_weight"],
+            },
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="材质编码重复") from error
+    db.refresh(material)
+    return {
+        "material": _response(material, user),
+        "total_gram_weight": preview["total_gram_weight"],
+        "created": action == "CREATE",
+        "message": "组合材质已保存，可在常用箱、订单、报料和报价中选择",
     }
 
 
@@ -600,12 +1058,23 @@ def create_material(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
-    _validate_layer_flute(payload.layer_count, payload.flute_type)
     data = payload.model_dump()
     data["code"] = clean_code(payload.code)
+    data["flute_type"] = None
     data["basis_weight_description"] = normalize_basis_weight(
         payload.basis_weight_description
     )
+    duplicate = _find_dictionary_duplicate(
+        db,
+        supplier_name=(payload.supplier_name or "").strip(),
+        layer_count=payload.layer_count or len(data["code"]),
+        material_code=data["code"],
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {data['code']}，不能重复保存",
+        )
     material = Material(**data)
     try:
         db.add(material)
@@ -634,11 +1103,23 @@ def update_material(
     user: User = Depends(can_write),
 ) -> dict:
     material = _material_or_404(db, material_id)
-    _validate_layer_flute(payload.layer_count, payload.flute_type)
     before = MaterialResponse.model_validate(material).model_dump()
+    duplicate = _find_dictionary_duplicate(
+        db,
+        supplier_name=(payload.supplier_name or "").strip(),
+        layer_count=payload.layer_count or len(payload.code),
+        material_code=payload.code,
+        exclude_material_id=material_id,
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {payload.code}，不能重复保存",
+        )
     for key, value in payload.model_dump().items():
         setattr(material, key, value)
     material.code = clean_code(payload.code)
+    material.flute_type = None
     material.basis_weight_description = normalize_basis_weight(
         payload.basis_weight_description
     )

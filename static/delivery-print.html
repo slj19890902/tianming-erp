@@ -159,9 +159,9 @@
   <div id="errorBox" class="error" hidden></div>
 
   <main id="sheet" class="sheet" hidden>
-    <h1 class="company">苏州天明包装有限公司</h1>
+    <h1 id="senderCompanyName" class="company">苏州天明包装有限公司</h1>
     <h2 class="document-title">送货单</h2>
-    <div class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
+    <div id="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
 
     <section class="meta">
       <div class="meta-row"><span>客户名称：</span><span id="customerName" class="meta-value"></span></div>
@@ -232,6 +232,17 @@
         }
         if (!response.ok) {
           throw new Error(data.detail || "读取送货单失败。");
+        }
+        const sender = data.sender || {};
+        if (sender.company_name) {
+          document.getElementById("senderCompanyName").textContent = sender.company_name;
+        }
+        const senderParts = [];
+        if (sender.address) senderParts.push(`地址：${sender.address}`);
+        if (sender.phone) senderParts.push(`电话：${sender.phone}`);
+        if (sender.fax) senderParts.push(`传真：${sender.fax}`);
+        if (senderParts.length) {
+          document.getElementById("senderContact").textContent = senderParts.join("　");
         }
         document.getElementById("customerName").textContent = data.customer.name || "";
         document.getElementById("customerPhone").textContent = data.customer.phone || "";

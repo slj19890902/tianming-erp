@@ -80,3 +80,48 @@ def decode_session_token(
         return int(payload["sub"])
     except (jwt.PyJWTError, KeyError, TypeError, ValueError) as error:
         raise ValueError("登录凭证无效或已过期") from error
+
+
+def create_tianhua_pick_token(
+    batch_id: int,
+    draft_id: int,
+    *,
+    secret_key: str | None = None,
+    expires_hours: int = 24,
+) -> tuple[str, datetime]:
+    current = load_settings()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(hours=expires_hours)
+    token = jwt.encode(
+        {
+            "batch_id": batch_id,
+            "draft_id": draft_id,
+            "iat": now,
+            "exp": expires,
+            "type": "tianhua_mobile_pick",
+        },
+        secret_key or current.secret_key,
+        algorithm="HS256",
+    )
+    return token, expires
+
+
+def decode_tianhua_pick_token(
+    token: str,
+    *,
+    secret_key: str | None = None,
+) -> tuple[int, int]:
+    current = load_settings()
+    try:
+        payload = jwt.decode(
+            token,
+            secret_key or current.secret_key,
+            algorithms=["HS256"],
+        )
+        if payload.get("type") != "tianhua_mobile_pick":
+            raise ValueError
+        return int(payload["batch_id"]), int(payload["draft_id"])
+    except jwt.ExpiredSignatureError as error:
+        raise ValueError("二维码已过期，请在电脑端重新生成") from error
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("无权限访问该拿货单") from error

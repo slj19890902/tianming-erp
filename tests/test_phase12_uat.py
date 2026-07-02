@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from fastapi import FastAPI
@@ -324,3 +325,314 @@ def test_statement_excel_export_is_valid_workbook(phase12_app):
     assert sheet["A1"].value == "月结对账单"
     assert "苏州正常客户" in sheet["A2"].value
     assert sheet.max_row >= 7
+
+
+# ── v0.20.2 导出完善测试 ────────────────────────────────────────────────────────
+
+
+def test_customer_abbr_extracts_short_name():
+    from app.api.finance import _customer_abbr
+
+    assert _customer_abbr("苏州天明包装有限公司") == "天明"
+    assert _customer_abbr("苏州天华超净科技股份有限公司") == "天华"
+    assert _customer_abbr("天华超净科技（苏州）有限公司") == "天华"
+    assert _customer_abbr("昆山华诚电子有限公司") == "华诚"
+    assert _customer_abbr("苏州思迈尔包装有限公司") == "思迈"
+    assert _customer_abbr("上海威力科技有限公司") == "威力"
+    assert _customer_abbr("正常两字") == "正常"
+
+
+def test_customer_abbr_falls_back_to_ke_hu_when_empty():
+    from app.api.finance import _customer_abbr
+
+    # 苏州 + 有限公司 → 去掉后剩余无中文字符，应回退为"客户"
+    assert _customer_abbr("苏州有限公司") == "客户"
+
+
+def test_safe_filename_removes_illegal_chars():
+    from app.api.finance import _safe_filename
+
+    assert _safe_filename("天明2026/06对账单") == "天明202606对账单"
+    assert _safe_filename('file*name?"<>|end') == "filenameend"
+    assert _safe_filename("no\\backslash:here") == "nobackslashhere"
+
+
+def test_export_content_disposition_uses_rfc5987_with_ascii_fallback(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    assert response.status_code == 200
+    cd = response.headers["content-disposition"]
+    assert 'filename="statement.xlsx"' in cd, f"ASCII fallback missing from: {cd}"
+    assert "filename*=UTF-8''" in cd, f"RFC 5987 encoding missing from: {cd}"
+
+
+def test_export_filename_uses_customer_abbr_and_month(phase12_app):
+    # Fixture customer "苏州正常客户" → abbr "正常"; month "2026-06"
+    # Expected filename: 正常2026-06对账单.xlsx
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    assert response.status_code == 200
+    cd = response.headers["content-disposition"]
+    assert "filename*=UTF-8''" in cd
+    encoded_part = cd.split("filename*=UTF-8''")[1].split(";")[0].strip()
+    decoded = unquote(encoded_part)
+    assert decoded == "正常2026-06对账单.xlsx", f"Got filename: {decoded}"
+
+
+def test_export_excel_contains_all_required_columns(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    header_row = [cell.value for cell in sheet[5]]
+    required = {
+        "客户名称", "客户单号", "存货编码", "送货日期", "送货单号",
+        "产品名称", "规格型号", "材质", "实际签收数量",
+        "单价", "金额", "备注", "开票状态", "对账状态", "结清状态",
+    }
+    missing = required - set(header_row)
+    assert not missing, f"缺少列：{missing}"
+
+
+def test_export_uses_actual_received_quantity_not_delivered(phase12_app):
+    # Fixture: delivered_quantity=80, actual_received_quantity=78
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    headers = [cell.value for cell in sheet[5]]
+    qty_col = headers.index("实际签收数量") + 1
+    assert sheet.cell(6,qty_col).value == 78, "应使用实际签收数量 78，不是送货数量 80"
+
+
+def test_export_amount_equals_receivable_amount(phase12_app):
+    # Fixture: actual_received_quantity=78, unit_price=3.00, receivable_amount=234
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    headers = [cell.value for cell in sheet[5]]
+    amount_col = headers.index("金额") + 1
+    assert float(sheet.cell(6,amount_col).value) == 234.0
+
+
+def test_export_remarks_spec_material_correct(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    headers = [cell.value for cell in sheet[5]]
+    remarks_col = headers.index("备注") + 1
+    material_col = headers.index("材质") + 1
+    assert sheet.cell(6,remarks_col).value == "压坏2个"
+    assert sheet.cell(6,material_col).value == "WCX1"
+
+
+def test_export_returns_404_for_nonexistent_statement(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/999/export")
+
+    assert response.status_code == 404
+
+
+def test_export_does_not_write_to_database(phase12_app):
+    from app.models.audit import OperationLog
+
+    app, session_factory, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        with session_factory() as session:
+            before_count = session.query(OperationLog).count()
+        client.get("/api/finance/statements/1/export")
+
+    with session_factory() as session:
+        after_count = session.query(OperationLog).count()
+
+    assert after_count == before_count, "导出操作不应写入数据库"
+
+
+HEADER_ROW = 5  # row 1=title, 2=customer info, 3=company info, 4=blank, 5=headers
+DATA_ROW_START = 6
+
+
+def _get_header_col(sheet, name: str) -> int:
+    headers = [cell.value for cell in sheet[HEADER_ROW]]
+    return headers.index(name) + 1
+
+
+def test_export_product_code_uses_snapshot_not_current(phase12_app):
+    # Fixture: OrderItem.snapshot_product_code="21301028"
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "存货编码")
+    assert sheet.cell(6,col).value == "21301028"
+
+
+def test_export_invoice_status_partial(phase12_app):
+    from app.models.finance import Statement
+
+    app, session_factory, _ = phase12_app
+    with session_factory() as session:
+        stmt = session.get(Statement, 1)
+        stmt.invoiced_amount = Decimal("100")
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "开票状态")
+    assert sheet.cell(6,col).value == "部分开票"
+
+
+def test_export_invoice_status_full(phase12_app):
+    from app.models.finance import Statement
+
+    app, session_factory, _ = phase12_app
+    with session_factory() as session:
+        stmt = session.get(Statement, 1)
+        stmt.invoiced_amount = Decimal("234")
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "开票状态")
+    assert sheet.cell(6,col).value == "已开票"
+
+
+def test_export_settlement_status_not_received(phase12_app):
+    # Default fixture: settled_amount=0
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "结清状态")
+    assert sheet.cell(6,col).value == "未收款"
+
+
+def test_export_settlement_status_partial(phase12_app):
+    from app.models.finance import Statement
+
+    app, session_factory, _ = phase12_app
+    with session_factory() as session:
+        stmt = session.get(Statement, 1)
+        stmt.settled_amount = Decimal("100")
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "结清状态")
+    assert sheet.cell(6,col).value == "部分收款"
+
+
+def test_export_settlement_status_full(phase12_app):
+    from app.models.finance import Statement
+
+    app, session_factory, _ = phase12_app
+    with session_factory() as session:
+        stmt = session.get(Statement, 1)
+        stmt.settled_amount = Decimal("234")
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "结清状态")
+    assert sheet.cell(6,col).value == "已结清"
+
+
+def test_export_reconciliation_status_is_always_reconciled(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "对账状态")
+    assert sheet.cell(6,col).value == "已对账"
+
+
+def test_export_original_fields_not_lost(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    headers = {cell.value for cell in sheet[5]}
+    for field in ("送货日期", "送货单号", "客户单号", "产品名称", "规格型号",
+                  "实际签收数量", "单价", "金额", "备注"):
+        assert field in headers, f"原有字段丢失：{field}"
+
+
+def test_export_column_order_exact(phase12_app):
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    actual = [cell.value for cell in sheet[5]]
+    expected = [
+        "客户名称", "客户单号", "存货编码", "送货日期", "送货单号",
+        "产品名称", "规格型号", "材质", "实际签收数量", "单价", "金额",
+        "备注", "开票状态", "对账状态", "结清状态",
+    ]
+    assert actual == expected, f"列顺序不符\n预期：{expected}\n实际：{actual}"
+
+
+def test_export_invoice_status_zero_is_not_invoiced(phase12_app):
+    # Default fixture: invoiced_amount=0 (default)
+    app, _, _ = phase12_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        response = client.get("/api/finance/statements/1/export")
+
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    col = _get_header_col(sheet, "开票状态")
+    assert sheet.cell(6,col).value == "未开票"

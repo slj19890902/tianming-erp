@@ -132,12 +132,101 @@ def test_match_import_draft_links_customer_and_products(tmp_path: Path) -> None:
             matched = match_import_draft(session, draft)
 
         assert matched["matched_customer_id"] == 1
+        assert matched["customer_match_status"] == "matched"
         assert matched["items"][0]["matched_product_id"] is not None
         assert matched["items"][1]["matched_product_id"] is not None
         assert matched["items"][2]["matched_product_id"] is None
     finally:
         engine.dispose()
         database_path.unlink(missing_ok=True)
+
+
+def test_customer_match_returns_multiple_candidates_for_ambiguous_name(
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.services.order_pdf_import import _customer_match
+
+    engine = create_sqlite_engine(tmp_path / "ambiguous-customer.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with session_factory() as session:
+        session.add_all(
+            [
+                Customer(
+                    customer_number=1,
+                    customer_code="TH1",
+                    name="苏州天华超净科技有限公司",
+                    payment_term_days=30,
+                    credit_limit=0,
+                ),
+                Customer(
+                    customer_number=2,
+                    customer_code="TH2",
+                    name="天华科技包装有限公司",
+                    payment_term_days=30,
+                    credit_limit=0,
+                ),
+            ]
+        )
+        session.commit()
+        status, customer_id, candidates = _customer_match(session, "天华")
+
+    assert status == "multiple_candidates"
+    assert customer_id is None
+    assert {row["name"] for row in candidates} == {
+        "苏州天华超净科技有限公司",
+        "天华科技包装有限公司",
+    }
+    assert all(row["name"] != "天华" for row in candidates)
+
+
+def test_full_customer_name_wins_over_short_customer_candidate(
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.services.order_pdf_import import _customer_match
+
+    engine = create_sqlite_engine(tmp_path / "full-customer-priority.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    full_name = "苏州天华超净科技股份有限公司"
+    with session_factory() as session:
+        session.add_all(
+            [
+                Customer(
+                    customer_number=1,
+                    customer_code="TH",
+                    name=full_name,
+                    payment_term_days=30,
+                    credit_limit=0,
+                ),
+                Customer(
+                    customer_number=2,
+                    customer_code="SHORT",
+                    name="天华",
+                    payment_term_days=30,
+                    credit_limit=0,
+                ),
+                Customer(
+                    customer_number=3,
+                    customer_code="THXN",
+                    name="苏州天华新能源科技股份有限公司",
+                    payment_term_days=30,
+                    credit_limit=0,
+                ),
+            ]
+        )
+        session.commit()
+        status, customer_id, candidates = _customer_match(session, full_name)
+
+    assert status == "matched"
+    assert customer_id == 1
+    assert candidates == [{"id": 1, "name": full_name}]
 
 
 def _order_import_app(tmp_path: Path):

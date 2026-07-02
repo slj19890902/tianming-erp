@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -455,6 +455,59 @@ def test_sales_can_edit_and_delete_one_order_item(order_api_app) -> None:
     assert Decimal(str(refreshed["total_amount"])) == Decimal("777.00")
 
 
+def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> None:
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = client.post("/api/orders", json=_payload()).json()
+        item_id = created["items"][0]["id"]
+        edited = client.put(
+            f"/api/orders/items/{item_id}",
+            json={
+                "quantity": 500,
+                "unit_price": "3.92",
+                "product_code": "SME-001",
+                "product_name": "同步常用箱测试",
+                "material": "A6A",
+                "specification": "880×670×110mm",
+                "box_style": "A1/0201 普通开槽箱",
+                "length_mm": 880,
+                "width_mm": 670,
+                "height_mm": 110,
+                "snapshot_splice_mode": "double",
+                "snapshot_pieces_per_box": 2,
+                "snapshot_flap_mm": 30,
+                "snapshot_report_length_mm": 3130,
+                "snapshot_report_width_mm": 785,
+                "snapshot_crease_type": "压线",
+                "snapshot_crease_left_mm": 335,
+                "snapshot_crease_middle_mm": 110,
+                "snapshot_crease_right_mm": 335,
+                "production_process": "粘贴",
+                "print_content": "单色印刷",
+                "product_remark": "订单编辑同步",
+                "sync_product": True,
+            },
+        )
+        assert edited.status_code == 200, edited.text
+
+    with session_factory() as session:
+        product = session.get(Product, 1)
+        assert product.box_style == "A1/0201 普通开槽箱"
+        assert int(product.length_mm) == 880
+        assert int(product.width_mm) == 670
+        assert int(product.height_mm) == 110
+        assert product.splice_mode == "double"
+        assert product.pieces_per_box == 2
+        assert product.report_length_mm == 3130
+        assert product.crease_middle_mm == 110
+        assert product.production_process == "粘贴"
+        assert product.print_content == "单色印刷"
+        assert product.remark == "订单编辑同步"
+
+
 def test_order_models_use_new_tables_and_leave_legacy_name_free() -> None:
     from app.models.order import Order, OrderItem
 
@@ -506,6 +559,273 @@ def test_order_delete_requires_double_confirmation_and_does_not_reuse_number(
     assert denied.status_code == 400
     assert deleted.status_code == 204
     assert second["order_number"] == "TM20260613002"
+
+
+def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
+    order_api_app,
+) -> None:
+    from app.models.order import Order
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = order_api_app
+    first_payload = _payload()
+    first_payload["customer_po"] = "PDF-GROUP-001"
+    first_payload["remark"] = "PDF识别草稿：first.pdf"
+    second_payload = _payload()
+    second_payload["customer_po"] = "PDF-GROUP-001"
+    second_payload["remark"] = "PDF识别草稿：second.pdf"
+    second_payload["items"][0]["quantity"] = 201
+    with TestClient(app) as client:
+        _login(client)
+        first = client.post("/api/orders", json=first_payload).json()
+        second = client.post("/api/orders", json=second_payload).json()
+        deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [first["id"], second["id"]], "confirm": True},
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_count"] == 2
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Order)) == 0
+
+    blocked_payload = _payload()
+    blocked_payload["customer_po"] = "PDF-GROUP-BLOCKED"
+    blocked_payload["remark"] = "PDF识别草稿：blocked.pdf"
+    with TestClient(app) as client:
+        _login(client)
+        blocked_order = client.post("/api/orders", json=blocked_payload).json()
+        blocked_item = blocked_order["items"][0]
+        with session_factory() as session:
+            requisition = Requisition(
+                requisition_number="MR-PDF-BLOCK",
+                requisition_date=date(2026, 6, 13),
+                status="已报料",
+            )
+            session.add(requisition)
+            session.flush()
+            session.add(
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=blocked_item["id"],
+                    inventory_deducted_qty=0,
+                    requisition_qty=200,
+                    cardboard_len=Decimal("1000"),
+                    cardboard_width=Decimal("500"),
+                    special_process="一开一",
+                    product_name_snapshot="五层加强纸箱",
+                    status="有效",
+                )
+            )
+            session.commit()
+        blocked = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [blocked_order["id"]], "confirm": True},
+        )
+
+    assert blocked.status_code == 409
+    assert "报料" in blocked.json()["detail"]
+    assert "不能直接删除" in blocked.json()["detail"]
+    with session_factory() as session:
+        assert session.get(Order, blocked_order["id"]) is not None
+
+
+def _seed_tianhua_predelivery(
+    session,
+    *,
+    order_id: int,
+    order_item_id: int,
+    order_number: str,
+    suffix: str,
+    activity_at: datetime | None = None,
+) -> int:
+    from app.models.tianhua_pre_delivery import (
+        TianhuaPreDeliveryDraft,
+        TianhuaPreDeliveryDraftItem,
+        TianhuaPreDeliveryImportBatch,
+        TianhuaPreDeliveryImportItem,
+    )
+
+    batch = TianhuaPreDeliveryImportBatch(
+        batch_number=f"TH-DELETE-{suffix}",
+        filename=f"{suffix}.png",
+        customer_id=1,
+        customer_name="苏州思迈尔包装有限公司",
+        pre_delivery_date=date(2026, 6, 20),
+        status="draft_created",
+        total_rows=1,
+    )
+    session.add(batch)
+    session.flush()
+    imported = TianhuaPreDeliveryImportItem(
+        batch_id=batch.id,
+        row_no=1,
+        raw_text="SME-001 200",
+        stock_code="SME-001",
+        image_qty=200,
+        product_id=1,
+        product_name="五层加强纸箱",
+        order_item_id=order_item_id,
+        order_id=order_id,
+        order_number=order_number,
+        system_pending_qty=200,
+        suggested_qty=200,
+        final_delivery_qty=200,
+        status="ok",
+        selected=True,
+    )
+    session.add(imported)
+    session.flush()
+    draft = TianhuaPreDeliveryDraft(
+        draft_number=f"THYSH-DELETE-{suffix}",
+        batch_id=batch.id,
+        customer_id=1,
+        status="draft",
+        updated_at=activity_at,
+    )
+    session.add(draft)
+    session.flush()
+    draft_item = TianhuaPreDeliveryDraftItem(
+        draft_id=draft.id,
+        import_item_id=imported.id,
+        row_no=1,
+        stock_code="SME-001",
+        product_id=1,
+        order_item_id=order_item_id,
+        order_id=order_id,
+        order_number=order_number,
+        delivery_qty=200,
+        mobile_pick_status="pending",
+    )
+    session.add(draft_item)
+    session.commit()
+    return imported.id
+
+
+def test_active_predelivery_still_blocks_order_group_delete(order_api_app) -> None:
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PREDELIVERY-ACTIVE"
+    with TestClient(app) as client:
+        _login(client)
+        order = client.post("/api/orders", json=payload).json()
+        with session_factory() as session:
+            _seed_tianhua_predelivery(
+                session,
+                order_id=order["id"],
+                order_item_id=order["items"][0]["id"],
+                order_number=order["order_number"],
+                suffix="ACTIVE",
+            )
+        response = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [order["id"]], "confirm": True},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "该订单仍存在有效预送货流程，请先撤回或作废预送货后再删除。"
+    )
+    with session_factory() as session:
+        assert session.get(Order, order["id"]) is not None
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["ROLLBACK_WORKFLOW", "CANCEL_PRE_DELIVERY", "VOID_PRE_DELIVERY"],
+)
+def test_invalidated_predelivery_does_not_block_order_group_delete(
+    order_api_app,
+    action: str,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.order import Order
+    from app.models.tianhua_pre_delivery import (
+        TianhuaPreDeliveryDraftItem,
+        TianhuaPreDeliveryImportItem,
+    )
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = f"PREDELIVERY-{action}"
+    with TestClient(app) as client:
+        _login(client)
+        order = client.post("/api/orders", json=payload).json()
+        with session_factory() as session:
+            import_item_id = _seed_tianhua_predelivery(
+                session,
+                order_id=order["id"],
+                order_item_id=order["items"][0]["id"],
+                order_number=order["order_number"],
+                suffix=action,
+                activity_at=datetime(2026, 6, 19, 10, 0, 0),
+            )
+            session.add(
+                OperationLog(
+                    action=action,
+                    resource="Order",
+                    entity_type="order",
+                    entity_id=order["id"],
+                    created_at=datetime(2026, 6, 20, 10, 0, 0),
+                    description="预送货已撤回或作废",
+                )
+            )
+            session.commit()
+        response = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [order["id"]], "confirm": True},
+        )
+
+    assert response.status_code == 200, response.text
+    with session_factory() as session:
+        assert session.get(Order, order["id"]) is None
+        imported = session.get(TianhuaPreDeliveryImportItem, import_item_id)
+        assert imported is not None
+        assert imported.order_id is None
+        assert imported.order_item_id is None
+        assert imported.selected is False
+        assert imported.status == "not_matched"
+        assert session.scalar(
+            select(func.count()).select_from(TianhuaPreDeliveryDraftItem)
+        ) == 0
+
+
+def test_workflow_rollback_unlinks_predelivery_before_later_delete(
+    order_api_app,
+) -> None:
+    from app.models.tianhua_pre_delivery import TianhuaPreDeliveryImportItem
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PREDELIVERY-ROLLBACK-ENDPOINT"
+    with TestClient(app) as client:
+        _login(client, "admin")
+        order = client.post("/api/orders", json=payload).json()
+        with session_factory() as session:
+            import_item_id = _seed_tianhua_predelivery(
+                session,
+                order_id=order["id"],
+                order_item_id=order["items"][0]["id"],
+                order_number=order["order_number"],
+                suffix="ROLLBACK-ENDPOINT",
+            )
+        rolled_back = client.put(
+            f"/api/orders/{order['id']}/rollback-workflow",
+            json={"reason": "预送货取消"},
+        )
+        deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [order["id"]], "confirm": True},
+        )
+
+    assert rolled_back.status_code == 200, rolled_back.text
+    assert deleted.status_code == 200, deleted.text
+    with session_factory() as session:
+        imported = session.get(TianhuaPreDeliveryImportItem, import_item_id)
+        assert imported.order_id is None
+        assert imported.order_item_id is None
 
 
 def test_duplicate_formal_order_is_not_generated_twice(order_api_app) -> None:
@@ -909,6 +1229,25 @@ def test_back_dated_pdf_order_surfaces_at_top_of_business(order_api_app) -> None
     assert first["id"] in ids
     # the most recently saved order ranks first despite its older order_date
     assert data["items"][0]["id"] == back_dated["id"]
+
+
+def test_business_orders_sort_by_latest_update(order_api_app) -> None:
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        first = _create_order(client, customer_po="PO-UPDATE-FIRST", order_date="2026-06-13")
+        second = _create_order(client, customer_po="PO-UPDATE-SECOND", order_date="2026-06-13")
+        with session_factory() as session:
+            first_order = session.get(Order, first["id"])
+            first_order.updated_at = datetime.now() + timedelta(minutes=5)
+            session.commit()
+        business = client.get("/api/orders", params={"status": "business"})
+
+    assert business.status_code == 200
+    assert business.json()["items"][0]["id"] == first["id"]
+    assert business.json()["items"][1]["id"] == second["id"]
 
 
 def test_dead_order_is_excluded_from_business(order_api_app) -> None:

@@ -8,14 +8,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 
-USER_ROLES = ("admin", "finance", "sales", "workshop")
+USER_ROLES = ("admin", "finance", "sales", "workshop", "delivery_picker")
 
 
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role IN ('admin', 'finance', 'sales', 'workshop')",
+            "role IN ('admin', 'finance', 'sales', 'workshop', 'delivery_picker')",
             name="ck_users_role_valid",
         ),
     )

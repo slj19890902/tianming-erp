@@ -6,18 +6,21 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import case, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_db
 from app.models.audit import OperationLog
+from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
+from app.models.warehouse_inventory import InventoryReservation
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.warehouse_inventory import active_finished_reserved_qty
 
 
 router = APIRouter()
@@ -45,6 +48,22 @@ class DeliveryLineCreate(BaseModel):
 
 class DeliveryCreate(BaseModel):
     customer_id: int
+    delivery_date: date | None = None
+    vehicle_number: str | None = None
+    items: list[DeliveryLineCreate]
+
+    @field_validator("items")
+    @classmethod
+    def validate_items(cls, value: list[DeliveryLineCreate]):
+        if not value:
+            raise ValueError("送货单至少需要一条明细")
+        ids = [item.order_item_id for item in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("同一订单明细不能重复选择")
+        return value
+
+
+class DeliveryUpdate(BaseModel):
     delivery_date: date | None = None
     vehicle_number: str | None = None
     items: list[DeliveryLineCreate]
@@ -91,6 +110,20 @@ def _next_delivery_number(db: Session, delivery_date: date) -> str:
 
 
 def _pending_query():
+    active_finished_reserved = (
+        select(
+            func.coalesce(
+                func.sum(InventoryReservation.credited_requirement_quantity), 0
+            )
+        )
+        .where(
+            InventoryReservation.order_item_id == OrderItem.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status == "active",
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
     return (
         select(
             OrderItem.id.label("item_id"),
@@ -115,15 +148,17 @@ def _pending_query():
         .join(Customer, Customer.id == Order.customer_id)
         .join(Product, Product.id == OrderItem.product_id)
         .where(
-            OrderItem.material_status == "received",
+            or_(
+                OrderItem.material_status == "received",
+                active_finished_reserved >= OrderItem.quantity,
+            ),
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
         .order_by(
-            case((Order.delivery_date.is_(None), 1), else_=0),
-            Order.delivery_date.asc(),
-            Order.order_number.asc(),
-            OrderItem.id.asc(),
+            OrderItem.material_received_at.desc(),
+            OrderItem.created_at.desc(),
+            OrderItem.id.desc(),
         )
     )
 
@@ -252,6 +287,82 @@ def _refresh_order_status(db: Session, order_id: int) -> None:
     )
 
 
+def _collect_delivery_lines(
+    db: Session,
+    *,
+    customer_id: int,
+    lines: list[DeliveryLineCreate],
+) -> tuple[list[tuple[OrderItem, DeliveryLineCreate]], int, list[dict]]:
+    """校验送货明细并返回 (订单明细, 行) 列表、总数量、超送警告。
+
+    不写入任何数据，供创建与编辑共用。已送数量在此阶段不变动，
+    因此剩余可送量按订单明细当前 delivered_quantity 计算。
+    """
+    built: list[tuple[OrderItem, DeliveryLineCreate]] = []
+    seen: set[int] = set()
+    total_quantity = 0
+    warnings: list[dict] = []
+    for index, line in enumerate(lines, start=1):
+        if line.order_item_id in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条订单明细重复选择",
+            )
+        seen.add(line.order_item_id)
+        if line.delivered_quantity <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条送货数量必须大于0",
+            )
+        row = db.execute(
+            select(OrderItem, Order)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(OrderItem.id == line.order_item_id)
+        ).one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条订单明细不存在",
+            )
+        order_item, order = row
+        remaining = order_item.quantity - order_item.delivered_quantity
+        if order.customer_id != customer_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条订单明细不属于当前客户",
+            )
+        full_finished_reservation = (
+            active_finished_reserved_qty(db, order_item.id)
+            >= order_item.quantity
+        )
+        if (
+            (
+                order_item.material_status != "received"
+                and not full_finished_reservation
+            )
+            or order_item.is_force_closed
+            or remaining <= 0
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条订单明细当前不可发货",
+            )
+        if line.delivered_quantity > remaining:
+            warnings.append(
+                {
+                    "code": "OVER_DELIVERY",
+                    "order_item_id": order_item.id,
+                    "remaining_quantity": remaining,
+                    "delivered_quantity": line.delivered_quantity,
+                    "excess_quantity": line.delivered_quantity - remaining,
+                    "message": "实际发货数已超过订单可送数量",
+                }
+            )
+        built.append((order_item, line))
+        total_quantity += line.delivered_quantity
+    return built, total_quantity, warnings
+
+
 @router.get("/pending_items")
 def pending_delivery_items(
     db: Session = Depends(get_db),
@@ -282,7 +393,11 @@ def list_deliveries(
     _user: User = Depends(can_read),
 ) -> dict:
     query = select(Delivery.id).order_by(
-        Delivery.delivery_date.desc(),
+        func.coalesce(
+            Delivery.printed_at,
+            Delivery.dispatched_at,
+            Delivery.created_at,
+        ).desc(),
         Delivery.id.desc(),
     )
     if customer_id is not None:
@@ -325,51 +440,12 @@ def create_delivery(
         )
         db.add(delivery)
         db.flush()
-        total_quantity = 0
-        warnings: list[dict] = []
-        for index, line in enumerate(payload.items, start=1):
-            if line.delivered_quantity <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条送货数量必须大于0",
-                )
-            row = db.execute(
-                select(OrderItem, Order)
-                .join(Order, Order.id == OrderItem.order_id)
-                .where(OrderItem.id == line.order_item_id)
-            ).one_or_none()
-            if row is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条订单明细不存在",
-                )
-            order_item, order = row
-            remaining = order_item.quantity - order_item.delivered_quantity
-            if order.customer_id != payload.customer_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条订单明细不属于当前客户",
-                )
-            if (
-                order_item.material_status != "received"
-                or order_item.is_force_closed
-                or remaining <= 0
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条订单明细当前不可发货",
-                )
-            if line.delivered_quantity > remaining:
-                warnings.append(
-                    {
-                        "code": "OVER_DELIVERY",
-                        "order_item_id": order_item.id,
-                        "remaining_quantity": remaining,
-                        "delivered_quantity": line.delivered_quantity,
-                        "excess_quantity": line.delivered_quantity - remaining,
-                        "message": "实际发货数已超过订单可送数量",
-                    }
-                )
+        built, total_quantity, warnings = _collect_delivery_lines(
+            db,
+            customer_id=payload.customer_id,
+            lines=payload.items,
+        )
+        for order_item, line in built:
             db.add(
                 DeliveryItem(
                     delivery_id=delivery.id,
@@ -378,7 +454,6 @@ def create_delivery(
                     remarks=(line.remarks or "").strip() or None,
                 )
             )
-            total_quantity += line.delivered_quantity
         delivery.total_quantity = total_quantity
         _write_audit(
             db,
@@ -492,6 +567,257 @@ def dispatch_delivery(
         raise
 
 
+@router.put("/{delivery_id}")
+def update_delivery(
+    delivery_id: int,
+    payload: DeliveryUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        # 先以条件写取得 SQLite 写锁。这样编辑与发货并发时，
+        # 只有先取得 pending 状态的一方继续，避免按过期状态替换明细。
+        claimed = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery_id,
+                Delivery.status == "pending",
+            )
+            .values(status="pending")
+        )
+        if claimed.rowcount != 1:
+            exists = db.scalar(
+                select(Delivery.id).where(Delivery.id == delivery_id)
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="送货单不存在")
+            raise HTTPException(
+                status_code=409,
+                detail="送货单已确认发货，不能编辑，请先取消发货",
+            )
+        delivery = _delivery_or_404(db, delivery_id)
+        built, total_quantity, warnings = _collect_delivery_lines(
+            db,
+            customer_id=delivery.customer_id,
+            lines=payload.items,
+        )
+        db.execute(
+            delete(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+        )
+        db.flush()
+        for order_item, line in built:
+            db.add(
+                DeliveryItem(
+                    delivery_id=delivery.id,
+                    order_item_id=order_item.id,
+                    delivered_quantity=line.delivered_quantity,
+                    remarks=(line.remarks or "").strip() or None,
+                )
+            )
+        if payload.delivery_date is not None:
+            delivery.delivery_date = payload.delivery_date
+        if payload.vehicle_number is not None:
+            delivery.vehicle_number = payload.vehicle_number.strip() or None
+        delivery.total_quantity = total_quantity
+        _write_audit(
+            db,
+            user=user,
+            action="UPDATE",
+            resource="Delivery",
+            entity_id=delivery.id,
+            details={
+                "delivery_number": delivery.delivery_number,
+                "item_count": len(built),
+                "total_quantity": total_quantity,
+            },
+            description="编辑待发货送货单",
+        )
+        db.commit()
+        response = _delivery_response(db, delivery.id)
+        response["warnings"] = warnings
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="送货单数据冲突") from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.delete("/{delivery_id}")
+def delete_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        # 与确认发货竞争时先锁定 pending 状态，防止发货累计数量后
+        # 送货单又被按旧状态删除。
+        claimed = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery_id,
+                Delivery.status == "pending",
+            )
+            .values(status="pending")
+        )
+        if claimed.rowcount != 1:
+            exists = db.scalar(
+                select(Delivery.id).where(Delivery.id == delivery_id)
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="送货单不存在")
+            raise HTTPException(
+                status_code=409,
+                detail="已确认发货的送货单不能删除，请改用取消发货",
+            )
+        delivery = _delivery_or_404(db, delivery_id)
+        _write_audit(
+            db,
+            user=user,
+            action="DELETE",
+            resource="Delivery",
+            entity_id=delivery.id,
+            details={
+                "delivery_number": delivery.delivery_number,
+                "total_quantity": delivery.total_quantity,
+            },
+            description="删除待发货送货单",
+        )
+        db.delete(delivery)
+        db.commit()
+        return {"deleted": True, "id": delivery_id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.put("/{delivery_id}/cancel")
+def cancel_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem, StatementItem
+
+    try:
+        # 先原子抢占 dispatched -> pending 并取得写锁，再检查回单/对账。
+        # 若门禁不通过，整个事务 rollback，状态仍保持 dispatched。
+        claimed = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery_id,
+                Delivery.status == "dispatched",
+            )
+            .values(
+                status="pending",
+                dispatched_by=None,
+                dispatched_at=None,
+                printed_by=None,
+                printed_at=None,
+            )
+        )
+        if claimed.rowcount != 1:
+            exists = db.scalar(
+                select(Delivery.id).where(Delivery.id == delivery_id)
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="送货单不存在")
+            raise HTTPException(
+                status_code=409,
+                detail="送货单未确认发货，无需取消",
+            )
+        delivery = _delivery_or_404(db, delivery_id)
+        # 门禁 1（优先）：已进入对账 -> 必须先反审核对账，本阶段不开放
+        statement_linked = db.scalar(
+            select(StatementItem.id)
+            .join(
+                ReturnReceiptItem,
+                ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+            )
+            .join(
+                ReturnReceipt,
+                ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
+            )
+            .where(ReturnReceipt.delivery_id == delivery_id)
+            .limit(1)
+        )
+        if statement_linked is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="送货单已进入对账，必须先反审核对账，本阶段不支持取消发货",
+            )
+        # 门禁 2：已有有效回单 -> 不能取消发货
+        receipt = db.scalar(
+            select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery_id)
+        )
+        if receipt is not None and receipt.status == "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail="送货单已有回单，请先撤销回单后再取消发货",
+            )
+        lines = db.scalars(
+            select(DeliveryItem)
+            .where(DeliveryItem.delivery_id == delivery_id)
+            .order_by(DeliveryItem.id)
+        ).all()
+        affected_order_ids: set[int] = set()
+        for line in lines:
+            order_id = db.scalar(
+                select(OrderItem.order_id).where(
+                    OrderItem.id == line.order_item_id
+                )
+            )
+            result = db.execute(
+                update(OrderItem)
+                .where(
+                    OrderItem.id == line.order_item_id,
+                    OrderItem.delivered_quantity >= line.delivered_quantity,
+                )
+                .values(
+                    delivered_quantity=(
+                        OrderItem.delivered_quantity - line.delivered_quantity
+                    )
+                )
+            )
+            if result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"订单明细{line.order_item_id}已送数量异常，无法回滚",
+                )
+            if order_id is not None:
+                affected_order_ids.add(order_id)
+        for order_id in affected_order_ids:
+            _refresh_order_status(db, order_id)
+        _write_audit(
+            db,
+            user=user,
+            action="CANCEL_DISPATCH",
+            resource="Delivery",
+            entity_id=delivery_id,
+            details={
+                "delivery_number": delivery.delivery_number,
+                "item_count": len(lines),
+                "restored_quantity": delivery.total_quantity,
+            },
+            description="取消送货单发货并回滚已送数量",
+        )
+        db.commit()
+        return _delivery_response(db, delivery_id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.put("/{delivery_id}/printed")
 def mark_delivery_printed(
     delivery_id: int,
@@ -499,22 +825,42 @@ def mark_delivery_printed(
     user: User = Depends(can_operate),
 ) -> dict:
     printed_at = _utc_now()
-    delivery = _delivery_or_404(db, delivery_id)
-    if delivery.status != "dispatched":
-        raise HTTPException(status_code=409, detail="送货单尚未确认发货")
-    delivery.printed_at = printed_at
-    delivery.printed_by = user.id
-    _write_audit(
-        db,
-        user=user,
-        action="PRINT_DELIVERY",
-        resource="Delivery",
-        entity_id=delivery.id,
-        details={"printed_at": printed_at},
-        description="打印送货单",
-    )
-    db.commit()
-    return _delivery_response(db, delivery.id)
+    try:
+        updated = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery_id,
+                Delivery.status == "dispatched",
+            )
+            .values(
+                printed_at=printed_at,
+                printed_by=user.id,
+            )
+        )
+        if updated.rowcount != 1:
+            exists = db.scalar(
+                select(Delivery.id).where(Delivery.id == delivery_id)
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="送货单不存在")
+            raise HTTPException(status_code=409, detail="送货单尚未确认发货")
+        _write_audit(
+            db,
+            user=user,
+            action="PRINT_DELIVERY",
+            resource="Delivery",
+            entity_id=delivery_id,
+            details={"printed_at": printed_at},
+            description="打印送货单",
+        )
+        db.commit()
+        return _delivery_response(db, delivery_id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @order_actions_router.put("/items/{item_id}/force_close")
@@ -586,6 +932,7 @@ def get_delivery_print_data(
 ) -> dict:
     delivery = _delivery_or_404(db, delivery_id)
     customer = db.get(Customer, delivery.customer_id)
+    company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     rows = db.execute(
         select(
             Order.customer_po,
@@ -615,6 +962,17 @@ def get_delivery_print_data(
             "contact_person": customer.contact_person if customer else None,
             "phone": customer.phone if customer else None,
             "address": customer.address if customer else None,
+        },
+        "sender": {
+            "company_name": company.company_name if company else "",
+            "address": company.address if company else None,
+            "phone": company.phone if company else None,
+            "fax": company.fax if company else None,
+            "tax_number": company.tax_number if company else None,
+            "bank_name": company.bank_name if company else None,
+            "bank_account": company.bank_account if company else None,
+            "contact_person": company.contact_person if company else None,
+            "contact_phone": company.contact_phone if company else None,
         },
         "items": [
             {

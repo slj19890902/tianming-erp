@@ -119,15 +119,263 @@ def _batch_payload() -> dict:
         "items": [
             {
                 "order_item_id": 1,
-                "inventory_deducted_qty": 20,
-                "requisition_qty": 85,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 27,
                 "cardboard_len": "1756",
-                "cardboard_width": "654",
-                "special_process": "大做小",
-                "remark": "多备5张损耗",
+                "cardboard_width": "1962",
+                "special_process": "一开三",
+                "remark": "按一开三采购",
             }
         ],
     }
+
+
+def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
+    from app.models.material import Material
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        supplier_a = Material(
+            code="A6A",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="嘉林亿",
+        )
+        supplier_b = Material(
+            code="CCC-B",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="鸣朋",
+        )
+        supplier_a_alt = Material(
+            code="BC14C",
+            layer_count=5,
+            flute_type="AB",
+            supplier_name="嘉林亿",
+        )
+        session.add_all([supplier_a, supplier_b, supplier_a_alt])
+        session.flush()
+        item.material_id = supplier_a.id
+        item.snapshot_material = supplier_a.code
+        item.snapshot_supplier_name = supplier_a.supplier_name
+        item.layer_count = 3
+        item.flute_type = "E"
+        order = session.get(Order, item.order_id)
+        for index in range(9):
+            session.add(
+                OrderItem(
+                    order_id=order.id,
+                    product_id=product.id,
+                    quantity=10,
+                    unit_price=Decimal("1"),
+                    subtotal=Decimal("10"),
+                    material_status="pending",
+                    requisition_status="未报料",
+                    snapshot_product_name=f"嘉林亿产品{index}",
+                    snapshot_material=supplier_a.code,
+                    snapshot_supplier_name=supplier_a.supplier_name,
+                    material_id=supplier_a.id,
+                    layer_count=3,
+                    flute_type="E",
+                )
+            )
+        supplier_b_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=10,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("10"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_name="鸣朋产品",
+            snapshot_material=supplier_b.code,
+            snapshot_supplier_name=supplier_b.supplier_name,
+            material_id=supplier_b.id,
+            layer_count=3,
+            flute_type="E",
+        )
+        session.add(supplier_b_item)
+        session.commit()
+        supplier_a_id = supplier_a.id
+        supplier_a_alt_id = supplier_a_alt.id
+        supplier_b_item_id = supplier_b_item.id
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200
+        counts = {
+            row["supplier_name"]: row["count"]
+            for row in pending.json()["supplier_counts"]
+        }
+        assert counts == {"嘉林亿": 10, "鸣朋": 1}
+        changed = client.put(
+            f"/api/requisition/pending/{supplier_b_item_id}/material",
+            json={
+                "material_id": supplier_a_id,
+                "layer_count": 3,
+                "flute_type": "E",
+                "sync_product": True,
+            },
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["supplier_name"] == "嘉林亿"
+        assert changed.json()["material_code"] == "A6A"
+        pending_after_supplier_change = client.get("/api/requisition/pending")
+        assert pending_after_supplier_change.status_code == 200
+        counts_after_supplier_change = {
+            row["supplier_name"]: row["count"]
+            for row in pending_after_supplier_change.json()["supplier_counts"]
+        }
+        assert counts_after_supplier_change == {"嘉林亿": 11}
+        changed_row = next(
+            row
+            for row in pending_after_supplier_change.json()["items"]
+            if row["item_id"] == supplier_b_item_id
+        )
+        assert changed_row["requisition_status"] == "未报料"
+        assert changed_row["material_display"] == "A6A / E"
+
+        same_supplier_change = client.put(
+            f"/api/requisition/pending/{supplier_b_item_id}/material",
+            json={
+                "material_id": supplier_a_alt_id,
+                "layer_count": 5,
+                "flute_type": "AB",
+                "sync_product": True,
+            },
+        )
+        assert same_supplier_change.status_code == 200, same_supplier_change.text
+        assert same_supplier_change.json()["supplier_name"] == "嘉林亿"
+        assert same_supplier_change.json()["material_code"] == "BC14C"
+        pending_after_material_change = client.get("/api/requisition/pending")
+        assert pending_after_material_change.status_code == 200
+        same_supplier_row = next(
+            row
+            for row in pending_after_material_change.json()["items"]
+            if row["item_id"] == supplier_b_item_id
+        )
+        assert same_supplier_row["snapshot_supplier_name"] == "嘉林亿"
+        assert same_supplier_row["material_display"] == "BC14C / AB"
+        assert {
+            row["supplier_name"]: row["count"]
+            for row in pending_after_material_change.json()["supplier_counts"]
+        } == {"嘉林亿": 11}
+
+    with session_factory() as session:
+        changed_item = session.get(OrderItem, supplier_b_item_id)
+        changed_product = session.get(Product, changed_item.product_id)
+        assert changed_item.snapshot_supplier_name == "嘉林亿"
+        assert changed_item.snapshot_material == "BC14C"
+        assert changed_item.flute_type == "AB"
+        assert changed_item.requisition_status == "未报料"
+        assert changed_item.material_status == "pending"
+        assert changed_item.material_id == supplier_a_alt_id
+        assert changed_product.material_id == supplier_a_alt_id
+
+
+def test_pending_requisition_sorts_newest_record_first(requisition_app) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        first = session.get(OrderItem, 1)
+        first.created_at = datetime(2026, 6, 1, 8, 0, 0)
+        newest = OrderItem(
+            order_id=first.order_id,
+            product_id=first.product_id,
+            quantity=10,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("10"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_name="最近新增报料明细",
+            snapshot_material=first.snapshot_material,
+            created_at=datetime(2026, 6, 30, 8, 0, 0),
+        )
+        session.add(newest)
+        session.commit()
+        newest_id = newest.id
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/requisition/pending")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["item_id"] == newest_id
+
+
+def test_merge_suggestions_never_merge_different_flute_types(requisition_app) -> None:
+    from app.models.material import Material
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        source = session.get(OrderItem, 1)
+        material = Material(
+            code="A416D",
+            layer_count=5,
+            supplier_name="苏州嘉林亿",
+            is_active=True,
+        )
+        session.add(material)
+        session.flush()
+        common = {
+            "order_id": source.order_id,
+            "product_id": source.product_id,
+            "quantity": 10,
+            "unit_price": Decimal("1"),
+            "subtotal": Decimal("10"),
+            "material_status": "pending",
+            "requisition_status": "未报料",
+            "snapshot_material": "A416D",
+            "snapshot_supplier_name": "苏州嘉林亿",
+            "material_id": material.id,
+            "layer_count": 5,
+            "snapshot_report_length_mm": 800,
+            "snapshot_report_width_mm": 300,
+            "snapshot_splice_mode": "single",
+            "snapshot_pieces_per_box": 1,
+        }
+        session.add_all(
+            [
+                OrderItem(
+                    **common,
+                    snapshot_product_name="AB楞产品1",
+                    flute_type="AB",
+                ),
+                OrderItem(
+                    **common,
+                    snapshot_product_name="AB楞产品2",
+                    flute_type="AB",
+                ),
+                OrderItem(
+                    **common,
+                    snapshot_product_name="BE楞产品",
+                    flute_type="BE",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/requisition/merge-suggestions")
+
+    assert response.status_code == 200
+    matching = [
+        row for row in response.json()["suggestions"]
+        if row["material_display"].startswith("A416D")
+    ]
+    assert len(matching) == 1
+    assert matching[0]["flute_type"] == "AB"
+    assert matching[0]["member_count"] == 2
+    assert all(member["flute_type"] == "AB" for member in matching[0]["members"])
+
 
 
 def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
@@ -138,10 +386,10 @@ def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
     with session_factory() as session:
         item = session.get(OrderItem, 1)
         item.requisition_status = "已报料"
-        item.requisition_qty = 85
+        item.requisition_qty = 27
         item.requisition_date = date(2026, 6, 22)
         item.cardboard_len = Decimal("1756")
-        item.cardboard_width = Decimal("654")
+        item.cardboard_width = Decimal("1962")
         session.add(
             ProductDrawing(
                 product_id=item.product_id,
@@ -221,13 +469,14 @@ def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> No
     assert created.json()["requisition_number"].startswith(
         f"BL-{date.today():%Y%m%d}-"
     )
-    assert created.json()["items"][0]["requisition_qty"] == 85
+    assert created.json()["items"][0]["requisition_qty"] == 34
+    assert created.json()["items"][0]["cutting_mode"] == "一开三"
     with session_factory() as session:
         item = session.get(OrderItem, 1)
-        assert item.inventory_deducted_qty == 20
-        assert item.requisition_qty == 85
+        assert item.inventory_deducted_qty == 0
+        assert item.requisition_qty == 34
         assert item.requisition_status == "已报料"
-        assert item.special_process == "大做小"
+        assert item.special_process == "一开三"
         assert session.scalar(select(Requisition)) is not None
         assert session.scalar(select(RequisitionItem)) is not None
 
@@ -327,7 +576,7 @@ def test_requisition_cannot_change_or_cancel_after_material_received(
                 "requisition_qty": 100,
                 "cardboard_len": "1756",
                 "cardboard_width": "654",
-                "special_process": "无",
+                "special_process": "一开一",
                 "remark": None,
             },
         )
@@ -351,11 +600,24 @@ def test_history_search_returns_latest_successful_requisition(requisition_app) -
     result = response.json()["items"][0]
     assert result["product_code"] == "21301028"
     assert Decimal(str(result["cardboard_len"])) == Decimal("1756")
+    assert result["special_process"] == "一开三"
     assert result["material"] == "K=A-BC"
 
 
 def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> None:
-    app, _ = requisition_app
+    from app.models.company_config import CompanyConfig
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        session.add(
+            CompanyConfig(
+                id=1,
+                company_name="测试纸品包装厂",
+                address="测试路88号",
+                phone="0512-12345678",
+            )
+        )
+        session.commit()
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/requisition/batches", json=_batch_payload())
@@ -364,9 +626,62 @@ def test_requisition_print_contract_has_no_financial_fields(requisition_app) -> 
         )
 
     assert response.status_code == 200
+    assert response.json()["sender"] == {
+        "company_name": "测试纸品包装厂",
+        "address": "测试路88号",
+        "phone": "0512-12345678",
+    }
     serialized = str(response.json()).lower()
     for forbidden in ("unit_price", "subtotal", "cost", "amount"):
         assert forbidden not in serialized
+
+
+def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.snapshot_splice_mode = "double"
+        item.snapshot_pieces_per_box = 2
+        item.snapshot_report_length_mm = 800
+        item.snapshot_report_width_mm = 200
+        session.commit()
+
+    payload = {
+        "supplier_name": "苏州纸板供应商",
+        "items": [
+            {
+                "order_item_id": 1,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 4,
+                "cardboard_len": "800",
+                "cardboard_width": "600",
+                "special_process": "一开三",
+                "remark": "双拼一开三",
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        created = client.post("/api/requisition/batches", json=payload)
+
+    assert pending.status_code == 200
+    row = pending.json()["items"][0]
+    assert row["pieces_per_box"] == 2
+    assert row["required_piece_qty"] == 200
+    assert created.status_code == 201, created.text
+    assert created.json()["items"][0]["requisition_qty"] == 67
+    assert created.json()["items"][0]["cardboard_len"] == "800"
+    assert created.json()["items"][0]["cardboard_width"] == "600"
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        assert item.requisition_qty == 67
+        assert item.special_process == "一开三"
+
 
 
 def test_phase11_migration_is_additive_and_preserves_order_items(

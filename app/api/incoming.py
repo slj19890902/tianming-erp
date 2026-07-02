@@ -8,8 +8,8 @@ from io import BytesIO
 
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
-from sqlalchemy import case, func, select, update
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import RoleChecker, get_db
@@ -53,6 +53,22 @@ class ReceiveRequest(BaseModel):
         if value is not None and value <= 0:
             raise ValueError("入库数量必须大于0")
         return value
+
+
+class BatchReceiveLine(BaseModel):
+    item_id: int
+    received_quantity: int
+
+    @field_validator("received_quantity")
+    @classmethod
+    def validate_received_quantity(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("入库数量必须大于0")
+        return value
+
+
+class BatchReceiveRequest(BaseModel):
+    items: list[BatchReceiveLine] = Field(min_length=1, max_length=200)
 
 
 def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
@@ -99,16 +115,9 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             OrderItem.material_status == "pending",
             OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
         ).order_by(
-            case(
-                (OrderItem.requisition_status == "供应商已排单", 0),
-                else_=1,
-            ),
-            case((OrderItem.supplier_delivery_time.is_(None), 1), else_=0),
-            OrderItem.supplier_delivery_time.asc(),
-            case((Order.delivery_date.is_(None), 1), else_=0),
-            Order.delivery_date.asc(),
-            Order.order_number.asc(),
-            OrderItem.id.asc(),
+            OrderItem.requisition_date.desc(),
+            OrderItem.created_at.desc(),
+            OrderItem.id.desc(),
         )
     else:
         query = query.where(
@@ -212,6 +221,86 @@ def _item_response(db: Session, item_id: int) -> dict:
     }
 
 
+def _receive_material(
+    db: Session,
+    *,
+    user: User,
+    item_id: int,
+    received_quantity: int | None,
+) -> dict:
+    received_at = _utc_now()
+    current = db.get(OrderItem, item_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    final_quantity = (
+        received_quantity
+        if received_quantity is not None
+        else (current.requisition_qty or current.quantity)
+    )
+    if final_quantity <= 0:
+        raise HTTPException(status_code=400, detail="入库数量必须大于0")
+    previous_requisition_qty = current.requisition_qty
+    result = db.execute(
+        update(OrderItem)
+        .where(
+            OrderItem.id == item_id,
+            OrderItem.material_status == "pending",
+            OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
+        )
+        .values(
+            material_status="received",
+            requisition_status="已入库",
+            material_received_at=received_at,
+            material_received_by=user.id,
+            requisition_qty=final_quantity,
+        )
+    )
+    if result.rowcount != 1:
+        exists = db.scalar(select(OrderItem.id).where(OrderItem.id == item_id))
+        if exists is None:
+            raise HTTPException(status_code=404, detail="订单明细不存在")
+        raise HTTPException(
+            status_code=409,
+            detail="该明细当前不可入库，可能已入库、已作废或状态已变化",
+        )
+    remaining_pending = db.scalar(
+        select(func.count(OrderItem.id)).where(
+            OrderItem.order_id == current.order_id,
+            OrderItem.material_status != "received",
+        )
+    ) or 0
+    if remaining_pending == 0:
+        db.execute(
+            update(Order)
+            .where(
+                Order.id == current.order_id,
+                Order.status.in_(["pending_production", "production"]),
+            )
+            .values(status="pending_delivery")
+        )
+    db.execute(
+        update(RequisitionItem)
+        .where(
+            RequisitionItem.order_item_id == item_id,
+            RequisitionItem.status == "有效",
+        )
+        .values(requisition_qty=final_quantity)
+    )
+    _audit(
+        db,
+        user=user,
+        action="RECEIVE_MATERIAL",
+        item_id=item_id,
+        details={
+            "received_at": received_at,
+            "previous_requisition_qty": previous_requisition_qty,
+            "received_quantity": final_quantity,
+        },
+    )
+    db.flush()
+    return _item_response(db, item_id)
+
+
 @router.get("/pending")
 def pending_items(
     db: Session = Depends(get_db),
@@ -271,81 +360,85 @@ def receive_item(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    received_at = _utc_now()
-    current = db.get(OrderItem, item_id)
-    if current is None:
-        raise HTTPException(status_code=404, detail="订单明细不存在")
-    received_quantity = (
-        payload.received_quantity
-        if payload is not None and payload.received_quantity is not None
-        else (current.requisition_qty or current.quantity)
-    )
-    previous_requisition_qty = current.requisition_qty
     try:
-        result = db.execute(
-            update(OrderItem)
-            .where(
-                OrderItem.id == item_id,
-                OrderItem.material_status == "pending",
-                OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
-            )
-            .values(
-                material_status="received",
-                requisition_status="已入库",
-                material_received_at=received_at,
-                material_received_by=user.id,
-                requisition_qty=received_quantity,
-            )
-        )
-        if result.rowcount != 1:
-            exists = db.scalar(
-                select(OrderItem.id).where(OrderItem.id == item_id)
-            )
-            if exists is None:
-                raise HTTPException(status_code=404, detail="订单明细不存在")
-            raise HTTPException(status_code=409, detail="该明细已入库，请勿重复操作")
-        remaining_pending = db.scalar(
-            select(func.count(OrderItem.id)).where(
-                OrderItem.order_id == current.order_id,
-                OrderItem.material_status != "received",
-            )
-        ) or 0
-        if remaining_pending == 0:
-            db.execute(
-                update(Order)
-                .where(
-                    Order.id == current.order_id,
-                    Order.status.in_(["pending_production", "production"]),
-                )
-                .values(status="pending_delivery")
-            )
-        db.execute(
-            update(RequisitionItem)
-            .where(
-                RequisitionItem.order_item_id == item_id,
-                RequisitionItem.status == "有效",
-            )
-            .values(requisition_qty=received_quantity)
-        )
-        _audit(
+        response = _receive_material(
             db,
             user=user,
-            action="RECEIVE_MATERIAL",
             item_id=item_id,
-            details={
-                "received_at": received_at,
-                "previous_requisition_qty": previous_requisition_qty,
-                "received_quantity": received_quantity,
-            },
+            received_quantity=(
+                payload.received_quantity if payload is not None else None
+            ),
         )
         db.commit()
-        return _item_response(db, item_id)
+        return response
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
         raise
+
+
+@router.put("/batch-receive")
+def batch_receive_items(
+    payload: BatchReceiveRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    seen: set[int] = set()
+    results: list[dict] = []
+    succeeded = 0
+    for line in payload.items:
+        if line.item_id in seen:
+            results.append(
+                {
+                    "item_id": line.item_id,
+                    "success": False,
+                    "message": "同一明细不能重复提交",
+                }
+            )
+            continue
+        seen.add(line.item_id)
+        try:
+            with db.begin_nested():
+                response = _receive_material(
+                    db,
+                    user=user,
+                    item_id=line.item_id,
+                    received_quantity=line.received_quantity,
+                )
+            results.append(
+                {
+                    "item_id": line.item_id,
+                    "success": True,
+                    "message": "入库成功",
+                    "item": response,
+                }
+            )
+            succeeded += 1
+        except HTTPException as error:
+            results.append(
+                {
+                    "item_id": line.item_id,
+                    "success": False,
+                    "message": str(error.detail),
+                }
+            )
+        except Exception:
+            results.append(
+                {
+                    "item_id": line.item_id,
+                    "success": False,
+                    "message": "系统处理失败，请刷新后重试",
+                }
+            )
+    db.commit()
+    return {
+        "total": len(payload.items),
+        "succeeded": succeeded,
+        "failed": len(payload.items) - succeeded,
+        "results": results,
+    }
 
 
 @router.put("/revert/{item_id}")

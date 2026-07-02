@@ -463,6 +463,62 @@ def test_phase6_migration_preserves_legacy_orders(
     assert legacy_row == (4, "SO20260529132650852")
 
 
+def test_incoming_rows_expose_material_code_flute_and_display(
+    incoming_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).flute_type = "BE"
+        # item 2 deliberately has no flute_type snapshot
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    assert response.status_code == 200
+    items = {item["item_id"]: item for item in response.json()["items"]}
+    with_flute = items[1]
+    without_flute = items[2]
+
+    assert with_flute["material_code"] == "K=A-BC"
+    assert with_flute["flute_type"] == "BE"
+    assert with_flute["material_display"] == "K=A-BC / BE"
+
+    assert without_flute["material_code"] == "K=A-BC"
+    assert without_flute["flute_type"] == ""
+    assert without_flute["material_display"] == "K=A-BC"
+    # never leak literal null/undefined into the display fields
+    assert without_flute["flute_type"] is not None
+
+
+def test_incoming_rows_expose_crease_snapshot_fields(incoming_api_app) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 110
+        item.snapshot_crease_middle_mm = 450
+        item.snapshot_crease_right_mm = 110
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    assert response.status_code == 200
+    items = {item["item_id"]: item for item in response.json()["items"]}
+    with_crease = items[1]
+    without_crease = items[2]
+
+    assert with_crease["snapshot_crease_left_mm"] == 110
+    assert with_crease["snapshot_crease_middle_mm"] == 450
+    assert with_crease["snapshot_crease_right_mm"] == 110
+    assert without_crease["snapshot_crease_left_mm"] is None
+
+
 def test_no_received_state_is_changed_when_duplicate_receive_races(
     incoming_api_app,
 ) -> None:

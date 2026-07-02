@@ -88,6 +88,7 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             ).label("product_code"),
             OrderItem.snapshot_spec.label("specification"),
             OrderItem.snapshot_material.label("material"),
+            OrderItem.flute_type,
             OrderItem.quantity,
             Order.delivery_date,
             Order.status.label("order_status"),
@@ -98,6 +99,12 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             OrderItem.requisition_spec,
             OrderItem.cardboard_len,
             OrderItem.cardboard_width,
+            OrderItem.snapshot_crease_type,
+            OrderItem.snapshot_crease_left_mm,
+            OrderItem.snapshot_crease_middle_mm,
+            OrderItem.snapshot_crease_right_mm,
+            OrderItem.snapshot_supplier_name,
+            OrderItem.requisition_remark,
             OrderItem.special_process,
             OrderItem.supplier_delivery_time,
             OrderItem.supplier_order_number,
@@ -136,6 +143,14 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             if data.get("requisition_qty") is not None
             else data["quantity"]
         )
+        material_code = (data.get("material") or "").strip()
+        flute_type = (data.get("flute_type") or "").strip()
+        data["material_code"] = material_code
+        data["flute_type"] = flute_type
+        if material_code and flute_type:
+            data["material_display"] = f"{material_code} / {flute_type}"
+        else:
+            data["material_display"] = material_code
         rows.append(data)
     rows = _decorate_rows_with_display_numbers(db, rows, registry)
     product_ids = {row["product_id"] for row in rows if row.get("product_id")}

@@ -168,6 +168,8 @@ def _response(product: Product, user: User) -> dict:
     data = {
         **_product_payload_snapshot(product),
         "id": product.id,
+        "manual_modified": product.manual_modified,
+        "manual_modified_at": product.manual_modified_at,
         "deleted_at": product.deleted_at,
         "deleted_by": product.deleted_by,
         "purged_at": product.purged_at,
@@ -514,6 +516,8 @@ def create_product(
         product_code=clean_code(payload.product_code),
         customer_material_code=clean_code(payload.customer_material_code),
         product_name=payload.product_name.strip(),
+        manual_modified=True,
+        manual_modified_at=datetime.now(),
     )
     product = Product(**data)
     try:
@@ -554,6 +558,8 @@ def update_product(
     product.product_code = clean_code(payload.product_code)
     product.customer_material_code = clean_code(payload.customer_material_code)
     product.product_name = payload.product_name.strip()
+    product.manual_modified = True
+    product.manual_modified_at = datetime.now()
     try:
         audit_master_change(
             db,

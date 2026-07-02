@@ -58,9 +58,14 @@ def test_requisition_print_page_is_registered() -> None:
 
 
 def test_incoming_pending_cards_show_cardboard_requisition_size() -> None:
-    assert "纸板报料尺寸" in INCOMING
+    assert "报料尺寸" in INCOMING
     assert "item.cardboard_len" in INCOMING
     assert "item.cardboard_width" in INCOMING
+    # v0.22.1 阶段 1A Task B：压线尺寸需与报料尺寸同样在卡片主视觉显示
+    assert "压线尺寸" in INCOMING
+    assert "item.snapshot_crease_left_mm" in INCOMING
+    assert "item.snapshot_crease_middle_mm" in INCOMING
+    assert "item.snapshot_crease_right_mm" in INCOMING
 
 
 def test_product_drawing_upload_and_mobile_page_support_pdf() -> None:
@@ -77,7 +82,8 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert "仓库来料入库" in INDEX
     assert "incomingPending" in INDEX
     assert "received_quantity:quantity" in INDEX
-    assert "客户名称 · 存货编码 · 产品名称" in INCOMING
-    assert "纸板报料尺寸" in INCOMING
+    assert "客户 · 存货编码 · 产品名称" in INCOMING
+    assert "报料尺寸" in INCOMING
+    assert "压线尺寸" in INCOMING
     assert 'data-quantity="${item.item_id}"' in INCOMING
     assert "item.requisition_date" in INCOMING

@@ -881,7 +881,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -1424,7 +1424,7 @@
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.item_id">
                     <td v-if="incomingTab==='pending'"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
-                    <td>{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material || "-" }}</td>
+                    <td>{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
                     <td><input v-if="incomingTab==='pending'" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
@@ -1443,7 +1443,7 @@
                       <td>{{ row.customer_name }}</td>
                       <td>{{ row.product_code || "-" }}</td>
                       <td>{{ row.product_name }}</td>
-                      <td>{{ row.material || "-" }}</td>
+                      <td>{{ row.material_display || "-" }}</td>
                       <td><strong>{{ row.incoming_quantity }}</strong></td>
                       <td>
                         <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销入库</button>
@@ -1865,6 +1865,7 @@
                   <span v-else class="muted">请人工选择</span>
                 </div>
                 <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
+                <div v-if="productCreaseMismatch" class="field wide status orange" style="display:block">{{ productCreaseMismatch }}</div>
               </div>
 
               <div class="product-form-row product-material-row">
@@ -2907,7 +2908,7 @@
               <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
             </template>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading" @click="saveModal">保存</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && !!productCreaseMismatch)" @click="saveModal">保存</button>
           </div>
         </div>
       </div>
@@ -3286,6 +3287,10 @@
           canDelivery() { return ["admin", "sales"].includes(this.user?.role); },
           canRequisition() { return ["admin", "sales"].includes(this.user?.role); },
           isForcedPassword() { return this.modal?.type === "password" && this.modal.force; },
+          productCreaseMismatch() {
+            if (!this.modal || this.modal.type !== "product") return "";
+            return this.validateProductCreaseAndReport(this.productForm) || "";
+          },
           canSaveModal() {
             if (!this.modal) return false;
             if (["customer","product","material"].includes(this.modal.type)) return this.canAdmin;
@@ -4673,7 +4678,7 @@
           },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
-            form.box_style = form.box_style || "";
+            form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
             form.print_content = form.print_content || "无印刷";
             form.splice_mode = form.splice_mode || (String(form.production_process || "").includes("双拼") ? "double" : "single");
             form.pieces_per_box = Number(form.pieces_per_box || (form.splice_mode === "double" ? 2 : 1));
@@ -5077,6 +5082,11 @@
             const value = String(boxType || "").trim().toUpperCase();
             return value.includes("A1") || value.includes("0201");
           },
+          // 旧数据箱型字符串 → 现行箱型显示名（仅展示层，保存时才落库）
+          normalizeBoxTypeDisplay(rawBoxType) {
+            const legacyMap = { "WCX1五层箱1": "A1/0201 普通开槽箱" };
+            return legacyMap[rawBoxType] || rawBoxType;
+          },
           calculateBoardSizeByBoxType(boxType, length, width, height, spliceMode, flapMm) {
             const L = this.normalizeMmInteger(length);
             const W = this.normalizeMmInteger(width);
@@ -5120,6 +5130,37 @@
           },
           markProductCreaseManual() {
             this.productForm._crease_dims_manual = true;
+            this.syncProductReportWidthFromCrease();
+          },
+          // 压线尺寸 → 报料宽 单向同步（仅 A1/0201 普通开槽箱 + 压线类型=压线）
+          syncProductReportWidthFromCrease() {
+            const form = this.productForm;
+            if (!form || !this.isA1BoxStyle(form.box_style) || form.crease_type !== "压线") return;
+            const left = this.normalizeMmInteger(form.crease_left_mm);
+            const middle = this.normalizeMmInteger(form.crease_middle_mm);
+            const right = this.normalizeMmInteger(form.crease_right_mm);
+            if (left === null || middle === null || right === null) return;
+            form.report_width_mm = left + middle + right;
+            form._report_dims_manual = true;
+          },
+          // 常用箱编辑保存前校验：压线尺寸完整性/数值有效性/与报料宽一致性
+          validateProductCreaseAndReport(form) {
+            if (!form || !this.isA1BoxStyle(form.box_style) || form.crease_type !== "压线") return null;
+            const rawValues = [form.crease_left_mm, form.crease_middle_mm, form.crease_right_mm];
+            const isBlank = (value) => value === null || value === undefined || value === "";
+            if (rawValues.every(isBlank)) return null;
+            if (rawValues.some(isBlank)) return "请填写完整压线尺寸。";
+            const numbers = rawValues.map((value) => Number(value));
+            if (!numbers.every((value) => Number.isFinite(value))) return "压线尺寸必须为数字。";
+            const sum = Math.round(numbers.reduce((total, value) => total + value, 0));
+            if (isBlank(form.report_width_mm)) return null;
+            const width = Number(form.report_width_mm);
+            if (!Number.isFinite(width)) return null;
+            const roundedWidth = Math.round(width);
+            if (sum !== roundedWidth) {
+              return `压线不符：压线尺寸合计 ${sum}，与报料宽 ${roundedWidth} 不一致，请修改压线尺寸后再保存。`;
+            }
+            return null;
           },
           onProductBoxStyleChange() {
             const selected = this.productForm.box_style;
@@ -6407,6 +6448,8 @@
                 await this.loadCustomers();
               }
               if (this.modal.type === "product") {
+                const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
+                if (productCreaseError) throw new Error(productCreaseError);
                 const payload = { ...this.productForm };
                 delete payload.id;
                 payload.production_process = this.serializeProductionProcesses(
@@ -6420,6 +6463,8 @@
                 delete payload._crease_dims_manual;
                 delete payload._recommendation_message;
                 delete payload.drawings;
+                delete payload.manual_modified;
+                delete payload.manual_modified_at;
                 if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
                 [
                   "length_mm", "width_mm", "height_mm",

@@ -131,6 +131,8 @@ class Product(Base):
     pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    manual_modified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    manual_modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,

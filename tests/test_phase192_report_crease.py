@@ -457,3 +457,64 @@ class TestOrderItemUpdateWithReport:
             cookies=admin_cookies,
         )
         assert r.status_code == 200, r.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MANUAL: 常用箱"未修改/已修改"状态标记（v0.22.1 阶段 1A · Task E2）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestManualModifiedFlag:
+    def test_create_sets_manual_modified(self, client, admin_cookies, product_id_b):
+        r = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["manual_modified"] is True
+        assert d["manual_modified_at"] is not None
+
+    def test_update_product_sets_manual_modified(self, client, admin_cookies, product_id_b):
+        r = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies)
+        base = r.json()
+        payload = {k: v for k, v in base.items()
+                   if k in {"customer_id", "product_code", "customer_material_code",
+                             "product_name", "material_id", "length_mm", "width_mm",
+                             "height_mm", "box_category", "layer_count", "flute_type",
+                             "sale_unit_price"}}
+        r2 = client.put(f"/api/master/products/{product_id_b}", json=payload, cookies=admin_cookies)
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["manual_modified"] is True
+        assert r2.json()["manual_modified_at"] is not None
+
+    def test_status_toggle_does_not_change_manual_modified_at(
+        self, client, admin_cookies, product_id_b
+    ):
+        before = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies).json()
+        toggled = client.put(
+            f"/api/master/products/{product_id_b}/status",
+            json={"is_active": False},
+            cookies=admin_cookies,
+        )
+        assert toggled.status_code == 200, toggled.text
+        after = toggled.json()
+        assert after["is_active"] is False
+        assert after["manual_modified_at"] == before["manual_modified_at"]
+        # 恢复状态，避免影响其它用例
+        restore = client.put(
+            f"/api/master/products/{product_id_b}/status",
+            json={"is_active": True},
+            cookies=admin_cookies,
+        )
+        assert restore.status_code == 200
+        assert restore.json()["manual_modified_at"] == before["manual_modified_at"]
+
+    def test_sync_fields_does_not_change_manual_modified_at(
+        self, client, admin_cookies, product_id_b
+    ):
+        before = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies).json()
+        r = client.post(
+            f"/api/master/products/{product_id_b}/sync-fields",
+            json={"fields": {"remark": "来自订单同步的备注"}},
+            cookies=admin_cookies,
+        )
+        assert r.status_code == 200, r.text
+        after = client.get(f"/api/master/products/{product_id_b}", cookies=admin_cookies).json()
+        assert after["manual_modified_at"] == before["manual_modified_at"]

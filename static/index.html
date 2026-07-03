@@ -2588,7 +2588,7 @@
               </div>
               <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再按存货编码查询待送货产品。</div>
-              <table v-else><thead><tr><th>存货编码 / 查询</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入存货编码后查询" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ displayOrderNumber(candidate) }} / {{ candidate.customer_po || "-" }} / 未送 {{ candidate.remaining_quantity }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
+              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -6333,6 +6333,8 @@
               remaining_quantity: null,
               delivered_quantity: null,
               remarks: "",
+              product_options: [],
+              selected_product_key: "",
               candidate_options: [],
               candidate_message: "",
               candidate_error: false,
@@ -6384,6 +6386,59 @@
             }
             return "";
           },
+          groupDeliveryCandidatesByProduct(items) {
+            const groups = new Map();
+            (items || []).forEach((item) => {
+              const key = [
+                item.product_code || "",
+                item.product_name || "",
+                item.specification || "",
+                item.material_display || item.material || "",
+              ].join("||");
+              if (!groups.has(key)) {
+                groups.set(key, {
+                  key,
+                  product_code: item.product_code || "",
+                  product_name: item.product_name || "",
+                  specification: item.specification || "",
+                  material_display: item.material_display || item.material || "",
+                  total_remaining_quantity: 0,
+                  detail_count: 0,
+                  items: [],
+                });
+              }
+              const group = groups.get(key);
+              group.items.push(item);
+              group.detail_count += 1;
+              group.total_remaining_quantity += Number(item.remaining_quantity || 0);
+            });
+            return Array.from(groups.values());
+          },
+          deliveryProductOptionLabel(option) {
+            return `${option.product_code || "-"}｜${option.product_name || "-"}｜${option.specification || "-"}｜${option.material_display || "-"}｜合计未送 ${option.total_remaining_quantity}｜明细 ${option.detail_count} 条`;
+          },
+          deliveryDetailOptionLabel(candidate) {
+            return `${this.displayOrderNumber(candidate)} / ${candidate.customer_po || "-"} / 未送 ${candidate.remaining_quantity || 0} / 交期 ${candidate.delivery_date || "-"}`;
+          },
+          selectDeliveryProductCandidate(line, productKey) {
+            const targetKey = String(productKey || "");
+            line.selected_product_key = targetKey;
+            line.candidate_options = [];
+            if (!targetKey) {
+              line.candidate_message = "请选择具体产品";
+              line.order_item_id = null;
+              return;
+            }
+            const option = (line.product_options || []).find(item => item.key === targetKey);
+            if (!option) return;
+            if ((option.items || []).length === 1) {
+              this.applyDeliveryCandidate(line, option.items[0]);
+              line.candidate_message = "已自动带出待送货明细";
+              return;
+            }
+            line.candidate_options = option.items || [];
+            line.candidate_message = `该产品有 ${line.candidate_options.length} 条待送货明细，请选择具体订单明细`;
+          },
           async searchDeliveryLine(line) {
             if (!this.deliveryForm.customer_id) {
               this.showToast("请先选择客户", true);
@@ -6391,6 +6446,8 @@
             }
             const keyword = String(line.inventory_code || "").trim();
             if (!keyword) {
+              line.product_options = [];
+              line.selected_product_key = "";
               line.candidate_options = [];
               line.candidate_message = "请输入存货编码后再查询";
               line.candidate_error = true;
@@ -6409,20 +6466,23 @@
                 },
               });
               const items = data.items || [];
-              line.candidate_options = items;
-              if (!items.length) {
+              const productOptions = this.groupDeliveryCandidatesByProduct(items);
+              line.product_options = productOptions;
+              line.selected_product_key = "";
+              line.candidate_options = [];
+              if (!productOptions.length) {
                 this.clearDeliveryLine(line);
                 line.inventory_code = keyword;
                 line.candidate_message = "未找到该客户下可送货的存货编码、客户单号或产品名称";
                 line.candidate_error = true;
                 return;
               }
-              if (items.length === 1) {
-                this.applyDeliveryCandidate(line, items[0]);
-                line.candidate_message = "已自动带出待送货明细";
+              if (productOptions.length === 1) {
+                line.selected_product_key = productOptions[0].key;
+                this.selectDeliveryProductCandidate(line, productOptions[0].key);
                 return;
               }
-              line.candidate_message = `找到 ${items.length} 条待送货明细，请选择具体订单明细`;
+              line.candidate_message = `找到 ${productOptions.length} 个产品候选，请先选择具体产品`;
             } catch (error) {
               line.candidate_error = true;
               line.candidate_message = this.errorMessage(error);
@@ -6462,8 +6522,10 @@
               remaining_quantity: candidate.remaining_quantity,
               delivered_quantity: candidate.remaining_quantity,
               remarks: line.remarks || "",
-              candidate_options: line.candidate_options || [],
-              candidate_message: line.candidate_options?.length > 1 ? "已选择具体订单明细" : "已带出待送货明细",
+              product_options: [],
+              selected_product_key: "",
+              candidate_options: [],
+              candidate_message: "已带出待送货明细",
               candidate_error: false,
             }));
           },

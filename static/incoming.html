@@ -324,12 +324,29 @@
           </article>`;
     }
 
+    function applyIncomingPrimarySpecLayout(items) {
+      const cards = Array.from($("cardList").children || []);
+      cards.forEach((card, index) => {
+        const item = items[index];
+        const primaryRow = card.firstElementChild;
+        if (!item || !primaryRow || primaryRow.dataset.layoutApplied === "1") return;
+        const badge = primaryRow.lastElementChild?.outerHTML || "";
+        primaryRow.innerHTML = `
+              <div class="min-w-0 flex-1 grid grid-cols-2 gap-2">
+                <div class="rounded-lg bg-blue-50 p-2"><p class="text-xs font-semibold text-blue-700">报料尺寸</p><p class="mt-0.5 text-lg font-black text-blue-950 break-words">${escapeHtml(formatBoardSpec(item.cardboard_len, item.cardboard_width))}</p></div>
+                <div class="rounded-lg bg-indigo-50 p-2"><p class="text-xs font-semibold text-indigo-700">压线尺寸</p><p class="mt-0.5 text-lg font-black text-indigo-950 break-words">${escapeHtml(formatCreaseDisplay(item))}</p></div>
+              </div>
+              ${badge}`;
+        primaryRow.dataset.layoutApplied = "1";
+      });
+    }
     function render() {
       const items = state[state.activeTab];
       $("pendingCount").textContent = state.pending.length;
       $("receivedCount").textContent = state.received.length;
       $("emptyState").hidden = items.length !== 0;
       $("cardList").innerHTML = items.map(renderCard).join("");
+      applyIncomingPrimarySpecLayout(items);
     }
 
     async function loadData() {

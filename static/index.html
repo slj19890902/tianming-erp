@@ -2584,10 +2584,26 @@
               <div class="toolbar-group" style="margin-bottom:10px">
                 <button class="btn small" type="button" @click="addDeliveryLines(1)">新增一行</button>
                 <button class="btn small" type="button" @click="addDeliveryLines(5)">新增5行</button>
+                <button v-if="!deliveryForm.editingId" class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">批量选择待送货</button>
                 <span class="muted">默认先显示 5 行空白明细，按存货编码查询当前客户下仍有未送数量的产品。</span>
               </div>
               <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再按存货编码查询待送货产品。</div>
+              <div v-if="deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
+                <div class="toolbar" style="margin-bottom:8px">
+                  <div class="section-title" style="margin:0">批量选择待送货</div>
+                  <div class="toolbar-group">
+                    <input class="input" style="width:280px" v-model.trim="deliveryBatchPicker.keyword" placeholder="搜索存货编码 / 客户单号 / 产品名称" />
+                    <button class="btn small" type="button" @click="loadDeliveryBatchItems">{{ deliveryBatchPicker.loading ? "查询中..." : "查询" }}</button>
+                    <button class="btn small" type="button" @click="clearDeliveryBatchFilter">清空</button>
+                    <button class="btn small" type="button" :disabled="!deliveryBatchFilteredItems().some(item => !isDeliveryItemAlreadyInForm(item.order_item_id))" @click="toggleAllDeliveryBatchFiltered(true)">全选当前结果</button>
+                    <button class="btn small" type="button" :disabled="!Object.values(deliveryBatchPicker.selected).some(Boolean)" @click="toggleAllDeliveryBatchFiltered(false)">取消全选</button>
+                    <button class="btn primary small" type="button" :disabled="!Object.values(deliveryBatchPicker.selected).some(Boolean)" @click="importSelectedDeliveryBatchItems()">导入已选</button>
+                  </div>
+                </div>
+                <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
+                <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" v-model="deliveryBatchPicker.selected[item.order_item_id]" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
+              </div>
               <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
@@ -3136,6 +3152,7 @@
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", lines: [] },
+            deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false },
             tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
@@ -6357,9 +6374,118 @@
           clearDeliveryLine(line) {
             Object.assign(line, this.createDeliveryLine({ key: line.key }));
           },
+          emptyDeliveryLine() {
+            return (this.deliveryForm.lines || []).find(line =>
+              !line.order_item_id
+              && !String(line.product_code || "").trim()
+              && !String(line.product_name || "").trim()
+              && !Number(line.delivered_quantity || 0)
+            ) || null;
+          },
+          clearDeliveryBatchSelection() {
+            this.deliveryBatchPicker.selected = {};
+          },
+          clearDeliveryBatchFilter() {
+            this.deliveryBatchPicker.keyword = "";
+            this.deliveryBatchPicker.message = this.deliveryBatchPicker.items.length
+              ? `已加载 ${this.deliveryBatchPicker.items.length} 条待送货明细`
+              : "";
+          },
+          deliveryBatchFilteredItems() {
+            const items = this.deliveryBatchPicker.items || [];
+            const keyword = String(this.deliveryBatchPicker.keyword || "").trim().toLowerCase();
+            if (!keyword) return items;
+            return items.filter((item) => [
+              item.product_code,
+              item.product_name,
+              item.customer_po,
+              item.display_order_number,
+              item.order_number,
+              item.specification,
+              item.material_display,
+            ].some(value => String(value || "").toLowerCase().includes(keyword)));
+          },
+          isDeliveryItemAlreadyInForm(orderItemId) {
+            return (this.deliveryForm.lines || []).some(line =>
+              Number(line.order_item_id) === Number(orderItemId)
+            );
+          },
+          async toggleDeliveryBatchPicker() {
+            if (this.deliveryForm.editingId) return;
+            if (!this.deliveryForm.customer_id) {
+              this.showToast("请先选择客户", true);
+              return;
+            }
+            this.deliveryBatchPicker.visible = !this.deliveryBatchPicker.visible;
+            if (this.deliveryBatchPicker.visible && !this.deliveryBatchPicker.items.length) {
+              await this.loadDeliveryBatchItems();
+            }
+          },
+          async loadDeliveryBatchItems() {
+            if (!this.deliveryForm.customer_id) {
+              this.showToast("请先选择客户", true);
+              return;
+            }
+            this.deliveryBatchPicker.loading = true;
+            this.deliveryBatchPicker.error = false;
+            try {
+              const { data } = await axios.get("/api/deliveries/pending-items/search", {
+                params: {
+                  customer_id: this.deliveryForm.customer_id,
+                  list_all: 1,
+                  limit: 200,
+                },
+              });
+              this.deliveryBatchPicker.items = data.items || [];
+              this.deliveryBatchPicker.message = this.deliveryBatchPicker.items.length
+                ? `已加载 ${this.deliveryBatchPicker.items.length} 条待送货明细`
+                : "当前客户没有可送货明细";
+              this.clearDeliveryBatchSelection();
+            } catch (error) {
+              this.deliveryBatchPicker.error = true;
+              this.deliveryBatchPicker.message = this.errorMessage(error);
+            } finally {
+              this.deliveryBatchPicker.loading = false;
+            }
+          },
+          toggleAllDeliveryBatchFiltered(checked) {
+            this.deliveryBatchFilteredItems().forEach((item) => {
+              if (this.isDeliveryItemAlreadyInForm(item.order_item_id)) return;
+              this.deliveryBatchPicker.selected[item.order_item_id] = checked;
+            });
+          },
+          applyDeliveryBatchItemToLine(line, item) {
+            this.applyDeliveryCandidate(line, item);
+            line.delivered_quantity = Number(item.remaining_quantity || 0) || null;
+          },
+          importSelectedDeliveryBatchItems() {
+            const selectedIds = Object.entries(this.deliveryBatchPicker.selected || {})
+              .filter(([, checked]) => !!checked)
+              .map(([orderItemId]) => Number(orderItemId));
+            const selectedItems = (this.deliveryBatchPicker.items || []).filter(item =>
+              selectedIds.includes(Number(item.order_item_id))
+              && !this.isDeliveryItemAlreadyInForm(item.order_item_id)
+            );
+            if (!selectedItems.length) {
+              this.showToast("没有可导入的待送货明细", true);
+              return;
+            }
+            selectedItems.forEach((item) => {
+              let line = this.emptyDeliveryLine();
+              if (!line) {
+                line = this.createDeliveryLine();
+                this.deliveryForm.lines.push(line);
+              }
+              this.applyDeliveryBatchItemToLine(line, item);
+            });
+            this.clearDeliveryBatchSelection();
+            this.deliveryBatchPicker.message = `已导入 ${selectedItems.length} 条待送货明细`;
+            this.showToast(`已导入 ${selectedItems.length} 条待送货明细`);
+          },
           onDeliveryCustomerChange() {
             if (this.deliveryForm.editingId) return;
             this.resetDeliveryLines();
+            this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
           },
           deliveryLineHasInput(line) {
             return !!(
@@ -6532,6 +6658,7 @@
           async openDelivery() {
             await this.loadDeliveries();
             this.deliveryForm = { editingId:null, customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", lines:[] };
+            this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
             this.resetDeliveryLines();
             this.modal = { type:"delivery", title:"新增送货单" };
           },
@@ -6960,6 +7087,7 @@
             });
             while (lines.length < 5) lines.push(this.createDeliveryLine());
             this.deliveryForm = { editingId: row.id, customer_id: row.customer_id, delivery_date: row.delivery_date, vehicle_number: row.vehicle_number || "", lines };
+            this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },
           async deleteDelivery(row) {

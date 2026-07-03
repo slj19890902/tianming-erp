@@ -6403,7 +6403,8 @@
               const { data } = await axios.get("/api/deliveries/pending-items/search", {
                 params: {
                   customer_id: this.deliveryForm.customer_id,
-                  inventory_code: keyword,
+                  q: keyword,
+                  limit: 20,
                 },
               });
               const items = data.items || [];
@@ -6411,7 +6412,7 @@
               if (!items.length) {
                 this.clearDeliveryLine(line);
                 line.inventory_code = keyword;
-                line.candidate_message = "未找到该客户下可送货的存货编码";
+                line.candidate_message = "未找到该客户下可送货的存货编码、客户单号或产品名称";
                 line.candidate_error = true;
                 return;
               }

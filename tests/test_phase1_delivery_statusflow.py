@@ -787,7 +787,7 @@ def test_delivery_frontend_uses_five_blank_rows_and_search_flow() -> None:
     assert "resetDeliveryLines(count = 5)" in index
     assert "新增一行" in index
     assert "/api/deliveries/pending-items/search" in index
-    assert "未找到该客户下可送货的存货编码" in index
+    assert "未找到该客户下可送货的存货编码、客户单号或产品名称" in index
     assert "请选择具体订单明细" in index
 
 

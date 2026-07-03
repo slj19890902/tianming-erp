@@ -270,7 +270,7 @@ def test_create_combined_delivery_then_partial_dispatch_once(
         assert session.get(Delivery, delivery_id).status == "dispatched"
 
 
-def test_over_delivery_is_allowed_with_warning_and_dispatches(
+def test_over_delivery_is_rejected_before_dispatch(
     delivery_api_app,
 ) -> None:
     from app.models.order import OrderItem
@@ -286,16 +286,11 @@ def test_over_delivery_is_allowed_with_warning_and_dispatches(
     with TestClient(app) as client:
         _login(client, "sales")
         created = client.post("/api/deliveries", json=payload)
-        dispatched = client.put(
-            f"/api/deliveries/{created.json()['id']}/dispatch"
-        )
 
-    assert created.status_code == 201, created.text
-    assert created.json()["warnings"][0]["code"] == "OVER_DELIVERY"
-    assert created.json()["warnings"][0]["excess_quantity"] == 10
-    assert dispatched.status_code == 200, dispatched.text
+    assert created.status_code == 400, created.text
+    assert "不能超过未送数量" in created.json()["detail"]
     with session_factory() as session:
-        assert session.get(OrderItem, 1).delivered_quantity == 110
+        assert session.get(OrderItem, 1).delivered_quantity == 20
 
 
 def test_delivery_can_be_marked_printed_and_returns_print_status(

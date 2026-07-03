@@ -646,8 +646,88 @@ def test_delivery_frontend_preserves_line_remarks() -> None:
         Path(__file__).resolve().parents[1] / "static" / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert "deliveryForm.remarks[row.item_id]" in index
-    assert "remarks: this.deliveryForm.remarks[row.item_id]" in index
+    assert "deliveryForm.lines" in index
+    assert "searchDeliveryLine(line)" in index
+    assert "remarks: line.remarks || null" in index
+
+
+def test_pending_delivery_search_scopes_customer_and_empty_keyword(
+    delivery_api_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        other_product = Product(
+            customer_id=2,
+            product_code="SME-001",
+            customer_material_code="HC-001",
+            product_name="其他客户同编码产品",
+            legacy_material_text="B=B",
+            box_category="normal",
+        )
+        session.add(other_product)
+        session.flush()
+        other_order = Order(
+            order_number="PO-20260613-099",
+            customer_id=2,
+            customer_po="HC-PO-001",
+            order_date=date(2026, 6, 13),
+            delivery_date=date(2026, 6, 18),
+            status="pending_delivery",
+            payment_status="unpaid",
+            total_amount=Decimal("88"),
+        )
+        session.add(other_order)
+        session.flush()
+        session.add(
+            OrderItem(
+                order_id=other_order.id,
+                product_id=other_product.id,
+                quantity=30,
+                unit_price=Decimal("2.93"),
+                subtotal=Decimal("88"),
+                material_status="received",
+                delivered_quantity=0,
+                snapshot_product_name="其他客户同编码产品",
+                snapshot_spec="300×200×100mm",
+                snapshot_material="B=B",
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        empty = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "inventory_code": ""},
+        )
+        matched = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "inventory_code": "SME-001"},
+        )
+
+    assert empty.status_code == 200
+    assert empty.json()["items"] == []
+    assert matched.status_code == 200
+    items = matched.json()["items"]
+    assert items
+    assert all(item["customer_id"] == 1 for item in items)
+    assert all(item["remaining_quantity"] > 0 for item in items)
+    assert all(item["product_code"] == "SME-001" for item in items)
+
+
+def test_delivery_frontend_uses_five_blank_rows_and_search_flow() -> None:
+    index = (
+        Path(__file__).resolve().parents[1] / "static" / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert "resetDeliveryLines(count = 5)" in index
+    assert "新增一行" in index
+    assert "/api/deliveries/pending-items/search" in index
+    assert "未找到该客户下可送货的存货编码" in index
+    assert "请选择具体订单明细" in index
 
 
 def test_delivery_frontend_exposes_guarded_status_actions() -> None:

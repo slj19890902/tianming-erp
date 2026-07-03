@@ -10,7 +10,7 @@ import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import RoleChecker, get_db
 from app.models.audit import OperationLog
@@ -110,6 +110,7 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             OrderItem.supplier_order_number,
             OrderItem.material_received_at,
             OrderItem.material_received_by,
+            OrderItem.drawing_file.label("order_item_drawing_file"),
             receiver.real_name.label("received_by_name"),
         )
         .join(Order, Order.id == OrderItem.order_id)
@@ -143,17 +144,54 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             if data.get("requisition_qty") is not None
             else data["quantity"]
         )
+        rows.append(data)
+    rows = _decorate_rows_with_display_numbers(db, rows, registry)
+    product_ids = {row["product_id"] for row in rows if row.get("product_id")}
+
+    # v0.23.0 P0-4/P0-5：明细快照（订单/报料时写入）优先；快照缺失时才回退到
+    # 常用箱当前值——绝不从材质字典反查楞型，只读常用箱自身的 flute_type /
+    # crease_*_mm 字段。历史数据不做任何回写，只在展示时按需回退。
+    products_by_id: dict[int, Product] = {}
+    if product_ids:
+        products_by_id = {
+            product.id: product
+            for product in db.scalars(
+                select(Product)
+                .options(selectinload(Product.material))
+                .where(Product.id.in_(product_ids))
+            ).all()
+        }
+    for data in rows:
+        product = products_by_id.get(data.get("product_id"))
+
         material_code = (data.get("material") or "").strip()
+        if not material_code and product is not None:
+            fallback_code = (
+                product.material.code if product.material is not None else None
+            ) or product.legacy_material_text
+            material_code = (fallback_code or "").strip()
+
         flute_type = (data.get("flute_type") or "").strip()
+        if not flute_type and product is not None:
+            flute_type = (product.flute_type or "").strip()
+
         data["material_code"] = material_code
         data["flute_type"] = flute_type
         if material_code and flute_type:
             data["material_display"] = f"{material_code} / {flute_type}"
         else:
             data["material_display"] = material_code
-        rows.append(data)
-    rows = _decorate_rows_with_display_numbers(db, rows, registry)
-    product_ids = {row["product_id"] for row in rows if row.get("product_id")}
+
+        if product is not None:
+            if not (data.get("snapshot_crease_type") or "").strip():
+                data["snapshot_crease_type"] = product.crease_type
+            if data.get("snapshot_crease_left_mm") is None:
+                data["snapshot_crease_left_mm"] = product.crease_left_mm
+            if data.get("snapshot_crease_middle_mm") is None:
+                data["snapshot_crease_middle_mm"] = product.crease_middle_mm
+            if data.get("snapshot_crease_right_mm") is None:
+                data["snapshot_crease_right_mm"] = product.crease_right_mm
+
     latest_drawings: dict[int, ProductDrawing] = {}
     if product_ids:
         drawings = db.scalars(
@@ -168,11 +206,16 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
         for drawing in drawings:
             latest_drawings.setdefault(drawing.product_id, drawing)
     for row in rows:
-        drawing = latest_drawings.get(row.get("product_id"))
-        row["drawing_path"] = drawing.image_path if drawing else None
-        row["drawing_is_pdf"] = bool(
-            drawing and drawing.image_path.lower().endswith(".pdf")
-        )
+        # v0.23.0 P0-3：订单/明细上传的图纸优先于常用箱图纸——车间来料页面
+        # 需要能看到"这一单"实际上传的图纸，而不仅仅是常用箱历史图纸。
+        product_drawing = latest_drawings.get(row.get("product_id"))
+        product_drawing_path = product_drawing.image_path if product_drawing else None
+        order_drawing_path = (row.get("order_item_drawing_file") or "").strip() or None
+        final_path = order_drawing_path or product_drawing_path
+        row["order_drawing_path"] = order_drawing_path
+        row["product_drawing_path"] = product_drawing_path
+        row["drawing_path"] = final_path
+        row["drawing_is_pdf"] = bool(final_path and final_path.lower().endswith(".pdf"))
     return rows
 
 

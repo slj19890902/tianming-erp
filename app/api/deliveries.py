@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -109,7 +109,11 @@ def _next_delivery_number(db: Session, delivery_date: date) -> str:
     return f"DH-{delivery_date:%Y%m%d}-{sequence:03d}"
 
 
-def _pending_query():
+def _pending_query(
+    *,
+    customer_id: int | None = None,
+    inventory_keyword: str | None = None,
+):
     active_finished_reserved = (
         select(
             func.coalesce(
@@ -124,9 +128,10 @@ def _pending_query():
         .correlate(OrderItem)
         .scalar_subquery()
     )
-    return (
+    query = (
         select(
             OrderItem.id.label("item_id"),
+            OrderItem.id.label("order_item_id"),
             Order.id.label("order_id"),
             Order.order_number,
             Order.customer_po,
@@ -136,6 +141,7 @@ def _pending_query():
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
             OrderItem.snapshot_material.label("material"),
+            OrderItem.flute_type,
             OrderItem.snapshot_production_notes.label("production_notes"),
             OrderItem.quantity,
             OrderItem.delivered_quantity,
@@ -155,12 +161,33 @@ def _pending_query():
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
-        .order_by(
+    )
+    if customer_id is not None:
+        query = query.where(Order.customer_id == customer_id)
+    keyword = (inventory_keyword or "").strip()
+    if keyword:
+        lowered = keyword.lower()
+        fuzzy = f"%{keyword}%"
+        query = query.where(
+            or_(
+                func.lower(Product.product_code) == lowered,
+                Product.product_code.like(fuzzy),
+                OrderItem.snapshot_product_name.like(fuzzy),
+            )
+        ).order_by(
+            case((func.lower(Product.product_code) == lowered, 0), else_=1),
+            Order.delivery_date.is_(None),
+            Order.delivery_date,
+            OrderItem.created_at.desc(),
+            OrderItem.id.desc(),
+        )
+    else:
+        query = query.order_by(
             OrderItem.material_received_at.desc(),
             OrderItem.created_at.desc(),
             OrderItem.id.desc(),
         )
-    )
+    return query
 
 
 def _delivery_or_404(db: Session, delivery_id: int) -> Delivery:
@@ -335,6 +362,11 @@ def _collect_delivery_lines(
             active_finished_reserved_qty(db, order_item.id)
             >= order_item.quantity
         )
+        if line.delivered_quantity > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条本次送货数量不能超过未送数量，当前未送数量为 {remaining}",
+            )
         if (
             (
                 order_item.material_status != "received"
@@ -378,6 +410,42 @@ def pending_delivery_items(
                 **dict(row._mapping),
                 "order_number": display,
                 "display_order_number": display,
+            }
+        )
+    return {"items": items}
+
+
+@router.get("/pending-items/search")
+def search_pending_delivery_items(
+    customer_id: int = Query(gt=0),
+    inventory_code: str = Query(default="", max_length=150),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_operate),
+) -> dict:
+    keyword = inventory_code.strip()
+    if not keyword:
+        return {"items": []}
+    if db.get(Customer, customer_id) is None:
+        raise HTTPException(status_code=400, detail="客户不存在")
+    registry = build_display_registry(db)
+    items = []
+    for row in db.execute(
+        _pending_query(customer_id=customer_id, inventory_keyword=keyword).limit(20)
+    ):
+        order = db.get(Order, row._mapping["order_id"])
+        display = display_order_number(order, registry)
+        material = (row._mapping["material"] or "").strip()
+        flute_type = (row._mapping["flute_type"] or "").strip()
+        items.append(
+            {
+                **dict(row._mapping),
+                "order_number": display,
+                "display_order_number": display,
+                "material_display": (
+                    f"{material} / {flute_type}"
+                    if material and flute_type
+                    else material
+                ),
             }
         )
     return {"items": items}

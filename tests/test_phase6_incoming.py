@@ -519,6 +519,110 @@ def test_incoming_rows_expose_crease_snapshot_fields(incoming_api_app) -> None:
     assert without_crease["snapshot_crease_left_mm"] is None
 
 
+def test_incoming_rows_fall_back_to_product_when_snapshot_material_missing(
+    incoming_api_app,
+) -> None:
+    # v0.23.0 P0-4：明细快照优先；快照为空时才回退到常用箱当前的
+    # flute_type / material，绝不从材质字典反查。
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 2)
+        item.snapshot_material = None
+        item.flute_type = None
+        session.commit()
+        product_id = item.product_id
+        product = session.get(Product, product_id)
+        product.flute_type = "BE"
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    assert response.status_code == 200
+    items = {item["item_id"]: item for item in response.json()["items"]}
+    fallback_item = items[2]
+    assert fallback_item["flute_type"] == "BE"
+    assert fallback_item["material_code"] == "K=A-BC"  # 回退到 legacy_material_text
+    assert fallback_item["material_display"] == "K=A-BC / BE"
+
+
+def test_incoming_rows_fall_back_to_product_when_snapshot_crease_missing(
+    incoming_api_app,
+) -> None:
+    # v0.23.0 P0-5：压线快照优先；快照为空时回退到常用箱当前压线值。
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 2)
+        product = session.get(Product, item.product_id)
+        product.crease_type = "压线"
+        product.crease_left_mm = 110
+        product.crease_middle_mm = 450
+        product.crease_right_mm = 110
+        item.snapshot_crease_type = None
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    assert response.status_code == 200
+    items = {item["item_id"]: item for item in response.json()["items"]}
+    fallback_item = items[2]
+    assert fallback_item["snapshot_crease_type"] == "压线"
+    assert fallback_item["snapshot_crease_left_mm"] == 110
+    assert fallback_item["snapshot_crease_middle_mm"] == 450
+    assert fallback_item["snapshot_crease_right_mm"] == 110
+
+
+def test_incoming_rows_prioritize_order_item_drawing_over_product_drawing(
+    incoming_api_app,
+) -> None:
+    # v0.23.0 P0-3：订单/明细自身上传的图纸优先于常用箱图纸。
+    from app.models.order import OrderItem
+    from app.models.product_drawing import ProductDrawing
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        session.add(
+            ProductDrawing(
+                product_id=item.product_id,
+                image_path="/static/uploads/drawings/product-only.pdf",
+                thumbnail_path="/static/uploads/drawings/product-only.pdf",
+            )
+        )
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    assert response.status_code == 200
+    items = {item["item_id"]: item for item in response.json()["items"]}
+    # item 2 只有常用箱图纸 -> 使用常用箱图纸
+    assert items[2]["drawing_path"] == "/static/uploads/drawings/product-only.pdf"
+    assert items[2]["drawing_is_pdf"] is True
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.drawing_file = "/static/uploads/drawings/order-item.jpg"
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.get("/api/incoming/pending")
+
+    items = {item["item_id"]: item for item in response.json()["items"]}
+    # item 1 同时存在订单图纸与常用箱图纸 -> 订单图纸优先
+    assert items[1]["drawing_path"] == "/static/uploads/drawings/order-item.jpg"
+    assert items[1]["drawing_is_pdf"] is False
+    assert items[1]["order_drawing_path"] == "/static/uploads/drawings/order-item.jpg"
+    assert items[1]["product_drawing_path"] == "/static/uploads/drawings/product-only.pdf"
+
+
 def test_no_received_state_is_changed_when_duplicate_receive_races(
     incoming_api_app,
 ) -> None:

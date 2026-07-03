@@ -1280,7 +1280,7 @@
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td>
                                     <td>
                                       <div v-if="row.is_history_order" class="status blue">历史归档</div>
-                                      <status-tag v-else :value="row.status"></status-tag>
+                                      <status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag>
                                     </td>
                                     <td class="toolbar-group">
                                       <button class="btn small" @click="openOrderDetail(row)">详情</button>
@@ -1855,11 +1855,11 @@
                 </div>
                 <div class="field"><label>压线尺寸</label>
                   <div v-if="productForm.crease_type === '压线'" class="crease-segments">
-                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="markProductCreaseManual" placeholder="上摇盖" aria-label="上摇盖" />
+                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="onCreaseLeftInput" placeholder="上摇盖" aria-label="上摇盖" />
                     <span class="crease-segment-plus" aria-hidden="true">+</span>
                     <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" placeholder="高" aria-label="高" />
                     <span class="crease-segment-plus" aria-hidden="true">+</span>
-                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="markProductCreaseManual" placeholder="下摇盖" aria-label="下摇盖" />
+                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="onCreaseRightInput" placeholder="下摇盖" aria-label="下摇盖" />
                   </div>
                   <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请在报料备注中填写要求' }}</span>
                   <span v-else class="muted">请人工选择</span>
@@ -2454,7 +2454,7 @@
                 <div class="field"><label>客户单号</label><div>{{ orderDetail.customer_po || "-" }}</div></div>
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
                 <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
-                <div class="field"><label>状态</label><div v-if="orderDetail.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDetail.status"></status-tag></div>
+                <div class="field"><label>状态</label><div v-if="orderDetail.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
                 <div v-if="!isWorkshop" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
@@ -2577,12 +2577,18 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId"><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
+                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"><option :value="null">请选择客户</option><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
-              <div v-if="!deliveryOptions.length" class="status orange" style="margin-bottom:10px">只有已入库的订单明细才能生成送货单，请先去来料入库。</div>
-              <table><thead><tr><th><input type="checkbox" :checked="allDeliverySelected" @change="toggleAllDelivery($event.target.checked)" /> 全选</th><th>订单号</th><th>品号/产品</th><th>剩余可发</th><th>本次送货</th><th>备注</th><th>提示</th></tr></thead><tbody><tr v-for="row in deliveryOptions" :key="row.item_id" :class="{'warning-row':Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity)}"><td><input type="checkbox" v-model="deliveryForm.selected[row.item_id]" /></td><td>{{ displayOrderNumber(row) }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.remaining_quantity }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="deliveryForm.quantities[row.item_id]" /></td><td><input class="input" v-model.trim="deliveryForm.remarks[row.item_id]" placeholder="可选" /></td><td class="danger-text">{{ Number(deliveryForm.quantities[row.item_id])>Number(row.remaining_quantity) ? "超出可送数量，允许提交" : "" }}</td></tr></tbody></table>
+              <div class="toolbar-group" style="margin-bottom:10px">
+                <button class="btn small" type="button" @click="addDeliveryLines(1)">新增一行</button>
+                <button class="btn small" type="button" @click="addDeliveryLines(5)">新增5行</button>
+                <span class="muted">默认先显示 5 行空白明细，按存货编码查询当前客户下仍有未送数量的产品。</span>
+              </div>
+              <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库且仍有未送数量的订单明细才能生成送货单。</div>
+              <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再按存货编码查询待送货产品。</div>
+              <table v-else><thead><tr><th>存货编码 / 查询</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入存货编码后查询" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ displayOrderNumber(candidate) }} / {{ candidate.customer_po || "-" }} / 未送 {{ candidate.remaining_quantity }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -2908,7 +2914,7 @@
               <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
             </template>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && !!productCreaseMismatch)" @click="saveModal">保存</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && !!productCreaseMismatch) || (modal?.type==='delivery' && !!deliveryValidationError)" @click="saveModal">保存</button>
           </div>
         </div>
       </div>
@@ -3129,7 +3135,7 @@
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
-            deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", selected: {}, quantities: {}, remarks: {} },
+            deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", lines: [] },
             tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
@@ -3291,6 +3297,10 @@
             if (!this.modal || this.modal.type !== "product") return "";
             return this.validateProductCreaseAndReport(this.productForm) || "";
           },
+          deliveryValidationError() {
+            if (!this.modal || this.modal.type !== "delivery") return "";
+            return this.validateDeliveryForm();
+          },
           canSaveModal() {
             if (!this.modal) return false;
             if (["customer","product","material"].includes(this.modal.type)) return this.canAdmin;
@@ -3326,8 +3336,10 @@
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
             return this.customerOptions.filter(row => ids.includes(row.id));
           },
-          deliveryOptions() { return this.pendingDeliveryItems.filter(row => row.customer_id === Number(this.deliveryForm.customer_id)); }
-          ,
+          deliveryOptions() { return this.pendingDeliveryItems.filter(row => row.customer_id === Number(this.deliveryForm.customer_id)); },
+          deliveryActiveLines() {
+            return (this.deliveryForm.lines || []).filter(line => !!line.order_item_id);
+          },
           activeCustomerOptions() { return this.customerOptions.filter(row=>row.is_active); },
           filteredRequisitionPending() {
             if (!this.requisitionSupplierFilter) return this.requisitionPending;
@@ -3382,7 +3394,7 @@
                   total_delivered_quantity: 0,
                   total_amount: 0,
                   all_received: true,
-                  group_status: row.status,
+                  group_status: this.orderDisplayStatusKey(row),
                   hasHistoryOnly: true,
                   orders: [],
                 });
@@ -3395,7 +3407,7 @@
               group.total_amount += Number(row.total_amount || 0);
               group.all_received = group.all_received && row.items.every((item) => item.material_status === "received");
               group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
-              if (!group.hasHistoryOnly) group.group_status = row.status;
+              if (!group.hasHistoryOnly) group.group_status = this.orderDisplayStatusKey(row);
               if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
                 group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
               }
@@ -3428,7 +3440,6 @@
             const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row));
             return rows.length > 0 && rows.every(row => this.incomingSelected[row.item_id]);
           },
-          allDeliverySelected() { return this.deliveryOptions.length > 0 && this.deliveryOptions.every(row => this.deliveryForm.selected[row.item_id]); },
           finishedInventoryRemainingRequirement() {
             return Math.max(
               Number(this.orderItemForm.quantity || 0)
@@ -3640,19 +3651,29 @@
           statusTone(value) {
             if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","accepted","converted","已入库","已结算"].includes(value)) return "green";
             if (["cancelled","dead","inactive","voided"].includes(value)) return "red";
-            if (["pending","unsettled","waiting_receipt","pending_production","draft"].includes(value)) return "orange";
+            if (["pending","unsettled","waiting_receipt","pending_production","pending_material","draft"].includes(value)) return "orange";
             return "blue";
           },
           statusText(value) {
             return ({
               active:"启用", inactive:"停用", pending:"待处理", received:"材料已到",
-              business:"日常订单", history:"历史订单", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", production:"生产中", pending_delivery:"待送货",
+              business:"日常订单", history:"历史订单", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", production:"生产中", pending_delivery:"待送货",
               partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
               delivered:"已送货", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
               unsettled:"未结清", settled:"已结清", draft:"草稿", quoted:"已报价", accepted:"客户接受", converted:"已转常用箱", voided:"作废",
               "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
             })[value] || value || "-";
+          },
+          // v0.23.0 P0-1：新建订单 / PDF 导入订单在还没有任何明细报料前，
+          // 后端状态仍是 pending_production（保持状态机与既有筛选逻辑不变），
+          // 但列表 / 详情展示需要显示为"待报料"，直到至少一条明细的
+          // requisition_status 脱离"未报料"（即已经满足系统原有的"已报料/可生产"条件）。
+          orderDisplayStatusKey(row) {
+            if (!row || row.status !== "pending_production") return row ? row.status : row;
+            const items = Array.isArray(row.items) ? row.items : [];
+            const noneRequisitioned = items.every((item) => (item?.requisition_status || "未报料") === "未报料");
+            return noneRequisitioned ? "pending_material" : "pending_production";
           },
           showToast(message, error=false) {
             clearTimeout(this.toastTimer);
@@ -3768,10 +3789,21 @@
             }
             return "";
           },
+          loginRedirectPath() {
+            const target = new URLSearchParams(window.location.search).get("redirect") || "";
+            return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
+          },
+          redirectAfterLogin() {
+            const target = this.loginRedirectPath();
+            if (!target || this.user?.must_change_password) return false;
+            window.location.replace(target);
+            return true;
+          },
           async checkSession() {
             try {
               const { data } = await axios.get("/api/auth/me");
               this.user = data.user;
+              if (this.redirectAfterLogin()) return;
               this.activePage = "dashboard";
               await this.loadBase();
               await this.loadPage("dashboard");
@@ -3788,9 +3820,10 @@
               else localStorage.removeItem("erp_username");
               const { data } = await axios.get("/api/auth/me");
               this.user = data.user;
-              this.activePage = "dashboard";
               const currentPassword = this.loginForm.password;
               this.loginForm.password = "";
+              if (this.redirectAfterLogin()) return;
+              this.activePage = "dashboard";
               await this.loadBase(); await this.loadPage("dashboard");
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
@@ -5083,9 +5116,15 @@
             return value.includes("A1") || value.includes("0201");
           },
           // 旧数据箱型字符串 → 现行箱型显示名（仅展示层，保存时才落库）
+          // 需要兼容：无空格、"WCX1 五层箱1"这类中间带空格、以及下拉框自带的
+          // "原记录：xxx" 前缀三种历史写法，统一折叠后再匹配。
           normalizeBoxTypeDisplay(rawBoxType) {
+            const trimmed = String(rawBoxType || "").trim();
+            if (!trimmed) return trimmed;
+            const withoutLegacyPrefix = trimmed.replace(/^原记录[:：]\s*/, "");
+            const collapsed = withoutLegacyPrefix.replace(/\s+/g, "");
             const legacyMap = { "WCX1五层箱1": "A1/0201 普通开槽箱" };
-            return legacyMap[rawBoxType] || rawBoxType;
+            return legacyMap[collapsed] || withoutLegacyPrefix;
           },
           calculateBoardSizeByBoxType(boxType, length, width, height, spliceMode, flapMm) {
             const L = this.normalizeMmInteger(length);
@@ -5118,7 +5157,7 @@
               top_flap: Math.round(W / 2),
               height: H,
               bottom_flap: Math.round(W / 2),
-              formula_label: "按宽度一半推荐上下摇盖，高度取执行高",
+              formula_label: "按宽度一半推荐上下摇盖，高度取执行高；报料宽另含 5mm 余量",
             };
           },
           shouldAutoApplyRecommendation(fieldState) {
@@ -5132,7 +5171,26 @@
             this.productForm._crease_dims_manual = true;
             this.syncProductReportWidthFromCrease();
           },
-          // 压线尺寸 → 报料宽 单向同步（仅 A1/0201 普通开槽箱 + 压线类型=压线）
+          // A1/0201 普通开槽箱 + 压线类型=压线时，上摇盖与下摇盖联动：
+          // 改其中一侧，另一侧自动同步为同一数值，避免现场把两侧改成不同值
+          // 却看不出报料宽已经对不上。
+          onCreaseLeftInput() {
+            const form = this.productForm;
+            if (form && this.isA1BoxStyle(form.box_style) && form.crease_type === "压线") {
+              form.crease_right_mm = form.crease_left_mm;
+            }
+            this.markProductCreaseManual();
+          },
+          onCreaseRightInput() {
+            const form = this.productForm;
+            if (form && this.isA1BoxStyle(form.box_style) && form.crease_type === "压线") {
+              form.crease_left_mm = form.crease_right_mm;
+            }
+            this.markProductCreaseManual();
+          },
+          // 压线尺寸 → 报料宽 单向同步（仅 A1/0201 普通开槽箱 + 压线类型=压线）。
+          // 报料宽比三段压线合计多 5mm 裁切余量；余量不能摊进上下摇盖，
+          // 否则 670mm 宽会错误显示成 338/337，而不是现场确认的 335/335。
           syncProductReportWidthFromCrease() {
             const form = this.productForm;
             if (!form || !this.isA1BoxStyle(form.box_style) || form.crease_type !== "压线") return;
@@ -5140,7 +5198,7 @@
             const middle = this.normalizeMmInteger(form.crease_middle_mm);
             const right = this.normalizeMmInteger(form.crease_right_mm);
             if (left === null || middle === null || right === null) return;
-            form.report_width_mm = left + middle + right;
+            form.report_width_mm = left + middle + right + 5;
             form._report_dims_manual = true;
           },
           // 常用箱编辑保存前校验：压线尺寸完整性/数值有效性/与报料宽一致性
@@ -5157,8 +5215,9 @@
             const width = Number(form.report_width_mm);
             if (!Number.isFinite(width)) return null;
             const roundedWidth = Math.round(width);
-            if (sum !== roundedWidth) {
-              return `压线不符：压线尺寸合计 ${sum}，与报料宽 ${roundedWidth} 不一致，请修改压线尺寸后再保存。`;
+            const expectedWidth = sum + 5;
+            if (expectedWidth !== roundedWidth) {
+              return `压线不符：压线尺寸合计 ${sum}，加 5mm 报料余量后应为 ${expectedWidth}，当前报料宽为 ${roundedWidth}，请修改后再保存。`;
             }
             return null;
           },
@@ -6259,13 +6318,157 @@
             const isConfirmed = receipt?.status === "confirmed";
             this.modal={type:"receipt",title: isConfirmed ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
           },
+          createDeliveryLine(overrides = {}) {
+            return {
+              key: `delivery-line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              inventory_code: "",
+              order_item_id: null,
+              order_id: null,
+              order_number: "",
+              customer_po: "",
+              product_code: "",
+              product_name: "",
+              specification: "",
+              material_display: "",
+              remaining_quantity: null,
+              delivered_quantity: null,
+              remarks: "",
+              candidate_options: [],
+              candidate_message: "",
+              candidate_error: false,
+              search_loading: false,
+              ...overrides,
+            };
+          },
+          resetDeliveryLines(count = 5) {
+            this.deliveryForm.lines = Array.from({ length: count }, () => this.createDeliveryLine());
+          },
+          addDeliveryLines(count = 1) {
+            for (let i = 0; i < count; i += 1) {
+              this.deliveryForm.lines.push(this.createDeliveryLine());
+            }
+          },
+          removeDeliveryLine(lineKey) {
+            this.deliveryForm.lines = this.deliveryForm.lines.filter(line => line.key !== lineKey);
+            if (!this.deliveryForm.lines.length) this.resetDeliveryLines();
+          },
+          clearDeliveryLine(line) {
+            Object.assign(line, this.createDeliveryLine({ key: line.key }));
+          },
+          onDeliveryCustomerChange() {
+            if (this.deliveryForm.editingId) return;
+            this.resetDeliveryLines();
+          },
+          deliveryLineHasInput(line) {
+            return !!(
+              line.order_item_id
+              || String(line.inventory_code || "").trim()
+              || Number(line.delivered_quantity || 0) > 0
+              || String(line.remarks || "").trim()
+            );
+          },
+          validateDeliveryForm() {
+            const lines = this.deliveryForm.lines || [];
+            const seen = new Set();
+            const active = lines.filter(line => this.deliveryLineHasInput(line));
+            if (!active.length) return "至少填写一条送货明细";
+            for (let index = 0; index < active.length; index += 1) {
+              const line = active[index];
+              if (!line.order_item_id) return `第${index + 1}行请先按存货编码选择待送货产品`;
+              if (seen.has(line.order_item_id)) return `第${index + 1}行重复选择了同一条订单明细`;
+              seen.add(line.order_item_id);
+              const quantity = Number(line.delivered_quantity);
+              const remaining = Number(line.remaining_quantity || 0);
+              if (!Number.isInteger(quantity) || quantity <= 0) return `第${index + 1}行本次送货数量必须大于0`;
+              if (quantity > remaining) return `第${index + 1}行本次送货数量不能超过未送数量`;
+            }
+            return "";
+          },
+          async searchDeliveryLine(line) {
+            if (!this.deliveryForm.customer_id) {
+              this.showToast("请先选择客户", true);
+              return;
+            }
+            const keyword = String(line.inventory_code || "").trim();
+            if (!keyword) {
+              line.candidate_options = [];
+              line.candidate_message = "请输入存货编码后再查询";
+              line.candidate_error = true;
+              return;
+            }
+            line.search_loading = true;
+            line.candidate_error = false;
+            line.candidate_message = "";
+            try {
+              const { data } = await axios.get("/api/deliveries/pending-items/search", {
+                params: {
+                  customer_id: this.deliveryForm.customer_id,
+                  inventory_code: keyword,
+                },
+              });
+              const items = data.items || [];
+              line.candidate_options = items;
+              if (!items.length) {
+                this.clearDeliveryLine(line);
+                line.inventory_code = keyword;
+                line.candidate_message = "未找到该客户下可送货的存货编码";
+                line.candidate_error = true;
+                return;
+              }
+              if (items.length === 1) {
+                this.applyDeliveryCandidate(line, items[0]);
+                line.candidate_message = "已自动带出待送货明细";
+                return;
+              }
+              line.candidate_message = `找到 ${items.length} 条待送货明细，请选择具体订单明细`;
+            } catch (error) {
+              line.candidate_error = true;
+              line.candidate_message = this.errorMessage(error);
+            } finally {
+              line.search_loading = false;
+            }
+          },
+          selectDeliveryCandidateById(line, orderItemId) {
+            const targetId = Number(orderItemId || 0);
+            if (!targetId) {
+              line.order_item_id = null;
+              return;
+            }
+            const candidate = (line.candidate_options || []).find(item => Number(item.order_item_id) === targetId);
+            if (candidate) this.applyDeliveryCandidate(line, candidate);
+          },
+          applyDeliveryCandidate(line, candidate) {
+            const duplicateLine = (this.deliveryForm.lines || []).find(item =>
+              item.key !== line.key && Number(item.order_item_id) === Number(candidate.order_item_id)
+            );
+            if (duplicateLine) {
+              line.candidate_error = true;
+              line.candidate_message = "同一张送货单里不能重复选择同一条订单明细";
+              return;
+            }
+            Object.assign(line, this.createDeliveryLine({
+              key: line.key,
+              inventory_code: candidate.product_code || line.inventory_code || "",
+              order_item_id: candidate.order_item_id,
+              order_id: candidate.order_id,
+              order_number: candidate.display_order_number || candidate.order_number || "",
+              customer_po: candidate.customer_po || "",
+              product_code: candidate.product_code || "",
+              product_name: candidate.product_name || "",
+              specification: candidate.specification || "",
+              material_display: candidate.material_display || candidate.material || "",
+              remaining_quantity: candidate.remaining_quantity,
+              delivered_quantity: candidate.remaining_quantity,
+              remarks: line.remarks || "",
+              candidate_options: line.candidate_options || [],
+              candidate_message: line.candidate_options?.length > 1 ? "已选择具体订单明细" : "已带出待送货明细",
+              candidate_error: false,
+            }));
+          },
           async openDelivery() {
             await this.loadDeliveries();
-            this.deliveryForm = { editingId:null, customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", selected:{}, quantities:{}, remarks:{} };
-            this.pendingDeliveryItems.forEach(row => {
-              this.deliveryForm.quantities[row.item_id] = row.remaining_quantity;
-              this.deliveryForm.remarks[row.item_id] = "";
-            });
+            this.deliveryForm = { editingId:null, customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", lines:[] };
+            this.resetDeliveryLines();
             this.modal = { type:"delivery", title:"新增送货单" };
           },
           openTianhuaPreimport() {
@@ -6487,6 +6690,8 @@
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
                 await this.loadProducts();
+                // 产品已成功保存，关闭弹窗时不应再提示“有未保存的修改”。
+                this.productFormSnapshot = null;
               }
               if (this.modal.type === "material") {
                 const payload={...this.materialForm}; delete payload.id;
@@ -6587,19 +6792,21 @@
                 await this.loadDeliveries();
               }
               if (this.modal.type === "delivery") {
-                const items = this.deliveryOptions.filter(row => this.deliveryForm.selected[row.item_id]).map(row => ({
-                  order_item_id: row.item_id,
-                  delivered_quantity: Number(this.deliveryForm.quantities[row.item_id]),
-                  remarks: this.deliveryForm.remarks[row.item_id] || null
-                }));
-                if (!items.length) throw new Error("至少选择一条送货明细");
+                const deliveryError = this.validateDeliveryForm();
+                if (deliveryError) throw new Error(deliveryError);
+                const items = (this.deliveryForm.lines || [])
+                  .filter(line => this.deliveryLineHasInput(line))
+                  .map(line => ({
+                    order_item_id: Number(line.order_item_id),
+                    delivered_quantity: Number(line.delivered_quantity),
+                    remarks: line.remarks || null
+                  }));
                 let data;
                 if (this.deliveryForm.editingId) {
                   ({ data } = await axios.put(`/api/deliveries/${this.deliveryForm.editingId}`, { delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
                 } else {
                   ({ data } = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
                 }
-                if (data.warnings?.some(w => w.code === "OVER_DELIVERY")) this.showToast("警告：实际发货数超过订单可送数量，系统已按工厂实际情况放行");
                 await this.loadDeliveries();
               }
               if (this.modal.type === "statement") {
@@ -6621,6 +6828,7 @@
                 });
                 this.user = data.user;
                 this.modal.force = false;
+                if (this.redirectAfterLogin()) return;
               }
               if (this.modal.type === "resetPassword") {
                 if (this.resetPasswordForm.new_password !== this.resetPasswordForm.confirm_password) throw new Error("两次输入的临时密码不一致");
@@ -6666,17 +6874,28 @@
           printDelivery(row) { window.open(`/delivery-print.html?id=${row.id}`, "_blank"); },
           async editDelivery(row) {
             await this.loadDeliveries();
-            const quantities = {};
-            this.pendingDeliveryItems.forEach(it => quantities[it.item_id] = it.remaining_quantity);
-            const selected = {};
-            const remarks = {};
-            this.pendingDeliveryItems.forEach(it => remarks[it.item_id] = "");
-            (row.items || []).forEach(it => {
-              selected[it.order_item_id] = true;
-              quantities[it.order_item_id] = it.delivered_quantity;
-              remarks[it.order_item_id] = it.remarks || "";
+            const lines = (row.items || []).map(it => {
+              const pending = this.pendingDeliveryItems.find(item => Number(item.item_id) === Number(it.order_item_id));
+              return this.createDeliveryLine({
+                inventory_code: it.product_code || "",
+                order_item_id: it.order_item_id,
+                order_id: it.order_id,
+                order_number: it.display_order_number || it.order_number || "",
+                customer_po: it.customer_po || "",
+                product_code: it.product_code || "",
+                product_name: it.product_name || "",
+                specification: it.specification || "",
+                material_display: pending?.material_display || pending?.material || "",
+                remaining_quantity: pending?.remaining_quantity ?? it.delivered_quantity,
+                delivered_quantity: it.delivered_quantity,
+                remarks: it.remarks || "",
+                candidate_options: [],
+                candidate_message: "",
+                candidate_error: false,
+              });
             });
-            this.deliveryForm = { editingId: row.id, customer_id: row.customer_id, delivery_date: row.delivery_date, vehicle_number: row.vehicle_number || "", selected, quantities, remarks };
+            while (lines.length < 5) lines.push(this.createDeliveryLine());
+            this.deliveryForm = { editingId: row.id, customer_id: row.customer_id, delivery_date: row.delivery_date, vehicle_number: row.vehicle_number || "", lines };
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },
           async deleteDelivery(row) {

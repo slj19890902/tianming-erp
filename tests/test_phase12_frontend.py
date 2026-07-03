@@ -133,3 +133,19 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert "压线尺寸" in INCOMING
     assert 'data-quantity="${item.item_id}"' in INCOMING
     assert "item.requisition_date" in INCOMING
+
+
+def test_system_version_panel_groups_major_releases_and_hides_legacy_tools() -> None:
+    assert "versionMajorGroups" in INDEX
+    assert "toggleVersionGroup(group.key)" in INDEX
+    assert "group.visibleEntries" in INDEX
+    assert "还有 {{ group.overflow }} 条，详见更新记录。" in INDEX
+    assert "<template v-if=\"false\">" in INDEX
+    assert "材质映射审批" in INDEX
+    assert "楞型批量识别" in INDEX
+
+
+def test_pdf_training_uses_safe_sample_ids_in_frontend() -> None:
+    assert "Number.parseInt(sampleId, 10)" in INDEX
+    assert "样本编号无效，请刷新样本列表后重试" in INDEX
+    assert "id: Number(row.id)" in INDEX

@@ -315,6 +315,12 @@ class TestPdfTrainingApi:
         body = json.loads(r["body"])
         assert isinstance(body, list)
 
+    def test_samples_list_legacy_alias(self):
+        r = _api_auth("get", "/api/pdf-training/samples/list")
+        assert r["status"] == 200
+        body = json.loads(r["body"])
+        assert isinstance(body, list)
+
     def test_templates_list(self):
         r = _api_auth("get", "/api/pdf-training/templates")
         assert r["status"] == 200
@@ -336,6 +342,18 @@ class TestPdfTrainingApi:
     def test_sample_not_found(self):
         r = _api_auth("get", "/api/pdf-training/samples/999999")
         assert r["status"] == 404
+
+    def test_sample_invalid_id_returns_readable_message(self):
+        r = _api_auth("get", "/api/pdf-training/samples/not-a-number")
+        assert r["status"] == 400
+        body = json.loads(r["body"])
+        assert "样本ID无效" in body["detail"]
+
+    def test_sample_legacy_detail_alias_invalid_id_returns_readable_message(self):
+        r = _api_auth("get", "/api/pdf-training/samples/detail/not-a-number")
+        assert r["status"] == 400
+        body = json.loads(r["body"])
+        assert "样本ID无效" in body["detail"]
 
     def test_ground_truth_requires_labeled_sample(self):
         """对不存在的样本写 ground_truth 应返回 404。"""

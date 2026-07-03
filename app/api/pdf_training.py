@@ -85,6 +85,39 @@ def _log(db: Session, user: User, action: str, detail: str) -> None:
     )
 
 
+def _parse_sample_id(sample_id: int | str | None) -> int:
+    raw = "" if sample_id is None else str(sample_id).strip()
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="样本ID不能为空，请刷新样本列表后重试。",
+        )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"样本ID无效：{raw}。请从样本列表重新进入详情。",
+        ) from exc
+    if value <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="样本ID必须是大于 0 的整数。",
+        )
+    return value
+
+
+def _get_sample_or_404(
+    db: Session,
+    sample_id: int | str | None,
+) -> tuple[PdfOrderTrainingSample, int]:
+    safe_sample_id = _parse_sample_id(sample_id)
+    sample = db.get(PdfOrderTrainingSample, safe_sample_id)
+    if sample is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    return sample, safe_sample_id
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schema
 # ---------------------------------------------------------------------------
@@ -269,6 +302,19 @@ def list_samples(
     return samples
 
 
+@router.get("/samples/list", response_model=list[SampleSummary])
+def list_samples_legacy(
+    batch_id: int | None = Query(None),
+    parse_status: str | None = Query(None),
+    customer_id: int | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    return list_samples(batch_id, parse_status, customer_id, limit, offset, db, _user)
+
+
 @router.post(
     "/samples/upload",
     response_model=SampleSummary,
@@ -387,29 +433,35 @@ async def upload_sample(
 # 样本详情 / 标注 / 评分 / 删除
 # ---------------------------------------------------------------------------
 
-@router.get("/samples/{sample_id}", response_model=SampleDetail)
-def get_sample(
-    sample_id: int,
+@router.get("/samples/detail/{sample_id}", response_model=SampleDetail)
+def get_sample_legacy_detail(
+    sample_id: str,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    sample = db.get(PdfOrderTrainingSample, sample_id)
-    if sample is None:
-        raise HTTPException(status_code=404, detail="样本不存在")
+    sample, _ = _get_sample_or_404(db, sample_id)
+    return sample
+
+
+@router.get("/samples/{sample_id}", response_model=SampleDetail)
+def get_sample(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    sample, _ = _get_sample_or_404(db, sample_id)
     return sample
 
 
 @router.put("/samples/{sample_id}/ground-truth", response_model=SampleDetail)
 def set_ground_truth(
-    sample_id: int,
+    sample_id: str,
     payload: GroundTruthPayload,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """写入人工标注 ground_truth_json，同时自动触发评分计算。"""
-    sample = db.get(PdfOrderTrainingSample, sample_id)
-    if sample is None:
-        raise HTTPException(status_code=404, detail="样本不存在")
+    sample, safe_sample_id = _get_sample_or_404(db, sample_id)
 
     # 校验 JSON 格式
     try:
@@ -435,7 +487,7 @@ def set_ground_truth(
         db,
         user,
         "pdf_training.sample.label",
-        f"标注样本 {sample_id}，评分={sr.overall_score:.3f}",
+        f"标注样本 {safe_sample_id}，评分={sr.overall_score:.3f}",
     )
     db.commit()
     db.refresh(sample)
@@ -444,14 +496,12 @@ def set_ground_truth(
 
 @router.post("/samples/{sample_id}/score", response_model=ScoreOut)
 def compute_sample_score(
-    sample_id: int,
+    sample_id: str,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """（重新）计算并保存评分。要求样本已有 ground_truth_json。"""
-    sample = db.get(PdfOrderTrainingSample, sample_id)
-    if sample is None:
-        raise HTTPException(status_code=404, detail="样本不存在")
+    sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     if not sample.ground_truth_json:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -460,11 +510,11 @@ def compute_sample_score(
 
     sr = score_sample(sample.parser_result_json, sample.ground_truth_json)
     sample.score = sr.overall_score
-    _log(db, user, "pdf_training.sample.score", f"评分样本 {sample_id}={sr.overall_score:.3f}")
+    _log(db, user, "pdf_training.sample.score", f"评分样本 {safe_sample_id}={sr.overall_score:.3f}")
     db.commit()
 
     return ScoreOut(
-        sample_id=sample_id,
+        sample_id=safe_sample_id,
         overall_score=sr.overall_score,
         item_count_truth=sr.item_count_truth,
         item_count_parsed=sr.item_count_parsed,
@@ -485,14 +535,12 @@ def compute_sample_score(
 
 @router.delete("/samples/{sample_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_sample(
-    sample_id: int,
+    sample_id: str,
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    sample = db.get(PdfOrderTrainingSample, sample_id)
-    if sample is None:
-        raise HTTPException(status_code=404, detail="样本不存在")
-    _log(db, user, "pdf_training.sample.delete", f"删除样本 {sample_id}: {sample.file_name}")
+    sample, safe_sample_id = _get_sample_or_404(db, sample_id)
+    _log(db, user, "pdf_training.sample.delete", f"删除样本 {safe_sample_id}: {sample.file_name}")
     db.delete(sample)
     db.commit()
 
@@ -527,17 +575,15 @@ class CorrectionOut(BaseModel):
     status_code=status.HTTP_201_CREATED,
 )
 def add_correction(
-    sample_id: int,
+    sample_id: str,
     payload: CorrectionCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """为样本新增字段纠错记录（不影响 ground_truth_json，仅记录差异）。"""
-    sample = db.get(PdfOrderTrainingSample, sample_id)
-    if sample is None:
-        raise HTTPException(status_code=404, detail="样本不存在")
+    _sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     log = PdfOrderCorrectionLog(
-        sample_id=sample_id,
+        sample_id=safe_sample_id,
         field_path=payload.field_path,
         parser_value=payload.parser_value,
         corrected_value=payload.corrected_value,
@@ -553,16 +599,14 @@ def add_correction(
 
 @router.get("/samples/{sample_id}/corrections", response_model=list[CorrectionOut])
 def list_corrections(
-    sample_id: int,
+    sample_id: str,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    sample = db.get(PdfOrderTrainingSample, sample_id)
-    if sample is None:
-        raise HTTPException(status_code=404, detail="样本不存在")
+    _sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     return (
         db.query(PdfOrderCorrectionLog)
-        .filter(PdfOrderCorrectionLog.sample_id == sample_id)
+        .filter(PdfOrderCorrectionLog.sample_id == safe_sample_id)
         .order_by(PdfOrderCorrectionLog.corrected_at.asc())
         .all()
     )

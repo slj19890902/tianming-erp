@@ -1537,9 +1537,26 @@
                   <span style="font-weight:600">{{ versionInfo.version_name || '' }}</span>
                   <span class="muted">发布日期：{{ versionInfo.build_date || '-' }}</span>
                 </div>
-                <ul v-if="(versionInfo.changelog||[]).length" style="margin:10px 0 0 0;padding-left:18px;font-size:13px;color:var(--text-secondary)">
-                  <li v-for="item in versionInfo.changelog" :key="item">{{ item }}</li>
-                </ul>
+                <div v-if="versionMajorGroups.length" style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
+                  <div v-for="group in versionMajorGroups" :key="group.key" style="border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fff">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                      <div style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline">
+                        <strong style="color:var(--primary)">{{ group.version }}</strong>
+                        <span>{{ group.summary }}</span>
+                        <span v-if="group.latestVersion && group.latestVersion !== group.version" class="muted">最新：{{ group.latestVersion }}</span>
+                      </div>
+                      <button class="btn small" @click="toggleVersionGroup(group.key)">
+                        {{ versionExpandedGroups[group.key] ? '收起' : '展开' }}
+                      </button>
+                    </div>
+                    <ul v-if="versionExpandedGroups[group.key]" style="margin:10px 0 0 0;padding-left:18px;font-size:13px;color:var(--text-secondary)">
+                      <li v-for="entry in group.visibleEntries" :key="entry.raw" style="margin-bottom:4px">
+                        <strong>{{ entry.version }}</strong>：{{ entry.text }}
+                      </li>
+                      <li v-if="group.overflow > 0" class="muted">还有 {{ group.overflow }} 条，详见更新记录。</li>
+                    </ul>
+                  </div>
+                </div>
               </div>
               <div class="section-title">数据备份</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
@@ -1591,6 +1608,7 @@
                 </div>
               </div>
 
+              <template v-if="false">
               <!-- ── 材质映射审批 ── -->
               <div class="section-title" style="margin-top:24px">材质映射审批</div>
               <!-- 汇总统计 -->
@@ -1675,7 +1693,9 @@
                   <button class="btn small" :disabled="materialMappingItems.length<50" @click="loadMaterialMapping(materialMappingPage+1)">下一页</button>
                 </div>
               </data-panel>
+              </template>
 
+              <template v-if="false">
               <!-- ── 楞型批量识别 ── -->
               <div class="section-title" style="margin-top:24px">楞型批量识别</div>
               <div class="panel" style="margin-bottom:10px;padding:14px 18px">
@@ -1691,6 +1711,7 @@
                   <button class="btn" style="background:#d97706;color:#fff" @click="fixFluteConsistency" :disabled="loading">修复非法组合</button>
                 </div>
               </div>
+              </template>
 
               <!-- ── PDF 识别训练库 (Phase 18) ── -->
               <div class="section-title" style="margin-top:24px">PDF 订单识别训练库</div>
@@ -3087,6 +3108,7 @@
             materialMappingFilterConf: '', materialMappingFilterStatus: '',
             materialMappingStats: {},
             versionInfo: {},
+            versionExpandedGroups: {},
             // Phase 18/19: PDF 训练库
             pdfTrainingStats: null, pdfTrainingSamples: [], pdfSamplePage: 1,
             pdfTrainingBatches: [],
@@ -3161,6 +3183,36 @@
           };
         },
         computed: {
+          versionMajorGroups() {
+            const changelog = Array.isArray(this.versionInfo?.changelog) ? this.versionInfo.changelog : [];
+            const groups = [];
+            const grouped = new Map();
+            changelog.forEach((rawItem, index) => {
+              const raw = String(rawItem || "").trim();
+              if (!raw) return;
+              const match = raw.match(/^(v\d+\.\d+)(?:\.(\d+))?(?:-[A-Z])?[：:]\s*(.+)$/i);
+              const groupKey = match ? `${match[1]}.0` : `misc-${index}`;
+              const versionLabel = match ? raw.split(/[：:]/)[0] : `记录 ${index + 1}`;
+              const summary = match ? match[3].trim() : raw;
+              if (!grouped.has(groupKey)) {
+                const group = {
+                  key: groupKey,
+                  version: groupKey,
+                  latestVersion: versionLabel,
+                  summary,
+                  entries: [],
+                };
+                grouped.set(groupKey, group);
+                groups.push(group);
+              }
+              grouped.get(groupKey).entries.unshift({ version: versionLabel, text: summary, raw });
+            });
+            return groups.slice(0, 5).map(group => ({
+              ...group,
+              visibleEntries: group.entries.slice(0, 10),
+              overflow: Math.max(group.entries.length - 10, 0),
+            }));
+          },
           statementCustomerOptions() {
             return this.statementCustomers;
           },
@@ -3696,6 +3748,12 @@
             clearTimeout(this.toastTimer);
             this.toast = { message, error };
             this.toastTimer = setTimeout(() => this.toast.message = "", 3200);
+          },
+          toggleVersionGroup(groupKey) {
+            this.versionExpandedGroups = {
+              ...this.versionExpandedGroups,
+              [groupKey]: !this.versionExpandedGroups[groupKey],
+            };
           },
           errorMessage(error) {
             const detail=error?.response?.data?.detail;
@@ -7323,7 +7381,10 @@
             const offset = (page - 1) * 50;
             try {
               const { data } = await axios.get('/api/pdf-training/samples', { params: { limit: 50, offset } });
-              this.pdfTrainingSamples = data;
+              this.pdfTrainingSamples = (Array.isArray(data) ? data : []).map(row => ({
+                ...row,
+                id: Number(row.id),
+              }));
               // 同时加载统计和批次
               const [statsRes, batchRes] = await Promise.all([
                 axios.get('/api/pdf-training/stats'),
@@ -7360,14 +7421,19 @@
             finally { this.loading = false; }
           },
           async openPdfSampleDetail(sampleId) {
+            const safeSampleId = Number.parseInt(sampleId, 10);
+            if (!Number.isInteger(safeSampleId) || safeSampleId <= 0) {
+              this.showToast('样本编号无效，请刷新样本列表后重试', true);
+              return;
+            }
             this.loading = true;
             try {
-              const { data } = await axios.get(`/api/pdf-training/samples/${sampleId}`);
+              const { data } = await axios.get(`/api/pdf-training/samples/${safeSampleId}`);
               this.pdfSampleDetail = data;
               this.pdfGroundTruthEdit = data.ground_truth_json
                 ? JSON.stringify(JSON.parse(data.ground_truth_json), null, 2)
                 : '';
-              this.modal = { type: 'pdfSampleDetail', title: `样本 #${sampleId} 详情与标注` };
+              this.modal = { type: 'pdfSampleDetail', title: `样本 #${safeSampleId} 详情与标注` };
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },

@@ -113,6 +113,9 @@ def _pending_query(
     *,
     customer_id: int | None = None,
     inventory_keyword: str | None = None,
+    customer_po_keyword: str | None = None,
+    product_name_keyword: str | None = None,
+    general_keyword: str | None = None,
 ):
     active_finished_reserved = (
         select(
@@ -164,29 +167,92 @@ def _pending_query(
     )
     if customer_id is not None:
         query = query.where(Order.customer_id == customer_id)
-    keyword = (inventory_keyword or "").strip()
-    if keyword:
-        lowered = keyword.lower()
-        fuzzy = f"%{keyword}%"
+    inventory_keyword = (inventory_keyword or "").strip()
+    customer_po_keyword = (customer_po_keyword or "").strip()
+    product_name_keyword = (product_name_keyword or "").strip()
+    general_keyword = (general_keyword or "").strip()
+
+    if inventory_keyword:
+        lowered = inventory_keyword.lower()
+        fuzzy = f"%{inventory_keyword}%"
         query = query.where(
             or_(
                 func.lower(Product.product_code) == lowered,
                 Product.product_code.like(fuzzy),
+            )
+        )
+    if customer_po_keyword:
+        lowered = customer_po_keyword.lower()
+        fuzzy = f"%{customer_po_keyword}%"
+        query = query.where(
+            or_(
+                func.lower(Order.customer_po) == lowered,
+                Order.customer_po.like(fuzzy),
+            )
+        )
+    if product_name_keyword:
+        query = query.where(
+            OrderItem.snapshot_product_name.like(f"%{product_name_keyword}%")
+        )
+
+    rank_ordering = []
+    if general_keyword:
+        lowered = general_keyword.lower()
+        prefix = f"{general_keyword}%"
+        fuzzy = f"%{general_keyword}%"
+        query = query.where(
+            or_(
+                func.lower(Product.product_code) == lowered,
+                Product.product_code.like(prefix),
+                Product.product_code.like(fuzzy),
+                func.lower(Order.customer_po) == lowered,
+                Order.customer_po.like(prefix),
+                Order.customer_po.like(fuzzy),
                 OrderItem.snapshot_product_name.like(fuzzy),
             )
-        ).order_by(
-            case((func.lower(Product.product_code) == lowered, 0), else_=1),
-            Order.delivery_date.is_(None),
-            Order.delivery_date,
-            OrderItem.created_at.desc(),
-            OrderItem.id.desc(),
         )
-    else:
-        query = query.order_by(
-            OrderItem.material_received_at.desc(),
-            OrderItem.created_at.desc(),
-            OrderItem.id.desc(),
+        rank_ordering.append(
+            case(
+                (func.lower(Product.product_code) == lowered, 0),
+                (func.lower(Order.customer_po) == lowered, 1),
+                (Product.product_code.like(prefix), 2),
+                (Order.customer_po.like(prefix), 3),
+                (Product.product_code.like(fuzzy), 4),
+                (Order.customer_po.like(fuzzy), 5),
+                else_=6,
+            )
         )
+    elif inventory_keyword:
+        lowered = inventory_keyword.lower()
+        prefix = f"{inventory_keyword}%"
+        fuzzy = f"%{inventory_keyword}%"
+        rank_ordering.append(
+            case(
+                (func.lower(Product.product_code) == lowered, 0),
+                (Product.product_code.like(prefix), 1),
+                (Product.product_code.like(fuzzy), 2),
+                else_=3,
+            )
+        )
+    elif customer_po_keyword:
+        lowered = customer_po_keyword.lower()
+        prefix = f"{customer_po_keyword}%"
+        fuzzy = f"%{customer_po_keyword}%"
+        rank_ordering.append(
+            case(
+                (func.lower(Order.customer_po) == lowered, 0),
+                (Order.customer_po.like(prefix), 1),
+                (Order.customer_po.like(fuzzy), 2),
+                else_=3,
+            )
+        )
+
+    query = query.order_by(
+        *rank_ordering,
+        OrderItem.material_received_at.desc(),
+        OrderItem.created_at.desc(),
+        OrderItem.id.desc(),
+    )
     return query
 
 
@@ -419,18 +485,60 @@ def pending_delivery_items(
 def search_pending_delivery_items(
     customer_id: int = Query(gt=0),
     inventory_code: str = Query(default="", max_length=150),
+    q: str = Query(default="", max_length=150),
+    customer_po: str = Query(default="", max_length=150),
+    product_name: str = Query(default="", max_length=150),
+    search_type: str = Query(default="", max_length=50),
+    list_all: bool = False,
+    limit: int | None = Query(default=None, ge=1, le=200),
     db: Session = Depends(get_db),
     _user: User = Depends(can_operate),
 ) -> dict:
-    keyword = inventory_code.strip()
-    if not keyword:
+    inventory_keyword = inventory_code.strip()
+    general_keyword = q.strip()
+    customer_po_keyword = customer_po.strip()
+    product_name_keyword = product_name.strip()
+    search_type = search_type.strip().lower()
+
+    if search_type:
+        allowed_search_types = {
+            "inventory_code",
+            "customer_po",
+            "product_name",
+        }
+        if search_type not in allowed_search_types:
+            raise HTTPException(status_code=400, detail="search_type 参数无效")
+        if general_keyword:
+            if search_type == "inventory_code":
+                inventory_keyword = inventory_keyword or general_keyword
+            elif search_type == "customer_po":
+                customer_po_keyword = customer_po_keyword or general_keyword
+            else:
+                product_name_keyword = product_name_keyword or general_keyword
+            general_keyword = ""
+
+    if not list_all and not any(
+        [
+            inventory_keyword,
+            general_keyword,
+            customer_po_keyword,
+            product_name_keyword,
+        ]
+    ):
         return {"items": []}
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
+    effective_limit = limit or (100 if list_all else 20)
     registry = build_display_registry(db)
     items = []
     for row in db.execute(
-        _pending_query(customer_id=customer_id, inventory_keyword=keyword).limit(20)
+        _pending_query(
+            customer_id=customer_id,
+            inventory_keyword=inventory_keyword,
+            customer_po_keyword=customer_po_keyword,
+            product_name_keyword=product_name_keyword,
+            general_keyword=general_keyword,
+        ).limit(effective_limit)
     ):
         order = db.get(Order, row._mapping["order_id"])
         display = display_order_number(order, registry)

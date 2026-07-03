@@ -703,19 +703,80 @@ def test_pending_delivery_search_scopes_customer_and_empty_keyword(
             "/api/deliveries/pending-items/search",
             params={"customer_id": 1, "inventory_code": ""},
         )
-        matched = client.get(
+        matched_inventory_code = client.get(
             "/api/deliveries/pending-items/search",
             params={"customer_id": 1, "inventory_code": "SME-001"},
+        )
+        matched_q_inventory = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "q": "SME-001"},
+        )
+        matched_q_po = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "q": "CPO-001"},
+        )
+        matched_q_name = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "q": "五层"},
+        )
+        matched_search_type_po = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "q": "CPO-001", "search_type": "customer_po"},
+        )
+        matched_product_name = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "product_name": "三层瓦楞外箱"},
+        )
+        listed = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "list_all": "1"},
+        )
+        limited = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "list_all": "1", "limit": 2},
         )
 
     assert empty.status_code == 200
     assert empty.json()["items"] == []
-    assert matched.status_code == 200
-    items = matched.json()["items"]
-    assert items
-    assert all(item["customer_id"] == 1 for item in items)
-    assert all(item["remaining_quantity"] > 0 for item in items)
-    assert all(item["product_code"] == "SME-001" for item in items)
+    assert matched_inventory_code.status_code == 200
+    inventory_items = matched_inventory_code.json()["items"]
+    assert inventory_items
+    assert all(item["customer_id"] == 1 for item in inventory_items)
+    assert all(item["remaining_quantity"] > 0 for item in inventory_items)
+    assert all(item["product_code"] == "SME-001" for item in inventory_items)
+    assert matched_q_inventory.status_code == 200
+    q_inventory_items = matched_q_inventory.json()["items"]
+    assert q_inventory_items
+    assert all(item["customer_id"] == 1 for item in q_inventory_items)
+    assert all(item["product_code"] == "SME-001" for item in q_inventory_items)
+    assert matched_q_po.status_code == 200
+    po_items = matched_q_po.json()["items"]
+    assert po_items
+    assert all(item["customer_id"] == 1 for item in po_items)
+    assert any(item["customer_po"] == "CPO-001" for item in po_items)
+    assert matched_q_name.status_code == 200
+    q_name_items = matched_q_name.json()["items"]
+    assert q_name_items
+    assert all(item["customer_id"] == 1 for item in q_name_items)
+    assert all("五层" in item["product_name"] for item in q_name_items)
+    assert matched_search_type_po.status_code == 200
+    typed_po_items = matched_search_type_po.json()["items"]
+    assert typed_po_items
+    assert all(item["customer_id"] == 1 for item in typed_po_items)
+    assert all(item["customer_po"] == "CPO-001" for item in typed_po_items)
+    assert matched_product_name.status_code == 200
+    name_items = matched_product_name.json()["items"]
+    assert name_items
+    assert all(item["customer_id"] == 1 for item in name_items)
+    assert all("三层瓦楞外箱" in item["product_name"] for item in name_items)
+    assert listed.status_code == 200
+    listed_items = listed.json()["items"]
+    assert listed_items
+    assert all(item["customer_id"] == 1 for item in listed_items)
+    assert all(item["remaining_quantity"] > 0 for item in listed_items)
+    assert {item["order_item_id"] for item in listed_items} == {1, 2, 3}
+    assert limited.status_code == 200
+    assert len(limited.json()["items"]) == 2
 
 
 def test_delivery_frontend_uses_five_blank_rows_and_search_flow() -> None:

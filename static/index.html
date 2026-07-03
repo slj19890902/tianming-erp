@@ -5159,7 +5159,7 @@
             const isDouble = String(spliceMode || "single") === "double";
             return {
               board_length: this.normalizeMmInteger(isDouble ? (L + W + flap) : (2 * (L + W) + flap)),
-              board_width: this.normalizeMmInteger(W + H + 5),
+              board_width: this.normalizeMmInteger(W + H),
               formula_label: isDouble
                 ? `A1/0201 双拼推荐：长+宽+舌头，当前舌头 ${flap}mm`
                 : `A1/0201 单拼推荐：2×(长+宽)+舌头，当前舌头 ${flap}mm`,
@@ -5174,7 +5174,7 @@
               top_flap: Math.round(W / 2),
               height: H,
               bottom_flap: Math.round(W / 2),
-              formula_label: "按宽度一半推荐上下摇盖，高度取执行高；报料宽另含 5mm 余量",
+              formula_label: "按宽度一半推荐上下摇盖，高度取执行高；报料宽必须等于压线三段总和",
             };
           },
           shouldAutoApplyRecommendation(fieldState) {
@@ -5215,7 +5215,7 @@
             const middle = this.normalizeMmInteger(form.crease_middle_mm);
             const right = this.normalizeMmInteger(form.crease_right_mm);
             if (left === null || middle === null || right === null) return;
-            form.report_width_mm = left + middle + right + 5;
+            form.report_width_mm = left + middle + right;
             form._report_dims_manual = true;
           },
           // 常用箱编辑保存前校验：压线尺寸完整性/数值有效性/与报料宽一致性
@@ -5232,9 +5232,9 @@
             const width = Number(form.report_width_mm);
             if (!Number.isFinite(width)) return null;
             const roundedWidth = Math.round(width);
-            const expectedWidth = sum + 5;
+            const expectedWidth = sum;
             if (expectedWidth !== roundedWidth) {
-              return `压线不符：压线尺寸合计 ${sum}，加 5mm 报料余量后应为 ${expectedWidth}，当前报料宽为 ${roundedWidth}，请修改后再保存。`;
+              return `压线不符：压线尺寸合计 ${sum}mm，当前报料宽为 ${roundedWidth}mm。报料宽度必须等于压线三段总和；如需裁切余量，请把余量体现在压线尺寸中。`;
             }
             return null;
           },
@@ -5278,6 +5278,11 @@
               form.crease_left_mm = crease.top_flap;
               form.crease_middle_mm = crease.height;
               form.crease_right_mm = crease.bottom_flap;
+              if (force || this.shouldAutoApplyRecommendation(form._report_dims_manual)) {
+                form.report_width_mm = this.normalizeMmInteger(
+                  crease.top_flap + crease.height + crease.bottom_flap
+                );
+              }
             }
           },
           reapplyProductRecommendations() {

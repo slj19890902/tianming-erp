@@ -140,7 +140,10 @@ def test_common_box_a1_board_and_crease_recommendations_use_splice_and_flap() ->
     assert "calculateCreaseByBoxType(boxType, length, width, height, creaseType)" in source
     assert "2 * (L + W) + flap" in source
     assert "L + W + flap" in source
-    assert "W + H + 5" in source
+    assert "W + H + 5" not in source
+    assert "board_width: this.normalizeMmInteger(W + H)" in source
+    assert "form.report_width_mm = left + middle + right;" in source
+    assert "const expectedWidth = sum;" in source
     assert "Math.round(W / 2)" in source
     assert "A1/0201 双拼推荐" in source
     assert "A1/0201 单拼推荐" in source

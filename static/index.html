@@ -3012,6 +3012,7 @@
               </div>
               <div class="toolbar-group">
                 <button class="btn primary" :disabled="loading" @click="savePdfGroundTruth">保存人工标注 + 自动评分</button>
+                <button class="btn" :disabled="loading" @click="reparsePdfSample">重新解析当前样本</button>
                 <button class="btn" :disabled="!pdfSampleDetail.ground_truth_json || loading" @click="rescorePdfSample">重新评分</button>
               </div>
             </div>
@@ -7662,6 +7663,26 @@
               this.loadPdfGroundTruthFormFromSample(data);
               const scoreText = data.score != null ? `${(data.score * 100).toFixed(1)}%` : "未评分";
               this.showToast(`已保存人工标注并评分：${scoreText}`);
+              await this.loadPdfTrainingSamples(this.pdfSamplePage);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async reparsePdfSample() {
+            if (!this.pdfSampleDetail) return;
+            const safeSampleId = this.normalizePdfSampleId(this.pdfSampleDetail);
+            if (!safeSampleId) {
+              console.warn("Invalid PDF sample id for reparse", this.pdfSampleDetail);
+              this.showToast("样本ID无效，请从样本列表重新打开详情。", true);
+              return;
+            }
+            const confirmed = confirm("确定重新解析当前 PDF 样本？这会刷新解析器结果，但不会删除人工标注，也不会写入正式订单。");
+            if (!confirmed) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post(`/api/pdf-training/samples/${safeSampleId}/reparse`);
+              this.pdfSampleDetail = data;
+              this.loadPdfGroundTruthFormFromSample(data);
+              this.showToast("已重新解析当前样本");
               await this.loadPdfTrainingSamples(this.pdfSamplePage);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }

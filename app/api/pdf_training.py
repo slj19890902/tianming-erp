@@ -119,6 +119,64 @@ def _get_sample_or_404(
     return sample, safe_sample_id
 
 
+def _parse_pdf_sample_content(
+    db: Session,
+    content: bytes,
+    source_name: str,
+) -> dict:
+    template_rules = load_active_pdf_template_rules(db)
+
+    extracted_text: str | None = None
+    parser_result_json: str | None = None
+    parse_result: dict | None = None
+    parse_method = "failed"
+
+    try:
+        extracted_text = extract_text_from_pdf_bytes(content)
+        if extracted_text and extracted_text.strip():
+            try:
+                parse_result = parse_purchase_order_text(
+                    extracted_text,
+                    source_name=source_name,
+                    template_rules=template_rules,
+                )
+                parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
+                parse_method = "text"
+            except ValueError:
+                parse_method = "failed"
+    except Exception:
+        parse_method = "failed"
+
+    ocr_text_raw: str | None = None
+    if should_use_ocr(extracted_text, parse_result):
+        ocr_text, ocr_method = ocr_pdf_bytes(content)
+        if ocr_text and ocr_method not in ("ocr_unavailable", "ocr_failed"):
+            ocr_text_raw = ocr_text
+            if parse_result is None or not parse_result.get("items"):
+                try:
+                    ocr_parse = parse_purchase_order_text(
+                        ocr_text,
+                        source_name=source_name,
+                        template_rules=template_rules,
+                    )
+                    parser_result_json = json.dumps(ocr_parse, ensure_ascii=False, default=str)
+                    parse_result = ocr_parse
+                    parse_method = "mixed" if extracted_text and extracted_text.strip() else ocr_method
+                except ValueError:
+                    parse_method = ocr_method
+            else:
+                parse_method = "mixed"
+        elif ocr_method == "ocr_unavailable" and parse_method == "failed":
+            parse_method = "ocr_unavailable"
+
+    return {
+        "extracted_text": extracted_text,
+        "ocr_text_raw": ocr_text_raw,
+        "parser_result_json": parser_result_json,
+        "parse_method": parse_method,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schema
 # ---------------------------------------------------------------------------
@@ -343,7 +401,6 @@ async def upload_sample(
 
     content = await file.read()
     sha = file_sha256(content)
-    template_rules = load_active_pdf_template_rules(db)
 
     # 重复上传检测
     existing = db.query(PdfOrderTrainingSample).filter(
@@ -541,6 +598,57 @@ def compute_sample_score(
             for fs in sr.field_scores
         ],
     )
+
+
+@router.post("/samples/{sample_id}/reparse", response_model=SampleDetail)
+def reparse_sample(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    sample, safe_sample_id = _get_sample_or_404(db, sample_id)
+    if not sample.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="样本原始 PDF 文件不存在，无法重新解析。",
+        )
+
+    pdf_path = Path(sample.file_path)
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="样本原始 PDF 文件不存在，无法重新解析。",
+        )
+
+    try:
+        content = pdf_path.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取样本原始 PDF 失败：{exc}",
+        ) from exc
+
+    parse_payload = _parse_pdf_sample_content(db, content, sample.file_name or pdf_path.name)
+    sample.extracted_text = parse_payload["extracted_text"]
+    sample.ocr_text_raw = parse_payload["ocr_text_raw"]
+    sample.parser_result_json = parse_payload["parser_result_json"]
+    sample.parse_method = parse_payload["parse_method"]
+
+    if sample.ground_truth_json:
+        sr = score_sample(sample.parser_result_json, sample.ground_truth_json)
+        sample.score = sr.overall_score
+    else:
+        sample.score = None
+
+    _log(
+        db,
+        user,
+        "pdf_training.sample.reparse",
+        f"重新解析样本 {safe_sample_id}: {sample.file_name}",
+    )
+    db.commit()
+    db.refresh(sample)
+    return sample
 
 
 @router.delete("/samples/{sample_id}", status_code=status.HTTP_204_NO_CONTENT)

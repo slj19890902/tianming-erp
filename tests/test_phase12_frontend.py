@@ -183,3 +183,9 @@ def test_pdf_training_sample_list_uses_safe_page_number() -> None:
 def test_pdf_training_detail_shows_template_rule_warnings() -> None:
     assert "模板规则 / 解析警告" in INDEX
     assert "pdfParsedResult.warnings && pdfParsedResult.warnings.length" in INDEX
+
+
+def test_pdf_training_detail_supports_single_sample_reparse() -> None:
+    assert "重新解析当前样本" in INDEX
+    assert "async reparsePdfSample()" in INDEX
+    assert "/api/pdf-training/samples/${safeSampleId}/reparse" in INDEX

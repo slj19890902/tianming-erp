@@ -146,6 +146,35 @@ def test_system_version_panel_groups_major_releases_and_hides_legacy_tools() -> 
 
 
 def test_pdf_training_uses_safe_sample_ids_in_frontend() -> None:
-    assert "Number.parseInt(sampleId, 10)" in INDEX
+    assert "normalizePdfSampleId(value)" in INDEX
+    assert "Number.parseInt(raw, 10)" in INDEX
     assert "样本编号无效，请刷新样本列表后重试" in INDEX
     assert "id: Number(row.id)" in INDEX
+
+
+def test_pdf_training_detail_uses_form_based_ground_truth_editor() -> None:
+    assert "人工标注表单" in INDEX
+    assert "从解析结果生成草稿" in INDEX
+    assert "新增明细行" in INDEX
+    assert "高级：Ground Truth JSON 预览" in INDEX
+    assert "pdfGroundTruthForm" in INDEX
+    assert "fillPdfGroundTruthFromParsedResult" in INDEX
+    assert "addPdfGroundTruthItem" in INDEX
+    assert "removePdfGroundTruthItem" in INDEX
+    assert "buildPdfGroundTruthJsonFromForm" in INDEX
+    assert "loadPdfGroundTruthFormFromSample" in INDEX
+
+
+def test_pdf_training_normalizes_sample_ids_for_detail_save_and_score() -> None:
+    assert "normalizePdfSampleId(value)" in INDEX
+    assert 'value.id ?? value.sample_id' in INDEX
+    assert 'this.normalizePdfSampleId(sampleId)' in INDEX
+    assert 'this.normalizePdfSampleId(this.pdfSampleDetail)' in INDEX
+    assert "样本ID无效，请从样本列表重新打开详情。" in INDEX
+
+
+def test_pdf_training_sample_list_uses_safe_page_number() -> None:
+    assert '@click="loadPdfTrainingSamples(1)"' in INDEX
+    assert "const normalizedPage = Number.parseInt(page, 10);" in INDEX
+    assert "const safePage = Number.isInteger(normalizedPage) && normalizedPage > 0 ? normalizedPage : 1;" in INDEX
+    assert "const offset = (safePage - 1) * 50;" in INDEX

@@ -1754,7 +1754,7 @@
                 <div class="toolbar-group" style="margin-bottom:12px">
                   <button class="btn" @click="loadPdfTrainingStats" :disabled="loading">刷新统计</button>
                   <button class="btn" style="background:#2563eb;color:#fff" @click="openPdfUploadModal" :disabled="loading">上传 PDF 样本</button>
-                  <button class="btn" @click="loadPdfTrainingSamples" :disabled="loading">查看样本列表</button>
+                  <button class="btn" @click="loadPdfTrainingSamples(1)" :disabled="loading">查看样本列表</button>
                 </div>
 
                 <!-- 样本列表 -->
@@ -2931,15 +2931,79 @@
                 </div>
 
                 <div class="field wide">
-                  <label>人工标注 Ground Truth JSON</label>
-                  <textarea class="textarea" rows="8" style="font-family:monospace;font-size:11px" v-model="pdfGroundTruthEdit" placeholder='{"order_no":"THPO-xxx","customer_name":"xxx","order_date":"2024-01-15","items":[{"line_no":1,"product_code":"P001","quantity":100}]}'></textarea>
-                  <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">
-                    字段：order_no / customer_name / order_date / delivery_date / items[]{line_no, product_code, product_name, spec, quantity, unit, unit_price, amount}
+                  <label>人工标注表单</label>
+                  <div class="toolbar-group" style="margin-bottom:8px">
+                    <button class="btn small" type="button" :disabled="loading" @click="fillPdfGroundTruthFromParsedResult">从解析结果生成草稿</button>
+                    <button class="btn small" type="button" :disabled="loading" @click="addPdfGroundTruthItem">新增明细行</button>
+                    <button class="btn small" type="button" :disabled="loading" @click="clearPdfGroundTruthForm">清空标注</button>
+                    <button class="btn small" type="button" @click="pdfGroundTruthShowJson = !pdfGroundTruthShowJson">{{ pdfGroundTruthShowJson ? "收起高级 JSON" : "高级：Ground Truth JSON 预览" }}</button>
                   </div>
+                  <div v-if="pdfGroundTruthJsonError" style="font-size:12px;color:#b45309;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:8px 10px;margin-bottom:8px">
+                    {{ pdfGroundTruthJsonError }}
+                  </div>
+                  <div class="form-grid" style="margin-bottom:10px">
+                    <div class="field">
+                      <label>客户名称</label>
+                      <input class="input" v-model.trim="pdfGroundTruthForm.customer_name" placeholder="可留空，建议填写" />
+                      <div v-if="!pdfGroundTruthForm.customer_name" style="font-size:11px;color:#b45309;margin-top:4px">建议填写客户名称，便于后续按客户沉淀样本。</div>
+                    </div>
+                    <div class="field">
+                      <label>客户单号</label>
+                      <input class="input" v-model.trim="pdfGroundTruthForm.order_no" placeholder="可留空，建议填写" />
+                      <div v-if="!pdfGroundTruthForm.order_no" style="font-size:11px;color:#b45309;margin-top:4px">建议填写客户单号，便于后续核对识别结果。</div>
+                    </div>
+                    <div class="field">
+                      <label>订单日期</label>
+                      <input class="input" v-model.trim="pdfGroundTruthForm.order_date" placeholder="如 2026-07-03" />
+                    </div>
+                    <div class="field">
+                      <label>交货日期</label>
+                      <input class="input" v-model.trim="pdfGroundTruthForm.delivery_date" placeholder="如 2026-07-10" />
+                    </div>
+                  </div>
+                  <div style="overflow-x:auto">
+                    <table class="data-table" style="font-size:12px;min-width:980px">
+                      <thead>
+                        <tr>
+                          <th>行号</th>
+                          <th>存货编码</th>
+                          <th>产品名称</th>
+                          <th>规格</th>
+                          <th>数量</th>
+                          <th>单位</th>
+                          <th>单价</th>
+                          <th>金额</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(item, index) in pdfGroundTruthForm.items" :key="`pdf-gt-${index}`">
+                          <td style="width:70px"><input class="input" type="number" min="1" v-model.number="item.line_no" /></td>
+                          <td style="min-width:120px"><input class="input" v-model.trim="item.product_code" placeholder="存货编码" /></td>
+                          <td style="min-width:180px"><input class="input" v-model.trim="item.product_name" placeholder="产品名称" /></td>
+                          <td style="min-width:180px"><input class="input" v-model.trim="item.spec" placeholder="规格" /></td>
+                          <td style="width:110px"><input class="input" type="number" min="0" step="0.0001" v-model="item.quantity" placeholder="数量" /></td>
+                          <td style="width:90px"><input class="input" v-model.trim="item.unit" placeholder="单位" /></td>
+                          <td style="width:110px"><input class="input" type="number" step="0.0001" v-model="item.unit_price" placeholder="单价" /></td>
+                          <td style="width:110px"><input class="input" type="number" step="0.0001" v-model="item.amount" placeholder="金额" /></td>
+                          <td style="width:90px">
+                            <button class="btn small danger" type="button" @click="removePdfGroundTruthItem(index)">删除</button>
+                          </td>
+                        </tr>
+                        <tr v-if="!pdfGroundTruthForm.items.length">
+                          <td colspan="9" class="muted" style="text-align:center">当前没有明细行，可先从解析结果生成草稿，或手工新增明细行。</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <details style="margin-top:10px" :open="pdfGroundTruthShowJson" @toggle="pdfGroundTruthShowJson = $event.target.open">
+                    <summary style="cursor:pointer;color:var(--primary)">高级：Ground Truth JSON 预览</summary>
+                    <textarea class="textarea" readonly rows="10" style="margin-top:8px;font-family:monospace;font-size:11px" :value="pdfGroundTruthPreviewText()"></textarea>
+                  </details>
                 </div>
               </div>
               <div class="toolbar-group">
-                <button class="btn primary" :disabled="!pdfGroundTruthEdit || loading" @click="savePdfGroundTruth">保存标注 + 自动评分</button>
+                <button class="btn primary" :disabled="loading" @click="savePdfGroundTruth">保存人工标注 + 自动评分</button>
                 <button class="btn" :disabled="!pdfSampleDetail.ground_truth_json || loading" @click="rescorePdfSample">重新评分</button>
               </div>
             </div>
@@ -3113,6 +3177,8 @@
             pdfTrainingStats: null, pdfTrainingSamples: [], pdfSamplePage: 1,
             pdfTrainingBatches: [],
             pdfSampleDetail: null, pdfGroundTruthEdit: '',
+            pdfGroundTruthForm: { customer_name: "", order_no: "", order_date: "", delivery_date: "", items: [] },
+            pdfGroundTruthJsonError: '', pdfGroundTruthShowJson: false,
             pdfUploadFile: null, pdfUploadBatchId: null, pdfUploadStore: false, pdfUploadNotes: '',
             pdfOcrStatus: null,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {},
@@ -7376,9 +7442,11 @@
             finally { this.loading = false; }
           },
           async loadPdfTrainingSamples(page = 1) {
+            const normalizedPage = Number.parseInt(page, 10);
+            const safePage = Number.isInteger(normalizedPage) && normalizedPage > 0 ? normalizedPage : 1;
             this.loading = true;
-            this.pdfSamplePage = page;
-            const offset = (page - 1) * 50;
+            this.pdfSamplePage = safePage;
+            const offset = (safePage - 1) * 50;
             try {
               const { data } = await axios.get('/api/pdf-training/samples', { params: { limit: 50, offset } });
               this.pdfTrainingSamples = (Array.isArray(data) ? data : []).map(row => ({
@@ -7420,9 +7488,17 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
+          normalizePdfSampleId(value) {
+            const raw = value && typeof value === "object"
+              ? (value.id ?? value.sample_id)
+              : value;
+            const safeId = Number.parseInt(raw, 10);
+            return Number.isInteger(safeId) && safeId > 0 ? safeId : null;
+          },
           async openPdfSampleDetail(sampleId) {
-            const safeSampleId = Number.parseInt(sampleId, 10);
-            if (!Number.isInteger(safeSampleId) || safeSampleId <= 0) {
+            const safeSampleId = this.normalizePdfSampleId(sampleId);
+            if (!safeSampleId) {
+              console.warn("Invalid PDF sample id for detail", sampleId);
               this.showToast('样本编号无效，请刷新样本列表后重试', true);
               return;
             }
@@ -7430,44 +7506,185 @@
             try {
               const { data } = await axios.get(`/api/pdf-training/samples/${safeSampleId}`);
               this.pdfSampleDetail = data;
-              this.pdfGroundTruthEdit = data.ground_truth_json
-                ? JSON.stringify(JSON.parse(data.ground_truth_json), null, 2)
-                : '';
+              this.loadPdfGroundTruthFormFromSample(data);
               this.modal = { type: 'pdfSampleDetail', title: `样本 #${safeSampleId} 详情与标注` };
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
+          resetPdfGroundTruthForm() {
+            this.pdfGroundTruthForm = {
+              customer_name: "",
+              order_no: "",
+              order_date: "",
+              delivery_date: "",
+              items: []
+            };
+          },
+          normalizePdfGroundTruthItem(item, index) {
+            const source = item || {};
+            const toNullableNumberText = (value) => {
+              if (value === null || value === undefined || value === "") return "";
+              const numeric = Number(value);
+              return Number.isFinite(numeric) ? String(value) : "";
+            };
+            return {
+              line_no: Number.parseInt(source.line_no, 10) || index + 1,
+              product_code: String(source.product_code || source.raw_product_code || "").trim(),
+              product_name: String(source.product_name || source.raw_product_name || "").trim(),
+              spec: String(source.spec || source.specification || source.raw_spec_model || source.size_spec || "").trim(),
+              quantity: toNullableNumberText(source.quantity),
+              unit: String(source.unit || "").trim(),
+              unit_price: toNullableNumberText(source.unit_price),
+              amount: toNullableNumberText(source.amount),
+            };
+          },
+          applyPdfGroundTruthObject(payload) {
+            const source = payload && typeof payload === "object" ? payload : {};
+            const items = Array.isArray(source.items) ? source.items : [];
+            this.pdfGroundTruthForm = {
+              customer_name: String(source.customer_name || "").trim(),
+              order_no: String(source.order_no || source.customer_po || "").trim(),
+              order_date: String(source.order_date || "").trim(),
+              delivery_date: String(source.delivery_date || "").trim(),
+              items: items.map((item, index) => this.normalizePdfGroundTruthItem(item, index))
+            };
+          },
+          loadPdfGroundTruthFormFromSample(sample) {
+            this.resetPdfGroundTruthForm();
+            this.pdfGroundTruthJsonError = "";
+            this.pdfGroundTruthShowJson = false;
+            this.pdfGroundTruthEdit = sample?.ground_truth_json || "";
+            if (!this.pdfGroundTruthEdit) return;
+            try {
+              const parsed = JSON.parse(this.pdfGroundTruthEdit);
+              this.pdfGroundTruthEdit = JSON.stringify(parsed, null, 2);
+              this.applyPdfGroundTruthObject(parsed);
+            } catch (error) {
+              this.pdfGroundTruthJsonError = "当前人工标注 JSON 格式异常，请检查原始 JSON。";
+            }
+          },
+          fillPdfGroundTruthFromParsedResult() {
+            if (!this.pdfParsedResult) {
+              this.showToast("当前解析结果为空，请手工填写标注。", true);
+              return;
+            }
+            this.pdfGroundTruthJsonError = "";
+            this.applyPdfGroundTruthObject(this.pdfParsedResult);
+            this.showToast("已根据解析结果生成标注草稿。");
+          },
+          addPdfGroundTruthItem() {
+            const nextLineNo = this.pdfGroundTruthForm.items.reduce(
+              (max, item) => Math.max(max, Number.parseInt(item.line_no, 10) || 0),
+              0
+            ) + 1;
+            this.pdfGroundTruthForm.items.push(this.normalizePdfGroundTruthItem({ line_no: nextLineNo }, nextLineNo - 1));
+          },
+          removePdfGroundTruthItem(index) {
+            this.pdfGroundTruthForm.items.splice(index, 1);
+          },
+          normalizePdfGroundTruthNumber(value, fieldLabel) {
+            if (value === null || value === undefined || value === "") return null;
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+              throw new Error(`${fieldLabel}必须是数字或留空`);
+            }
+            return numeric;
+          },
+          buildPdfGroundTruthJsonFromForm() {
+            const items = this.pdfGroundTruthForm.items.map((item, index) => ({
+              line_no: index + 1,
+              product_code: String(item.product_code || "").trim(),
+              product_name: String(item.product_name || "").trim(),
+              spec: String(item.spec || "").trim(),
+              quantity: this.normalizePdfGroundTruthNumber(item.quantity, `第${index + 1}行数量`),
+              unit: String(item.unit || "").trim(),
+              unit_price: this.normalizePdfGroundTruthNumber(item.unit_price, `第${index + 1}行单价`),
+              amount: this.normalizePdfGroundTruthNumber(item.amount, `第${index + 1}行金额`),
+            }));
+            return {
+              customer_name: String(this.pdfGroundTruthForm.customer_name || "").trim(),
+              order_no: String(this.pdfGroundTruthForm.order_no || "").trim(),
+              order_date: String(this.pdfGroundTruthForm.order_date || "").trim(),
+              delivery_date: String(this.pdfGroundTruthForm.delivery_date || "").trim(),
+              items,
+            };
+          },
+          pdfGroundTruthPreviewText() {
+            if (this.pdfGroundTruthJsonError && this.pdfGroundTruthEdit) {
+              return this.pdfGroundTruthEdit;
+            }
+            try {
+              return JSON.stringify(this.buildPdfGroundTruthJsonFromForm(), null, 2);
+            } catch (error) {
+              return `JSON 预览生成失败：${error.message}`;
+            }
+          },
+          clearPdfGroundTruthForm() {
+            if (!confirm("确定清空当前人工标注表单？不会删除 PDF 样本。")) return;
+            this.resetPdfGroundTruthForm();
+            this.pdfGroundTruthJsonError = "";
+            this.pdfGroundTruthEdit = "";
+          },
           async savePdfGroundTruth() {
-            if (!this.pdfSampleDetail || !this.pdfGroundTruthEdit.trim()) return;
-            try { JSON.parse(this.pdfGroundTruthEdit); }
-            catch (e) { this.showToast('JSON 格式错误，请检查', true); return; }
+            if (!this.pdfSampleDetail) return;
+            const safeSampleId = this.normalizePdfSampleId(this.pdfSampleDetail);
+            if (!safeSampleId) {
+              console.warn("Invalid PDF sample id for ground truth save", this.pdfSampleDetail);
+              this.showToast("样本ID无效，请从样本列表重新打开详情。", true);
+              return;
+            }
+            if (!this.pdfGroundTruthForm.items.length) {
+              const proceed = confirm("当前没有明细行，保存后无法有效评分，是否继续？");
+              if (!proceed) return;
+            }
+            let payloadText = "";
+            try {
+              payloadText = JSON.stringify(this.buildPdfGroundTruthJsonFromForm());
+            } catch (error) {
+              this.showToast(error.message || "人工标注数据格式错误，请检查。", true);
+              return;
+            }
             this.loading = true;
             try {
               const { data } = await axios.put(
-                `/api/pdf-training/samples/${this.pdfSampleDetail.id}/ground-truth`,
-                { ground_truth_json: this.pdfGroundTruthEdit }
+                `/api/pdf-training/samples/${safeSampleId}/ground-truth`,
+                { ground_truth_json: payloadText }
               );
               this.pdfSampleDetail = data;
-              this.showToast(`标注保存成功，评分：${(data.score * 100).toFixed(1)}%`);
+              this.loadPdfGroundTruthFormFromSample(data);
+              const scoreText = data.score != null ? `${(data.score * 100).toFixed(1)}%` : "未评分";
+              this.showToast(`已保存人工标注并评分：${scoreText}`);
               await this.loadPdfTrainingSamples(this.pdfSamplePage);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
           async rescorePdfSample() {
             if (!this.pdfSampleDetail) return;
+            const safeSampleId = this.normalizePdfSampleId(this.pdfSampleDetail);
+            if (!safeSampleId) {
+              console.warn("Invalid PDF sample id for rescore", this.pdfSampleDetail);
+              this.showToast("样本ID无效，请从样本列表重新打开详情。", true);
+              return;
+            }
             this.loading = true;
             try {
-              const { data } = await axios.post(`/api/pdf-training/samples/${this.pdfSampleDetail.id}/score`);
+              const { data } = await axios.post(`/api/pdf-training/samples/${safeSampleId}/score`);
               this.pdfSampleDetail = { ...this.pdfSampleDetail, score: data.overall_score };
               this.showToast(`重新评分：${(data.overall_score * 100).toFixed(1)}%`);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
           async deletePdfSample(sampleId) {
-            if (!confirm(`确认删除样本 #${sampleId}？此操作不可撤销。`)) return;
+            const safeSampleId = this.normalizePdfSampleId(sampleId);
+            if (!safeSampleId) {
+              console.warn("Invalid PDF sample id for delete", sampleId);
+              this.showToast("样本ID无效，请刷新样本列表后重试。", true);
+              return;
+            }
+            if (!confirm(`确认删除样本 #${safeSampleId}？此操作不可撤销。`)) return;
             this.loading = true;
             try {
-              await axios.delete(`/api/pdf-training/samples/${sampleId}`);
+              await axios.delete(`/api/pdf-training/samples/${safeSampleId}`);
               this.showToast('样本已删除');
               await this.loadPdfTrainingSamples(this.pdfSamplePage);
             } catch (error) { this.showToast(this.errorMessage(error), true); }

@@ -412,55 +412,11 @@ async def upload_sample(
             detail=f"该 PDF 已上传（样本 ID={existing.id}，文件 SHA256 重复）",
         )
 
-    # ── 步骤1：PDF 文本提取 ──────────────────────────────────────────────
-    extracted_text: str | None = None
-    parser_result_json: str | None = None
-    parse_result: dict | None = None
-    parse_method = "failed"
-    try:
-        extracted_text = extract_text_from_pdf_bytes(content)
-        if extracted_text and extracted_text.strip():
-            try:
-                parse_result = parse_purchase_order_text(
-                    extracted_text,
-                    source_name=file.filename,
-                    template_rules=template_rules,
-                )
-                parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
-                parse_method = "text"
-            except ValueError:
-                # 文本提取成功但解析失败（乱码 / 格式不符）
-                parse_method = "failed"
-    except Exception:
-        parse_method = "failed"
-
-    # ── 步骤2：OCR 兜底（图片 PDF / 乱码 PDF）─────────────────────────
-    ocr_text_raw: str | None = None
-    if should_use_ocr(extracted_text, parse_result):
-        ocr_text, ocr_method = ocr_pdf_bytes(content)
-        if ocr_text and ocr_method not in ("ocr_unavailable", "ocr_failed"):
-            ocr_text_raw = ocr_text
-            # 尝试用 OCR 文本重新解析
-            if parse_result is None or not parse_result.get("items"):
-                try:
-                    ocr_parse = parse_purchase_order_text(
-                        ocr_text,
-                        source_name=file.filename,
-                        template_rules=template_rules,
-                    )
-                    parser_result_json = json.dumps(ocr_parse, ensure_ascii=False, default=str)
-                    parse_result = ocr_parse
-                    # 如果原文本解析也部分成功，标记为 mixed；否则纯 OCR
-                    parse_method = "mixed" if extracted_text and extracted_text.strip() else ocr_method
-                except ValueError:
-                    parse_method = ocr_method  # OCR 了但仍解析失败
-            else:
-                # 已有文本解析结果，仅保存 OCR 文本供参考
-                parse_method = "mixed"
-        elif ocr_method == "ocr_unavailable":
-            # OCR 引擎未配置，记录但不覆盖现有方法
-            if parse_method == "failed":
-                parse_method = "ocr_unavailable"
+    parse_payload = _parse_pdf_sample_content(db, content, file.filename)
+    extracted_text = parse_payload["extracted_text"]
+    ocr_text_raw = parse_payload["ocr_text_raw"]
+    parser_result_json = parse_payload["parser_result_json"]
+    parse_method = parse_payload["parse_method"]
 
     # ── 步骤3：落盘 PDF 原文件 ─────────────────────────────────────────
     file_path: str | None = None

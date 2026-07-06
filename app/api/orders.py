@@ -58,6 +58,7 @@ from app.services.order_pdf_import import (
     parse_purchase_order_text,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
+from app.services.pdf_ocr import ocr_pdf_bytes, should_use_ocr
 from app.services.product_import import (
     NewProductError,
     NewProductInput,
@@ -658,6 +659,49 @@ def _pdf_failure_draft(
     }
 
 
+def _parse_order_pdf_preview(
+    content: bytes,
+    filename: str,
+    template_rules: list[dict],
+) -> dict:
+    """Parse an order PDF for preview, using OCR only when text parsing needs it."""
+    text = extract_text_from_pdf_bytes(content)
+    draft: dict | None = None
+    parse_error: PdfParseError | None = None
+
+    if text and text.strip():
+        try:
+            draft = parse_purchase_order_text(
+                text,
+                source_name=filename,
+                template_rules=template_rules,
+            )
+        except PdfParseError as error:
+            parse_error = error
+
+    if should_use_ocr(text, draft):
+        ocr_text, ocr_method = ocr_pdf_bytes(content)
+        if ocr_text and ocr_method not in {"ocr_unavailable", "ocr_failed"}:
+            try:
+                return parse_purchase_order_text(
+                    ocr_text,
+                    source_name=filename,
+                    template_rules=template_rules,
+                )
+            except PdfParseError as error:
+                parse_error = error
+
+    if draft is not None:
+        return draft
+    if parse_error is not None:
+        raise parse_error
+    return parse_purchase_order_text(
+        text or "",
+        source_name=filename,
+        template_rules=template_rules,
+    )
+
+
 @router.post("/pdf-preview")
 async def preview_order_pdf(
     file: UploadFile = File(...),
@@ -672,12 +716,7 @@ async def preview_order_pdf(
         raise HTTPException(status_code=400, detail="上传的 PDF 为空")
     template_rules = load_active_pdf_template_rules(db)
     try:
-        text = extract_text_from_pdf_bytes(content)
-        draft = parse_purchase_order_text(
-            text,
-            source_name=filename,
-            template_rules=template_rules,
-        )
+        draft = _parse_order_pdf_preview(content, filename, template_rules)
         draft["file_hash"] = file_sha256(content)
         return match_import_draft(db, draft)
     except PdfParseError as error:
@@ -722,12 +761,7 @@ async def preview_order_pdf_batch(
                 )
                 continue
             seen_hashes.add(digest)
-            text = extract_text_from_pdf_bytes(content)
-            draft = parse_purchase_order_text(
-                text,
-                source_name=filename,
-                template_rules=template_rules,
-            )
+            draft = _parse_order_pdf_preview(content, filename, template_rules)
             draft["file_hash"] = digest
             drafts.append(match_import_draft(db, draft))
         except PdfParseError as error:

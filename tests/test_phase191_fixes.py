@@ -367,6 +367,36 @@ class TestOcrUnavailableNocrash(unittest.TestCase):
 
 
 class TestGaotaiTemplateRules(unittest.TestCase):
+    def test_gaotai_generic_keyword_does_not_capture_tianhua_contract(self):
+        from app.services.order_pdf_import import (
+            detect_pdf_customer_by_template,
+            parse_purchase_order_text,
+        )
+        from app.services.pdf_customer_templates import GAOTAI_TEMPLATE_RULE
+
+        text = """
+采购合同
+苏州天华超净科技有限公司
+PO2026050269
+苏州天明包装有限公司
+行号 料品编码 物料名称 规格型号 单位 数量 含税单价 价税合计 交货日期
+10 21312009 中性内箱 28.5*19.5*5.5cm 个 25.00000 5.410000 135.25 2026.06.25
+合计 25.00000 135.25
+"""
+        rules = [dict(GAOTAI_TEMPLATE_RULE)]
+
+        self.assertIsNone(detect_pdf_customer_by_template(text, rules))
+        result = parse_purchase_order_text(text, "tianhua-contract.pdf", template_rules=rules)
+
+        self.assertEqual(result["customer_name"], "苏州天华超净科技有限公司")
+        self.assertEqual(result["customer_type"], "tianhua_chao")
+        self.assertEqual(result["customer_po"], "PO2026050269")
+        self.assertGreater(len(result["items"]), 0)
+        self.assertNotIn(
+            result.get("recognition_status"),
+            {"missing_customer_template", "ocr_required", "failed"},
+        )
+
     def test_normalize_gaotai_product_code(self):
         from app.services.order_pdf_import import normalize_gaotai_product_code
 

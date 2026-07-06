@@ -147,11 +147,21 @@ def detect_pdf_customer_by_template(
     full_text = (text or "").lower()
     for rule in template_rules or []:
         customer_name = str(rule.get("customer_name") or "").strip()
-        candidates = [customer_name]
-        candidates.extend(str(value or "").strip() for value in (rule.get("aliases") or []))
-        candidates.extend(str(value or "").strip() for value in (rule.get("keywords") or []))
-        candidates = [value for value in candidates if value]
-        if any(candidate.lower() in full_text for candidate in candidates):
+        identity_candidates = [customer_name]
+        identity_candidates.extend(str(value or "").strip() for value in (rule.get("aliases") or []))
+        identity_candidates = [value for value in identity_candidates if value]
+        keywords = [
+            str(value or "").strip()
+            for value in (rule.get("keywords") or [])
+            if str(value or "").strip()
+        ]
+        identity_matched = any(candidate.lower() in full_text for candidate in identity_candidates)
+        keyword_only_matched = (
+            not identity_candidates
+            and bool(keywords)
+            and all(keyword.lower() in full_text for keyword in keywords)
+        )
+        if identity_matched or keyword_only_matched:
             return {
                 "customer_name": customer_name or None,
                 "customer_type": rule.get("customer_type") or "unknown",
@@ -189,6 +199,9 @@ def apply_customer_template_postprocess(
 ) -> dict:
     output = json.loads(json.dumps(result, ensure_ascii=False, default=str))
     warnings = list(output.get("warnings") or [])
+    if output.get("customer_type") in ("tianhua_chao", "tianhua_energy"):
+        output["warnings"] = warnings
+        return output
     effective_rules = template_rules or [
         {
             "customer_name": "苏州高泰电子技术股份有限公司",
@@ -969,13 +982,18 @@ def parse_purchase_order_text(
 
     # 提取客户名
     customer_name = _extract_customer_name(lines, customer_po)
-    if template_match and template_match.get("customer_name"):
-        customer_name = template_match["customer_name"]
-    customer_type = (
-        template_match.get("customer_type")
-        if template_match and template_match.get("customer_type") not in (None, "", "unknown")
-        else _detect_customer_type(customer_name, customer_po, text)
-    )
+    detected_customer_type = _detect_customer_type(customer_name, customer_po, text)
+    if detected_customer_type in ("tianhua_chao", "tianhua_energy"):
+        template_match = None
+        customer_type = detected_customer_type
+    else:
+        if template_match and template_match.get("customer_name"):
+            customer_name = template_match["customer_name"]
+        customer_type = (
+            template_match.get("customer_type")
+            if template_match and template_match.get("customer_type") not in (None, "", "unknown")
+            else detected_customer_type
+        )
     is_tianhua = customer_type in ("tianhua_chao", "tianhua_energy")
 
     # 思迈尔：识别到但无模板，明确返回状态

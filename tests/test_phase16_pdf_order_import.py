@@ -276,6 +276,16 @@ def _order_import_app(tmp_path: Path):
         )
         session.add(customer)
         session.flush()
+        gaotai_customer = Customer(
+            id=46,
+            customer_number=46,
+            customer_code="GT",
+            name="苏州高泰电子技术股份有限公司",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        session.add(gaotai_customer)
+        session.flush()
         session.add_all(
             [
                 Product(
@@ -290,6 +300,27 @@ def _order_import_app(tmp_path: Path):
                     product_code="21308002",
                     customer_material_code="21308002",
                     product_name="衬板",
+                    box_category="normal",
+                ),
+                Product(
+                    customer_id=gaotai_customer.id,
+                    product_code="3D90078",
+                    customer_material_code="3D90078",
+                    product_name="纸箱615*460*375",
+                    box_category="normal",
+                ),
+                Product(
+                    customer_id=gaotai_customer.id,
+                    product_code="3D90095",
+                    customer_material_code="3D90095纸箱460*305*225",
+                    product_name="纸箱460*305*225",
+                    box_category="normal",
+                ),
+                Product(
+                    customer_id=gaotai_customer.id,
+                    product_code="3D30268",
+                    customer_material_code="3.D30268",
+                    product_name="纸箱190*190*160",
                     box_category="normal",
                 ),
             ]
@@ -354,12 +385,6 @@ def test_pdf_preview_uses_ocr_fallback_for_gaotai_image_pdf(
         "ocr_pdf_bytes",
         lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
     )
-    monkeypatch.setattr(
-        orders_api,
-        "match_import_draft",
-        lambda _db, draft: {**draft, "matched_customer_id": 46},
-    )
-
     with TestClient(app) as client:
         client.post(
             "/api/auth/login",
@@ -380,6 +405,18 @@ def test_pdf_preview_uses_ocr_fallback_for_gaotai_image_pdf(
         "3D90095",
         "3D30268",
     ]
+    assert [item["raw_product_code"] for item in body["items"][:3]] == [
+        "3090078",
+        "3090095",
+        "3030268",
+    ]
+    assert [item["normalized_product_code"] for item in body["items"][:3]] == [
+        "3D90078",
+        "3D90095",
+        "3D30268",
+    ]
+    assert all(item["matched_product_id"] for item in body["items"][:3])
+    assert all(item["match_status"] == "matched" for item in body["items"][:3])
     assert any("3090078" in warning and "3D90078" in warning for warning in body["warnings"])
 
 

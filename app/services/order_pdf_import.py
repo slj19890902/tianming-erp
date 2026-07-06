@@ -1156,8 +1156,17 @@ def _product_spec(product: Product) -> str | None:
     return "×".join(format(value, "f").rstrip("0").rstrip(".") for value in values) + "mm"
 
 
+def _preferred_item_product_code(item: dict) -> str:
+    return str(
+        item.get("normalized_product_code")
+        or item.get("product_code")
+        or item.get("raw_product_code")
+        or ""
+    )
+
+
 def _score_product(product: Product, item: dict) -> int:
-    code = _normalized_text(item.get("raw_product_code") or item.get("product_code"))
+    code = _normalized_text(_preferred_item_product_code(item))
     name = _normalized_text(item.get("raw_product_name") or item.get("product_name"))
     spec = _normalized_text(item.get("raw_spec_model") or item.get("specification"))
     material = _normalized_text(item.get("raw_material"))
@@ -1355,7 +1364,7 @@ def _merge_same_product_code(items: list[dict]) -> list[dict]:
 
     def _merge_key(item: dict):
         return (
-            _normalized_text(item.get("raw_product_code") or ""),
+            _normalized_text(_preferred_item_product_code(item)),
             str(item.get("matched_product_id") or ""),
             str(item.get("unit_price") or ""),
             str(item.get("delivery_date") or ""),
@@ -1365,7 +1374,7 @@ def _merge_same_product_code(items: list[dict]) -> list[dict]:
     order_keys: list[tuple] = []
     for item in items:
         k = _merge_key(item)
-        code = _normalized_text(item.get("raw_product_code") or "")
+        code = _normalized_text(_preferred_item_product_code(item))
         if not code:
             # 没有存货编码的行不合并
             groups.setdefault(id(item), []).append(item)  # type: ignore[arg-type]
@@ -1421,7 +1430,7 @@ def _lines_signature(items: list[dict]) -> str:
     rows = [
         "|".join(
             [
-                _normalized_text(item.get("raw_product_code") or item.get("product_code")),
+                _normalized_text(_preferred_item_product_code(item)),
                 _normalized_text(item.get("raw_spec_model") or item.get("specification")),
                 str(item.get("quantity") or ""),
                 str(item.get("unit_price") or ""),

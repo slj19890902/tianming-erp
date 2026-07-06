@@ -2045,7 +2045,7 @@
                       <td style="padding:4px 6px;vertical-align:top">
                         <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
                           <input v-if="item.is_new_product" class="input compact-input" style="width:110px" v-model.trim="item.raw_product_code" placeholder="存货编码" />
-                          <span v-else class="sys-num" style="font-size:12px;font-weight:600">{{ item.raw_product_code || "-" }}</span>
+                          <span v-else class="sys-num" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
                         </div>
                         <!-- 名称：匹配常用箱时显示常用箱名称，否则 PDF 名称 -->
                         <div v-if="item.matched_product_id && !item.is_new_product" style="font-size:13px">
@@ -5818,7 +5818,7 @@
               items: (draft.items || []).map(item => ({
                 product_id: item.is_new_product ? null : (item.matched_product_id || null),
                 is_new_product: !!item.is_new_product,
-                product_code: item.raw_product_code || "",
+                product_code: item.normalized_product_code || item.product_code || item.raw_product_code || "",
                 // 名称以常用箱为准
                 product_name: (!item.is_new_product && item.product_name) ? item.product_name : (item.raw_product_name || ""),
                 material_id: item.matched_material_id || null,
@@ -5877,7 +5877,7 @@
                         product_id: item.is_new_product ? null : (item.matched_product_id || null),
                         is_new_product: !!item.is_new_product,
                         material_id: item.matched_material_id || null,
-                        product_code: item.raw_product_code || null,
+                        product_code: item.normalized_product_code || item.product_code || item.raw_product_code || null,
                         product_name: (useStd && item.product_name) ? item.product_name : (item.raw_product_name || null),
                         material: matCode,
                         specification: (useStd && item.specification) ? item.specification : (item.raw_spec_model || null),

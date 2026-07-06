@@ -416,6 +416,8 @@ PO2026050269
         }
         result = apply_customer_template_postprocess(gaotai, "苏州高泰电子技术股份有限公司")
         self.assertEqual(result["items"][0]["product_code"], "3D90078")
+        self.assertEqual(result["items"][0]["raw_product_code"], "3090078")
+        self.assertEqual(result["items"][0]["normalized_product_code"], "3D90078")
         self.assertTrue(any("3090078" in warning and "3D90078" in warning for warning in result["warnings"]))
 
         tianhua = {
@@ -444,6 +446,14 @@ PO2026050269
         self.assertEqual(result["customer_po"], "0100-CG260624-02")
         self.assertEqual(
             [item["product_code"] for item in result["items"][:3]],
+            ["3D90078", "3D90095", "3D30268"],
+        )
+        self.assertEqual(
+            [item["raw_product_code"] for item in result["items"][:3]],
+            ["3090078", "3090095", "3030268"],
+        )
+        self.assertEqual(
+            [item["normalized_product_code"] for item in result["items"][:3]],
             ["3D90078", "3D90095", "3D30268"],
         )
         self.assertTrue(any("3D90078" in warning for warning in result["warnings"]))

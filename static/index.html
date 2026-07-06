@@ -2860,6 +2860,14 @@
                   <label>解析器结果 JSON</label>
                   <textarea class="textarea" readonly rows="5" style="font-family:monospace;font-size:11px">{{ pdfSampleDetail.parser_result_json ? JSON.stringify(JSON.parse(pdfSampleDetail.parser_result_json),null,2) : '（解析失败或无结果）' }}</textarea>
                 </div>
+                <div class="field wide" v-if="pdfParsedResult && pdfParsedResult.warnings && pdfParsedResult.warnings.length">
+                  <label>模板规则 / 解析警告</label>
+                  <div style="background:#fefce8;border:1px solid #facc15;border-radius:6px;padding:8px 12px">
+                    <div v-for="(warning, index) in pdfParsedResult.warnings" :key="`pdf-warning-${index}`" style="font-size:12px;color:#854d0e;line-height:1.6">
+                      {{ warning }}
+                    </div>
+                  </div>
+                </div>
 
                 <!-- PDF 分类标签 + 不支持格式说明 -->
                 <div class="field wide" v-if="pdfSampleDetail.parser_result_json && pdfParsedResult">

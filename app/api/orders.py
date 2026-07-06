@@ -57,6 +57,7 @@ from app.services.order_pdf_import import (
     match_import_draft,
     parse_purchase_order_text,
 )
+from app.services.pdf_customer_templates import load_active_pdf_template_rules
 from app.services.product_import import (
     NewProductError,
     NewProductInput,
@@ -669,9 +670,14 @@ async def preview_order_pdf(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="上传的 PDF 为空")
+    template_rules = load_active_pdf_template_rules(db)
     try:
         text = extract_text_from_pdf_bytes(content)
-        draft = parse_purchase_order_text(text, source_name=filename)
+        draft = parse_purchase_order_text(
+            text,
+            source_name=filename,
+            template_rules=template_rules,
+        )
         draft["file_hash"] = file_sha256(content)
         return match_import_draft(db, draft)
     except PdfParseError as error:
@@ -692,6 +698,7 @@ async def preview_order_pdf_batch(
         raise HTTPException(status_code=400, detail="请至少上传一个 PDF 文件")
     drafts: list[dict] = []
     seen_hashes: set[str] = set()
+    template_rules = load_active_pdf_template_rules(db)
     for file in files:
         filename = (file.filename or "uploaded.pdf").strip()
         try:
@@ -716,7 +723,11 @@ async def preview_order_pdf_batch(
                 continue
             seen_hashes.add(digest)
             text = extract_text_from_pdf_bytes(content)
-            draft = parse_purchase_order_text(text, source_name=filename)
+            draft = parse_purchase_order_text(
+                text,
+                source_name=filename,
+                template_rules=template_rules,
+            )
             draft["file_hash"] = digest
             drafts.append(match_import_draft(db, draft))
         except PdfParseError as error:

@@ -50,6 +50,7 @@ from app.services.order_pdf_import import (
     file_sha256,
     parse_purchase_order_text,
 )
+from app.services.pdf_customer_templates import load_active_pdf_template_rules
 from app.services.pdf_ocr import ocr_available, ocr_engine_name, ocr_pdf_bytes, should_use_ocr
 from app.services.pdf_scoring import compute_stats, score_sample
 
@@ -342,6 +343,7 @@ async def upload_sample(
 
     content = await file.read()
     sha = file_sha256(content)
+    template_rules = load_active_pdf_template_rules(db)
 
     # 重复上传检测
     existing = db.query(PdfOrderTrainingSample).filter(
@@ -362,7 +364,11 @@ async def upload_sample(
         extracted_text = extract_text_from_pdf_bytes(content)
         if extracted_text and extracted_text.strip():
             try:
-                parse_result = parse_purchase_order_text(extracted_text)
+                parse_result = parse_purchase_order_text(
+                    extracted_text,
+                    source_name=file.filename,
+                    template_rules=template_rules,
+                )
                 parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
                 parse_method = "text"
             except ValueError:
@@ -380,7 +386,11 @@ async def upload_sample(
             # 尝试用 OCR 文本重新解析
             if parse_result is None or not parse_result.get("items"):
                 try:
-                    ocr_parse = parse_purchase_order_text(ocr_text)
+                    ocr_parse = parse_purchase_order_text(
+                        ocr_text,
+                        source_name=file.filename,
+                        template_rules=template_rules,
+                    )
                     parser_result_json = json.dumps(ocr_parse, ensure_ascii=False, default=str)
                     parse_result = ocr_parse
                     # 如果原文本解析也部分成功，标记为 mixed；否则纯 OCR

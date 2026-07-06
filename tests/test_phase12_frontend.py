@@ -178,3 +178,8 @@ def test_pdf_training_sample_list_uses_safe_page_number() -> None:
     assert "const normalizedPage = Number.parseInt(page, 10);" in INDEX
     assert "const safePage = Number.isInteger(normalizedPage) && normalizedPage > 0 ? normalizedPage : 1;" in INDEX
     assert "const offset = (safePage - 1) * 50;" in INDEX
+
+
+def test_pdf_training_detail_shows_template_rule_warnings() -> None:
+    assert "模板规则 / 解析警告" in INDEX
+    assert "pdfParsedResult.warnings && pdfParsedResult.warnings.length" in INDEX

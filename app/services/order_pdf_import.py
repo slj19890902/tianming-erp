@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from decimal import Decimal
 from io import BytesIO
@@ -35,7 +36,7 @@ class PdfParseError(ValueError):
 
 # v0.19.1: 扩展支持思迈尔 P-XXXXXXX(-N) 格式
 ORDER_NO_RE = re.compile(
-    r"\b((?:THPO|PO)[A-Z0-9-]{6,}|P-\d{7}(?:-\d+)?)\b",
+    r"\b((?:THPO|PO)[A-Z0-9-]{6,}|P-\d{7}(?:-\d+)?|\d{4}-CG\d{6}-\d{2})\b",
     re.IGNORECASE,
 )
 DATE_RE = re.compile(r"\b(20\d{2})[-/.](\d{2})[-/.](\d{2})\b")
@@ -94,6 +95,7 @@ PACKAGING_ANNOTATION_RE = re.compile(
 CUSTOMER_TYPES = {
     "tianhua_chao":   "天华超净（苏州天华超净有限公司）",
     "tianhua_energy": "天华新能源（苏州天华新能源科技股份有限公司）",
+    "gaotai":         "高泰（苏州高泰电子技术股份有限公司）",
     "simair":         "思迈尔（苏州思迈尔电子设备有限公司）",
     "tianming":       "天明（苏州天明包装有限公司）",
     "unknown":        "未识别客户",
@@ -123,6 +125,9 @@ def _detect_customer_type(
         return "simair"
     if re.match(r"P-\d{7}", po):
         return "simair"
+    # 高泰
+    if "高泰" in name or "高泰" in full_text:
+        return "gaotai"
     # 天明（天明 PDF 通常是销售方向，不是采购订单）
     if "天明" in name or "天明" in full_text:
         return "tianming"
@@ -133,6 +138,109 @@ def _is_tianhua_customer(customer_name: str | None, customer_po: str | None = No
     """判断是否是天华系客户（超净或新能源）。"""
     ct = _detect_customer_type(customer_name, customer_po)
     return ct in ("tianhua_chao", "tianhua_energy")
+
+
+def detect_pdf_customer_by_template(
+    text: str,
+    template_rules: list[dict] | None = None,
+) -> dict | None:
+    full_text = (text or "").lower()
+    for rule in template_rules or []:
+        customer_name = str(rule.get("customer_name") or "").strip()
+        candidates = [customer_name]
+        candidates.extend(str(value or "").strip() for value in (rule.get("aliases") or []))
+        candidates.extend(str(value or "").strip() for value in (rule.get("keywords") or []))
+        candidates = [value for value in candidates if value]
+        if any(candidate.lower() in full_text for candidate in candidates):
+            return {
+                "customer_name": customer_name or None,
+                "customer_type": rule.get("customer_type") or "unknown",
+                "template_name": rule.get("template_name"),
+                "rule": rule,
+            }
+        pattern = rule.get("customer_name_pattern")
+        if pattern:
+            try:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return {
+                        "customer_name": customer_name or None,
+                        "customer_type": rule.get("customer_type") or "unknown",
+                        "template_name": rule.get("template_name"),
+                        "rule": rule,
+                    }
+            except re.error:
+                continue
+    return None
+
+
+def normalize_gaotai_product_code(code: str) -> tuple[str, str | None]:
+    raw = (code or "").strip()
+    match = re.fullmatch(r"30(\d{5})", raw, re.IGNORECASE)
+    if not match:
+        return raw, None
+    normalized = f"3D{match.group(1)}"
+    return normalized, f"高泰存货编码由 {raw} 按模板规则修正为 {normalized}"
+
+
+def apply_customer_template_postprocess(
+    result: dict,
+    raw_text: str,
+    template_rules: list[dict] | None = None,
+) -> dict:
+    output = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    warnings = list(output.get("warnings") or [])
+    effective_rules = template_rules or [
+        {
+            "customer_name": "苏州高泰电子技术股份有限公司",
+            "customer_type": "gaotai",
+            "aliases": ["高泰电子", "苏州高泰"],
+            "keywords": ["采购合同", "苏州高泰电子技术股份有限公司"],
+            "item_code_rules": [
+                {
+                    "name": "gaotai_3d_code",
+                    "pattern": r"^30(\d{5})$",
+                    "replace": r"3D\1",
+                    "reason": "高泰存货编码应为 3D + 5位数字，OCR 易把 D 识别成 0",
+                }
+            ],
+        }
+    ]
+    matched = detect_pdf_customer_by_template(raw_text, effective_rules)
+    if matched:
+        if matched.get("customer_name"):
+            output["customer_name"] = matched["customer_name"]
+            if not output.get("customer_name_raw"):
+                output["customer_name_raw"] = matched["customer_name"]
+        if matched.get("customer_type") and output.get("customer_type") in (None, "", "unknown"):
+            output["customer_type"] = matched["customer_type"]
+        output["template_name"] = matched.get("template_name")
+
+    if output.get("customer_type") != "gaotai":
+        output["warnings"] = warnings
+        return output
+
+    item_code_rules = []
+    if matched and isinstance(matched.get("rule"), dict):
+        item_code_rules = matched["rule"].get("item_code_rules") or []
+
+    correction_notes: list[str] = []
+    for index, item in enumerate(output.get("items") or [], start=1):
+        original_code = str(item.get("product_code") or "").strip()
+        normalized_code = original_code
+        correction_note = None
+        if item_code_rules:
+            normalized_code, correction_note = normalize_gaotai_product_code(original_code)
+        if correction_note and normalized_code and normalized_code != original_code:
+            item["raw_product_code"] = item.get("raw_product_code") or original_code
+            item["normalized_product_code"] = normalized_code
+            item["product_code"] = normalized_code
+            correction_notes.append(f"第{index}行存货编码由 {original_code} 按高泰规则修正为 {normalized_code}")
+
+    warnings.extend(correction_notes)
+    output["warnings"] = warnings
+    if correction_notes:
+        output["template_corrections"] = correction_notes
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +368,18 @@ def _normalize_date(raw: str | None) -> str | None:
     return f"{match.group(1)}-{match.group(2)}-{match.group(3)}" if match else None
 
 
+def _extract_gaotai_order_no(text: str) -> str | None:
+    patterns = [
+        r"合同号[/／]?[PO0Oo]?\s*[:：]\s*([0-9A-Z-]{8,})",
+        r"\b(\d{4}-CG\d{6}-\d{2})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return None
+
+
 def _decimal_to_str(raw: str, places: str) -> str:
     return format(Decimal(raw.replace(",", "")).quantize(Decimal(places)), "f")
 
@@ -359,6 +479,71 @@ def _split_records(lines: list[str]) -> tuple[list[list[str]], bool, bool]:
     if current and current not in records:
         records.append(current)
     return records, has_extra_columns, header_found
+
+
+def _parse_gaotai_items(text: str) -> list[dict]:
+    code_matches = list(re.finditer(r"\b3[0D]\d{5}\b", text, re.IGNORECASE))
+    items: list[dict] = []
+    for index, match in enumerate(code_matches, start=1):
+        start = match.start()
+        end = code_matches[index].start() if index < len(code_matches) else len(text)
+        segment = text[start:end]
+        segment = segment.split("合计", 1)[0].strip()
+        if not segment:
+            continue
+        code = match.group(0).upper()
+        body = segment[len(match.group(0)):].strip()
+        if not body:
+            continue
+        delivery_matches = list(DATE_RE.finditer(segment))
+        delivery_date = None
+        body_without_date = body
+        if delivery_matches:
+            last_date = delivery_matches[-1]
+            delivery_date = _normalize_date(last_date.group(0))
+            body_without_date = body.replace(last_date.group(0), " ").strip()
+        tokens = [token for token in re.split(r"\s+", body_without_date) if token]
+        if not tokens:
+            continue
+        product_name = tokens[0]
+        unit = "Pcs" if any(token.lower() == "pcs" for token in tokens) else ""
+        quantity = None
+        if unit:
+            for pos, token in enumerate(tokens):
+                if token.lower() == "pcs" and pos > 0 and re.fullmatch(r"\d+(?:\.\d+)?", tokens[pos - 1]):
+                    quantity = tokens[pos - 1]
+                    break
+        if quantity is None:
+            for token in tokens[1:]:
+                if re.fullmatch(r"\d+(?:\.\d+)?", token):
+                    quantity = token
+                    break
+        spec_tokens: list[str] = []
+        quantity_consumed = False
+        for token in tokens[1:]:
+            if delivery_date and DATE_RE.fullmatch(token):
+                continue
+            if unit and token.lower() == "pcs":
+                break
+            if quantity and token == quantity and not quantity_consumed:
+                quantity_consumed = True
+                continue
+            spec_tokens.append(token)
+        items.append(
+            {
+                "line_no": index,
+                "product_code": code,
+                "product_name": product_name,
+                "specification": " ".join(spec_tokens).strip(),
+                "raw_spec_model": " ".join(spec_tokens).strip(),
+                "quantity": quantity or "",
+                "unit": unit or "",
+                "unit_price": "",
+                "amount": "",
+                "delivery_date": delivery_date,
+            }
+        )
+    return items
 
 
 def _find_spec_start_outside_parens(text: str) -> int | None:
@@ -755,7 +940,11 @@ def _classify_pdf(
 # 主解析入口
 # ---------------------------------------------------------------------------
 
-def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict:
+def parse_purchase_order_text(
+    text: str,
+    source_name: str | None = None,
+    template_rules: list[dict] | None = None,
+) -> dict:
     lines = [_clean_line(line) for line in text.splitlines() if _clean_line(line)]
     if not lines:
         # 无可提取文字：通常是图片型/字体未映射，需 OCR
@@ -764,13 +953,29 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
             "ocr_required" if ocr_available() else "ocr_unavailable",
         )
     order_match = ORDER_NO_RE.search(text)
+    template_match = detect_pdf_customer_by_template(text, template_rules)
+    if not order_match and template_match and template_match.get("customer_type") == "gaotai":
+        gaotai_order_no = _extract_gaotai_order_no(text)
+        if gaotai_order_no:
+            class _SimpleMatch:
+                def __init__(self, value: str) -> None:
+                    self._value = value
+                def group(self, _index: int) -> str:
+                    return self._value
+            order_match = _SimpleMatch(gaotai_order_no)
     if not order_match:
         raise PdfParseError("未识别到采购订单号。", "order_no_not_recognized")
     customer_po = order_match.group(1).upper()
 
     # 提取客户名
     customer_name = _extract_customer_name(lines, customer_po)
-    customer_type = _detect_customer_type(customer_name, customer_po, text)
+    if template_match and template_match.get("customer_name"):
+        customer_name = template_match["customer_name"]
+    customer_type = (
+        template_match.get("customer_type")
+        if template_match and template_match.get("customer_type") not in (None, "", "unknown")
+        else _detect_customer_type(customer_name, customer_po, text)
+    )
     is_tianhua = customer_type in ("tianhua_chao", "tianhua_energy")
 
     # 思迈尔：识别到但无模板，明确返回状态
@@ -825,11 +1030,16 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
         )
 
     records, has_extra_columns, header_found = _split_records(lines)
+    gaotai_items = []
+    if customer_type == "gaotai":
+        gaotai_items = _parse_gaotai_items(text)
+        if gaotai_items:
+            header_found = True
     if not header_found:
         raise PdfParseError("未识别到订单明细表头。", "header_not_recognized")
-    if not records:
+    if not records and not gaotai_items:
         raise PdfParseError("识别到表头但无法切分出订单明细行。", "items_not_split")
-    items_raw = [
+    items_raw = gaotai_items or [
         item
         for record in records
         if (item := _parse_record(record, has_extra_columns=has_extra_columns))
@@ -872,7 +1082,7 @@ def parse_purchase_order_text(text: str, source_name: str | None = None) -> dict
         "is_tianhua": is_tianhua,
         "has_extra_columns": has_extra_columns,
     }
-    return result
+    return apply_customer_template_postprocess(result, text, template_rules=template_rules)
 
 
 # ---------------------------------------------------------------------------

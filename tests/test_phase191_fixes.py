@@ -305,6 +305,11 @@ class TestCustomerTypeDetect(unittest.TestCase):
         ct = _detect_customer_type("某某纸箱有限公司", "SO-12345")
         self.assertEqual(ct, "unknown")
 
+    def test_gaotai_detected_by_name(self):
+        """含'高泰'的客户名应识别为 gaotai。"""
+        ct = _detect_customer_type("苏州高泰电子技术股份有限公司", None)
+        self.assertEqual(ct, "gaotai")
+
 
 class TestSimairMissingTemplate(unittest.TestCase):
     """思迈尔缺少完整模板时返回明确失败原因。"""
@@ -359,6 +364,59 @@ class TestOcrUnavailableNocrash(unittest.TestCase):
         garbled = "Lorem ipsum dolor sit amet xyz abc ??? !!!"
         result = should_use_ocr(garbled, None)
         self.assertIsInstance(result, bool)
+
+
+class TestGaotaiTemplateRules(unittest.TestCase):
+    def test_normalize_gaotai_product_code(self):
+        from app.services.order_pdf_import import normalize_gaotai_product_code
+
+        self.assertEqual(normalize_gaotai_product_code("3090078")[0], "3D90078")
+        self.assertEqual(normalize_gaotai_product_code("3090095")[0], "3D90095")
+        self.assertEqual(normalize_gaotai_product_code("3030268")[0], "3D30268")
+        self.assertEqual(normalize_gaotai_product_code("3D90078")[0], "3D90078")
+
+    def test_apply_gaotai_postprocess_only_for_gaotai(self):
+        from app.services.order_pdf_import import apply_customer_template_postprocess
+
+        gaotai = {
+            "customer_name": "苏州高泰电子技术股份有限公司",
+            "customer_type": "gaotai",
+            "items": [{"product_code": "3090078"}],
+            "warnings": [],
+        }
+        result = apply_customer_template_postprocess(gaotai, "苏州高泰电子技术股份有限公司")
+        self.assertEqual(result["items"][0]["product_code"], "3D90078")
+        self.assertTrue(any("3090078" in warning and "3D90078" in warning for warning in result["warnings"]))
+
+        tianhua = {
+            "customer_name": "苏州天华新能源科技股份有限公司",
+            "customer_type": "tianhua_energy",
+            "items": [{"product_code": "3090078"}],
+            "warnings": [],
+        }
+        untouched = apply_customer_template_postprocess(tianhua, "苏州天华新能源科技股份有限公司")
+        self.assertEqual(untouched["items"][0]["product_code"], "3090078")
+
+    def test_gaotai_ocr_snippet_can_produce_corrected_items(self):
+        from app.services.order_pdf_import import parse_purchase_order_text
+
+        text = """
+苏州高泰电子技术股份有限公司 采购合同 苏州工业园区天明纸品包装厂
+合同号/0 : 0100-CG260624-02 日期/0ate: 2026/6/24
+序号 产品编号 名称 规格 数量 单位 单价(含税) 金额 税率 交货期 备注
+3090078 纸箱 SSII 50 510.00 13.00 2026-5-26
+3090095 纸箱 2SII 500 Pcs 2950.00 13.00 2026-6-26
+3030268 纸箱 190*160 2000 Pcs 13.00 2026-6-26
+合计
+"""
+        result = parse_purchase_order_text(text, "gaotai.pdf")
+        self.assertEqual(result["customer_type"], "gaotai")
+        self.assertEqual(result["customer_po"], "0100-CG260624-02")
+        self.assertEqual(
+            [item["product_code"] for item in result["items"][:3]],
+            ["3D90078", "3D90095", "3D30268"],
+        )
+        self.assertTrue(any("3D90078" in warning for warning in result["warnings"]))
         # 中文率 = 0% < 1%，应触发 OCR
         self.assertTrue(result, "纯 ASCII 文本中文率=0，应触发 OCR")
 

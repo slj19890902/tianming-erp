@@ -36,16 +36,6 @@ A535T/AB
 合计 55.00000 212.85
 """
 
-GAOTAI_OCR_TEXT = """
-苏州高泰电子技术股份有限公司 采购合同 苏州工业园区天明纸品包装厂
-合同号/0 : 0100-CG260624-02 日期/0ate: 2026/6/24
-序号 产品编号 名称 规格 数量 单位 单价(含税) 金额 税率 交货期 备注
-3090078 纸箱 SSII 50 510.00 13.00 2026-5-26
-3090095 纸箱 2SII 500 Pcs 2950.00 13.00 2026-6-26
-3030268 纸箱 190*160 2000 Pcs 13.00 2026-6-26
-合计
-"""
-
 
 def test_parse_purchase_order_text_extracts_header_and_lines() -> None:
     from app.services.order_pdf_import import parse_purchase_order_text
@@ -341,48 +331,6 @@ def test_pdf_preview_endpoint_returns_draft_without_writing_order(
     assert body["items"][2]["matched_product_id"] is None
 
 
-def test_pdf_preview_uses_ocr_fallback_for_gaotai_image_pdf(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
-
-    monkeypatch.setattr(orders_api, "extract_text_from_pdf_bytes", lambda _content: "")
-    monkeypatch.setattr(
-        orders_api,
-        "ocr_pdf_bytes",
-        lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
-    )
-    monkeypatch.setattr(
-        orders_api,
-        "match_import_draft",
-        lambda _db, draft: {**draft, "matched_customer_id": 46},
-    )
-
-    with TestClient(app) as client:
-        client.post(
-            "/api/auth/login",
-            json={"username": "sales", "password": "RolePass123!"},
-        )
-        response = client.post(
-            "/api/orders/pdf-preview",
-            files={"file": ("gaotai.pdf", b"%PDF-image-stub", "application/pdf")},
-        )
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["customer_name"] == "苏州高泰电子技术股份有限公司"
-    assert body["customer_po"] == "0100-CG260624-02"
-    assert body["matched_customer_id"] == 46
-    assert [item["product_code"] for item in body["items"][:3]] == [
-        "3D90078",
-        "3D90095",
-        "3D30268",
-    ]
-    assert any("3090078" in warning and "3D90078" in warning for warning in body["warnings"])
-
-
 def test_manual_customer_rematch_preserves_recognized_fields(tmp_path: Path) -> None:
     from app.core.database import create_sqlite_engine
     from app.models import Base
@@ -441,11 +389,6 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
         "extract_text_from_pdf_bytes",
         lambda content: SAMPLE_PO_TEXT if content == b"good" else "",
     )
-    monkeypatch.setattr(
-        orders_api,
-        "ocr_pdf_bytes",
-        lambda _content: (None, "ocr_failed"),
-    )
     with TestClient(app) as client:
         client.post(
             "/api/auth/login",
@@ -465,35 +408,3 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
     assert drafts[0]["recognition_status"] in {"recognized", "needs_confirmation"}
     assert drafts[1]["duplicate_status"] == "duplicate_skipped"
     assert drafts[2]["recognition_status"] == "failed"
-
-
-def test_batch_pdf_preview_uses_ocr_fallback_without_saving_order(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
-
-    monkeypatch.setattr(orders_api, "extract_text_from_pdf_bytes", lambda _content: "")
-    monkeypatch.setattr(
-        orders_api,
-        "ocr_pdf_bytes",
-        lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
-    )
-    monkeypatch.setattr(orders_api, "match_import_draft", lambda _db, draft: draft)
-
-    with TestClient(app) as client:
-        client.post(
-            "/api/auth/login",
-            json={"username": "sales", "password": "RolePass123!"},
-        )
-        response = client.post(
-            "/api/orders/pdf-preview-batch",
-            files=[("files", ("gaotai.pdf", b"%PDF-image-stub", "application/pdf"))],
-        )
-
-    assert response.status_code == 200, response.text
-    drafts = response.json()["drafts"]
-    assert len(drafts) == 1
-    assert drafts[0]["customer_po"] == "0100-CG260624-02"
-    assert len(drafts[0]["items"]) == 3

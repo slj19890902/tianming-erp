@@ -462,26 +462,26 @@
       const revertButton = event.target.closest("[data-revert]");
       if (drawingButton) {
         event.stopPropagation();
-        openDrawing(Number(drawingButton.dataset.drawing));
+        openDrawing(drawingButton.dataset.drawing);
         return;
       }
       if (receiveButton) {
         event.stopPropagation();
-        receive(Number(receiveButton.dataset.receive));
+        receive(receiveButton.dataset.receive);
         return;
       }
       if (revertButton) {
         event.stopPropagation();
-        openRevert(Number(revertButton.dataset.revert));
+        openRevert(revertButton.dataset.revert);
         return;
       }
       const card = event.target.closest("[data-detail]");
-      if (card) toggleExpand(Number(card.dataset.detail));
+      if (card) toggleExpand(card.dataset.detail);
     });
     $("cardList").addEventListener("input", (event) => {
       const input = event.target.closest("[data-quantity]");
       if (!input) return;
-      const item = findItem(Number(input.dataset.quantity));
+      const item = findItem(input.dataset.quantity);
       if (item) item.incoming_quantity = Number(input.value);
     });
 

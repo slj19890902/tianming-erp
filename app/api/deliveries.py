@@ -17,6 +17,7 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.requisition import RequisitionItem
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation
 from app.services.history_orders import build_display_registry, display_order_number
@@ -38,6 +39,49 @@ def _print_product_code(value: str | None) -> str:
     if not text:
         return ""
     return re.split(r"\s*/\s*|\s+", text, maxsplit=1)[0]
+
+
+def _component_kind(name: str | None) -> str:
+    value = str(name or "")
+    if value.endswith("-底"):
+        return "base"
+    if value.endswith("-盖"):
+        return "cover"
+    return ""
+
+
+def _received_telescoping_capacity(db: Session, order_item_id: int) -> int | None:
+    rows = db.execute(
+        select(
+            RequisitionItem.product_name_snapshot,
+            RequisitionItem.requisition_qty,
+        ).where(
+            RequisitionItem.order_item_id == order_item_id,
+            RequisitionItem.status == "已入库",
+        )
+    ).all()
+    base_qty = 0
+    cover_qty = 0
+    for product_name, quantity in rows:
+        component = _component_kind(product_name)
+        if component == "base":
+            base_qty += int(quantity or 0)
+        elif component == "cover":
+            cover_qty += int(quantity or 0)
+    if base_qty or cover_qty:
+        if not base_qty or not cover_qty:
+            return 0
+        return min(base_qty, cover_qty)
+    return None
+
+
+def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
+    max_deliverable = int(order_item.quantity or 0)
+    if active_finished_reserved_qty(db, order_item.id) < max_deliverable:
+        component_capacity = _received_telescoping_capacity(db, order_item.id)
+        if component_capacity is not None:
+            max_deliverable = min(max_deliverable, component_capacity)
+    return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
 
 
 class DeliveryLineCreate(BaseModel):
@@ -131,6 +175,19 @@ def _pending_query(
         .correlate(OrderItem)
         .scalar_subquery()
     )
+    received_telescoping_components = (
+        select(func.count(RequisitionItem.id))
+        .where(
+            RequisitionItem.order_item_id == OrderItem.id,
+            RequisitionItem.status == "已入库",
+            or_(
+                RequisitionItem.product_name_snapshot.like("%-盖"),
+                RequisitionItem.product_name_snapshot.like("%-底"),
+            ),
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
     query = (
         select(
             OrderItem.id.label("item_id"),
@@ -160,6 +217,7 @@ def _pending_query(
             or_(
                 OrderItem.material_status == "received",
                 active_finished_reserved >= OrderItem.quantity,
+                received_telescoping_components > 0,
             ),
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
@@ -418,7 +476,7 @@ def _collect_delivery_lines(
                 detail=f"第{index}条订单明细不存在",
             )
         order_item, order = row
-        remaining = order_item.quantity - order_item.delivered_quantity
+        remaining = _delivery_remaining_quantity(db, order_item)
         if order.customer_id != customer_id:
             raise HTTPException(
                 status_code=400,
@@ -470,10 +528,17 @@ def pending_delivery_items(
     items = []
     for row in db.execute(_pending_query()):
         order = db.get(Order, row._mapping["order_id"])
+        order_item = db.get(OrderItem, row._mapping["order_item_id"])
+        remaining_quantity = (
+            _delivery_remaining_quantity(db, order_item) if order_item else 0
+        )
+        if remaining_quantity <= 0:
+            continue
         display = display_order_number(order, registry)
         items.append(
             {
                 **dict(row._mapping),
+                "remaining_quantity": remaining_quantity,
                 "order_number": display,
                 "display_order_number": display,
             }
@@ -531,6 +596,7 @@ def search_pending_delivery_items(
     effective_limit = limit or (100 if list_all else 20)
     registry = build_display_registry(db)
     items = []
+    query_limit = min(effective_limit * 3, 200)
     for row in db.execute(
         _pending_query(
             customer_id=customer_id,
@@ -538,15 +604,22 @@ def search_pending_delivery_items(
             customer_po_keyword=customer_po_keyword,
             product_name_keyword=product_name_keyword,
             general_keyword=general_keyword,
-        ).limit(effective_limit)
+        ).limit(query_limit)
     ):
         order = db.get(Order, row._mapping["order_id"])
+        order_item = db.get(OrderItem, row._mapping["order_item_id"])
+        remaining_quantity = (
+            _delivery_remaining_quantity(db, order_item) if order_item else 0
+        )
+        if remaining_quantity <= 0:
+            continue
         display = display_order_number(order, registry)
         material = (row._mapping["material"] or "").strip()
         flute_type = (row._mapping["flute_type"] or "").strip()
         items.append(
             {
                 **dict(row._mapping),
+                "remaining_quantity": remaining_quantity,
                 "order_number": display,
                 "display_order_number": display,
                 "material_display": (
@@ -556,6 +629,8 @@ def search_pending_delivery_items(
                 ),
             }
         )
+        if len(items) >= effective_limit:
+            break
     return {"items": items}
 
 
@@ -694,11 +769,22 @@ def dispatch_delivery(
         ).all()
         affected_order_ids: set[int] = set()
         for line in lines:
-            order_id = db.scalar(
-                select(OrderItem.order_id).where(
-                    OrderItem.id == line.order_item_id
+            order_item = db.get(OrderItem, line.order_item_id)
+            if order_item is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"订单明细{line.order_item_id}不存在",
                 )
-            )
+            remaining = _delivery_remaining_quantity(db, order_item)
+            if line.delivered_quantity > remaining:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"订单明细{line.order_item_id}可送数量不足，"
+                        f"当前可送数量为 {remaining}"
+                    ),
+                )
+            order_id = order_item.order_id
             result = db.execute(
                 update(OrderItem)
                 .where(

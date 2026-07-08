@@ -293,6 +293,153 @@ def test_over_delivery_is_rejected_before_dispatch(
         assert session.get(OrderItem, 1).delivered_quantity == 20
 
 
+def test_telescoping_lid_delivery_capacity_uses_min_received_components(
+    delivery_api_app,
+) -> None:
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        requisition = Requisition(
+            requisition_number="BL-20260613-001",
+            requisition_date=date(2026, 6, 13),
+            supplier_name="苏州纸板供应商",
+            status="已报料",
+        )
+        session.add(requisition)
+        session.flush()
+        session.add_all(
+            [
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=2,
+                    requisition_qty=100,
+                    cardboard_len=Decimal("400"),
+                    cardboard_width=Decimal("300"),
+                    product_code_snapshot="SME-002",
+                    product_name_snapshot="天地盖测试箱-盖",
+                    specification_snapshot="380×260×220mm",
+                    material_snapshot="A=B",
+                    special_process="一开一",
+                    status="已入库",
+                ),
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=2,
+                    requisition_qty=99,
+                    cardboard_len=Decimal("375"),
+                    cardboard_width=Decimal("275"),
+                    product_code_snapshot="SME-002",
+                    product_name_snapshot="天地盖测试箱-底",
+                    specification_snapshot="380×260×220mm",
+                    material_snapshot="A=B",
+                    special_process="一开一",
+                    status="已入库",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        listed = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "list_all": "1"},
+        )
+        rejected = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": 1,
+                "delivery_date": "2026-06-13",
+                "items": [{"order_item_id": 2, "delivered_quantity": 100}],
+            },
+        )
+        accepted = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": 1,
+                "delivery_date": "2026-06-13",
+                "items": [{"order_item_id": 2, "delivered_quantity": 99}],
+            },
+        )
+
+    assert listed.status_code == 200
+    item2 = next(
+        item for item in listed.json()["items"] if item["order_item_id"] == 2
+    )
+    assert item2["remaining_quantity"] == 99
+    assert rejected.status_code == 400
+    assert "当前未送数量为 99" in rejected.text
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["total_quantity"] == 99
+
+
+def test_telescoping_lid_delivery_search_uses_components_when_parent_status_stale(
+    delivery_api_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 2)
+        item.material_status = "pending"
+        item.requisition_status = "已报料"
+        requisition = Requisition(
+            requisition_number="BL-20260613-002",
+            requisition_date=date(2026, 6, 13),
+            supplier_name="苏州纸板供应商",
+            status="已报料",
+        )
+        session.add(requisition)
+        session.flush()
+        session.add_all(
+            [
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=2,
+                    requisition_qty=100,
+                    cardboard_len=Decimal("400"),
+                    cardboard_width=Decimal("300"),
+                    product_code_snapshot="SME-002",
+                    product_name_snapshot="天地盖测试箱-盖",
+                    specification_snapshot="380×260×220mm",
+                    material_snapshot="A=B",
+                    special_process="一开一",
+                    status="已入库",
+                ),
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=2,
+                    requisition_qty=99,
+                    cardboard_len=Decimal("375"),
+                    cardboard_width=Decimal("275"),
+                    product_code_snapshot="SME-002",
+                    product_name_snapshot="天地盖测试箱-底",
+                    specification_snapshot="380×260×220mm",
+                    material_snapshot="A=B",
+                    special_process="一开一",
+                    status="已入库",
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        listed = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "list_all": "1"},
+        )
+
+    assert listed.status_code == 200
+    item2 = next(
+        item for item in listed.json()["items"] if item["order_item_id"] == 2
+    )
+    assert item2["customer_name"] == "苏州思迈尔包装有限公司"
+    assert item2["remaining_quantity"] == 99
+
+
 def test_delivery_can_be_marked_printed_and_returns_print_status(
     delivery_api_app,
 ) -> None:

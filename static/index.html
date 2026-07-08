@@ -2000,6 +2000,22 @@
                   <div class="field"><label>保存状态</label><span :class="['status',draft.confirmed ? 'green' : 'orange']">{{ draft.confirmed ? "已加入批量保存" : "待核对" }}</span></div>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
+                <div v-if="importDraftBlockReasons(draft).length" class="status red" style="display:block;margin-bottom:10px;line-height:1.7">
+                  <strong>当前草稿不能加入批量保存：</strong>
+                  <div v-for="reason in importDraftBlockReasons(draft)" :key="reason">{{ reason }}</div>
+                </div>
+                <div v-if="hasImportDraftQuantityReview(draft)" class="status orange" style="display:block;margin-bottom:10px">
+                  存在非整数数量，不能直接保存，请人工修改后再保存。
+                </div>
+                <div v-if="draft.integrity_check && draft.integrity_check.integrity_status === 'failed'" class="status red" style="display:block;margin-bottom:10px;line-height:1.7">
+                  <strong>识别完整性校验：异常</strong>
+                  <div>PDF疑似明细行数：{{ draft.integrity_check.source_detail_count || "-" }}</div>
+                  <div>系统识别明细行数：{{ draft.integrity_check.parsed_detail_count || 0 }}</div>
+                  <div v-if="draft.integrity_check.missing_line_numbers?.length">缺失行号：{{ draft.integrity_check.missing_line_numbers.join("、") }}</div>
+                  <div v-if="draft.integrity_check.source_total_quantity">PDF合计数量：{{ draft.integrity_check.source_total_quantity }}；识别数量合计：{{ draft.integrity_check.parsed_total_quantity }}</div>
+                  <div v-if="draft.integrity_check.source_total_amount">PDF合计金额：{{ draft.integrity_check.source_total_amount }}；识别金额合计：{{ draft.integrity_check.parsed_total_amount }}</div>
+                  <div v-for="err in draft.integrity_check.integrity_errors || []" :key="err">{{ err }}</div>
+                </div>
                 <div v-if="draft.warnings?.length" style="margin-bottom:10px">
                   <div class="status orange" style="cursor:pointer;display:flex;align-items:center;gap:8px"
                        @click="draft._warningsExpanded = !draft._warningsExpanded">
@@ -2083,7 +2099,8 @@
                       </td>
                       <!-- 数量 -->
                       <td style="padding:4px 6px;vertical-align:top">
-                        <input class="input compact-input" type="number" min="1" v-model.number="item.quantity" style="width:65px" />
+                        <input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:65px" />
+                        <div v-if="!Number.isInteger(Number(item.quantity))" style="font-size:10px;color:#dc2626;margin-top:2px">数量不是整数，请人工确认</div>
                       </td>
                       <!-- 客户单价 + 冲突提示 -->
                       <td class="sensitive-price" style="padding:4px 6px;vertical-align:top">
@@ -5683,16 +5700,28 @@
             return "未匹配到客户，请手工选择";
           },
           canConfirmImportDraft(draft) {
-            if (!draft?.matched_customer_id || !draft?.items?.length) return false;
-            if (draft.duplicate_status === "duplicate_skipped") return false;
-            return !draft.items.some(item => {
-              if (Number(item.quantity) <= 0) return true;
-              if (item.unit_price === "" || item.unit_price === null || item.unit_price === undefined) return true;
-              if (item.is_new_product) {
-                return !String(item.raw_product_code || "").trim() || !String(item.raw_product_name || "").trim();
-              }
-              return !item.matched_product_id;
+            return !this.importDraftBlockReasons(draft).length;
+          },
+          importDraftBlockReasons(draft) {
+            const reasons = [];
+            if (!draft?.matched_customer_id) reasons.push("客户未确认。");
+            if (!draft?.items?.length) reasons.push("没有识别到明细。");
+            if (draft?.duplicate_status === "duplicate_skipped") reasons.push("重复订单已跳过。");
+            if (draft?.integrity_check?.integrity_status === "failed") reasons.push("PDF识别存在漏行或合计不一致，请先处理完整性异常。");
+            if (this.hasImportDraftQuantityReview(draft)) reasons.push("存在非整数数量，不能直接保存，请人工修改后再保存。");
+            (draft?.items || []).forEach(item => {
+              const line = item.line_no ? `第${item.line_no}行` : "明细行";
+              const qty = Number(item.quantity);
+              if (qty <= 0) reasons.push(`${line}数量必须大于0。`);
+              else if (!Number.isInteger(qty)) reasons.push(`${line}数量 ${item.quantity} 不是整数，请先人工修改为正式订单数量。`);
+              if (item.unit_price === "" || item.unit_price === null || item.unit_price === undefined) reasons.push(`${line}缺少客户单价。`);
+              if (item.is_new_product && (!String(item.raw_product_code || "").trim() || !String(item.raw_product_name || "").trim())) reasons.push(`${line}新产品缺少存货编码或名称。`);
+              if (!item.is_new_product && !item.matched_product_id) reasons.push(`${line}未匹配到常用箱。`);
             });
+            return reasons;
+          },
+          hasImportDraftQuantityReview(draft) {
+            return (draft?.items || []).some(item => !Number.isInteger(Number(item.quantity)));
           },
           toggleConfirmableImportDrafts() {
             const confirmable = this.orderImportDrafts.filter(
@@ -5819,6 +5848,8 @@
               delivery_date: draft.delivery_date || plusDays(7),
               remark: `PDF识别草稿：${draft.source_name || "客户采购订单"}`,
               import_draft: true,
+              import_integrity_status: draft.integrity_check?.integrity_status || null,
+              import_integrity_errors: draft.integrity_check?.integrity_errors || [],
               // 每条明细使用常用箱字段（PDF只提供数量/单价/交期）
               items: (draft.items || []).map(item => ({
                 product_id: item.is_new_product ? null : (item.matched_product_id || null),
@@ -5874,6 +5905,8 @@
                     customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
                     order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
                     remark:`PDF识别草稿：${draft.source_name}`,
+                    import_integrity_status:draft.integrity_check?.integrity_status || null,
+                    import_integrity_errors:draft.integrity_check?.integrity_errors || [],
                     items:draft.items.map(item => {
                       // 优先使用常用箱数据，回退到 PDF 原始识别
                       const useStd = !!(item.matched_product_id && !item.is_new_product);

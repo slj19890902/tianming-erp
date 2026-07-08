@@ -111,7 +111,7 @@ _BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
 
 class OrderItemCreate(BaseModel):
     product_id: int | None = None
-    quantity: int
+    quantity: int | float
     unit_price: Decimal
     product_code: str | None = None
     product_name: str | None = None
@@ -184,6 +184,8 @@ class OrderCreate(BaseModel):
     payment_status: str = "unpaid"
     remark: str | None = None
     items: list[OrderItemCreate] | None = None
+    import_integrity_status: str | None = None
+    import_integrity_errors: list[str] | None = None
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -203,6 +205,18 @@ class OrderCreate(BaseModel):
     cost_unit_price: float | None = None
     warning_confirmed: bool = False
     created_by: int | None = None
+
+
+def _validated_order_quantity(value: int | float, index: int) -> int:
+    decimal_value = Decimal(str(value))
+    if decimal_value <= 0:
+        raise HTTPException(status_code=400, detail=f"第{index}条明细数量必须大于0")
+    if decimal_value != decimal_value.to_integral_value():
+        raise HTTPException(
+            status_code=400,
+            detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
+        )
+    return int(decimal_value)
 
 
 class OrderUpdate(BaseModel):
@@ -1434,6 +1448,15 @@ def create_order(
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    if payload.import_integrity_status == "failed":
+        errors = payload.import_integrity_errors or []
+        message = (
+            "当前 PDF 识别存在漏行或合计不一致，不能直接保存。"
+            "请先人工补齐或确认异常。"
+        )
+        if errors:
+            message = f"{message} {'；'.join(errors)}"
+        raise HTTPException(status_code=400, detail=message)
 
     try:
         customer = db.get(Customer, payload.customer_id)
@@ -1444,7 +1467,12 @@ def create_order(
 
         new_product_cache: dict[str, Product] = {}
         resolved_products: dict[int, Product] = {}
+        validated_quantities: dict[int, int] = {}
         for index, item_payload in enumerate(payload.items, start=1):
+            validated_quantities[index] = _validated_order_quantity(
+                item_payload.quantity,
+                index,
+            )
             if item_payload.product_id is not None and not item_payload.is_new_product:
                 product = db.scalar(
                     select(Product)
@@ -1512,7 +1540,7 @@ def create_order(
             incoming_signature = sorted(
                 (
                     resolved_products[index].id,
-                    item.quantity,
+                    validated_quantities[index],
                     str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
                     (
                         (item.specification or "").strip()
@@ -1557,11 +1585,6 @@ def create_order(
         total = Decimal("0")
         created_items: list[OrderItem] = []
         for index, item_payload in enumerate(payload.items, start=1):
-            if item_payload.quantity <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条明细数量必须大于0",
-                )
             try:
                 unit_price = Decimal(str(item_payload.unit_price))
             except (InvalidOperation, ValueError) as error:
@@ -1576,9 +1599,10 @@ def create_order(
                 )
 
             product = resolved_products[index]
+            quantity = validated_quantities[index]
 
             subtotal = (
-                Decimal(item_payload.quantity) * unit_price
+                Decimal(quantity) * unit_price
             ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
@@ -1590,7 +1614,7 @@ def create_order(
                     order.order_number,
                     item_sequence,
                 ),
-                quantity=item_payload.quantity,
+                quantity=quantity,
                 unit_price=unit_price,
                 subtotal=subtotal,
                 material_status="pending",

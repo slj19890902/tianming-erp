@@ -41,6 +41,7 @@ ORDER_NO_RE = re.compile(
 )
 DATE_RE = re.compile(r"\b(20\d{2})[-/.](\d{2})[-/.](\d{2})\b")
 ROW_START_RE = re.compile(r"^\d+\s+\S+")
+TIANHUA_LINE_START_RE = re.compile(r"^\s*(?P<line_no>\d{1,4})\s+(?P<product_code>\d{8})\b")
 ITEM_RE = re.compile(
     r"^(?P<line_no>\d+)\s+(?P<product_code>\S+)\s+(?P<body>.+?)\s+"
     r"(?P<unit>\S+)\s+(?P<quantity>\d+(?:\.\d+)?)\s+"
@@ -397,6 +398,37 @@ def _decimal_to_str(raw: str, places: str) -> str:
     return format(Decimal(raw.replace(",", "")).quantize(Decimal(places)), "f")
 
 
+def _quantity_value(raw: str):
+    value = Decimal(str(raw).replace(",", ""))
+    return int(value) if value == value.to_integral_value() else float(value)
+
+
+def _quantity_decimal(value) -> Decimal:
+    return Decimal(str(value or 0).replace(",", ""))
+
+
+def _apply_quantity_review_flags(result: dict) -> dict:
+    warnings = list(result.get("warnings") or [])
+    requires_review = False
+    for item in result.get("items") or []:
+        quantity_value = _quantity_decimal(item.get("quantity"))
+        if quantity_value != quantity_value.to_integral_value():
+            requires_review = True
+            item["quantity_review_required"] = True
+            item["quantity_warning"] = (
+                f"第{item.get('line_no', '?')}行数量 {item.get('quantity')} "
+                "不是整数，请按客户原单人工确认后修改。"
+            )
+            if item["quantity_warning"] not in warnings:
+                warnings.append(item["quantity_warning"])
+        else:
+            item["quantity_review_required"] = False
+            item["quantity_warning"] = None
+    result["requires_manual_quantity_review"] = requires_review
+    result["warnings"] = warnings
+    return result
+
+
 def _company_name_key(value: str | None) -> str:
     text = re.sub(r"[（）()\-—_·,，.。/\\\s]", "", value or "")
     for suffix in ("股份有限公司", "有限责任公司", "有限公司"):
@@ -483,7 +515,7 @@ def _split_records(lines: list[str]) -> tuple[list[list[str]], bool, bool]:
                 current = []
             in_table = False
             continue
-        if ROW_START_RE.match(line):
+        if TIANHUA_LINE_START_RE.match(line):
             if current:
                 records.append(current)
             current = [line]
@@ -806,7 +838,8 @@ def _parse_record(record_lines: list[str], has_extra_columns: bool = False) -> d
         "product_name": raw_name,
         "specification": raw_spec,
         "unit": match.group("unit"),
-        "quantity": int(Decimal(match.group("quantity"))),
+        "quantity": _quantity_value(match.group("quantity")),
+        "raw_quantity": match.group("quantity"),
         "unit_price": _decimal_to_str(match.group("unit_price"), "0.0000"),
         "amount": _decimal_to_str(match.group("amount"), "0.00"),
         "delivery_date": _normalize_date(match.group("delivery_date")),
@@ -819,6 +852,57 @@ def _parse_record(record_lines: list[str], has_extra_columns: bool = False) -> d
         "product_candidates": [],
         "material_candidates": [],
     }
+
+
+def _parse_tianhua_record_tail(record_lines: list[str]) -> dict | None:
+    if not record_lines:
+        return None
+    joined = _join_record_lines(record_lines)
+    start = TIANHUA_LINE_START_RE.match(joined)
+    if not start:
+        return None
+    match = re.match(
+        r"^(?P<body>.+?)\s+"
+        r"(?P<unit>个(?:\s*[（(]\s*无\s*小数\s*[）)])?|Pcs|PCS)\s+"
+        r"(?P<quantity>\d[\d,]*(?:\.\d+)?)\s+"
+        r"(?P<unit_price>\d+(?:\.\d+)?)\s+"
+        r"(?P<amount>[\d,]+(?:\.\d+)?)\s+"
+        r"(?P<delivery_date>20\d{2}[./]\d{2}[./]\d{2})$",
+        joined[start.end():].strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    raw_name, raw_spec = _split_name_and_spec(match.group("body"), match.group("body"))
+    code = start.group("product_code")
+    return {
+        "line_no": int(start.group("line_no")),
+        "raw_product_code": code,
+        "raw_product_name": raw_name,
+        "raw_spec_model": _extract_spec_dimensions(raw_spec),
+        "raw_spec_for_enrichment": raw_spec,
+        "product_code": code,
+        "product_name": raw_name,
+        "specification": _extract_spec_dimensions(raw_spec),
+        "unit": re.sub(r"\s+", "", match.group("unit")),
+        "quantity": _quantity_value(match.group("quantity")),
+        "raw_quantity": match.group("quantity"),
+        "unit_price": _decimal_to_str(match.group("unit_price"), "0.0000"),
+        "amount": _decimal_to_str(match.group("amount"), "0.00"),
+        "delivery_date": _normalize_date(match.group("delivery_date")),
+        "raw_lines": record_lines,
+        "production_notes": "",
+        "matched_product_id": None,
+        "matched_material_id": None,
+        "match_status": "unmatched",
+        "cost_status": "pending",
+        "product_candidates": [],
+        "material_candidates": [],
+    }
+
+
+def _parse_tianhua_record(record_lines: list[str], has_extra_columns: bool = False) -> dict | None:
+    return _parse_record(record_lines, has_extra_columns=has_extra_columns) or _parse_tianhua_record_tail(record_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +942,98 @@ def _check_item_warnings(item: dict) -> list[str]:
         warnings.append(f"第{line_no}行：客户型号缺失，但存在材质代码 {old_mat}，解析可能不完整。")
 
     return warnings
+
+
+def _extract_pdf_total(text: str) -> tuple[Decimal | None, Decimal | None]:
+    total_quantity: Decimal | None = None
+    total_amount: Decimal | None = None
+    for match in re.finditer(
+        r"合计\s+(?P<quantity>[\d,]+(?:\.\d+)?)\s+(?P<amount>[\d,]+(?:\.\d+)?)",
+        text,
+    ):
+        total_quantity = Decimal(match.group("quantity").replace(",", ""))
+        total_amount = Decimal(match.group("amount").replace(",", ""))
+    return total_quantity, total_amount
+
+
+def _decimal_diff(left: Decimal | None, right: Decimal | None) -> Decimal | None:
+    if left is None or right is None:
+        return None
+    return (left - right).copy_abs()
+
+
+def _format_integrity_decimal(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value.normalize(), "f")
+
+
+def _format_integrity_amount(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value.quantize(Decimal("0.01")), "f")
+
+
+def _build_pdf_integrity_check(text: str, records: list[list[str]], items: list[dict]) -> dict:
+    source_line_numbers = [
+        match.group("line_no")
+        for record in records
+        if record and (match := TIANHUA_LINE_START_RE.match(record[0]))
+    ]
+    parsed_line_numbers = [
+        str(item.get("line_no"))
+        for item in items
+        if item.get("line_no") is not None
+    ]
+    missing_line_numbers = [
+        line_no for line_no in source_line_numbers if line_no not in parsed_line_numbers
+    ]
+    parsed_quantity = sum(_quantity_decimal(item.get("quantity")) for item in items)
+    parsed_amount = sum(
+        Decimal(str(item.get("amount") or "0").replace(",", ""))
+        for item in items
+    )
+    source_quantity, source_amount = _extract_pdf_total(text)
+    quantity_diff = _decimal_diff(source_quantity, parsed_quantity)
+    amount_diff = _decimal_diff(source_amount, parsed_amount)
+
+    errors: list[str] = []
+    warnings = [] if source_line_numbers else ["未能可靠识别 PDF 原文明细行号，完整性校验仅供参考。"]
+    if source_line_numbers and len(source_line_numbers) > len(parsed_line_numbers):
+        errors.append(
+            f"PDF疑似有{len(source_line_numbers)}行明细，系统只识别出{len(parsed_line_numbers)}行，"
+            f"缺失行号：{'、'.join(missing_line_numbers) or '未定位'}"
+        )
+    if missing_line_numbers:
+        errors.append(f"PDF原文明细行号与识别结果不一致，缺失行号：{'、'.join(missing_line_numbers)}")
+    if quantity_diff is not None and quantity_diff > Decimal("0.01"):
+        errors.append(
+            f"PDF合计数量{_format_integrity_decimal(source_quantity)}，"
+            f"识别数量{_format_integrity_decimal(parsed_quantity)}，"
+            f"差异{_format_integrity_decimal(quantity_diff)}"
+        )
+    if amount_diff is not None and amount_diff > Decimal("0.01"):
+        errors.append(
+            f"PDF合计金额{_format_integrity_amount(source_amount)}，"
+            f"识别金额{_format_integrity_amount(parsed_amount)}，"
+            f"差异{_format_integrity_amount(amount_diff)}"
+        )
+    return {
+        "source_detail_count": len(source_line_numbers) or None,
+        "parsed_detail_count": len(parsed_line_numbers),
+        "source_line_numbers": source_line_numbers,
+        "parsed_line_numbers": parsed_line_numbers,
+        "missing_line_numbers": missing_line_numbers,
+        "source_total_quantity": _format_integrity_decimal(source_quantity),
+        "parsed_total_quantity": _format_integrity_decimal(parsed_quantity),
+        "quantity_total_diff": _format_integrity_decimal(quantity_diff),
+        "source_total_amount": _format_integrity_amount(source_amount),
+        "parsed_total_amount": _format_integrity_amount(parsed_amount),
+        "amount_total_diff": _format_integrity_amount(amount_diff),
+        "integrity_status": "failed" if errors else "passed",
+        "integrity_errors": errors,
+        "integrity_warnings": warnings,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1057,11 +1233,20 @@ def parse_purchase_order_text(
         raise PdfParseError("未识别到订单明细表头。", "header_not_recognized")
     if not records and not gaotai_items:
         raise PdfParseError("识别到表头但无法切分出订单明细行。", "items_not_split")
-    items_raw = gaotai_items or [
-        item
-        for record in records
-        if (item := _parse_record(record, has_extra_columns=has_extra_columns))
-    ]
+    if gaotai_items:
+        items_raw = gaotai_items
+    elif is_tianhua:
+        items_raw = [
+            item
+            for record in records
+            if (item := _parse_tianhua_record(record, has_extra_columns=has_extra_columns))
+        ]
+    else:
+        items_raw = [
+            item
+            for record in records
+            if (item := _parse_record(record, has_extra_columns=has_extra_columns))
+        ]
     if not items_raw:
         raise PdfParseError("识别到表头但无法切分出订单明细行。", "items_not_split")
 
@@ -1081,6 +1266,17 @@ def parse_purchase_order_text(
     dates = [item["delivery_date"] for item in items if item["delivery_date"]]
     order_dates = [_normalize_date(line) for line in lines]
     order_date = next((value for value in order_dates if value), None)
+    integrity_check = (
+        _build_pdf_integrity_check(text, records, items)
+        if is_tianhua
+        else {
+            "integrity_status": "unknown",
+            "integrity_errors": [],
+            "integrity_warnings": ["当前客户暂未接入完整性校验。"],
+        }
+    )
+    if integrity_check.get("integrity_errors"):
+        all_item_warnings.extend(integrity_check["integrity_errors"])
 
     result = {
         "source_name": source_name or "uploaded.pdf",
@@ -1097,10 +1293,13 @@ def parse_purchase_order_text(
         "item_count": len(items),
         "items": items,
         "warnings": all_item_warnings,
+        "integrity_check": integrity_check,
         "is_tianhua": is_tianhua,
         "has_extra_columns": has_extra_columns,
     }
-    return apply_customer_template_postprocess(result, text, template_rules=template_rules)
+    return _apply_quantity_review_flags(
+        apply_customer_template_postprocess(result, text, template_rules=template_rules)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1360,8 +1559,6 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
 
 def _merge_same_product_code(items: list[dict]) -> list[dict]:
     """同一草稿内，满足合并条件的相同存货编码行自动合并数量。"""
-    from decimal import Decimal as _D
-
     def _merge_key(item: dict):
         return (
             _normalized_text(_preferred_item_product_code(item)),
@@ -1411,8 +1608,14 @@ def _merge_same_product_code(items: list[dict]) -> list[dict]:
             continue
         # 合并
         base = dict(group[0])
-        total_qty = sum(int(i.get("quantity") or 0) for i in group)
-        base["quantity"] = total_qty
+        total_qty = sum(_quantity_decimal(i.get("quantity")) for i in group)
+        base["quantity"] = int(total_qty) if total_qty == total_qty.to_integral_value() else float(total_qty)
+        if any(i.get("quantity_review_required") for i in group) or total_qty != total_qty.to_integral_value():
+            base["quantity_review_required"] = True
+            base["quantity_warning"] = (
+                f"第{base.get('line_no', '?')}行数量 {base.get('quantity')} "
+                "不是整数，请按客户原单人工确认后修改。"
+            )
         base["merge_status"] = "merged"
         base["merged_sources"] = [
             {

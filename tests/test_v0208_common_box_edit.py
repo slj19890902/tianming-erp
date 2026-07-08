@@ -69,6 +69,30 @@ def test_common_box_api_rejects_fractional_mm_and_accepts_splice_fields() -> Non
     assert payload.pieces_per_box == 2
     assert payload.flap_mm == 35
 
+    lid_required = {
+        **required,
+        "product_code": "BOX-A3",
+        "customer_material_code": "BOX-A3",
+        "product_name": "天地盖",
+    }
+    lid_payload = ProductPayload(
+        **lid_required,
+        box_style="A3 天地盖",
+        length_mm=300,
+        width_mm=200,
+        height_mm=50,
+        splice_mode="double",
+        pieces_per_box=2,
+        flap_mm=30,
+        base_report_length_mm=375,
+        base_report_width_mm=275,
+    )
+    assert lid_payload.splice_mode == "single"
+    assert lid_payload.pieces_per_box == 1
+    assert lid_payload.flap_mm is None
+    assert lid_payload.base_report_length_mm == 375
+    assert lid_payload.base_report_width_mm == 275
+
     with pytest.raises(ValidationError):
         ProductPayload(**required, length_mm=880.5)
 
@@ -176,7 +200,7 @@ def test_common_box_recommendation_is_automatic_but_preserves_manual_values() ->
     assert '@input="markProductCreaseManual"' in source
 
 
-def test_common_box_type_list_preserves_legacy_and_only_a1_is_automatic() -> None:
+def test_common_box_type_list_preserves_legacy_and_supports_standard_formulas() -> None:
     source = _source()
 
     for box_type in (
@@ -194,7 +218,12 @@ def test_common_box_type_list_preserves_legacy_and_only_a1_is_automatic() -> Non
         assert box_type in source
     assert "原记录：" in source
     assert "isA1BoxStyle" in source
-    assert "该箱型暂无自动推荐公式，请手工填写报料长宽。" in source
+    assert "isTelescopingLidBoxStyle" in source
+    assert "A3 天地盖推荐" in source
+    assert '["平卡", "刀卡", "隔板"]' in source
+    assert "围套推荐" in source
+    assert "半开槽箱推荐" in source
+    assert "全搭盖箱推荐" in source
 
 
 def test_common_box_drawing_history_shows_filename_time_latest_and_open_action() -> None:
@@ -212,14 +241,19 @@ def test_common_box_drawing_history_shows_filename_time_latest_and_open_action()
 
 def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     source = _source()
+    save_block = source[source.index("async saveModal()"):source.index('if (this.modal.type === "material")')]
 
     assert "payload.production_process = this.serializeProductionProcesses(" in source
-    assert '"splice_mode", "pieces_per_box", "flap_mm"' in source
+    assert '"pieces_per_box", "flap_mm",' in save_block
+    assert '"splice_mode", "pieces_per_box", "flap_mm"' not in save_block
+    assert '"base_report_length_mm", "base_report_width_mm"' in save_block
     assert "delete payload._production_processes" in source
     assert "delete payload._production_process_legacy" in source
     assert "delete payload._material_supplier" in source
     assert "delete payload._report_dims_manual" in source
     assert "delete payload._crease_dims_manual" in source
+    assert "delete payload._base_report_dims_manual" in source
+    assert "delete payload._base_crease_dims_manual" in source
     assert "delete payload._recommendation_message" in source
     assert "delete payload.drawings" in source
     assert "productFormSnapshot" in source

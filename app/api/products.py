@@ -47,6 +47,25 @@ PRODUCT_DELETE_CONFLICT_DETAIL = (
 )
 
 
+def _box_style_uses_splice(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    return bool(value) and ("A1" in value or "0201" in value)
+
+
+def _box_style_uses_tongue(box_style: str | None) -> bool:
+    value = (box_style or "").strip()
+    if not value:
+        return True
+    upper = value.upper()
+    return (
+        "A1" in upper
+        or "0201" in upper
+        or "围套" in value
+        or "半开槽" in value
+        or "全搭盖" in value
+    )
+
+
 class ProductPayload(BaseModel):
     customer_id: int
     product_code: str = Field(min_length=1, max_length=150)
@@ -83,6 +102,13 @@ class ProductPayload(BaseModel):
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None
     report_notes: str | None = None
+    base_report_length_mm: int | None = None
+    base_report_width_mm: int | None = None
+    base_crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线|其他)$|^$")
+    base_crease_left_mm: int | None = None
+    base_crease_middle_mm: int | None = None
+    base_crease_right_mm: int | None = None
+    base_report_notes: str | None = None
     splice_mode: str | None = "single"
     pieces_per_box: int | None = None
     flap_mm: int | None = 30
@@ -94,18 +120,34 @@ class ProductPayload(BaseModel):
         err = validate_flute_consistency(self.flute_type, self.layer_count)
         if err:
             raise ValueError(err)
+        self.box_style = (self.box_style or "").strip() or None
         splice_mode = (self.splice_mode or "single").strip().lower()
-        if splice_mode not in {"single", "double"}:
-            raise ValueError("拼箱方式仅允许：single 或 double")
-        self.splice_mode = splice_mode
-        if self.pieces_per_box is None:
-            self.pieces_per_box = 2 if splice_mode == "double" else 1
-        if self.pieces_per_box not in {1, 2}:
-            raise ValueError("每箱片数仅允许 1 或 2")
-        if self.flap_mm is None:
-            self.flap_mm = 30
-        if self.flap_mm <= 0:
-            raise ValueError("舌头(mm)必须大于0")
+        if _box_style_uses_splice(self.box_style):
+            if splice_mode not in {"single", "double"}:
+                raise ValueError("拼箱方式仅允许：single 或 double")
+            self.splice_mode = splice_mode
+            if self.pieces_per_box is None:
+                self.pieces_per_box = 2 if splice_mode == "double" else 1
+            if self.pieces_per_box not in {1, 2}:
+                raise ValueError("每箱片数仅允许 1 或 2")
+        elif self.box_style:
+            self.splice_mode = "single"
+            self.pieces_per_box = 1
+        else:
+            if splice_mode not in {"single", "double"}:
+                raise ValueError("拼箱方式仅允许：single 或 double")
+            self.splice_mode = splice_mode
+            if self.pieces_per_box is None:
+                self.pieces_per_box = 2 if splice_mode == "double" else 1
+            if self.pieces_per_box not in {1, 2}:
+                raise ValueError("每箱片数仅允许 1 或 2")
+        if _box_style_uses_tongue(self.box_style):
+            if self.flap_mm is None:
+                self.flap_mm = 30
+            if self.flap_mm <= 0:
+                raise ValueError("舌头(mm)必须大于0")
+        else:
+            self.flap_mm = None
         return self
 
 
@@ -687,6 +729,9 @@ def sync_product_fields(
         "report_length_mm", "report_width_mm",
         "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm",
         "report_notes", "production_process", "product_name", "specification",
+        "base_report_length_mm", "base_report_width_mm",
+        "base_crease_type", "base_crease_left_mm", "base_crease_middle_mm",
+        "base_crease_right_mm", "base_report_notes",
         "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content",
     }
     product = _product_or_404(db, product_id)

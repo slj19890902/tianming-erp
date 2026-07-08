@@ -158,6 +158,13 @@ class OrderItemUpdate(BaseModel):
     snapshot_crease_middle_mm: int | None = None
     snapshot_crease_right_mm: int | None = None
     snapshot_report_notes: str | None = None
+    snapshot_base_report_length_mm: int | None = None
+    snapshot_base_report_width_mm: int | None = None
+    snapshot_base_crease_type: str | None = None
+    snapshot_base_crease_left_mm: int | None = None
+    snapshot_base_crease_middle_mm: int | None = None
+    snapshot_base_crease_right_mm: int | None = None
+    snapshot_base_report_notes: str | None = None
     snapshot_splice_mode: str | None = None
     snapshot_pieces_per_box: int | None = None
     snapshot_flap_mm: int | None = None
@@ -401,6 +408,13 @@ def _order_response(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_base_report_length_mm": item.snapshot_base_report_length_mm,
+                "snapshot_base_report_width_mm": item.snapshot_base_report_width_mm,
+                "snapshot_base_crease_type": item.snapshot_base_crease_type,
+                "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+                "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+                "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+                "snapshot_base_report_notes": item.snapshot_base_report_notes,
                 "snapshot_splice_mode": item.snapshot_splice_mode,
                 "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
                 "snapshot_flap_mm": item.snapshot_flap_mm,
@@ -1666,6 +1680,13 @@ def create_order(
                 snapshot_crease_middle_mm=product.crease_middle_mm,
                 snapshot_crease_right_mm=product.crease_right_mm,
                 snapshot_report_notes=product.report_notes,
+                snapshot_base_report_length_mm=product.base_report_length_mm,
+                snapshot_base_report_width_mm=product.base_report_width_mm,
+                snapshot_base_crease_type=product.base_crease_type,
+                snapshot_base_crease_left_mm=product.base_crease_left_mm,
+                snapshot_base_crease_middle_mm=product.base_crease_middle_mm,
+                snapshot_base_crease_right_mm=product.base_crease_right_mm,
+                snapshot_base_report_notes=product.base_report_notes,
                 snapshot_splice_mode=product.splice_mode or "single",
                 snapshot_pieces_per_box=product.pieces_per_box or (2 if (product.splice_mode or "").lower() == "double" else 1),
                 snapshot_flap_mm=product.flap_mm or 30,
@@ -1827,6 +1848,20 @@ def update_order_item(
         item.snapshot_crease_right_mm = payload.snapshot_crease_right_mm
     if payload.snapshot_report_notes is not None:
         item.snapshot_report_notes = payload.snapshot_report_notes or None
+    if payload.snapshot_base_report_length_mm is not None:
+        item.snapshot_base_report_length_mm = payload.snapshot_base_report_length_mm
+    if payload.snapshot_base_report_width_mm is not None:
+        item.snapshot_base_report_width_mm = payload.snapshot_base_report_width_mm
+    if payload.snapshot_base_crease_type is not None:
+        item.snapshot_base_crease_type = payload.snapshot_base_crease_type or None
+    if payload.snapshot_base_crease_left_mm is not None:
+        item.snapshot_base_crease_left_mm = payload.snapshot_base_crease_left_mm
+    if payload.snapshot_base_crease_middle_mm is not None:
+        item.snapshot_base_crease_middle_mm = payload.snapshot_base_crease_middle_mm
+    if payload.snapshot_base_crease_right_mm is not None:
+        item.snapshot_base_crease_right_mm = payload.snapshot_base_crease_right_mm
+    if payload.snapshot_base_report_notes is not None:
+        item.snapshot_base_report_notes = payload.snapshot_base_report_notes or None
     if payload.snapshot_splice_mode is not None:
         item.snapshot_splice_mode = payload.snapshot_splice_mode or None
     if payload.snapshot_pieces_per_box is not None:
@@ -1876,6 +1911,20 @@ def update_order_item(
             product.crease_right_mm = payload.snapshot_crease_right_mm
         if payload.snapshot_report_notes is not None:
             product.report_notes = payload.snapshot_report_notes or None
+        if payload.snapshot_base_report_length_mm is not None:
+            product.base_report_length_mm = payload.snapshot_base_report_length_mm
+        if payload.snapshot_base_report_width_mm is not None:
+            product.base_report_width_mm = payload.snapshot_base_report_width_mm
+        if payload.snapshot_base_crease_type is not None:
+            product.base_crease_type = payload.snapshot_base_crease_type or None
+        if payload.snapshot_base_crease_left_mm is not None:
+            product.base_crease_left_mm = payload.snapshot_base_crease_left_mm
+        if payload.snapshot_base_crease_middle_mm is not None:
+            product.base_crease_middle_mm = payload.snapshot_base_crease_middle_mm
+        if payload.snapshot_base_crease_right_mm is not None:
+            product.base_crease_right_mm = payload.snapshot_base_crease_right_mm
+        if payload.snapshot_base_report_notes is not None:
+            product.base_report_notes = payload.snapshot_base_report_notes or None
         if payload.product_remark is not None:
             product.remark = payload.product_remark.strip() or None
     _refresh_total(db, order)
@@ -1919,6 +1968,13 @@ def update_order_item(
         "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
         "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
         "snapshot_report_notes": item.snapshot_report_notes,
+        "snapshot_base_report_length_mm": item.snapshot_base_report_length_mm,
+        "snapshot_base_report_width_mm": item.snapshot_base_report_width_mm,
+        "snapshot_base_crease_type": item.snapshot_base_crease_type,
+        "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+        "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+        "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+        "snapshot_base_report_notes": item.snapshot_base_report_notes,
         "snapshot_splice_mode": item.snapshot_splice_mode,
         "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
         "snapshot_flap_mm": item.snapshot_flap_mm,

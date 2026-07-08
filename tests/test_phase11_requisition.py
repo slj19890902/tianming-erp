@@ -683,6 +683,97 @@ def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> No
         assert item.special_process == "一开三"
 
 
+def test_telescoping_lid_requisition_splits_cover_and_base_rows(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.requisition import RequisitionItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        product = session.get(Product, item.product_id)
+        product.box_style = "A3 天地盖"
+        item.snapshot_product_name = "天地盖测试箱"
+        item.snapshot_report_length_mm = 400
+        item.snapshot_report_width_mm = 300
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 50
+        item.snapshot_crease_middle_mm = 200
+        item.snapshot_crease_right_mm = 50
+        item.snapshot_report_notes = "盖料备注"
+        item.snapshot_base_report_length_mm = 375
+        item.snapshot_base_report_width_mm = 275
+        item.snapshot_base_crease_type = "压线"
+        item.snapshot_base_crease_left_mm = 50
+        item.snapshot_base_crease_middle_mm = 175
+        item.snapshot_base_crease_right_mm = 50
+        item.snapshot_base_report_notes = "底料备注"
+        item.snapshot_splice_mode = "single"
+        item.snapshot_pieces_per_box = 1
+        session.commit()
+
+    payload = {
+        "supplier_name": "苏州纸板供应商",
+        "items": [
+            {
+                "order_item_id": 1,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 100,
+                "cardboard_len": "400",
+                "cardboard_width": "300",
+                "special_process": "一开一",
+                "remark": None,
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = client.post("/api/requisition/batches", json=payload)
+        assert created.status_code == 201, created.text
+        batch_id = created.json()["id"]
+        printed = client.get(f"/api/requisition/batches/{batch_id}/print")
+        client.post("/api/auth/logout")
+        _login(client, "workshop")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={"received_quantity": 150},
+        )
+
+    assert printed.status_code == 200, printed.text
+    print_rows = printed.json()["items"]
+    assert [row["product_name"] for row in print_rows] == [
+        "天地盖测试箱-盖",
+        "天地盖测试箱-底",
+    ]
+    assert [row["specification"] for row in print_rows] == ["400×300", "375×275"]
+    assert [row["crease_display"] for row in print_rows] == ["50+200+50", "50+175+50"]
+    assert print_rows[0]["report_remark"] == "盖料备注"
+    assert print_rows[1]["report_remark"] == "底料备注"
+    assert received.status_code == 200, received.text
+    assert received.json()["incoming_quantity"] == 150
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        rows = (
+            session.query(RequisitionItem)
+            .filter_by(order_item_id=1, status="有效")
+            .order_by(RequisitionItem.id)
+            .all()
+        )
+        assert item.requisition_qty == 150
+        assert item.requisition_spec == "盖:400×300；底:375×275"
+        assert [row.product_name_snapshot for row in rows] == [
+            "天地盖测试箱-盖",
+            "天地盖测试箱-底",
+        ]
+        assert [int(row.cardboard_len) for row in rows] == [400, 375]
+        assert [int(row.cardboard_width) for row in rows] == [300, 275]
+        assert [row.requisition_qty for row in rows] == [100, 50]
+
+
 
 def test_phase11_migration_is_additive_and_preserves_order_items(
     monkeypatch: pytest.MonkeyPatch,

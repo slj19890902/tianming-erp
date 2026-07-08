@@ -255,15 +255,38 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             item["mobile_pick_status"] for item in saved_again.json()["items"]
         ] == ["no_stock", "partial"]
 
+        with factory() as db:
+            assert db.scalar(select(func.count()).select_from(Delivery)) == 1
+            delivery = db.scalars(select(Delivery)).one()
+            assert delivery.status == "pending"
+            assert delivery.total_quantity == 150
+            delivery_items = db.scalars(
+                select(DeliveryItem).order_by(DeliveryItem.order_item_id)
+            ).all()
+            assert [item.delivered_quantity for item in delivery_items] == [150]
+            assert db.get(OrderItem, 1).delivered_quantity == 0
+            assert db.get(OrderItem, 2).delivered_quantity == 0
+
+        all_no_stock = client.put(
+            f"/api/mobile/tianhua-pick/items/{shortage['item_id']}",
+            json={
+                "token": token,
+                "mobile_pick_status": "no_stock",
+                "mobile_picked_qty": 0,
+                "mobile_pick_note": "第二条也没货",
+            },
+        )
+        assert all_no_stock.status_code == 200
+        refreshed_empty = client.get(
+            f"/api/deliveries/tianhua-preimport/{uploaded.json()['batch_id']}"
+        )
+        assert refreshed_empty.status_code == 200
+        assert refreshed_empty.json()["draft"]["delivery_id"] is None
+        assert refreshed_empty.json()["draft"]["delivery_number"] is None
+
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(Delivery)) == 1
-        delivery = db.scalars(select(Delivery)).one()
-        assert delivery.status == "pending"
-        assert delivery.total_quantity == 150
-        delivery_items = db.scalars(
-            select(DeliveryItem).order_by(DeliveryItem.order_item_id)
-        ).all()
-        assert [item.delivered_quantity for item in delivery_items] == [150]
+        assert db.scalar(select(func.count()).select_from(Delivery)) == 0
+        assert db.scalar(select(func.count()).select_from(DeliveryItem)) == 0
         assert db.get(OrderItem, 1).delivered_quantity == 0
         assert db.get(OrderItem, 2).delivered_quantity == 0
         picked = db.scalars(
@@ -276,8 +299,8 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
                 TianhuaPreDeliveryImportItem.row_no
             )
         ).all()
-        assert [item.delivery_qty for item in picked] == [0, 150]
-        assert [item.final_delivery_qty for item in imported] == [0, 150]
+        assert [item.delivery_qty for item in picked] == [0, 0]
+        assert [item.final_delivery_qty for item in imported] == [0, 0]
 
 
 def test_delivery_picker_role_is_not_allowed_by_erp_role_checks(tmp_path):

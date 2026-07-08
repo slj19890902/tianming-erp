@@ -252,10 +252,27 @@ def ensure_draft_delivery(
     batch: TianhuaPreDeliveryImportBatch,
     draft: TianhuaPreDeliveryDraft,
     created_by: int | None = None,
-) -> Delivery:
+) -> Delivery | None:
     delivery = db.get(Delivery, draft.delivery_id) if draft.delivery_id else None
     if delivery is not None and delivery.status != "pending":
         raise ValueError("关联送货单已确认发货，不能再修改预送货拿货结果")
+    rows = db.scalars(
+        select(TianhuaPreDeliveryDraftItem)
+        .where(TianhuaPreDeliveryDraftItem.draft_id == draft.id)
+        .order_by(TianhuaPreDeliveryDraftItem.row_no)
+    ).all()
+    has_positive_qty = any(int(row.delivery_qty or 0) > 0 for row in rows)
+    if not has_positive_qty:
+        for row in rows:
+            row.delivery_item_id = None
+        if delivery is not None:
+            db.execute(delete(DeliveryItem).where(DeliveryItem.delivery_id == delivery.id))
+            db.delete(delivery)
+        draft.delivery_id = None
+        draft.updated_at = datetime.utcnow()
+        db.flush()
+        return None
+
     if delivery is None:
         delivery_date = batch.pre_delivery_date or date.today()
         delivery = Delivery(
@@ -272,11 +289,6 @@ def ensure_draft_delivery(
     else:
         delivery.delivery_date = batch.pre_delivery_date or delivery.delivery_date
 
-    rows = db.scalars(
-        select(TianhuaPreDeliveryDraftItem)
-        .where(TianhuaPreDeliveryDraftItem.draft_id == draft.id)
-        .order_by(TianhuaPreDeliveryDraftItem.row_no)
-    ).all()
     existing = {
         value.order_item_id: value
         for value in db.scalars(

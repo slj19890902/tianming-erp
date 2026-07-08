@@ -1269,6 +1269,13 @@ def _apply_standard_product(item: dict, product: Product) -> None:
     item["crease_middle_mm"] = product.crease_middle_mm
     item["crease_right_mm"] = product.crease_right_mm
     item["report_notes"] = product.report_notes
+    item["base_report_length_mm"] = product.base_report_length_mm
+    item["base_report_width_mm"] = product.base_report_width_mm
+    item["base_crease_type"] = product.base_crease_type
+    item["base_crease_left_mm"] = product.base_crease_left_mm
+    item["base_crease_middle_mm"] = product.base_crease_middle_mm
+    item["base_crease_right_mm"] = product.base_crease_right_mm
+    item["base_report_notes"] = product.base_report_notes
 
     # 对比信息（草稿页展示「已匹配常用箱 / 使用常用箱资料」）
     item["standard_match"] = {

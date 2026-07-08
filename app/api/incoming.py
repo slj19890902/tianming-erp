@@ -336,14 +336,35 @@ def _receive_material(
             )
             .values(status="pending_delivery")
         )
-    db.execute(
-        update(RequisitionItem)
+    active_requisition_items = db.scalars(
+        select(RequisitionItem)
         .where(
             RequisitionItem.order_item_id == item_id,
             RequisitionItem.status == "有效",
         )
-        .values(requisition_qty=final_quantity)
-    )
+        .order_by(RequisitionItem.id)
+    ).all()
+    if len(active_requisition_items) <= 1:
+        db.execute(
+            update(RequisitionItem)
+            .where(
+                RequisitionItem.order_item_id == item_id,
+                RequisitionItem.status == "有效",
+            )
+            .values(requisition_qty=final_quantity)
+        )
+    else:
+        remaining = int(final_quantity)
+        for index, requisition_item in enumerate(active_requisition_items):
+            if index == len(active_requisition_items) - 1:
+                assigned = max(remaining, 0)
+            else:
+                assigned = min(
+                    int(requisition_item.requisition_qty or 0),
+                    max(remaining, 0),
+                )
+            requisition_item.requisition_qty = assigned
+            remaining -= assigned
     _audit(
         db,
         user=user,

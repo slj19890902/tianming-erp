@@ -198,6 +198,27 @@ def _pieces_per_box(item: OrderItem) -> int:
     return 1
 
 
+def _is_telescoping_lid_box(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    return bool(value) and ("天地盖" in value or "A3" in value)
+
+
+def _component_crease(item: OrderItem, component: str | None) -> tuple[str | None, int | None, int | None, int | None]:
+    if component == "base":
+        return (
+            item.snapshot_base_crease_type,
+            item.snapshot_base_crease_left_mm,
+            item.snapshot_base_crease_middle_mm,
+            item.snapshot_base_crease_right_mm,
+        )
+    return (
+        item.snapshot_crease_type,
+        item.snapshot_crease_left_mm,
+        item.snapshot_crease_middle_mm,
+        item.snapshot_crease_right_mm,
+    )
+
+
 def _cutting_factor(cutting_mode: str | None) -> int:
     return CUTTING_MODE_FACTORS.get((cutting_mode or "").strip(), 1)
 
@@ -441,8 +462,16 @@ def pending_requisitions(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_base_report_length_mm": item.snapshot_base_report_length_mm,
+                "snapshot_base_report_width_mm": item.snapshot_base_report_width_mm,
+                "snapshot_base_crease_type": item.snapshot_base_crease_type,
+                "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+                "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+                "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+                "snapshot_base_report_notes": item.snapshot_base_report_notes,
                 "snapshot_splice_mode": item.snapshot_splice_mode,
                 "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
+                "box_style": product.box_style,
                 "snapshot_flap_mm": item.snapshot_flap_mm,
                 "dimension_warnings": _supplier_dimension_warnings(
                     item.snapshot_supplier_name,
@@ -648,9 +677,46 @@ def create_batch(
             )
             if requisition_qty < 0:
                 raise HTTPException(status_code=400, detail="采购报料张数不能为负数")
-            spec = f"{_plain(line.cardboard_len)}?{_plain(line.cardboard_width)}"
+            components = [
+                {
+                    "kind": "cover",
+                    "suffix": "盖",
+                    "cardboard_len": line.cardboard_len,
+                    "cardboard_width": line.cardboard_width,
+                    "requisition_qty": requisition_qty,
+                    "report_notes": item.snapshot_report_notes,
+                }
+            ]
+            if (
+                _is_telescoping_lid_box(product.box_style)
+                and item.snapshot_base_report_length_mm
+                and item.snapshot_base_report_width_mm
+            ):
+                base_qty = _purchase_qty(
+                    required_piece_qty, 0, line.special_process
+                )
+                components.append(
+                    {
+                        "kind": "base",
+                        "suffix": "底",
+                        "cardboard_len": Decimal(item.snapshot_base_report_length_mm),
+                        "cardboard_width": Decimal(item.snapshot_base_report_width_mm),
+                        "requisition_qty": base_qty,
+                        "report_notes": item.snapshot_base_report_notes,
+                    }
+                )
+            total_requisition_qty = sum(
+                int(component["requisition_qty"]) for component in components
+            )
+            if len(components) > 1:
+                spec = "；".join(
+                    f"{component['suffix']}:{_plain(component['cardboard_len'])}×{_plain(component['cardboard_width'])}"
+                    for component in components
+                )
+            else:
+                spec = f"{_plain(line.cardboard_len)}×{_plain(line.cardboard_width)}"
             item.inventory_deducted_qty = 0
-            item.requisition_qty = requisition_qty
+            item.requisition_qty = total_requisition_qty
             item.requisition_status = "已报料"
             item.special_process = line.special_process
             item.cardboard_len = line.cardboard_len
@@ -658,24 +724,36 @@ def create_batch(
             item.requisition_spec = spec
             item.requisition_date = requisition_date
             item.requisition_remark = (line.remark or "").strip() or None
-            batch_item = RequisitionItem(
-                requisition_id=batch.id,
-                order_item_id=item.id,
-                inventory_deducted_qty=0,
-                requisition_qty=requisition_qty,
-                cardboard_len=line.cardboard_len,
-                cardboard_width=line.cardboard_width,
-                pieces_per_box=pieces_per_box,
-                required_piece_qty=required_piece_qty,
-                special_process=line.special_process,
-                material_snapshot=item.snapshot_material,
-                product_code_snapshot=(item.snapshot_product_code or product.product_code),
-                product_name_snapshot=item.snapshot_product_name,
-                specification_snapshot=item.snapshot_spec,
-                remark=item.requisition_remark,
-                status="有效",
-            )
-            db.add(batch_item)
+            for component in components:
+                component_remark = item.requisition_remark
+                if component["report_notes"] and component["report_notes"] != component_remark:
+                    component_remark = "；".join(
+                        part
+                        for part in [component_remark, str(component["report_notes"]).strip()]
+                        if part
+                    )
+                batch_item = RequisitionItem(
+                    requisition_id=batch.id,
+                    order_item_id=item.id,
+                    inventory_deducted_qty=0,
+                    requisition_qty=int(component["requisition_qty"]),
+                    cardboard_len=component["cardboard_len"],
+                    cardboard_width=component["cardboard_width"],
+                    pieces_per_box=pieces_per_box,
+                    required_piece_qty=required_piece_qty,
+                    special_process=line.special_process,
+                    material_snapshot=item.snapshot_material,
+                    product_code_snapshot=(item.snapshot_product_code or product.product_code),
+                    product_name_snapshot=(
+                        f"{item.snapshot_product_name}-{component['suffix']}"
+                        if len(components) > 1
+                        else item.snapshot_product_name
+                    ),
+                    specification_snapshot=item.snapshot_spec,
+                    remark=component_remark,
+                    status="有效",
+                )
+                db.add(batch_item)
             response_items.append(_item_response(item, db))
         _audit(
             db,
@@ -1061,12 +1139,22 @@ def print_batch(
         material_code = material.code if material else None
         material_layer_count = material.layer_count if material else None
         material_flute_type = None
-        crease_type = order_item.snapshot_crease_type if order_item else None
-        if crease_type == "压线" and order_item and order_item.snapshot_crease_middle_mm is not None:
+        component = (
+            "base"
+            if row.product_name_snapshot and row.product_name_snapshot.endswith("-底")
+            else "cover"
+        )
+        if order_item:
+            crease_type, crease_left, crease_middle, crease_right = _component_crease(
+                order_item, component
+            )
+        else:
+            crease_type, crease_left, crease_middle, crease_right = (None, None, None, None)
+        if crease_type == "压线" and crease_middle is not None:
             crease_display = (
-                f"{order_item.snapshot_crease_left_mm or 0}+"
-                f"{order_item.snapshot_crease_middle_mm}+"
-                f"{order_item.snapshot_crease_right_mm or 0}"
+                f"{crease_left or 0}+"
+                f"{crease_middle}+"
+                f"{crease_right or 0}"
             )
         elif crease_type == "毛片":
             crease_display = "毛"
@@ -1079,8 +1167,15 @@ def print_batch(
             remarks.append(row.special_process)
         if row.remark:
             remarks.append(row.remark)
-        if order_item and order_item.snapshot_report_notes:
-            remarks.append(order_item.snapshot_report_notes)
+        component_report_notes = None
+        if order_item:
+            component_report_notes = (
+                order_item.snapshot_base_report_notes
+                if component == "base"
+                else order_item.snapshot_report_notes
+            )
+        if component_report_notes:
+            remarks.append(component_report_notes)
         print_items.append(
             {
                 "product_code": row.product_code_snapshot,

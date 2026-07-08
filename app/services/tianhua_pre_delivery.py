@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 
 import cv2
 import numpy as np
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
@@ -183,12 +183,13 @@ def preprocess_row(
 
 
 def item_dict(i, draft_item=None):
-    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"image_order_no":i.image_order_no,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"match_reason":i.match_reason,"match_score":i.match_score,"candidate_count":i.candidate_count,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item and draft_item.mobile_picked_at else None}
+    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"image_order_no":i.image_order_no,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"match_reason":i.match_reason,"match_score":i.match_score,"candidate_count":i.candidate_count,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"delivery_item_id":draft_item.delivery_item_id if draft_item else None,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item and draft_item.mobile_picked_at else None}
 
 
 def draft_dict(db,draft):
     items=db.scalars(select(TianhuaPreDeliveryDraftItem).where(TianhuaPreDeliveryDraftItem.draft_id==draft.id).order_by(TianhuaPreDeliveryDraftItem.row_no)).all()
-    return {"draft_id":draft.id,"draft_number":draft.draft_number,"batch_id":draft.batch_id,"status":draft.status,"remark":draft.remark,"items":[{"item_id":i.id,"import_item_id":i.import_item_id,"row_no":i.row_no,"stock_code":i.stock_code,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"delivery_qty":i.delivery_qty,"warning":i.warning or "","mobile_pick_status":i.mobile_pick_status,"mobile_picked_qty":i.mobile_picked_qty,"mobile_pick_note":i.mobile_pick_note or "","mobile_picked_at":i.mobile_picked_at.isoformat() if i.mobile_picked_at else None} for i in items]}
+    delivery=db.get(Delivery,draft.delivery_id) if draft.delivery_id else None
+    return {"draft_id":draft.id,"draft_number":draft.draft_number,"batch_id":draft.batch_id,"status":draft.status,"remark":draft.remark,"delivery_id":delivery.id if delivery else None,"delivery_number":delivery.delivery_number if delivery else None,"delivery_status":delivery.status if delivery else None,"delivery_total_quantity":delivery.total_quantity if delivery else 0,"items":[{"item_id":i.id,"import_item_id":i.import_item_id,"row_no":i.row_no,"stock_code":i.stock_code,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"delivery_item_id":i.delivery_item_id,"delivery_qty":i.delivery_qty,"warning":i.warning or "","mobile_pick_status":i.mobile_pick_status,"mobile_picked_qty":i.mobile_picked_qty,"mobile_pick_note":i.mobile_pick_note or "","mobile_picked_at":i.mobile_picked_at.isoformat() if i.mobile_picked_at else None} for i in items]}
 
 
 def batch_dict(db,batch):
@@ -218,9 +219,122 @@ def create_batch(db,content,filename,user_id,pre_delivery_date=None):
     db.commit(); db.refresh(batch); return batch
 
 
+def _next_delivery_number(db: Session, delivery_date: date) -> str:
+    sequence = db.execute(
+        text(
+            """
+            INSERT INTO delivery_daily_sequences (sequence_date, last_value)
+            VALUES (:sequence_date, 1)
+            ON CONFLICT(sequence_date)
+            DO UPDATE SET last_value = last_value + 1
+            RETURNING last_value
+            """
+        ),
+        {"sequence_date": delivery_date.isoformat()},
+    ).scalar_one()
+    if sequence > 999:
+        raise ValueError("当日送货单流水号已超过 999")
+    return f"DH-{delivery_date:%Y%m%d}-{sequence:03d}"
+
+
+def _delivery_total(db: Session, delivery_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0))
+            .where(DeliveryItem.delivery_id == delivery_id)
+        )
+        or 0
+    )
+
+
+def ensure_draft_delivery(
+    db: Session,
+    batch: TianhuaPreDeliveryImportBatch,
+    draft: TianhuaPreDeliveryDraft,
+    created_by: int | None = None,
+) -> Delivery:
+    delivery = db.get(Delivery, draft.delivery_id) if draft.delivery_id else None
+    if delivery is not None and delivery.status != "pending":
+        raise ValueError("关联送货单已确认发货，不能再修改预送货拿货结果")
+    if delivery is None:
+        delivery_date = batch.pre_delivery_date or date.today()
+        delivery = Delivery(
+            delivery_number=_next_delivery_number(db, delivery_date),
+            customer_id=batch.customer_id,
+            delivery_date=delivery_date,
+            status="pending",
+            total_quantity=0,
+            created_by=created_by,
+        )
+        db.add(delivery)
+        db.flush()
+        draft.delivery_id = delivery.id
+    else:
+        delivery.delivery_date = batch.pre_delivery_date or delivery.delivery_date
+
+    rows = db.scalars(
+        select(TianhuaPreDeliveryDraftItem)
+        .where(TianhuaPreDeliveryDraftItem.draft_id == draft.id)
+        .order_by(TianhuaPreDeliveryDraftItem.row_no)
+    ).all()
+    existing = {
+        value.order_item_id: value
+        for value in db.scalars(
+            select(DeliveryItem).where(DeliveryItem.delivery_id == delivery.id)
+        ).all()
+    }
+    wanted_ids: set[int] = set()
+    positive_order_items: set[int] = set()
+    for row in rows:
+        qty = int(row.delivery_qty or 0)
+        if qty <= 0:
+            if row.delivery_item_id:
+                old = db.get(DeliveryItem, row.delivery_item_id)
+                if old is not None and old.delivery_id == delivery.id:
+                    db.delete(old)
+            existing.pop(row.order_item_id, None)
+            row.delivery_item_id = None
+            continue
+        if row.order_item_id in positive_order_items:
+            raise ValueError(f"第 {row.row_no} 行与其他行重复绑定同一订单明细，请只保留一行生成正式送货单")
+        positive_order_items.add(row.order_item_id)
+        order_item = db.get(OrderItem, row.order_item_id)
+        if order_item is None or order_item.order_id != row.order_id:
+            raise ValueError(f"第 {row.row_no} 行订单绑定无效")
+        remaining = int(order_item.quantity - order_item.delivered_quantity)
+        if qty > remaining:
+            raise ValueError(f"第 {row.row_no} 行数量超过系统未送数量")
+        delivery_item = existing.get(row.order_item_id)
+        if delivery_item is None:
+            delivery_item = DeliveryItem(
+                delivery_id=delivery.id,
+                order_item_id=row.order_item_id,
+                delivered_quantity=qty,
+                remarks=f"来源：天华预送货草稿 {draft.draft_number}",
+            )
+            db.add(delivery_item)
+        else:
+            delivery_item.delivered_quantity = qty
+            delivery_item.remarks = f"来源：天华预送货草稿 {draft.draft_number}"
+        db.flush()
+        row.delivery_item_id = delivery_item.id
+        wanted_ids.add(delivery_item.id)
+
+    for delivery_item in db.scalars(
+        select(DeliveryItem).where(DeliveryItem.delivery_id == delivery.id)
+    ).all():
+        if delivery_item.id not in wanted_ids:
+            db.delete(delivery_item)
+    db.flush()
+    delivery.total_quantity = _delivery_total(db, delivery.id)
+    draft.updated_at = datetime.utcnow()
+    return delivery
+
+
 def _selection(db,batch_id,submitted,zero_allowed=None):
     zero_allowed=zero_allowed or set()
     stored={i.row_no:i for i in db.scalars(select(TianhuaPreDeliveryImportItem).where(TianhuaPreDeliveryImportItem.batch_id==batch_id)).all()}; result=[]; seen=set()
+    selected_order_items=set()
     for line in submitted:
         row_no=int(line["row_no"])
         if row_no in seen: raise ValueError(f"第 {row_no} 行重复提交")
@@ -237,6 +351,10 @@ def _selection(db,batch_id,submitted,zero_allowed=None):
         if bound_order_item is None or bound_order_item.order_id!=item.order_id:
             raise ValueError(f"第 {item.row_no} 行订单绑定无效")
         if item.system_pending_qty is not None and qty>item.system_pending_qty: raise ValueError(f"第 {item.row_no} 行数量超过系统未送数量")
+        if qty>0 and item.order_item_id in selected_order_items:
+            raise ValueError(f"第 {item.row_no} 行与其他行重复绑定同一订单明细，请只保留一行生成正式送货单")
+        if qty>0:
+            selected_order_items.add(item.order_item_id)
         item.final_delivery_qty=qty; result.append((item,qty))
     if not result: raise ValueError("至少选择一条可生成明细")
     return result
@@ -272,5 +390,7 @@ def save_draft(db,batch,submitted,remark,user_id,update_existing=False):
     draft.updated_at=datetime.utcnow()
     for item,qty in selected:
         old=previous.get(item.id)
-        db.add(TianhuaPreDeliveryDraftItem(draft_id=draft.id,import_item_id=item.id,row_no=item.row_no,stock_code=item.stock_code or "",product_id=item.product_id,order_item_id=item.order_item_id,order_id=item.order_id,order_number=item.order_number or "",customer_order_no=item.customer_order_no,delivery_qty=qty,warning=item.warning,mobile_pick_status=old.mobile_pick_status if old else "pending",mobile_picked_qty=old.mobile_picked_qty if old else None,mobile_pick_note=old.mobile_pick_note if old else None,mobile_picked_at=old.mobile_picked_at if old else None,mobile_picked_by=old.mobile_picked_by if old else None))
+        db.add(TianhuaPreDeliveryDraftItem(draft_id=draft.id,import_item_id=item.id,row_no=item.row_no,stock_code=item.stock_code or "",product_id=item.product_id,order_item_id=item.order_item_id,order_id=item.order_id,order_number=item.order_number or "",customer_order_no=item.customer_order_no,delivery_item_id=old.delivery_item_id if old else None,delivery_qty=qty,warning=item.warning,mobile_pick_status=old.mobile_pick_status if old else "pending",mobile_picked_qty=old.mobile_picked_qty if old else None,mobile_pick_note=old.mobile_pick_note if old else None,mobile_picked_at=old.mobile_picked_at if old else None,mobile_picked_by=old.mobile_picked_by if old else None))
+    db.flush()
+    ensure_draft_delivery(db,batch,draft,user_id)
     db.commit(); db.refresh(draft); return draft

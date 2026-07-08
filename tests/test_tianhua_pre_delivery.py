@@ -18,7 +18,7 @@ def test_supplied_screenshot_recognizes_30_rows():
     assert (rows[-1].stock_code,rows[-1].image_qty)==("21301466",20)
 
 
-def test_api_creates_isolated_draft_and_blocks_duplicate(tmp_path,monkeypatch):
+def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monkeypatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.tianhua_pre_delivery import router
@@ -83,9 +83,13 @@ def test_api_creates_isolated_draft_and_blocks_duplicate(tmp_path,monkeypatch):
     assert duplicate_line.status_code==400
     assert [response.status_code for response in blocked_responses]==[400,400]
     assert first.status_code==201 and second.status_code==409
+    assert first.json()["delivery_number"]
     assert first.json()["items"][0]["order_id"] == 1
     assert first.json()["items"][0]["order_no"] == "TH-1"
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(TianhuaPreDeliveryDraft))==1
-        assert db.scalar(select(func.count()).select_from(Delivery))==0
+        assert db.scalar(select(func.count()).select_from(Delivery))==1
+        delivery=db.scalars(select(Delivery)).one()
+        assert delivery.status=="pending"
+        assert delivery.total_quantity==200
         assert db.get(OrderItem,1).delivered_quantity==0

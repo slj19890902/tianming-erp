@@ -18,7 +18,7 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportItem,
 )
 from app.models.user import User
-from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, save_draft
+from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, ensure_draft_delivery, save_draft
 
 router=APIRouter()
 mobile_router=APIRouter()
@@ -117,6 +117,7 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
     ).all()
     return [{
         "item_id":draft_item.id,
+        "delivery_item_id":draft_item.delivery_item_id,
         "stock_code":draft_item.stock_code,
         "product_name":import_item.product_name,
         "order_no":draft_item.order_number,
@@ -134,11 +135,18 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
 
 
 @router.post("/tianhua-preimport/{batch_id}/mobile-token")
-def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),_user:User=Depends(can_operate)):
+def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(can_operate)):
     batch=_batch(db,batch_id)
     draft=db.scalar(select(TianhuaPreDeliveryDraft).where(TianhuaPreDeliveryDraft.batch_id==batch.id))
     if draft is None:
         raise HTTPException(status_code=409,detail="请先生成天华预送货草稿")
+    try:
+        ensure_draft_delivery(db,batch,draft,user.id)
+        db.commit()
+        db.refresh(draft)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=409,detail=str(e)) from e
     token,expires=create_tianhua_pick_token(batch.id,draft.id)
     port=request.url.port or 8000
     url=f"http://{_lan_ip()}:{port}/mobile/tianhua-pick?token={token}"
@@ -151,12 +159,12 @@ def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),
 @mobile_router.get("/tianhua-pick")
 def get_mobile_pick(token:str,db:Session=Depends(get_db)):
     batch,draft=_token_scope(token,db)
-    return {"batch_id":batch.id,"draft_id":draft.id,"draft_number":draft.draft_number,"customer_name":batch.customer_name,"pre_delivery_date":batch.pre_delivery_date.isoformat() if batch.pre_delivery_date else None,"items":_mobile_items(db,draft)}
+    return {"batch_id":batch.id,"draft_id":draft.id,"draft_number":draft.draft_number,"delivery_id":draft.delivery_id,"customer_name":batch.customer_name,"pre_delivery_date":batch.pre_delivery_date.isoformat() if batch.pre_delivery_date else None,"items":_mobile_items(db,draft)}
 
 
 @mobile_router.put("/tianhua-pick/items/{item_id}")
 def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(get_db)):
-    _batch_value,draft=_token_scope(payload.token,db)
+    batch,draft=_token_scope(payload.token,db)
     item=db.get(TianhuaPreDeliveryDraftItem,item_id)
     if item is None or item.draft_id!=draft.id:
         raise HTTPException(status_code=403,detail="无权限修改该拿货明细")
@@ -176,6 +184,11 @@ def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(g
     item.mobile_picked_at=datetime.utcnow()
     item.delivery_qty=qty
     import_item.final_delivery_qty=qty
+    try:
+        ensure_draft_delivery(db,batch,draft,None)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=409,detail=str(e)) from e
     db.commit()
     db.refresh(item)
     return {"ok":True,"item":next(value for value in _mobile_items(db,draft) if value["item_id"]==item.id)}

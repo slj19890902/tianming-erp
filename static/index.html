@@ -2676,7 +2676,12 @@
                 <button v-if="tianhuaPreimport.draft" class="btn primary" :disabled="loading" @click="generateTianhuaMobileToken">生成手机拿货二维码</button>
                 <button class="btn success" :disabled="!tianhuaSelectedCount() || loading" @click="createTianhuaDraft">{{ tianhuaPreimport.draft ? "保存草稿修改" : "生成送货单草稿" }}</button>
               </div>
-              <div v-if="tianhuaPreimport.draft" class="status green" style="display:block;margin-top:10px">草稿 {{ tianhuaPreimport.draft.draft_number }} 已保存，状态为 draft；未出库、未发货。</div>
+              <div v-if="tianhuaPreimport.draft" class="status green" style="display:block;margin-top:10px">
+                草稿 {{ tianhuaPreimport.draft.draft_number }} 已保存；
+                <span v-if="tianhuaPreimport.draft.delivery_number">已同步到待发货送货单 {{ tianhuaPreimport.draft.delivery_number }}。</span>
+                <span v-else>尚未关联正式送货单。</span>
+                未出库、未发货。
+              </div>
               <div v-if="tianhuaPreimport.mobileToken" class="panel" style="margin-top:12px;text-align:center">
                 <div class="section-title">手机拿货二维码</div>
                 <img :src="tianhuaPreimport.mobileToken.qr_data_url" alt="天华手机拿货二维码" style="width:280px;max-width:90%;border:1px solid var(--line);border-radius:12px" />
@@ -6877,6 +6882,7 @@
               this.tianhuaPreimport.items = data.items || [];
               this.tianhuaPreimport.draft = data.draft || null;
               this.tianhuaPreimport.preDeliveryDate = data.pre_delivery_date || this.tianhuaPreimport.preDeliveryDate;
+              await this.loadDeliveries();
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
@@ -6897,6 +6903,7 @@
               const url = `/api/deliveries/tianhua-preimport/${this.tianhuaPreimport.batchId}/${updating ? "update-draft" : "create-draft"}`;
               const {data} = updating ? await axios.put(url, payload) : await axios.post(url, payload);
               this.tianhuaPreimport.draft = data;
+              await this.loadTianhuaBatch();
               this.showToast(updating ? "天华预送货草稿修改已保存" : "天华预送货草稿已生成");
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }

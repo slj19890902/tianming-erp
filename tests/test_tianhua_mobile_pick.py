@@ -25,7 +25,7 @@ def test_mobile_pick_token_expiry_and_invalid_token(monkeypatch):
         decode_tianhua_pick_token("not-a-valid-token")
 
 
-def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
+def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monkeypatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.tianhua_pre_delivery import mobile_router, router
@@ -33,7 +33,7 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
     from app.core.security import create_tianhua_pick_token, hash_password
     from app.models import Base
     from app.models.customer import Customer
-    from app.models.delivery import Delivery
+    from app.models.delivery import Delivery, DeliveryItem
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.tianhua_pre_delivery import (
@@ -49,7 +49,7 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
         "recognize_tianhua_image",
         lambda _content: [
             service.RecognizedRow(1, "21301877 200", "21301877", 200),
-            service.RecognizedRow(2, "21301877 300", "21301877", 300),
+            service.RecognizedRow(2, "21302001 300", "21302001", 300),
         ],
     )
     monkeypatch.setattr(
@@ -84,7 +84,14 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
             product_name="测试产品",
             box_category="normal",
         )
-        db.add(product)
+        product_shortage = Product(
+            customer_id=customer.id,
+            product_code="21302001",
+            customer_material_code="21302001",
+            product_name="库存不足产品",
+            box_category="normal",
+        )
+        db.add_all([product, product_shortage])
         db.flush()
         order = Order(
             order_number="TH-MOBILE-1",
@@ -96,7 +103,7 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
         )
         db.add(order)
         db.flush()
-        db.add(
+        db.add_all([
             OrderItem(
                 order_id=order.id,
                 product_id=product.id,
@@ -107,8 +114,19 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
                 material_status="received",
                 snapshot_product_name="测试产品",
                 snapshot_product_code="21301877",
-            )
-        )
+            ),
+            OrderItem(
+                order_id=order.id,
+                product_id=product_shortage.id,
+                quantity=300,
+                delivered_quantity=0,
+                unit_price=Decimal("0"),
+                subtotal=Decimal("0"),
+                material_status="pending",
+                snapshot_product_name="库存不足产品",
+                snapshot_product_code="21302001",
+            ),
+        ])
         db.commit()
 
     app = FastAPI()
@@ -152,6 +170,7 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
             },
         )
         assert draft.status_code == 201
+        assert draft.json()["delivery_number"]
         token_response = client.post(
             f"/api/deliveries/tianhua-preimport/{uploaded.json()['batch_id']}/mobile-token"
         )
@@ -237,8 +256,16 @@ def test_mobile_pick_api_isolated_from_formal_delivery(tmp_path, monkeypatch):
         ] == ["no_stock", "partial"]
 
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(Delivery)) == 0
+        assert db.scalar(select(func.count()).select_from(Delivery)) == 1
+        delivery = db.scalars(select(Delivery)).one()
+        assert delivery.status == "pending"
+        assert delivery.total_quantity == 150
+        delivery_items = db.scalars(
+            select(DeliveryItem).order_by(DeliveryItem.order_item_id)
+        ).all()
+        assert [item.delivered_quantity for item in delivery_items] == [150]
         assert db.get(OrderItem, 1).delivered_quantity == 0
+        assert db.get(OrderItem, 2).delivered_quantity == 0
         picked = db.scalars(
             select(TianhuaPreDeliveryDraftItem).order_by(
                 TianhuaPreDeliveryDraftItem.row_no

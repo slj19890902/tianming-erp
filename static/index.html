@@ -477,10 +477,11 @@
         grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
       }
       .product-final-row {
-        grid-template-columns: minmax(150px, .3fr) minmax(500px, 1.7fr);
+        grid-template-columns: minmax(150px, .3fr) minmax(260px, .8fr);
         border-bottom: 0;
         padding-bottom: 0;
       }
+      .compact-remark-field .textarea { min-height: 34px; font-size: 12px; }
       .product-edit-grid .field { min-width: 0; }
       .product-edit-grid .field label { margin-bottom: 5px; white-space: nowrap; }
       .product-edit-grid .input,
@@ -518,6 +519,17 @@
       }
       .report-size-line .input { width: 94px; min-width: 82px; }
       .report-size-line .btn { flex: 0 0 auto; white-space: nowrap; padding-inline: 8px; }
+      .telescoping-component-grid {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) 120px minmax(245px, 1fr) minmax(130px, .6fr);
+        gap: 8px 12px;
+        padding: 8px 10px;
+        border: 1px solid #d7e8fb;
+        border-radius: 10px;
+        background: #f7fbff;
+      }
+      .telescoping-action-field .btn { width: 100%; }
       .crease-segments { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: nowrap; }
       .crease-segments .input {
         width: 74px;
@@ -562,6 +574,7 @@
         .product-print-row,
         .product-final-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .product-size-report-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .telescoping-component-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 680px) {
         .product-core-row,
@@ -1855,39 +1868,41 @@
                   </select>
                 </div>
                 <div class="field" v-if="usesProductTongue(productForm.box_style)"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="productForm.flap_mm" /></div>
-                <div class="field"><label>报料长宽</label>
-                  <div class="report-size-line">
-                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" @input="markProductReportManual" placeholder="长" />
-                    <span class="muted">×</span>
-                    <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" @input="markProductReportManual" placeholder="宽" />
-                    <span class="muted">mm</span>
-                    <button type="button" class="btn small" @click="reapplyProductRecommendations">重新推荐</button>
-                  </div>
-                  <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted">{{ productForm._recommendation_message }}</div>
-                </div>
-                <div class="field"><label>压线类型</label>
-                  <select class="select" v-model="productForm.crease_type">
-                    <option :value="null">未设置</option>
-                    <option value="压线">压线</option>
-                    <option value="毛片">毛</option>
-                    <option value="净料">净</option>
-                    <option value="其他">其他</option>
-                  </select>
-                </div>
-                <div class="field"><label>压线尺寸</label>
-                  <div v-if="productForm.crease_type === '压线'" class="crease-segments">
-                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="onCreaseLeftInput" placeholder="上摇盖" aria-label="上摇盖" />
-                    <span class="crease-segment-plus" aria-hidden="true">+</span>
-                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" placeholder="高" aria-label="高" />
-                    <span class="crease-segment-plus" aria-hidden="true">+</span>
-                    <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="onCreaseRightInput" placeholder="下摇盖" aria-label="下摇盖" />
-                  </div>
-                  <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请在报料备注中填写要求' }}</span>
-                  <span v-else class="muted">请人工选择</span>
-                </div>
-                <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
                 <template v-if="isTelescopingLidBoxStyle(productForm.box_style)">
-                  <div class="field"><label>底料长宽</label>
+                  <div class="telescoping-component-grid">
+                    <div class="field"><label>盖报料长宽</label>
+                      <div class="report-size-line">
+                        <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" @input="markProductReportManual" placeholder="盖长" />
+                        <span class="muted">×</span>
+                        <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" @input="markProductReportManual" placeholder="盖宽" />
+                        <span class="muted">mm</span>
+                      </div>
+                    </div>
+                    <div class="field"><label>盖压线类型</label>
+                      <select class="select" v-model="productForm.crease_type">
+                        <option :value="null">未设置</option>
+                        <option value="压线">压线</option>
+                        <option value="毛片">毛</option>
+                        <option value="净料">净</option>
+                        <option value="其他">其他</option>
+                      </select>
+                    </div>
+                    <div class="field"><label>盖压线尺寸</label>
+                      <div v-if="productForm.crease_type === '压线'" class="crease-segments">
+                        <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="markProductCreaseManual" placeholder="边高" aria-label="盖边高" />
+                        <span class="crease-segment-plus" aria-hidden="true">+</span>
+                        <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" placeholder="盖宽" aria-label="盖宽" />
+                        <span class="crease-segment-plus" aria-hidden="true">+</span>
+                        <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="markProductCreaseManual" placeholder="边高" aria-label="盖边高" />
+                      </div>
+                      <span v-else class="muted">{{ productForm.crease_type || "未设置" }}</span>
+                    </div>
+                    <div class="field telescoping-action-field">
+                      <label>&nbsp;</label>
+                      <button type="button" class="btn small" @click="reapplyProductRecommendations">重新推荐</button>
+                      <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted">{{ productForm._recommendation_message }}</div>
+                    </div>
+                    <div class="field"><label>底报料长宽</label>
                     <div class="report-size-line">
                       <input class="input" type="number" min="1" step="1" v-model.number="productForm.base_report_length_mm" @input="markProductBaseReportManual" placeholder="底长" />
                       <span class="muted">×</span>
@@ -1915,6 +1930,39 @@
                     <span v-else class="muted">{{ productForm.base_crease_type || "未设置" }}</span>
                   </div>
                   <div class="field"><label>底料备注</label><input class="input" v-model.trim="productForm.base_report_notes" placeholder="底料特殊要求" /></div>
+                </div>
+                </template>
+                <template v-else>
+                  <div class="field"><label>报料长宽</label>
+                    <div class="report-size-line">
+                      <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" @input="markProductReportManual" placeholder="长" />
+                      <span class="muted">×</span>
+                      <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_width_mm" @input="markProductReportManual" placeholder="宽" />
+                      <span class="muted">mm</span>
+                      <button type="button" class="btn small" @click="reapplyProductRecommendations">重新推荐</button>
+                    </div>
+                    <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted">{{ productForm._recommendation_message }}</div>
+                  </div>
+                  <div class="field"><label>压线类型</label>
+                    <select class="select" v-model="productForm.crease_type">
+                      <option :value="null">未设置</option>
+                      <option value="压线">压线</option>
+                      <option value="毛片">毛</option>
+                      <option value="净料">净</option>
+                      <option value="其他">其他</option>
+                    </select>
+                  </div>
+                  <div class="field"><label>压线尺寸</label>
+                    <div v-if="productForm.crease_type === '压线'" class="crease-segments">
+                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="onCreaseLeftInput" placeholder="上摇盖" aria-label="上摇盖" />
+                      <span class="crease-segment-plus" aria-hidden="true">+</span>
+                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_middle_mm" @input="markProductCreaseManual" placeholder="高" aria-label="高" />
+                      <span class="crease-segment-plus" aria-hidden="true">+</span>
+                      <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_right_mm" @input="onCreaseRightInput" placeholder="下摇盖" aria-label="下摇盖" />
+                    </div>
+                    <span v-else-if="productForm.crease_type" class="muted">{{ productForm.crease_type === '净料' ? '净' : productForm.crease_type === '毛片' ? '毛' : '请在报料备注中填写要求' }}</span>
+                    <span v-else class="muted">请人工选择</span>
+                  </div>
                 </template>
                 <div v-if="productCreaseMismatch" class="field wide status orange" style="display:block">{{ productCreaseMismatch }}</div>
               </div>
@@ -1966,6 +2014,7 @@
                     <option v-if="productForm.print_content && !['无印刷','单色印刷','双色印刷','多色印刷'].includes(productForm.print_content)" :value="productForm.print_content">原记录：{{ productForm.print_content }}</option>
                   </select>
                 </div>
+                <div class="field"><label>报料备注</label><input class="input" v-model.trim="productForm.report_notes" placeholder="供应商直发、特殊压线等" /></div>
                 <template v-if="productForm.print_content !== '无印刷'">
                   <div class="field"><label>上传新版本图纸</label>
                     <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
@@ -1993,7 +2042,7 @@
 
               <div class="product-form-row product-final-row">
                 <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
-                <div class="field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="2"></textarea></div>
+                <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
@@ -6591,29 +6640,10 @@
               this.showToast("所选明细包含多个供应商，请先按供应商筛选，或更换供应商/材质后再合并报料", true);
               return;
             }
-            this.requisitionForm = { supplier_name:suppliers[0] || "", items:rows.map(row => ({
-              order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_name:row.customer_name,
-              product_code:row.product_code, product_name:row.product_name, specification:row.specification || "", quantity:Number(row.quantity || 0),
-              material_id:row.material_id || null,
-              snapshot_supplier_name:row.snapshot_supplier_name || "",
-              material_display:row.material_display || row.material || "",
-              layer_count:row.layer_count || null,
-              flute_type:row.flute_type || null,
-              inventory_deducted_qty:Number(row.inventory_deducted_qty || 0),
-              finished_inventory_reserved_qty:Number(row.finished_inventory_reserved_qty || 0),
-              production_required_qty:Number(row.production_required_qty ?? row.quantity ?? 0),
-              requisition_qty:Number(row.requisition_qty ?? 0),
-              cardboard_len:row.suggested_cardboard_len, cardboard_width:row.suggested_cardboard_width,
-              special_process:this.normalizeCuttingMode(row.cutting_mode || row.special_process),
-              cutting_mode:this.normalizeCuttingMode(row.cutting_mode || row.special_process),
-              pieces_per_box:Number(row.pieces_per_box || row.snapshot_pieces_per_box || 1),
-              required_piece_qty:Number(row.required_piece_qty || 0),
-              snapshot_report_length_mm:row.snapshot_report_length_mm || null,
-              snapshot_report_width_mm:row.snapshot_report_width_mm || null,
-              snapshot_splice_mode:row.snapshot_splice_mode || "single",
-              splice_mode_label:(row.snapshot_splice_mode || "single") === "double" ? "双拼" : "单拼",
-              remark:""
-            }))};
+            this.requisitionForm = {
+              supplier_name:suppliers[0] || "",
+              items:rows.flatMap(row => this.buildRequisitionFormLines(row))
+            };
             this.requisitionForm.items.forEach(line => this.recalculateRequisitionLine(line));
             this.modal = {type:"requisition", title:"生成合并报料单"};
             await Promise.all(this.requisitionForm.items.map(async line => {
@@ -6630,6 +6660,62 @@
             }));
           },
           autoRequisitionQty(line) { this.recalculateRequisitionLine(line); },
+          buildRequisitionFormLines(row) {
+            const common = {
+              order_item_id:row.item_id, order_number:this.displayOrderNumber(row), customer_name:row.customer_name,
+              product_code:row.product_code, product_name:row.product_name, specification:row.specification || "", quantity:Number(row.quantity || 0),
+              material_id:row.material_id || null,
+              snapshot_supplier_name:row.snapshot_supplier_name || "",
+              material_display:row.material_display || row.material || "",
+              layer_count:row.layer_count || null,
+              flute_type:row.flute_type || null,
+              inventory_deducted_qty:Number(row.inventory_deducted_qty || 0),
+              finished_inventory_reserved_qty:Number(row.finished_inventory_reserved_qty || 0),
+              production_required_qty:Number(row.production_required_qty ?? row.quantity ?? 0),
+              special_process:this.normalizeCuttingMode(row.cutting_mode || row.special_process),
+              cutting_mode:this.normalizeCuttingMode(row.cutting_mode || row.special_process),
+              pieces_per_box:Number(row.pieces_per_box || row.snapshot_pieces_per_box || 1),
+              required_piece_qty:Number(row.required_piece_qty || 0),
+              snapshot_splice_mode:row.snapshot_splice_mode || "single",
+              splice_mode_label:(row.snapshot_splice_mode || "single") === "double" ? "双拼" : "单拼",
+              remark:""
+            };
+            const isTelescoping = row.snapshot_base_report_length_mm && row.snapshot_base_report_width_mm;
+            if (!isTelescoping) {
+              return [{
+                ...common,
+                requisition_qty:Number(row.requisition_qty ?? 0),
+                cardboard_len:row.suggested_cardboard_len,
+                cardboard_width:row.suggested_cardboard_width,
+                snapshot_report_length_mm:row.snapshot_report_length_mm || null,
+                snapshot_report_width_mm:row.snapshot_report_width_mm || null,
+                component_type:null
+              }];
+            }
+            const coverQty = Number(row.requisition_qty ?? 0);
+            return [
+              {
+                ...common,
+                component_type:"cover",
+                product_name:`${row.product_name}-盖`,
+                requisition_qty:coverQty,
+                cardboard_len:row.snapshot_report_length_mm || row.suggested_cardboard_len,
+                cardboard_width:row.snapshot_report_width_mm || row.suggested_cardboard_width,
+                snapshot_report_length_mm:row.snapshot_report_length_mm || null,
+                snapshot_report_width_mm:row.snapshot_report_width_mm || null
+              },
+              {
+                ...common,
+                component_type:"base",
+                product_name:`${row.product_name}-底`,
+                requisition_qty:coverQty,
+                cardboard_len:row.snapshot_base_report_length_mm,
+                cardboard_width:row.snapshot_base_report_width_mm,
+                snapshot_report_length_mm:row.snapshot_base_report_length_mm || null,
+                snapshot_report_width_mm:row.snapshot_base_report_width_mm || null
+              }
+            ];
+          },
           openIncomingPage() {
             window.location.href = "/incoming.html";
           },

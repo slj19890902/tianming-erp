@@ -101,6 +101,7 @@ def _company_sender(db: Session) -> dict:
 
 class RequisitionLinePayload(BaseModel):
     order_item_id: int
+    component_type: str | None = None
     inventory_deducted_qty: int = Field(default=0, ge=0)
     requisition_qty: int | None = Field(default=None, ge=0)
     cardboard_len: Decimal = Field(gt=0)
@@ -114,6 +115,16 @@ class RequisitionLinePayload(BaseModel):
         normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
         if normalized not in CUTTING_MODE_FACTORS:
             raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
+
+    @field_validator("component_type")
+    @classmethod
+    def validate_component_type(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"cover", "base"}:
+            raise ValueError("天地盖组件仅允许 cover 或 base")
         return normalized
 
 
@@ -142,9 +153,20 @@ class RequisitionBatchCreate(BaseModel):
     ) -> list[RequisitionLinePayload]:
         if not value:
             raise ValueError("至少选择一条待报料明细")
-        ids = [item.order_item_id for item in value]
-        if len(ids) != len(set(ids)):
-            raise ValueError("同一订单明细不能重复报料")
+        seen_single: set[int] = set()
+        seen_components: set[tuple[int, str]] = set()
+        for item in value:
+            if item.component_type:
+                key = (item.order_item_id, item.component_type)
+                if key in seen_components:
+                    raise ValueError("同一天地盖组件不能重复报料")
+                seen_components.add(key)
+                continue
+            if item.order_item_id in seen_single:
+                raise ValueError("同一订单明细不能重复报料")
+            seen_single.add(item.order_item_id)
+        if seen_single & {order_item_id for order_item_id, _ in seen_components}:
+            raise ValueError("同一订单明细不能同时按整单和组件报料")
         return value
 
 
@@ -641,11 +663,15 @@ def create_batch(
         db.add(batch)
         db.flush()
         response_items = []
+        lines_by_order_item: dict[int, list[RequisitionLinePayload]] = {}
         for line in payload.items:
+            lines_by_order_item.setdefault(line.order_item_id, []).append(line)
+
+        for order_item_id, lines in lines_by_order_item.items():
             row = db.execute(
                 select(OrderItem, Product)
                 .join(Product, Product.id == OrderItem.product_id)
-                .where(OrderItem.id == line.order_item_id)
+                .where(OrderItem.id == order_item_id)
             ).one_or_none()
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
@@ -655,11 +681,6 @@ def create_batch(
             if item.requisition_status != "未报料":
                 raise HTTPException(status_code=409, detail="订单明细已经报料")
             pieces_per_box = _pieces_per_box(item)
-            if line.inventory_deducted_qty:
-                raise HTTPException(
-                    status_code=400,
-                    detail="旧库存抵扣字段已停用，请在订单明细中选择真实成品库存预占",
-                )
             finished_reserved_qty = active_finished_reserved_qty(db, item.id)
             production_required_qty = max(
                 item.quantity - finished_reserved_qty, 0
@@ -672,39 +693,69 @@ def create_batch(
             required_piece_qty = _required_piece_qty(
                 production_required_qty, pieces_per_box
             )
-            requisition_qty = _purchase_qty(
-                required_piece_qty, 0, line.special_process
-            )
-            if requisition_qty < 0:
-                raise HTTPException(status_code=400, detail="采购报料张数不能为负数")
-            components = [
-                {
-                    "kind": "cover",
-                    "suffix": "盖",
-                    "cardboard_len": line.cardboard_len,
-                    "cardboard_width": line.cardboard_width,
-                    "requisition_qty": requisition_qty,
-                    "report_notes": item.snapshot_report_notes,
-                }
-            ]
-            if (
-                _is_telescoping_lid_box(product.box_style)
-                and item.snapshot_base_report_length_mm
-                and item.snapshot_base_report_width_mm
-            ):
-                base_qty = _purchase_qty(
+            components = []
+            for line in lines:
+                if line.inventory_deducted_qty:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="旧库存抵扣字段已停用，请在订单明细中选择真实成品库存预占",
+                    )
+                calculated_qty = _purchase_qty(
                     required_piece_qty, 0, line.special_process
                 )
+                requisition_qty = (
+                    int(line.requisition_qty)
+                    if line.component_type and line.requisition_qty is not None
+                    else calculated_qty
+                )
+                if requisition_qty < 0:
+                    raise HTTPException(status_code=400, detail="采购报料张数不能为负数")
+                if line.component_type:
+                    is_base = line.component_type == "base"
+                    components.append(
+                        {
+                            "kind": line.component_type,
+                            "suffix": "底" if is_base else "盖",
+                            "cardboard_len": line.cardboard_len,
+                            "cardboard_width": line.cardboard_width,
+                            "requisition_qty": requisition_qty,
+                            "report_notes": (
+                                item.snapshot_base_report_notes
+                                if is_base
+                                else item.snapshot_report_notes
+                            ),
+                            "special_process": line.special_process,
+                        }
+                    )
+                    continue
                 components.append(
                     {
-                        "kind": "base",
-                        "suffix": "底",
-                        "cardboard_len": Decimal(item.snapshot_base_report_length_mm),
-                        "cardboard_width": Decimal(item.snapshot_base_report_width_mm),
-                        "requisition_qty": base_qty,
-                        "report_notes": item.snapshot_base_report_notes,
+                        "kind": "cover",
+                        "suffix": "盖",
+                        "cardboard_len": line.cardboard_len,
+                        "cardboard_width": line.cardboard_width,
+                        "requisition_qty": requisition_qty,
+                        "report_notes": item.snapshot_report_notes,
+                        "special_process": line.special_process,
                     }
                 )
+                if (
+                    _is_telescoping_lid_box(product.box_style)
+                    and item.snapshot_base_report_length_mm
+                    and item.snapshot_base_report_width_mm
+                ):
+                    components.append(
+                        {
+                            "kind": "base",
+                            "suffix": "底",
+                            "cardboard_len": Decimal(item.snapshot_base_report_length_mm),
+                            "cardboard_width": Decimal(item.snapshot_base_report_width_mm),
+                            "requisition_qty": requisition_qty,
+                            "report_notes": item.snapshot_base_report_notes,
+                            "special_process": line.special_process,
+                        }
+                    )
+            first_line = lines[0]
             total_requisition_qty = sum(
                 int(component["requisition_qty"]) for component in components
             )
@@ -714,16 +765,16 @@ def create_batch(
                     for component in components
                 )
             else:
-                spec = f"{_plain(line.cardboard_len)}×{_plain(line.cardboard_width)}"
+                spec = f"{_plain(first_line.cardboard_len)}×{_plain(first_line.cardboard_width)}"
             item.inventory_deducted_qty = 0
             item.requisition_qty = total_requisition_qty
             item.requisition_status = "已报料"
-            item.special_process = line.special_process
-            item.cardboard_len = line.cardboard_len
-            item.cardboard_width = line.cardboard_width
+            item.special_process = first_line.special_process
+            item.cardboard_len = first_line.cardboard_len
+            item.cardboard_width = first_line.cardboard_width
             item.requisition_spec = spec
             item.requisition_date = requisition_date
-            item.requisition_remark = (line.remark or "").strip() or None
+            item.requisition_remark = (first_line.remark or "").strip() or None
             for component in components:
                 component_remark = item.requisition_remark
                 if component["report_notes"] and component["report_notes"] != component_remark:
@@ -741,7 +792,7 @@ def create_batch(
                     cardboard_width=component["cardboard_width"],
                     pieces_per_box=pieces_per_box,
                     required_piece_qty=required_piece_qty,
-                    special_process=line.special_process,
+                    special_process=component["special_process"],
                     material_snapshot=item.snapshot_material,
                     product_code_snapshot=(item.snapshot_product_code or product.product_code),
                     product_name_snapshot=(
@@ -762,7 +813,7 @@ def create_batch(
             entity_id=batch.id,
             details={
                 "requisition_number": batch.requisition_number,
-                "item_ids": [line.order_item_id for line in payload.items],
+                "item_ids": list(lines_by_order_item),
             },
             description="生成采购报料单",
         )

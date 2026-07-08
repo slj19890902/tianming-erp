@@ -219,11 +219,48 @@ def test_common_box_type_list_preserves_legacy_and_supports_standard_formulas() 
     assert "原记录：" in source
     assert "isA1BoxStyle" in source
     assert "isTelescopingLidBoxStyle" in source
+
+
+def test_telescoping_lid_edit_layout_separates_cover_and_base_rows() -> None:
+    source = _source()
+
+    assert 'class="telescoping-component-grid"' in source
+    for marker in (
+        "盖报料长宽",
+        "底报料长宽",
+        "盖压线类型",
+        "底压线类型",
+        "盖压线尺寸",
+        "底压线尺寸",
+        "底料备注",
+    ):
+        assert marker in source
+
+    size_row_start = source.index('class="product-form-row product-size-report-row"')
+    material_row_start = source.index('class="product-form-row product-material-row"')
+    size_row = source[size_row_start:material_row_start]
+    assert "telescoping-component-grid" in size_row
+
+    print_row_start = source.index('class="product-form-row product-print-row"')
+    final_row_start = source.index('class="product-form-row product-final-row"')
+    print_row = source[print_row_start:final_row_start]
+    assert "报料备注" in print_row
+    assert "v-model.trim=\"productForm.report_notes\"" in print_row
+    assert "compact-remark-field" in source
     assert "A3 天地盖推荐" in source
     assert '["平卡", "刀卡", "隔板"]' in source
     assert "围套推荐" in source
     assert "半开槽箱推荐" in source
     assert "全搭盖箱推荐" in source
+
+
+def test_telescoping_lid_requisition_modal_splits_cover_and_base_lines() -> None:
+    source = _source()
+
+    assert "buildRequisitionFormLines(row)" in source
+    assert 'component_type:"cover"' in source
+    assert 'component_type:"base"' in source
+    assert "rows.flatMap(row => this.buildRequisitionFormLines(row))" in source
 
 
 def test_common_box_drawing_history_shows_filename_time_latest_and_open_action() -> None:

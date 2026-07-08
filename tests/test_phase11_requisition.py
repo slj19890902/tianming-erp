@@ -683,6 +683,81 @@ def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> No
         assert item.special_process == "一开三"
 
 
+def test_tiandigai_requisition_splits_cover_and_base_rows(requisition_app) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.requisition import RequisitionItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        product = session.get(Product, 1)
+        product.box_style = "A3 天地盖"
+        item = session.get(OrderItem, 1)
+        item.snapshot_report_length_mm = 660
+        item.snapshot_report_width_mm = 460
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 80
+        item.snapshot_crease_middle_mm = 300
+        item.snapshot_crease_right_mm = 80
+        item.snapshot_base_report_length_mm = 635
+        item.snapshot_base_report_width_mm = 435
+        item.snapshot_base_crease_type = "压线"
+        item.snapshot_base_crease_left_mm = 80
+        item.snapshot_base_crease_middle_mm = 275
+        item.snapshot_base_crease_right_mm = 80
+        session.commit()
+
+    payload = {
+        "supplier_name": "苏州纸板供应商",
+        "items": [
+            {
+                "order_item_id": 1,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 100,
+                "cardboard_len": "660",
+                "cardboard_width": "460",
+                "special_process": "一开一",
+                "remark": "天地盖按套报料",
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        created = client.post("/api/requisition/batches", json=payload)
+        _login(client, "admin")
+        received = client.put("/api/incoming/receive/1")
+
+    assert pending.status_code == 200
+    pending_row = pending.json()["items"][0]
+    assert pending_row["snapshot_base_report_length_mm"] == 635
+    assert pending_row["snapshot_base_report_width_mm"] == 435
+    assert created.status_code == 201, created.text
+    assert created.json()["items"][0]["requisition_qty"] == 200
+    assert received.status_code == 200, received.text
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        assert item.requisition_qty == 200
+        assert item.requisition_status == "已入库"
+        rows = session.scalars(
+            select(RequisitionItem).order_by(RequisitionItem.id)
+        ).all()
+        assert len(rows) == 2
+        assert [row.requisition_qty for row in rows] == [100, 100]
+        assert [Decimal(row.cardboard_len) for row in rows] == [
+            Decimal("660"),
+            Decimal("635"),
+        ]
+        assert [Decimal(row.cardboard_width) for row in rows] == [
+            Decimal("460"),
+            Decimal("435"),
+        ]
+        assert "天地盖-盖" in rows[0].product_name_snapshot
+        assert "天地盖-底" in rows[1].product_name_snapshot
+
+
 
 def test_phase11_migration_is_additive_and_preserves_order_items(
     monkeypatch: pytest.MonkeyPatch,

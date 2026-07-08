@@ -81,3 +81,15 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     SemiFinishedInventoryDetail,
     WarehouseLocation,
 )
+from app.models.xinzhen_carton_marking import (  # noqa: E402,F401
+    XinzhenCartonMarkingImportBatch,
+    XinzhenCartonMarkingOrder,
+    XinzhenCommonBoxRule,
+    XinzhenPrintChangeoverStep,
+    XinzhenPrintChangeoverStepItem,
+    XinzhenPrintLayout,
+    XinzhenPrintLayoutSlotValue,
+    XinzhenResinTemplate,
+    XinzhenResinTemplateSlot,
+    XinzhenRubberTypeBlock,
+)

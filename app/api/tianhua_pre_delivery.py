@@ -1,6 +1,8 @@
 import base64
+import re
 import socket
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 
 import qrcode
@@ -17,6 +19,8 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportBatch,
     TianhuaPreDeliveryImportItem,
 )
+from app.models.order import OrderItem
+from app.models.product import Product
 from app.models.user import User
 from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, ensure_draft_delivery, save_draft
 
@@ -108,6 +112,40 @@ def _token_scope(token:str,db:Session) -> tuple[TianhuaPreDeliveryImportBatch,Ti
     return batch,draft
 
 
+def _plain_mm(value) -> str | None:
+    if value is None:
+        return None
+    try:
+        number=Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        text=str(value).strip()
+        return text or None
+    if number==number.to_integral_value():
+        return str(int(number))
+    return format(number.normalize(),"f").rstrip("0").rstrip(".")
+
+
+def _dimension_from_text(value:str|None) -> str | None:
+    match=re.search(r"\d+(?:\.\d+)?\s*(?:[*xX×]\s*\d+(?:\.\d+)?){1,2}\s*(?:cm|mm)?",value or "")
+    if not match:
+        return None
+    return re.sub(r"\s+","",match.group(0)).replace("*","×").replace("x","×").replace("X","×")
+
+
+def _mobile_product_spec(order_item:OrderItem|None,product:Product|None,product_name:str|None) -> str:
+    if order_item and (order_item.snapshot_spec or "").strip():
+        return order_item.snapshot_spec.strip()
+    if product:
+        dims=[_plain_mm(product.length_mm),_plain_mm(product.width_mm),_plain_mm(product.height_mm)]
+        if all(dims):
+            return f"{dims[0]} × {dims[1]} × {dims[2]} mm"
+        parsed=_dimension_from_text(product.product_name)
+        if parsed:
+            return parsed
+    parsed=_dimension_from_text(product_name)
+    return parsed or ""
+
+
 def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
     rows=db.execute(
         select(TianhuaPreDeliveryDraftItem,TianhuaPreDeliveryImportItem)
@@ -115,11 +153,16 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
         .where(TianhuaPreDeliveryDraftItem.draft_id==draft.id)
         .order_by(TianhuaPreDeliveryDraftItem.row_no)
     ).all()
+    order_item_ids=[draft_item.order_item_id for draft_item,_import_item in rows if draft_item.order_item_id]
+    product_ids=[import_item.product_id for _draft_item,import_item in rows if import_item.product_id]
+    order_items={item.id:item for item in db.scalars(select(OrderItem).where(OrderItem.id.in_(order_item_ids))).all()} if order_item_ids else {}
+    products={product.id:product for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()} if product_ids else {}
     return [{
         "item_id":draft_item.id,
         "delivery_item_id":draft_item.delivery_item_id,
         "stock_code":draft_item.stock_code,
         "product_name":import_item.product_name,
+        "product_spec":_mobile_product_spec(order_items.get(draft_item.order_item_id),products.get(import_item.product_id),import_item.product_name),
         "order_no":draft_item.order_number,
         "customer_order_no":draft_item.customer_order_no,
         "suggested_qty":import_item.suggested_qty,

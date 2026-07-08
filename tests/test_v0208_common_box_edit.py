@@ -147,6 +147,11 @@ def test_common_box_a1_board_and_crease_recommendations_use_splice_and_flap() ->
     assert "Math.round(W / 2)" in source
     assert "A1/0201 双拼推荐" in source
     assert "A1/0201 单拼推荐" in source
+    assert "A3 天地盖推荐：盖=L+2H、W+2H；底长宽各减25mm后同高展开。" in source
+    assert "平卡/刀卡/隔板推荐" in source
+    assert "围套推荐" in source
+    assert "半开槽箱推荐" in source
+    assert "全搭盖箱推荐" in source
     assert "(L + W + 8) * 2" not in source
     assert "W + H + 4" not in source
 
@@ -194,6 +199,12 @@ def test_common_box_type_list_preserves_legacy_and_only_a1_is_automatic() -> Non
         assert box_type in source
     assert "原记录：" in source
     assert "isA1BoxStyle" in source
+    assert "isTelescopingLidBoxStyle" in source
+    assert "usesProductTongue" in source
+    assert 'v-if="usesProductSplice(productForm.box_style)"' in source
+    assert 'v-if="usesProductTongue(productForm.box_style)"' in source
+    assert "底报料长宽" in source
+    assert "底压线尺寸" in source
     assert "该箱型暂无自动推荐公式，请手工填写报料长宽。" in source
 
 
@@ -220,9 +231,50 @@ def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     assert "delete payload._material_supplier" in source
     assert "delete payload._report_dims_manual" in source
     assert "delete payload._crease_dims_manual" in source
+    assert "delete payload._base_report_dims_manual" in source
+    assert "delete payload._base_crease_dims_manual" in source
     assert "delete payload._recommendation_message" in source
     assert "delete payload.drawings" in source
     assert "productFormSnapshot" in source
+
+
+def test_common_box_payload_supports_tiandigai_base_and_hides_flap() -> None:
+    required = {
+        "customer_id": 1,
+        "product_code": "A3-001",
+        "customer_material_code": "A3-001",
+        "product_name": "天地盖",
+        "box_category": "normal",
+        "box_style": "A3 天地盖",
+    }
+
+    payload = ProductPayload(
+        **required,
+        length_mm=500,
+        width_mm=300,
+        height_mm=80,
+        report_length_mm=660,
+        report_width_mm=460,
+        crease_type="压线",
+        crease_left_mm=80,
+        crease_middle_mm=300,
+        crease_right_mm=80,
+        base_report_length_mm=635,
+        base_report_width_mm=435,
+        base_crease_type="压线",
+        base_crease_left_mm=80,
+        base_crease_middle_mm=275,
+        base_crease_right_mm=80,
+        splice_mode="double",
+        pieces_per_box=2,
+        flap_mm=30,
+    )
+
+    assert payload.splice_mode == "single"
+    assert payload.pieces_per_box == 1
+    assert payload.flap_mm is None
+    assert payload.base_report_length_mm == 635
+    assert payload.base_crease_middle_mm == 275
 
 
 def test_common_box_fifth_row_contains_price_and_remark() -> None:

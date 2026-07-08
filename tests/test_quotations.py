@@ -285,7 +285,13 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         assert product.product_name == "正式 A1 纸箱"
         assert product.sale_unit_price == Decimal("2.5000")
         assert product.report_length_mm == 1030
-        assert product.report_width_mm == 355
+        assert product.report_width_mm == 350
+        assert product.crease_type == "压线"
+        assert (
+            product.crease_left_mm,
+            product.crease_middle_mm,
+            product.crease_right_mm,
+        ) == (100, 150, 100)
         assert product.flute_type == "AB"
         assert product.material.flute_type is None
         second_product = db.query(Product).filter(Product.product_code == "Q-002").one()

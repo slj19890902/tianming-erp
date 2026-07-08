@@ -99,6 +99,23 @@ FINAL_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled", 
 
 _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
 
+
+def _box_style_uses_tongue(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    if not value:
+        return True
+    if any(marker in value for marker in ("A3", "天地盖", "平卡", "刀卡", "隔板", "异形", "其他")):
+        return False
+    return any(marker in value for marker in ("A1", "0201", "围套", "半开槽", "全搭盖", "0200", "0203"))
+
+
+def _box_style_uses_splice(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    if not value:
+        return True
+    return "A1" in value or "0201" in value
+
+
 # Terminal / archived statuses that should NOT appear in the day-to-day
 # "business" (日常订单) view. Active orders — including freshly saved PDF
 # imports that are still pending_production / awaiting requisition — stay in
@@ -111,7 +128,7 @@ _BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
 
 class OrderItemCreate(BaseModel):
     product_id: int | None = None
-    quantity: int
+    quantity: int | float
     unit_price: Decimal
     product_code: str | None = None
     product_name: str | None = None
@@ -158,6 +175,13 @@ class OrderItemUpdate(BaseModel):
     snapshot_crease_middle_mm: int | None = None
     snapshot_crease_right_mm: int | None = None
     snapshot_report_notes: str | None = None
+    snapshot_base_report_length_mm: int | None = None
+    snapshot_base_report_width_mm: int | None = None
+    snapshot_base_crease_type: str | None = None
+    snapshot_base_crease_left_mm: int | None = None
+    snapshot_base_crease_middle_mm: int | None = None
+    snapshot_base_crease_right_mm: int | None = None
+    snapshot_base_report_notes: str | None = None
     snapshot_splice_mode: str | None = None
     snapshot_pieces_per_box: int | None = None
     snapshot_flap_mm: int | None = None
@@ -184,6 +208,8 @@ class OrderCreate(BaseModel):
     payment_status: str = "unpaid"
     remark: str | None = None
     items: list[OrderItemCreate] | None = None
+    import_integrity_status: str | None = None
+    import_integrity_errors: list[str] | None = None
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -203,6 +229,18 @@ class OrderCreate(BaseModel):
     cost_unit_price: float | None = None
     warning_confirmed: bool = False
     created_by: int | None = None
+
+
+def _validated_order_quantity(value: int | float, index: int) -> int:
+    decimal_value = Decimal(str(value))
+    if decimal_value <= 0:
+        raise HTTPException(status_code=400, detail=f"第{index}条明细数量必须大于0")
+    if decimal_value != decimal_value.to_integral_value():
+        raise HTTPException(
+            status_code=400,
+            detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
+        )
+    return int(decimal_value)
 
 
 class OrderUpdate(BaseModel):
@@ -387,6 +425,13 @@ def _order_response(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_base_report_length_mm": item.snapshot_base_report_length_mm,
+                "snapshot_base_report_width_mm": item.snapshot_base_report_width_mm,
+                "snapshot_base_crease_type": item.snapshot_base_crease_type,
+                "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+                "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+                "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+                "snapshot_base_report_notes": item.snapshot_base_report_notes,
                 "snapshot_splice_mode": item.snapshot_splice_mode,
                 "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
                 "snapshot_flap_mm": item.snapshot_flap_mm,
@@ -1434,6 +1479,15 @@ def create_order(
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    if payload.import_integrity_status == "failed":
+        errors = payload.import_integrity_errors or []
+        message = (
+            "当前 PDF 识别存在漏行或合计不一致，不能直接保存。"
+            "请先人工补齐或确认异常。"
+        )
+        if errors:
+            message = f"{message} {'；'.join(errors)}"
+        raise HTTPException(status_code=400, detail=message)
 
     try:
         customer = db.get(Customer, payload.customer_id)
@@ -1444,7 +1498,12 @@ def create_order(
 
         new_product_cache: dict[str, Product] = {}
         resolved_products: dict[int, Product] = {}
+        validated_quantities: dict[int, int] = {}
         for index, item_payload in enumerate(payload.items, start=1):
+            validated_quantities[index] = _validated_order_quantity(
+                item_payload.quantity,
+                index,
+            )
             if item_payload.product_id is not None and not item_payload.is_new_product:
                 product = db.scalar(
                     select(Product)
@@ -1512,7 +1571,7 @@ def create_order(
             incoming_signature = sorted(
                 (
                     resolved_products[index].id,
-                    item.quantity,
+                    validated_quantities[index],
                     str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
                     (
                         (item.specification or "").strip()
@@ -1557,11 +1616,6 @@ def create_order(
         total = Decimal("0")
         created_items: list[OrderItem] = []
         for index, item_payload in enumerate(payload.items, start=1):
-            if item_payload.quantity <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条明细数量必须大于0",
-                )
             try:
                 unit_price = Decimal(str(item_payload.unit_price))
             except (InvalidOperation, ValueError) as error:
@@ -1576,9 +1630,10 @@ def create_order(
                 )
 
             product = resolved_products[index]
+            quantity = validated_quantities[index]
 
             subtotal = (
-                Decimal(item_payload.quantity) * unit_price
+                Decimal(quantity) * unit_price
             ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
@@ -1590,7 +1645,7 @@ def create_order(
                     order.order_number,
                     item_sequence,
                 ),
-                quantity=item_payload.quantity,
+                quantity=quantity,
                 unit_price=unit_price,
                 subtotal=subtotal,
                 material_status="pending",
@@ -1642,6 +1697,13 @@ def create_order(
                 snapshot_crease_middle_mm=product.crease_middle_mm,
                 snapshot_crease_right_mm=product.crease_right_mm,
                 snapshot_report_notes=product.report_notes,
+                snapshot_base_report_length_mm=product.base_report_length_mm,
+                snapshot_base_report_width_mm=product.base_report_width_mm,
+                snapshot_base_crease_type=product.base_crease_type,
+                snapshot_base_crease_left_mm=product.base_crease_left_mm,
+                snapshot_base_crease_middle_mm=product.base_crease_middle_mm,
+                snapshot_base_crease_right_mm=product.base_crease_right_mm,
+                snapshot_base_report_notes=product.base_report_notes,
                 snapshot_splice_mode=product.splice_mode or "single",
                 snapshot_pieces_per_box=product.pieces_per_box or (2 if (product.splice_mode or "").lower() == "double" else 1),
                 snapshot_flap_mm=product.flap_mm or 30,
@@ -1803,12 +1865,33 @@ def update_order_item(
         item.snapshot_crease_right_mm = payload.snapshot_crease_right_mm
     if payload.snapshot_report_notes is not None:
         item.snapshot_report_notes = payload.snapshot_report_notes or None
+    if payload.snapshot_base_report_length_mm is not None:
+        item.snapshot_base_report_length_mm = payload.snapshot_base_report_length_mm
+    if payload.snapshot_base_report_width_mm is not None:
+        item.snapshot_base_report_width_mm = payload.snapshot_base_report_width_mm
+    if payload.snapshot_base_crease_type is not None:
+        item.snapshot_base_crease_type = payload.snapshot_base_crease_type or None
+    if payload.snapshot_base_crease_left_mm is not None:
+        item.snapshot_base_crease_left_mm = payload.snapshot_base_crease_left_mm
+    if payload.snapshot_base_crease_middle_mm is not None:
+        item.snapshot_base_crease_middle_mm = payload.snapshot_base_crease_middle_mm
+    if payload.snapshot_base_crease_right_mm is not None:
+        item.snapshot_base_crease_right_mm = payload.snapshot_base_crease_right_mm
+    if payload.snapshot_base_report_notes is not None:
+        item.snapshot_base_report_notes = payload.snapshot_base_report_notes or None
     if payload.snapshot_splice_mode is not None:
         item.snapshot_splice_mode = payload.snapshot_splice_mode or None
     if payload.snapshot_pieces_per_box is not None:
         item.snapshot_pieces_per_box = payload.snapshot_pieces_per_box
     if payload.snapshot_flap_mm is not None:
         item.snapshot_flap_mm = payload.snapshot_flap_mm
+    effective_box_style = payload.box_style or (item.product.box_style if item.product else None)
+    if payload.box_style is not None:
+        if not _box_style_uses_splice(effective_box_style):
+            item.snapshot_splice_mode = "single"
+            item.snapshot_pieces_per_box = 1
+        if not _box_style_uses_tongue(effective_box_style):
+            item.snapshot_flap_mm = None
     if payload.sync_product and item.product_id:
         product = db.get(Product, item.product_id)
         if product is None:
@@ -1852,6 +1935,26 @@ def update_order_item(
             product.crease_right_mm = payload.snapshot_crease_right_mm
         if payload.snapshot_report_notes is not None:
             product.report_notes = payload.snapshot_report_notes or None
+        if payload.snapshot_base_report_length_mm is not None:
+            product.base_report_length_mm = payload.snapshot_base_report_length_mm
+        if payload.snapshot_base_report_width_mm is not None:
+            product.base_report_width_mm = payload.snapshot_base_report_width_mm
+        if payload.snapshot_base_crease_type is not None:
+            product.base_crease_type = payload.snapshot_base_crease_type or None
+        if payload.snapshot_base_crease_left_mm is not None:
+            product.base_crease_left_mm = payload.snapshot_base_crease_left_mm
+        if payload.snapshot_base_crease_middle_mm is not None:
+            product.base_crease_middle_mm = payload.snapshot_base_crease_middle_mm
+        if payload.snapshot_base_crease_right_mm is not None:
+            product.base_crease_right_mm = payload.snapshot_base_crease_right_mm
+        if payload.snapshot_base_report_notes is not None:
+            product.base_report_notes = payload.snapshot_base_report_notes or None
+        if payload.box_style is not None:
+            if not _box_style_uses_splice(product.box_style):
+                product.splice_mode = "single"
+                product.pieces_per_box = 1
+            if not _box_style_uses_tongue(product.box_style):
+                product.flap_mm = None
         if payload.product_remark is not None:
             product.remark = payload.product_remark.strip() or None
     _refresh_total(db, order)
@@ -1895,6 +1998,13 @@ def update_order_item(
         "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
         "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
         "snapshot_report_notes": item.snapshot_report_notes,
+        "snapshot_base_report_length_mm": item.snapshot_base_report_length_mm,
+        "snapshot_base_report_width_mm": item.snapshot_base_report_width_mm,
+        "snapshot_base_crease_type": item.snapshot_base_crease_type,
+        "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+        "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+        "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+        "snapshot_base_report_notes": item.snapshot_base_report_notes,
         "snapshot_splice_mode": item.snapshot_splice_mode,
         "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
         "snapshot_flap_mm": item.snapshot_flap_mm,

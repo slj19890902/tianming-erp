@@ -485,6 +485,13 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
                 "snapshot_crease_left_mm": 335,
                 "snapshot_crease_middle_mm": 110,
                 "snapshot_crease_right_mm": 335,
+                "snapshot_base_report_length_mm": 3070,
+                "snapshot_base_report_width_mm": 760,
+                "snapshot_base_crease_type": "压线",
+                "snapshot_base_crease_left_mm": 330,
+                "snapshot_base_crease_middle_mm": 100,
+                "snapshot_base_crease_right_mm": 330,
+                "snapshot_base_report_notes": "底盒手工确认",
                 "production_process": "粘贴",
                 "print_content": "单色印刷",
                 "product_remark": "订单编辑同步",
@@ -503,6 +510,11 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
         assert product.pieces_per_box == 2
         assert product.report_length_mm == 3130
         assert product.crease_middle_mm == 110
+        assert product.base_report_length_mm == 3070
+        assert product.base_report_width_mm == 760
+        assert product.base_crease_type == "压线"
+        assert product.base_crease_middle_mm == 100
+        assert product.base_report_notes == "底盒手工确认"
         assert product.production_process == "粘贴"
         assert product.print_content == "单色印刷"
         assert product.remark == "订单编辑同步"

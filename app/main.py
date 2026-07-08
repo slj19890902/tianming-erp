@@ -31,6 +31,9 @@ from app.api.tianhua_pre_delivery import (
     mobile_router as tianhua_mobile_router,
     router as tianhua_pre_delivery_router,
 )
+from app.api.xinzhen_carton_marking import (
+    router as xinzhen_carton_marking_router,
+)
 from app.core.config import load_settings
 
 
@@ -227,6 +230,15 @@ def create_app() -> FastAPI:
             tianhua_mobile_router,
             prefix="/api/mobile",
             tags=["tianhua-mobile-pick"],
+        )
+    if not any(
+        route.path == "/api/xinzhen-carton-marking/import-json"
+        for route in application.routes
+    ):
+        application.include_router(
+            xinzhen_carton_marking_router,
+            prefix="/api/xinzhen-carton-marking",
+            tags=["xinzhen-carton-marking"],
         )
     if not any(
         route.path == "/api/orders/items/{item_id}/force_close"

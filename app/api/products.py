@@ -47,6 +47,24 @@ PRODUCT_DELETE_CONFLICT_DETAIL = (
 )
 
 
+def _box_style_uses_tongue(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    if not value:
+        return True
+    non_tongue_markers = ("A3", "天地盖", "平卡", "刀卡", "隔板", "异形", "其他")
+    if any(marker in value for marker in non_tongue_markers):
+        return False
+    tongue_markers = ("A1", "0201", "围套", "半开槽", "全搭盖", "0200", "0203")
+    return any(marker in value for marker in tongue_markers)
+
+
+def _box_style_uses_splice(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    if not value:
+        return True
+    return "A1" in value or "0201" in value
+
+
 class ProductPayload(BaseModel):
     customer_id: int
     product_code: str = Field(min_length=1, max_length=150)
@@ -83,6 +101,13 @@ class ProductPayload(BaseModel):
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None
     report_notes: str | None = None
+    base_report_length_mm: int | None = None
+    base_report_width_mm: int | None = None
+    base_crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线|其他)$|^$")
+    base_crease_left_mm: int | None = None
+    base_crease_middle_mm: int | None = None
+    base_crease_right_mm: int | None = None
+    base_report_notes: str | None = None
     splice_mode: str | None = "single"
     pieces_per_box: int | None = None
     flap_mm: int | None = 30
@@ -97,15 +122,22 @@ class ProductPayload(BaseModel):
         splice_mode = (self.splice_mode or "single").strip().lower()
         if splice_mode not in {"single", "double"}:
             raise ValueError("拼箱方式仅允许：single 或 double")
+        if not _box_style_uses_splice(self.box_style):
+            splice_mode = "single"
         self.splice_mode = splice_mode
         if self.pieces_per_box is None:
             self.pieces_per_box = 2 if splice_mode == "double" else 1
+        if not _box_style_uses_splice(self.box_style):
+            self.pieces_per_box = 1
         if self.pieces_per_box not in {1, 2}:
             raise ValueError("每箱片数仅允许 1 或 2")
-        if self.flap_mm is None:
-            self.flap_mm = 30
-        if self.flap_mm <= 0:
-            raise ValueError("舌头(mm)必须大于0")
+        if _box_style_uses_tongue(self.box_style):
+            if self.flap_mm is None:
+                self.flap_mm = 30
+            if self.flap_mm <= 0:
+                raise ValueError("舌头(mm)必须大于0")
+        else:
+            self.flap_mm = None
         return self
 
 
@@ -686,6 +718,10 @@ def sync_product_fields(
         # v0.19.2-B: 报料尺寸 + 压线同步
         "report_length_mm", "report_width_mm",
         "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+        "base_report_length_mm", "base_report_width_mm",
+        "base_crease_type", "base_crease_left_mm",
+        "base_crease_middle_mm", "base_crease_right_mm",
+        "base_report_notes",
         "report_notes", "production_process", "product_name", "specification",
         "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content",
     }

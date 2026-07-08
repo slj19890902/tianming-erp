@@ -82,6 +82,9 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             product_code="21301877",
             customer_material_code="21301877",
             product_name="测试产品",
+            length_mm=Decimal("300"),
+            width_mm=Decimal("200"),
+            height_mm=Decimal("100"),
             box_category="normal",
         )
         product_shortage = Product(
@@ -89,6 +92,9 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             product_code="21302001",
             customer_material_code="21302001",
             product_name="库存不足产品",
+            length_mm=Decimal("310"),
+            width_mm=Decimal("210"),
+            height_mm=Decimal("110"),
             box_category="normal",
         )
         db.add_all([product, product_shortage])
@@ -181,8 +187,10 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
         mobile = client.get("/api/mobile/tianhua-pick", params={"token": token})
         assert mobile.status_code == 200
         assert len(mobile.json()["items"]) == 2
+        assert mobile.json()["items"][0]["product_spec"] == "300 × 200 × 100 mm"
         shortage = mobile.json()["items"][1]
         assert shortage["status"] == "stock_shortage"
+        assert shortage["product_spec"] == "310 × 210 × 110 mm"
         assert shortage["order_no"] == "TH-MOBILE-1"
         expired_token, _expires = create_tianhua_pick_token(
             uploaded.json()["batch_id"],
@@ -360,8 +368,11 @@ def test_mobile_page_is_standalone_and_supports_stock_shortage():
         "/api/mobile/tianhua-pick",
         "已拿货",
         "没货",
-        "部分拿货",
-        "此操作不会自动入库或扣库存",
+        "product_spec",
+        "currentFilter",
+        "data-filter",
     ):
         assert text in html
+    for hidden_text in ("此操作不会自动入库或扣库存", "订单：", "客户单号", "拿货备注", "<h1>"):
+        assert hidden_text not in html
     assert "后台菜单" not in html

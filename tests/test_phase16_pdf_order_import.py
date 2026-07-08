@@ -46,6 +46,9 @@ GAOTAI_OCR_TEXT = """
 合计
 """
 
+TIANHUA_PREFIX = "采购订单\n苏州天华超净科技有限公司\n{po}\n2026-07-01\n苏州天明包装有限公司\n行号 料品编码 物料名称 规格型号 单位 数量 含税单价 价税合计 交货日期\n"
+TIANHUA_THREE_LINES = "10 23203105 白底黑字内箱 28.5*19.5*5.5cm 个 1000 0.530000 530.00 2026.07.13\n20 21302006 衬板 98*20cm T5P/A 个 30 1.790000 53.70 2026.07.13\n30 21302060 外箱 30*20*10cm W535A/AB 个 150 1.230000 184.50 2026.07.13\n"
+
 
 def test_parse_purchase_order_text_extracts_header_and_lines() -> None:
     from app.services.order_pdf_import import parse_purchase_order_text
@@ -94,6 +97,41 @@ PO2026060469
     assert "25.00000" not in draft["items"][0]["raw_spec_model"]
     assert "5.410000" not in draft["items"][0]["raw_spec_model"]
     assert "2026" not in draft["items"][0]["raw_spec_model"]
+
+
+def test_tianhua_split_unit_and_integrity_checks() -> None:
+    from app.services.order_pdf_import import parse_purchase_order_text
+
+    split_text = TIANHUA_PREFIX.format(po="PO2026070130") + '70 21311404 E189白底蓝字内箱（22.5"*30"）\n93.5*60*20cm W535A/AB\n个\n（无\n小数\n）\n50\n5.760000\n288.00\n2026.07.13\n合计 50 288.00\n'
+    draft = parse_purchase_order_text(split_text, source_name="PO2026070130.pdf")
+    item = draft["items"][0]
+    assert (item["line_no"], item["product_code"], item["quantity"], item["unit_price"]) == (70, "21311404", 50, "5.7600")
+    assert item["raw_product_name"] == 'E189白底蓝字内箱（22.5"*30"）'
+    assert item["amount"] == "288.00"
+    assert item["delivery_date"] == "2026-07-13"
+    assert draft["integrity_check"]["integrity_status"] == "passed"
+
+    ok = parse_purchase_order_text(TIANHUA_PREFIX.format(po="PO2026070157") + TIANHUA_THREE_LINES + "合计 1180 768.20\n")
+    assert [item["product_code"] for item in ok["items"]] == ["23203105", "21302006", "21302060"]
+    assert ok["integrity_check"]["integrity_status"] == "passed"
+    assert ok["integrity_check"]["parsed_total_amount"] == "768.20"
+
+    missing = parse_purchase_order_text(TIANHUA_PREFIX.format(po="PO2026070157") + "10 23203105 白底黑字内箱 28.5*19.5*5.5cm 个 漏识别\n" + TIANHUA_THREE_LINES.split("\n", 1)[1] + "合计 1180 768.20\n")
+    assert [item["line_no"] for item in missing["items"]] == [20, 30]
+    assert missing["integrity_check"]["missing_line_numbers"] == ["10"]
+    assert missing["integrity_check"]["quantity_total_diff"] == "1000"
+    assert missing["integrity_check"]["integrity_status"] == "failed"
+
+    no_total = parse_purchase_order_text(TIANHUA_PREFIX.format(po="PO2026070158") + TIANHUA_THREE_LINES)
+    assert no_total["integrity_check"]["integrity_status"] == "passed"
+
+    fractional = parse_purchase_order_text(TIANHUA_PREFIX.format(po="PO2026070180") + "50 21301022 中性外箱 117*68.5*16.5cm 个 0.60000 12.720000 7.63 2026.07.14\n合计 0.6 7.63\n")
+    assert fractional["items"][0]["quantity"] == 0.6
+    assert fractional["items"][0]["raw_quantity"] == "0.60000"
+    assert fractional["items"][0]["quantity_review_required"] is True
+    assert fractional["requires_manual_quantity_review"] is True
+    assert any("数量 0.6 不是整数" in warning for warning in fractional["warnings"])
+    assert fractional["integrity_check"]["integrity_status"] == "passed"
 
 
 def test_match_import_draft_links_customer_and_products(tmp_path: Path) -> None:
@@ -370,6 +408,56 @@ def test_pdf_preview_endpoint_returns_draft_without_writing_order(
     assert body["item_count"] == 3
     assert body["items"][0]["matched_product_id"] is not None
     assert body["items"][2]["matched_product_id"] is None
+
+
+def test_pdf_integrity_failed_payload_cannot_create_order(tmp_path: Path) -> None:
+    app = _order_import_app(tmp_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "PO2026070157",
+                "order_date": "2026-07-01",
+                "delivery_date": "2026-07-13",
+                "import_integrity_status": "failed",
+                "import_integrity_errors": ["PDF疑似有3行明细，系统只识别出2行，缺失行号：10"],
+                "items": [{"product_id": 1, "quantity": 30, "unit_price": "1.79", "product_code": "21312009", "product_name": "中性内箱"}],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "当前 PDF 识别存在漏行或合计不一致" in response.json()["detail"]
+
+
+def test_pdf_import_non_integer_quantity_requires_manual_fix(tmp_path: Path) -> None:
+    app = _order_import_app(tmp_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "PO2026070180",
+                "order_date": "2026-07-01",
+                "delivery_date": "2026-07-14",
+                "items": [
+                    {
+                        "product_id": 1,
+                        "quantity": 0.6,
+                        "unit_price": "12.72",
+                        "product_code": "21312009",
+                        "product_name": "中性内箱",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "当前 PDF 识别存在非整数数量" in response.json()["detail"]
 
 
 def test_pdf_preview_uses_ocr_fallback_for_gaotai_image_pdf(

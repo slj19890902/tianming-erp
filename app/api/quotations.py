@@ -78,6 +78,10 @@ def _is_a1(box_type: str | None) -> bool:
     return "A1" in value or "0201" in value
 
 
+def _round_mm(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def _material_or_none(db: Session, material_id: int | None) -> Material | None:
     if material_id is None:
         return None
@@ -446,9 +450,17 @@ def convert_to_product(
     is_a1 = _is_a1(item.box_type)
     report_length = payload.report_length_mm
     report_width = payload.report_width_mm
+    crease_type = None
+    crease_left = None
+    crease_middle = None
+    crease_right = None
     if is_a1 and item.length_mm and item.width_mm and item.height_mm:
-        report_length = round(2 * (item.length_mm + item.width_mm) + 30)
-        report_width = round(item.width_mm + item.height_mm + 5)
+        crease_left = _round_mm(item.width_mm / Decimal("2"))
+        crease_middle = _round_mm(item.height_mm)
+        crease_right = crease_left
+        report_length = _round_mm(2 * (item.length_mm + item.width_mm) + Decimal("30"))
+        report_width = crease_left + crease_middle + crease_right
+        crease_type = "压线"
     if report_length is None or report_width is None:
         raise HTTPException(
             status_code=400,
@@ -475,6 +487,10 @@ def convert_to_product(
         layer_count=material.layer_count,
         report_length_mm=report_length,
         report_width_mm=report_width,
+        crease_type=crease_type,
+        crease_left_mm=crease_left,
+        crease_middle_mm=crease_middle,
+        crease_right_mm=crease_right,
         splice_mode="single",
         pieces_per_box=1,
         flap_mm=30,

@@ -223,6 +223,31 @@ def _purchase_dimensions(
     return Decimal(report_length_mm), Decimal(report_width_mm * factor)
 
 
+def _is_telescoping_lid_box(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    return "A3" in value or "天地盖" in value
+
+
+def _component_remark(remark: str | None, label: str) -> str:
+    remark_text = (remark or "").strip()
+    return f"{label}；{remark_text}" if remark_text else label
+
+
+def _telescoping_base_dimensions(
+    item: OrderItem,
+    cutting_mode: str | None,
+) -> tuple[Decimal | None, Decimal | None]:
+    return _purchase_dimensions(
+        item.snapshot_base_report_length_mm,
+        item.snapshot_base_report_width_mm,
+        cutting_mode,
+    )
+
+
+def _has_telescoping_base_snapshot(item: OrderItem) -> bool:
+    return bool(item.snapshot_base_report_length_mm and item.snapshot_base_report_width_mm)
+
+
 def _supplier_dimension_warnings(
     supplier_name: str | None,
     cardboard_len: Decimal | int | None,
@@ -441,6 +466,13 @@ def pending_requisitions(
                 "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
                 "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
                 "snapshot_report_notes": item.snapshot_report_notes,
+                "snapshot_base_report_length_mm": item.snapshot_base_report_length_mm,
+                "snapshot_base_report_width_mm": item.snapshot_base_report_width_mm,
+                "snapshot_base_crease_type": item.snapshot_base_crease_type,
+                "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+                "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+                "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+                "snapshot_base_report_notes": item.snapshot_base_report_notes,
                 "snapshot_splice_mode": item.snapshot_splice_mode,
                 "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
                 "snapshot_flap_mm": item.snapshot_flap_mm,
@@ -649,6 +681,49 @@ def create_batch(
             if requisition_qty < 0:
                 raise HTTPException(status_code=400, detail="采购报料张数不能为负数")
             spec = f"{_plain(line.cardboard_len)}?{_plain(line.cardboard_width)}"
+            batch_components = [
+                {
+                    "label": None,
+                    "requisition_qty": requisition_qty,
+                    "cardboard_len": line.cardboard_len,
+                    "cardboard_width": line.cardboard_width,
+                    "required_piece_qty": required_piece_qty,
+                    "remark": (line.remark or "").strip() or None,
+                }
+            ]
+            if _is_telescoping_lid_box(product.box_style) and _has_telescoping_base_snapshot(item):
+                base_len, base_width = _telescoping_base_dimensions(item, line.special_process)
+                if base_len is not None and base_width is not None:
+                    component_required_qty = _required_piece_qty(production_required_qty, 1)
+                    component_req_qty = _purchase_qty(
+                        component_required_qty,
+                        0,
+                        line.special_process,
+                    )
+                    batch_components = [
+                        {
+                            "label": "天地盖-盖",
+                            "requisition_qty": component_req_qty,
+                            "cardboard_len": line.cardboard_len,
+                            "cardboard_width": line.cardboard_width,
+                            "required_piece_qty": component_required_qty,
+                            "remark": _component_remark(line.remark, "天地盖-盖"),
+                        },
+                        {
+                            "label": "天地盖-底",
+                            "requisition_qty": component_req_qty,
+                            "cardboard_len": base_len,
+                            "cardboard_width": base_width,
+                            "required_piece_qty": component_required_qty,
+                            "remark": _component_remark(line.remark, "天地盖-底"),
+                        },
+                    ]
+                    requisition_qty = sum(row["requisition_qty"] for row in batch_components)
+                    required_piece_qty = sum(row["required_piece_qty"] for row in batch_components)
+                    spec = (
+                        f"盖:{_plain(line.cardboard_len)}?{_plain(line.cardboard_width)}；"
+                        f"底:{_plain(base_len)}?{_plain(base_width)}"
+                    )
             item.inventory_deducted_qty = 0
             item.requisition_qty = requisition_qty
             item.requisition_status = "已报料"
@@ -658,24 +733,30 @@ def create_batch(
             item.requisition_spec = spec
             item.requisition_date = requisition_date
             item.requisition_remark = (line.remark or "").strip() or None
-            batch_item = RequisitionItem(
-                requisition_id=batch.id,
-                order_item_id=item.id,
-                inventory_deducted_qty=0,
-                requisition_qty=requisition_qty,
-                cardboard_len=line.cardboard_len,
-                cardboard_width=line.cardboard_width,
-                pieces_per_box=pieces_per_box,
-                required_piece_qty=required_piece_qty,
-                special_process=line.special_process,
-                material_snapshot=item.snapshot_material,
-                product_code_snapshot=(item.snapshot_product_code or product.product_code),
-                product_name_snapshot=item.snapshot_product_name,
-                specification_snapshot=item.snapshot_spec,
-                remark=item.requisition_remark,
-                status="有效",
-            )
-            db.add(batch_item)
+            for component in batch_components:
+                db.add(
+                    RequisitionItem(
+                        requisition_id=batch.id,
+                        order_item_id=item.id,
+                        inventory_deducted_qty=0,
+                        requisition_qty=component["requisition_qty"],
+                        cardboard_len=component["cardboard_len"],
+                        cardboard_width=component["cardboard_width"],
+                        pieces_per_box=1 if component["label"] else pieces_per_box,
+                        required_piece_qty=component["required_piece_qty"],
+                        special_process=line.special_process,
+                        material_snapshot=item.snapshot_material,
+                        product_code_snapshot=(item.snapshot_product_code or product.product_code),
+                        product_name_snapshot=(
+                            f"{item.snapshot_product_name}（{component['label']}）"
+                            if component["label"]
+                            else item.snapshot_product_name
+                        ),
+                        specification_snapshot=item.snapshot_spec,
+                        remark=component["remark"],
+                        status="有效",
+                    )
+                )
             response_items.append(_item_response(item, db))
         _audit(
             db,

@@ -17,33 +17,28 @@
       }
       * { box-sizing: border-box; }
       body { margin: 0; color: var(--ink); background: radial-gradient(circle at 90% 0, #dcebdc, transparent 35%), var(--paper); font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif; }
-      header { position: sticky; top: 0; z-index: 5; padding: 18px 16px 14px; color: white; background: #183f2c; box-shadow: 0 4px 16px #17372838; }
-      h1 { margin: 0; font-size: 22px; letter-spacing: .04em; }
-      .sub { margin-top: 5px; color: #d8e9de; font-size: 13px; }
-      .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 12px; }
-      .stat { padding: 9px 3px; text-align: center; background: #fffdf8; border: 1px solid var(--line); border-radius: 11px; font-size: 11px; }
-      .stat strong { display: block; margin-bottom: 2px; font-size: 19px; }
-      main { padding: 0 12px 30px; }
-      .card { margin-bottom: 12px; padding: 15px; background: #fffdf8; border: 1px solid var(--line); border-left: 7px solid var(--green); border-radius: 14px; box-shadow: 0 5px 18px #4b4b3520; }
+      .stats { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 8px; background: #183f2c; box-shadow: 0 4px 16px #17372838; }
+      .stat { min-height: 44px; padding: 6px 3px; text-align: center; color: #d8e9de; background: #214c35; border: 1px solid #416a51; border-radius: 8px; font-size: 11px; }
+      .stat.active { color: #183f2c; background: #fffdf8; border-color: #fffdf8; }
+      .stat strong { display: block; margin-bottom: 1px; font-size: 17px; }
+      main { padding: 8px 8px 26px; }
+      .card { margin-bottom: 8px; padding: 10px; background: #fffdf8; border: 1px solid var(--line); border-left: 5px solid var(--green); border-radius: 10px; box-shadow: 0 3px 10px #4b4b3518; }
       .card.duplicate_warning { border-left-color: var(--yellow); }
       .card.qty_mismatch, .card.partial { border-left-color: var(--orange); }
       .card.stock_shortage, .card.no_stock { border-left-color: var(--red); }
       .card.picked { opacity: .78; box-shadow: none; }
-      .code { font: 800 21px/1.1 Consolas, monospace; letter-spacing: .05em; }
-      .name { margin: 7px 0 12px; color: var(--muted); }
-      .warning { margin: 10px 0; padding: 9px; color: #8b2d27; background: #fff0ed; border-radius: 8px; font-size: 13px; }
-      .row { display: flex; gap: 9px; align-items: center; margin-top: 10px; }
-      label { flex: 1; font-size: 13px; color: var(--muted); }
-      input { width: 100%; margin-top: 4px; padding: 12px; font-size: 18px; border: 1px solid #bbb7ac; border-radius: 9px; background: white; }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
-      button { min-height: 48px; border: 0; border-radius: 10px; color: white; font-size: 17px; font-weight: 700; }
+      .name { color: var(--ink); font-size: 17px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+      .spec { margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.25; }
+      .qty-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; margin-top: 8px; }
+      label { font-size: 12px; color: var(--muted); }
+      .need { margin-top: 3px; color: var(--ink); font-size: 22px; font-weight: 800; line-height: 34px; }
+      input { width: 100%; margin-top: 3px; padding: 7px 8px; font-size: 19px; border: 1px solid #bbb7ac; border-radius: 8px; background: white; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
+      button { min-height: 40px; border: 0; border-radius: 8px; color: white; font-size: 15px; font-weight: 700; }
       button:disabled { opacity: .55; }
       .picked-btn { background: var(--green); }
       .stock-btn { background: var(--red); }
-      .badge { display: inline-block; margin-top: 8px; padding: 5px 9px; border-radius: 99px; color: white; background: #777; font-size: 12px; }
-      .badge.picked { background: var(--green); }
-      .badge.partial { background: var(--orange); }
-      .badge.no_stock { background: var(--red); }
+      .empty { margin: 20px 0; padding: 20px; text-align: center; color: var(--muted); background: #fffdf8; border: 1px solid var(--line); border-radius: 10px; }
       .message { margin: 40px 18px; padding: 22px; text-align: center; background: white; border-radius: 14px; }
       .toast { position: fixed; left: 50%; bottom: 20px; z-index: 10; transform: translateX(-50%); padding: 12px 18px; color: white; background: #17211be8; border-radius: 10px; }
     </style>
@@ -52,7 +47,6 @@
     <div id="loading" class="message">正在加载拿货明细...</div>
     <div id="error" class="message" hidden></div>
     <div id="app" hidden>
-      <header><h1>天华预送货拿货</h1><div id="subtitle" class="sub"></div><div id="deliveryDate" class="sub"></div></header>
       <div id="stats" class="stats"></div>
       <main id="items"></main>
     </div>
@@ -60,7 +54,8 @@
     <script>
       const token = new URLSearchParams(location.search).get("token") || "";
       let data = null;
-      const labels = {pending:"待处理",picked:"已拿货",no_stock:"没货",partial:"部分拿货"};
+      let currentFilter = "open";
+      const filterLabels = {open:"待拿",picked:"已拿",no_stock:"没货",partial:"部分",all:"全部"};
       const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
       const toast = (text) => {
         const node = document.getElementById("toast");
@@ -74,27 +69,29 @@
       };
       function render() {
         const count = counts();
-        document.getElementById("subtitle").textContent = `${data.customer_name} · 草稿 ${data.draft_number}`;
-        document.getElementById("deliveryDate").textContent = `预送货日期：${data.pre_delivery_date || "-"}`;
-        document.getElementById("stats").innerHTML = [
-          ["总数",data.items.length],["已拿货",count.picked],["没货",count.no_stock],["部分",count.partial],["待处理",count.pending]
-        ].map(([label,value]) => `<div class="stat"><strong>${value}</strong>${label}</div>`).join("");
-        document.getElementById("items").innerHTML = data.items.map(item => {
+        const openCount = count.pending + count.no_stock + count.partial;
+        const filters = [["open",openCount],["picked",count.picked],["no_stock",count.no_stock],["partial",count.partial],["all",data.items.length]];
+        document.getElementById("stats").innerHTML = filters.map(([filter,value]) => `<button class="stat ${currentFilter === filter ? "active" : ""}" type="button" data-filter="${filter}" onclick="setFilter('${filter}')"><strong>${value}</strong>${filterLabels[filter]}</button>`).join("");
+        const visible = data.items.filter(item => {
+          const pickStatus = item.mobile_pick_status || "pending";
+          if (currentFilter === "all") return true;
+          if (currentFilter === "open") return pickStatus !== "picked";
+          return pickStatus === currentFilter;
+        });
+        document.getElementById("items").innerHTML = visible.map(item => {
           const pickStatus=item.mobile_pick_status || "pending";
           const qty=item.mobile_picked_qty ?? item.final_delivery_qty ?? item.suggested_qty ?? 0;
-          const shortage=item.status === "stock_shortage" ? '<div class="warning">系统显示库存不足，但允许现场按实际拿货数量确认。此操作不会自动入库或扣库存。</div>' : "";
-          const warning=item.warning ? `<div class="warning">${escapeHtml(item.warning)}</div>` : "";
           return `<article class="card ${escapeHtml(item.status)} ${escapeHtml(pickStatus)}" data-id="${item.item_id}">
-            <div class="code">${escapeHtml(item.stock_code)}</div>
             <div class="name">${escapeHtml(item.product_name || "-")}</div>
-            <div class="sub" style="color:var(--muted)">订单：${escapeHtml(item.order_no || "-")}${item.customer_order_no ? ` · 客户单号 ${escapeHtml(item.customer_order_no)}` : ""}</div>
-            <span class="badge ${escapeHtml(pickStatus)}">${labels[pickStatus] || pickStatus}</span>
-            ${shortage}${warning}
-            <div class="row"><label>建议数量<input value="${item.suggested_qty ?? "-"}" disabled /></label><label>实际数量<input class="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></label></div>
-            <div class="row"><label>拿货备注<input class="note" maxlength="500" value="${escapeHtml(item.mobile_pick_note || "")}" placeholder="可选" /></label></div>
+            <div class="spec">${escapeHtml(item.product_spec || "规格未填写")}</div>
+            <div class="qty-row"><label>数量<div class="need">${escapeHtml(item.final_delivery_qty ?? item.suggested_qty ?? 0)}</div></label><label>实拿<input class="qty" type="number" min="0" inputmode="numeric" value="${qty}" aria-label="实际拿货数量" /></label></div>
             <div class="actions"><button class="picked-btn" onclick="saveItem(${item.item_id},'picked')">√ 已拿货</button><button class="stock-btn" onclick="saveItem(${item.item_id},'no_stock')">× 没货</button></div>
           </article>`;
-        }).join("");
+        }).join("") || `<div class="empty">当前筛选下没有明细</div>`;
+      }
+      function setFilter(filter) {
+        currentFilter = filter;
+        render();
       }
       async function request(url, options={}) {
         const response=await fetch(url,options);
@@ -113,7 +110,7 @@
           const result=await request(`/api/mobile/tianhua-pick/items/${id}`,{
             method:"PUT",
             headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({token,mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:card.querySelector(".note").value})
+            body:JSON.stringify({token,mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:current.mobile_pick_note || ""})
           });
           Object.assign(current,result.item);
           render();

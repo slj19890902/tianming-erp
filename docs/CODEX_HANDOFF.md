@@ -1,5 +1,24 @@
 # Codex 项目交接
 
+## 2026-07-08 N-026 多箱型报料公式与天地盖盖/底拆分
+
+- 常用箱编辑已从“仅 A1/0201 自动推荐”扩展为多箱型推荐：A1/0201 保持单拼/双拼与舌头逻辑；A3 天地盖按盖 `L+2H / W+2H`、底 `L-25+2H / W-25+2H` 推荐；平卡/刀卡/隔板按输入长宽作为单片净料；围套、半开槽箱、全搭盖箱按对应展开尺寸推荐。所有推荐值仍可手工修改并保存。
+- 默认舌头仍为 30mm 且可修改；只有 A1/0201、围套、半开槽箱、全搭盖箱显示舌头输入；拼箱方式仅 A1/0201 显示。A3 天地盖、平卡、刀卡、隔板、异形箱、其他默认不显示舌头和拼箱方式。
+- 新增 `products.base_*` 与 `sales_order_items.snapshot_base_*` 字段，保存天地盖底料报料长宽、底压线和底备注；订单创建会从常用箱固化盖/底快照，订单明细编辑可同步回常用箱。
+- 采购报料生成时，天地盖订单仍按“套”进入业务流程，但报料批次明细自动拆为两行：`天地盖-盖` 与 `天地盖-底`，每行张数按需生产套数和开料方式计算；订单明细上的报料数量记录为盖+底总张数。来料入库回写多条报料明细时按行数分摊，避免盖/底明细被总数覆盖。
+- 新增迁移文件 `alembic/versions/ab29u7v8w9x18_box_type_component_formulas.py`，当前 Alembic head 为 `ab29u7v8w9x18`。本轮未对正式 `data/carton_erp.sqlite3` 执行迁移升级；仅在 `.test-tmp/alembic_box_formulas.sqlite3` 临时库执行 `alembic upgrade head` 验证，完整性 `ok`，新列存在。
+- 定向验证：`tests/test_v0208_common_box_edit.py tests/test_phase5_orders.py tests/test_phase11_requisition.py tests/test_phase192_report_crease.py tests/test_quotations.py tests/test_phase16_pdf_order_import.py` → `103 passed, 35 warnings`；`tests/test_tianhua_pre_delivery.py tests/test_tianhua_mobile_pick.py tests/test_tianhua_order_matching.py tests/test_tianhua_preimport_entry.py` → `10 passed, 1 skipped`；`node --check .test-tmp/index-inline.js` 通过；Python `py_compile` 通过；`alembic heads` → `ab29u7v8w9x18 (head)`。
+- 本轮没有写入正式业务数据，没有自动扣库存、自动入库、自动改订单数量、送货数量或对账数量。
+
+## 2026-07-08 N-025 预送货手机拿货界面精简
+
+- 手机端 `/mobile/tianhua-pick` 默认不再显示标题、标题小字、订单号、客户单号、拿货备注和库存不足说明；主卡片只突出产品名称、规格/尺寸、数量、实拿输入和拿货操作。
+- 顶部状态栏改为可点击筛选：待拿、已拿、没货、部分、全部；默认只显示未完成项，已拿货明细进入“已拿”筛选后查看。
+- 手机拿货 API 增加只读 `product_spec` 字段，优先取订单明细规格快照，其次取常用箱长宽高，最后从产品名称中提取尺寸；不改变已有 `order_no`、`customer_order_no` 等兼容字段。
+- 报价 A1/0201 明细转常用箱时，不再隐藏生成 `宽 + 高 + 5mm` 报料宽；改为保存默认压线三段 `宽/2 + 高 + 宽/2`，报料宽度取压线合计，避免压线总和与报料宽度不一致。
+- 本轮没有写入正式数据库，没有新增数据库迁移，没有自动扣库存、自动入库、自动改订单数量、送货数量或对账数量。
+- 定向验证：`tests/test_tianhua_pre_delivery.py tests/test_tianhua_mobile_pick.py tests/test_tianhua_order_matching.py` → `7 passed, 1 skipped`；`tests/test_phase16_pdf_order_import.py tests/test_tianhua_preimport_entry.py` → `17 passed`；`tests/test_quotations.py tests/test_v0208_common_box_edit.py` → `14 passed`；`alembic heads` → `aa18t6u7v8w17`。
+
 ## 2026-07-02 v0.22.0-b 成品库存预占抵扣报料
 
 - 新增成品库存候选、人工预占、查询和释放接口；候选只按订单明细 `product_id`、客户专用/通用归属、active 状态和可用数量硬匹配。

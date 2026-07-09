@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from copy import deepcopy
 from collections.abc import Generator
 from datetime import date, datetime
 from decimal import Decimal
@@ -128,6 +129,817 @@ def _batch_payload() -> dict:
             }
         ],
     }
+
+
+def _add_pending_candidate(
+    session_factory,
+    suffix: int,
+    *,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    quantity: int = 80,
+    supplier_name: str | None = "苏州纸板供应商",
+    material_code: str | None = None,
+    layer_count: int | None = None,
+    flute_type: str | None = None,
+) -> int:
+    from app.models.material import Material
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+
+    with session_factory() as session:
+        customer_id = 1
+        material = None
+        if material_code:
+            material = session.query(Material).filter(Material.code == material_code).one_or_none()
+            if material is None:
+                material = Material(
+                    code=material_code,
+                    paper_composition=material_code,
+                    layer_count=layer_count,
+                    flute_type=flute_type,
+                    supplier_name=supplier_name,
+                )
+                session.add(material)
+                session.flush()
+        code = product_code or f"213010{27 + suffix:02d}"
+        product = Product(
+            customer_id=customer_id,
+            product_code=code,
+            customer_material_code=f"SME-{suffix:03d}",
+            product_name=product_name or f"中性纸箱{suffix}",
+            legacy_material_text="K=A-BC",
+            length_mm=Decimal("520"),
+            width_mm=Decimal("350"),
+            height_mm=Decimal("300"),
+            box_category="normal",
+        )
+        session.add(product)
+        session.flush()
+        order = Order(
+            order_number=f"PO-20260614-{suffix:03d}",
+            customer_id=customer_id,
+            order_date=date(2026, 6, 14),
+            delivery_date=date(2026, 6, 22),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal(str(quantity * 3.6)),
+        )
+        session.add(order)
+        session.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=quantity,
+            unit_price=Decimal("3.60"),
+            subtotal=Decimal(str(quantity * 3.6)),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_code=code,
+            snapshot_product_name=product.product_name,
+            snapshot_spec="520×350×300mm",
+            snapshot_material=material_code or "K=A-BC",
+            snapshot_supplier_name=supplier_name,
+            material_id=material.id if material else None,
+            layer_count=layer_count,
+            flute_type=flute_type,
+        )
+        session.add(item)
+        session.commit()
+        return item.id
+
+
+def _add_second_merge_candidate(session_factory) -> int:
+    return _add_pending_candidate(
+        session_factory,
+        2,
+        product_code="21301029",
+        product_name="中性内箱",
+    )
+
+
+def _create_merge_group(client: TestClient, item_ids: list[int]) -> dict:
+    response = client.post(
+        "/api/requisition/merge-groups",
+        json={
+            "member_item_ids": item_ids,
+            "supplier_name": "苏州纸板供应商",
+            "report_length_mm": 1000,
+            "report_width_mm": 800,
+            "cutting_mode": "一开一",
+            "remark": "先合并待报料",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _preview_supplier_order_draft(client: TestClient, selections: list[dict]) -> dict:
+    response = client.post(
+        "/api/requisition/supplier-orders/preview-from-pending-selection",
+        json={"selections": selections},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _save_supplier_order_draft(client: TestClient, draft: dict):
+    return client.post(
+        "/api/requisition/supplier-orders/from-pending-selection",
+        json=draft,
+    )
+
+
+def test_frontend_merge_suggestion_confirm_does_not_create_supplier_order() -> None:
+    index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'confirmMergeSuggestion(sg, sgIndex)' in index
+    assert "async generateSupplierOrder" not in index
+    assert "生成供应商报料单" not in index
+
+    start = index.index("async confirmMergeSuggestion")
+    end = index.index("async loadSupplierOrders", start)
+    confirm_block = index[start:end]
+    assert "/api/requisition/merge-groups" in confirm_block
+    assert "/api/requisition/supplier-orders" not in confirm_block
+    assert "/supplier-order" not in confirm_block
+    assert "createSupplierOrderFromMergeGroup" not in confirm_block
+    assert 'class="btn success" @click="openSupplierRequisitionDraft()"' in index
+    assert "selectedPendingKeys: []" in index
+    assert "pendingRowKey(row)" in index
+    assert "togglePendingRow(row, checked)" in index
+    assert "selectedPendingRows(rows = null)" in index
+    open_start = index.index("async openSupplierRequisitionDraft")
+    open_end = index.index("async openRequisition", open_start)
+    open_block = index[open_start:open_end]
+    assert "Array.isArray(rows)" in open_block
+    assert "this.selectedPendingRows()" in open_block
+    assert "this.requisitionPending.filter(row => this.requisitionSelected" not in open_block
+    assert "row.order_item_id || row.item_id || row.id" in index
+    assert "row.merge_group_id || row.id" in index
+    assert "/api/requisition/supplier-orders/preview-from-pending-selection" in open_block
+    assert "/api/requisition/supplier-orders/from-pending-selection" not in open_block
+    save_start = index.index("async saveSupplierRequisitionDraft")
+    save_end = index.index("async openSupplierRequisitionDraft", save_start)
+    save_block = index[save_start:save_end]
+    assert "/api/requisition/supplier-orders/from-pending-selection" in index
+    assert "/api/requisition/supplier-orders/from-pending-selection" in save_block
+    assert "`/api/requisition/merge-groups/${row.merge_group_id}/supplier-order`" not in index
+    assert "merge-size-input" in index
+    assert "merge-supplier-select" in index
+    assert "/api/requisition/reported-documents" in index
+    assert "draftGroupLines(group)" in index
+    assert "line.source_items || []" in index
+    assert "supplierOrderPrintLines(modal.data)" in index
+    assert "reported-compact-table" in index
+    assert "reported-source-cell" in index
+    assert "reported-code-cell" in index
+
+
+def test_preview_supplier_order_draft_supports_single_regular_pending_item(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": 1,
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                }
+            ],
+    )
+
+    assert draft["supplier_groups"]
+    line = draft["supplier_groups"][0]["lines"][0]
+    assert line["source_type"] == "normal"
+    assert line["source_items"][0]["source_type"] == "order_item"
+    assert line["source_items"][0]["order_item_id"] == 1
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 0
+        assert session.query(SupplierRequisitionOrderItem).count() == 0
+        assert session.get(OrderItem, 1).requisition_status == "未报料"
+
+
+def test_preview_supplier_order_draft_supports_multiple_regular_pending_items(
+    requisition_app,
+) -> None:
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    second_id = _add_pending_candidate(session_factory, 3, product_code="21301030")
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": 1,
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                },
+                {
+                    "type": "order_item",
+                    "order_item_id": second_id,
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                },
+            ],
+        )
+
+    draft_item_ids = {
+        source["order_item_id"]
+        for group in draft["supplier_groups"]
+        for row in group["lines"]
+        for source in row["source_items"]
+    }
+    assert draft_item_ids == {
+        1,
+        second_id,
+    }
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 0
+
+
+def test_preview_supplier_order_draft_supports_regular_item_and_merge_group(
+    requisition_app,
+) -> None:
+    from app.models.requisition import Requisition
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    regular_id = _add_pending_candidate(session_factory, 3, product_code="21301030")
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {"type": "merge_group", "merge_group_id": created["id"]},
+                {
+                    "type": "order_item",
+                    "order_item_id": regular_id,
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                },
+            ],
+        )
+
+    assert len(draft["supplier_groups"]) == 1
+    lines = draft["supplier_groups"][0]["lines"]
+    assert {row["source_type"] for row in lines} == {"merge_group", "normal"}
+    assert {
+        source["order_item_id"]
+        for row in lines
+        for source in row["source_items"]
+    } == {1, second_id, regular_id}
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 0
+        assert session.get(Requisition, created["id"]).status == "merged_pending"
+
+
+def test_merge_group_lifecycle_creates_supplier_order_only_at_final_step(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+        with session_factory() as session:
+            assert session.query(SupplierRequisitionOrder).count() == 0
+            assert session.query(SupplierRequisitionOrderItem).count() == 0
+            assert session.get(OrderItem, 1).requisition_status == "未报料"
+            assert session.get(OrderItem, second_id).requisition_status == "未报料"
+        pending = client.get("/api/requisition/pending")
+        updated = client.put(
+            f"/api/requisition/merge-groups/{created['id']}",
+            json={
+                "supplier_name": "更新后的供应商",
+                "report_length_mm": 1100,
+                "report_width_mm": 900,
+                "cutting_mode": "一开二",
+                "remark": "更新合并组备注",
+            },
+        )
+        pending_after_update = client.get("/api/requisition/pending")
+        supplier_created = client.post(
+            f"/api/requisition/merge-groups/{created['id']}/supplier-order"
+        )
+        supplier_orders = client.get("/api/requisition/supplier-orders")
+        duplicate = client.post(
+            f"/api/requisition/merge-groups/{created['id']}/supplier-order"
+        )
+        pending_after_supplier_order = client.get("/api/requisition/pending")
+
+    assert created["status"] == "merged_pending"
+    assert len(created["members"]) == 2
+    assert sorted(created["product_codes"]) == ["21301028", "21301029"]
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 1
+        assert session.query(SupplierRequisitionOrderItem).count() == 2
+        assert session.get(OrderItem, 1).requisition_status == "已报料"
+        assert session.get(OrderItem, second_id).requisition_status == "已报料"
+
+    assert pending.status_code == 200
+    merge_rows = [row for row in pending.json()["items"] if row.get("is_merge_group")]
+    assert len(merge_rows) == 1
+    merge_row = merge_rows[0]
+    assert merge_row["merge_group_id"] == created["id"]
+    assert len(merge_row["members"]) == 2
+    assert sorted(merge_row["product_codes"]) == ["21301028", "21301029"]
+    assert sorted(merge_row["order_numbers"]) == [
+        "PO-20260614-001",
+        "PO-20260614-002",
+    ]
+    regular_ids = {
+        row["item_id"]
+        for row in pending.json()["items"]
+        if not row.get("is_merge_group")
+    }
+    assert 1 not in regular_ids
+    assert second_id not in regular_ids
+
+    assert updated.status_code == 200, updated.text
+    assert pending_after_update.status_code == 200
+    updated_row = next(
+        row for row in pending_after_update.json()["items"] if row.get("is_merge_group")
+    )
+    assert updated_row["supplier_name"] == "更新后的供应商"
+    assert Decimal(str(updated_row["report_length_mm"])) == Decimal("1100")
+    assert Decimal(str(updated_row["report_width_mm"])) == Decimal("900")
+    assert updated_row["cutting_mode"] == "一开二"
+    assert updated_row["remark"] == "更新合并组备注"
+
+    assert supplier_created.status_code == 201, supplier_created.text
+    assert supplier_created.json()["supplier_order_id"]
+    assert supplier_orders.status_code == 200
+    assert supplier_orders.json()["total"] == 1
+    assert supplier_orders.json()["items"][0]["supplier_name"] == "更新后的供应商"
+    assert duplicate.status_code == 409
+    assert not [
+        row for row in pending_after_supplier_order.json()["items"]
+        if row.get("merge_group_id") == created["id"]
+    ]
+
+
+def test_pending_selection_creates_one_supplier_order_for_merge_group_and_regular_item(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.requisition import Requisition
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    regular_id = _add_pending_candidate(session_factory, 3, product_code="21301030")
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "merge_group",
+                    "merge_group_id": created["id"],
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                },
+                {
+                    "type": "order_item",
+                    "order_item_id": regular_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                },
+            ],
+        )
+        with session_factory() as session:
+            assert session.query(SupplierRequisitionOrder).count() == 0
+            assert session.query(SupplierRequisitionOrderItem).count() == 0
+            assert session.get(Requisition, created["id"]).status == "merged_pending"
+            assert session.get(OrderItem, 1).requisition_status == "未报料"
+        response = _save_supplier_order_draft(client, draft)
+
+    assert response.status_code == 201, response.text
+    created_orders = response.json()["created_orders"]
+    assert len(created_orders) == 1
+    assert created_orders[0]["supplier_name"] == "苏州纸板供应商"
+    assert created_orders[0]["item_count"] == 3
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 1
+        assert session.query(SupplierRequisitionOrderItem).count() == 3
+        assert session.get(Requisition, created["id"]).status == "supplier_requisition_created"
+        assert session.get(OrderItem, 1).requisition_status == "已报料"
+        assert session.get(OrderItem, second_id).requisition_status == "已报料"
+        assert session.get(OrderItem, regular_id).requisition_status == "已报料"
+
+
+def test_pending_selection_aggregates_supplier_draft_by_purchase_spec(
+    requisition_app,
+) -> None:
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    supplier = "昆山鸣明"
+    item_f616a = _add_pending_candidate(
+        session_factory,
+        10,
+        product_code="21301051",
+        product_name="中性外箱51*41",
+        quantity=50,
+        supplier_name=supplier,
+        material_code="F616A",
+        layer_count=5,
+        flute_type="AB",
+    )
+    item_k616a = _add_pending_candidate(
+        session_factory,
+        11,
+        product_code="20600037",
+        product_name="手套外箱48*45*47",
+        quantity=1,
+        supplier_name=supplier,
+        material_code="K616A",
+        layer_count=5,
+        flute_type="AB",
+    )
+    item_n7n_a = _add_pending_candidate(
+        session_factory,
+        12,
+        product_code="21301464",
+        product_name="A356专用包装箱25*45WW",
+        quantity=22,
+        supplier_name=supplier,
+        material_code="N7N",
+        layer_count=3,
+        flute_type="B",
+    )
+    item_n7n_b = _add_pending_candidate(
+        session_factory,
+        13,
+        product_code="21301435",
+        product_name="A356专用包装箱25*45BB",
+        quantity=10,
+        supplier_name=supplier,
+        material_code="N7N",
+        layer_count=3,
+        flute_type="B",
+    )
+
+    selections = [
+        {
+            "type": "order_item",
+            "order_item_id": item_f616a,
+            "supplier_name": supplier,
+            "report_length_mm": 1976,
+            "report_width_mm": 594,
+            "cutting_mode": "一开一",
+        },
+        {
+            "type": "order_item",
+            "order_item_id": item_k616a,
+            "supplier_name": supplier,
+            "report_length_mm": 1876,
+            "report_width_mm": 924,
+            "cutting_mode": "一开一",
+        },
+        {
+            "type": "order_item",
+            "order_item_id": item_n7n_a,
+            "supplier_name": supplier,
+            "report_length_mm": 1345,
+            "report_width_mm": 1300,
+            "cutting_mode": "一开一",
+        },
+        {
+            "type": "order_item",
+            "order_item_id": item_n7n_b,
+            "supplier_name": supplier,
+            "report_length_mm": 1345,
+            "report_width_mm": 1300,
+            "cutting_mode": "一开一",
+        },
+    ]
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(client, selections)
+        with session_factory() as session:
+            assert session.query(SupplierRequisitionOrder).count() == 0
+        group = draft["supplier_groups"][0]
+        lines = group["lines"]
+
+        assert len(draft["supplier_groups"]) == 1
+        assert len(lines) == 3
+        line_by_spec = {
+            (line["material_code"], line["flute_type"], line["report_length_mm"], line["report_width_mm"]): line
+            for line in lines
+        }
+        assert line_by_spec[("F616A", "AB", 1976, 594)]["requisition_qty"] == 50
+        assert line_by_spec[("K616A", "AB", 1876, 924)]["requisition_qty"] == 1
+        n7n_line = line_by_spec[("N7N", "B", 1345, 1300)]
+        assert n7n_line["requisition_qty"] == 32
+        assert {source["product_code"] for source in n7n_line["source_items"]} == {
+            "21301464",
+            "21301435",
+        }
+
+        saved = _save_supplier_order_draft(client, draft)
+        assert saved.status_code == 201, saved.text
+        created = saved.json()["created_orders"]
+        assert len(created) == 1
+        detail = client.get(f"/api/requisition/supplier-orders/{created[0]['supplier_order_id']}")
+        assert detail.status_code == 200, detail.text
+        saved_lines = detail.json()["items"]
+
+    assert len(saved_lines) == 3
+    saved_by_spec = {
+        (line["material_code"], line["flute_type"], line["report_length_mm"], line["report_width_mm"]): line
+        for line in saved_lines
+    }
+    assert saved_by_spec[("F616A", "AB", 1976, 594)]["requisition_qty"] == 50
+    assert saved_by_spec[("K616A", "AB", 1876, 924)]["requisition_qty"] == 1
+    assert saved_by_spec[("N7N", "B", 1345, 1300)]["requisition_qty"] == 32
+    assert not any(
+        line["material_code"] == "N7N"
+        and line["report_length_mm"] == 1345
+        and line["report_width_mm"] == 1300
+        and line["requisition_qty"] == 83
+        for line in saved_lines
+    )
+
+
+def test_pending_selection_groups_multiple_suppliers_separately(
+    requisition_app,
+) -> None:
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    supplier_a_item_id = _add_pending_candidate(session_factory, 3, product_code="21301030")
+    supplier_b_item_id = _add_pending_candidate(
+        session_factory,
+        4,
+        product_code="21301031",
+        supplier_name="昆山鸣明",
+    )
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "merge_group",
+                    "merge_group_id": created["id"],
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                },
+                {
+                    "type": "order_item",
+                    "order_item_id": supplier_a_item_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                },
+                {
+                    "type": "order_item",
+                    "order_item_id": supplier_b_item_id,
+                    "supplier_name": "昆山鸣明",
+                    "report_length_mm": 1200,
+                    "report_width_mm": 900,
+                    "cutting_mode": "一开二",
+                },
+            ],
+        )
+        response = _save_supplier_order_draft(client, draft)
+
+    assert response.status_code == 201, response.text
+    created_orders = response.json()["created_orders"]
+    assert {row["supplier_name"] for row in created_orders} == {"苏州纸板供应商", "昆山鸣明"}
+    assert {row["supplier_name"]: row["item_count"] for row in created_orders} == {
+        "苏州纸板供应商": 3,
+        "昆山鸣明": 1,
+    }
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 2
+
+
+def test_pending_selection_rejects_missing_supplier_and_duplicate_generation(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    regular_id = _add_pending_candidate(
+        session_factory,
+        3,
+        product_code="21301030",
+        supplier_name=None,
+    )
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft_without_supplier = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": regular_id,
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                }
+            ],
+        )
+        missing_supplier = _save_supplier_order_draft(client, draft_without_supplier)
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": regular_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                }
+            ],
+        )
+        created = _save_supplier_order_draft(client, draft)
+        duplicate = _save_supplier_order_draft(client, draft)
+
+    assert missing_supplier.status_code == 400
+    assert created.status_code == 201, created.text
+    assert duplicate.status_code == 409
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 1
+        assert session.get(OrderItem, regular_id).requisition_status == "已报料"
+
+
+def test_pending_selection_rejects_invalid_deduction_and_requisition_qty(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": 1,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                }
+            ],
+        )
+        negative_deduction = deepcopy(draft)
+        negative_deduction["supplier_groups"][0]["lines"][0]["inventory_deducted_qty"] = -1
+        too_large_deduction = deepcopy(draft)
+        too_large_deduction["supplier_groups"][0]["lines"][0]["inventory_deducted_qty"] = 101
+        zero_requisition_qty = deepcopy(draft)
+        zero_requisition_qty["supplier_groups"][0]["lines"][0]["requisition_qty"] = 0
+
+        negative = _save_supplier_order_draft(client, negative_deduction)
+        too_large = _save_supplier_order_draft(client, too_large_deduction)
+        zero_qty = _save_supplier_order_draft(client, zero_requisition_qty)
+
+    assert negative.status_code == 400
+    assert too_large.status_code == 400
+    assert zero_qty.status_code == 400
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 0
+        assert session.get(OrderItem, 1).requisition_status == "未报料"
+
+
+def test_reported_documents_unifies_supplier_orders_and_legacy_requisitions(
+    requisition_app,
+) -> None:
+    from app.models.requisition import Requisition
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    regular_id = _add_pending_candidate(session_factory, 3, product_code="21301030")
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "merge_group",
+                    "merge_group_id": created["id"],
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                },
+                {
+                    "type": "order_item",
+                    "order_item_id": regular_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                },
+            ],
+        )
+        saved = _save_supplier_order_draft(client, draft)
+        with session_factory() as session:
+            legacy = Requisition(
+                requisition_number="BL-LEGACY-001",
+                requisition_date=date(2026, 6, 20),
+                supplier_name="旧供应商",
+                status="已报料",
+            )
+            session.add(legacy)
+            session.commit()
+        documents = client.get("/api/requisition/reported-documents")
+
+    assert saved.status_code == 201, saved.text
+    assert documents.status_code == 200, documents.text
+    rows = documents.json()["items"]
+    source_types = {row["source_type"] for row in rows}
+    assert "supplier_order" in source_types
+    assert "legacy_material_requisition" in source_types
+    assert all(row["document_number"] for row in rows)
+    assert all("pdf_url" in row for row in rows)
+    assert not any(
+        row["source_type"] == "legacy_material_requisition"
+        and row["id"] == created["id"]
+        for row in rows
+    )
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 1
+
+
+def test_merged_pending_group_is_not_formal_requisition_flow(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+        printed = client.get(f"/api/requisition/batches/{created['id']}/print")
+        submitted = client.get("/api/requisition/items")
+        client.post("/api/auth/logout")
+        _login(client, "workshop")
+        incoming = client.get("/api/incoming/pending")
+
+    assert printed.status_code == 409
+    assert "不是正式报料单" in printed.json()["detail"]
+    assert submitted.status_code == 200
+    assert submitted.json()["items"] == []
+    assert incoming.status_code == 200
+    assert incoming.json()["items"] == []
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 0
+        assert session.query(SupplierRequisitionOrderItem).count() == 0
+        assert session.get(OrderItem, 1).requisition_status == "未报料"
+        assert session.get(OrderItem, second_id).requisition_status == "未报料"
 
 
 def test_pending_supplier_counts_and_material_change(requisition_app) -> None:

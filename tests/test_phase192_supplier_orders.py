@@ -38,8 +38,8 @@ def test_supplier_material_display_rejects_flute_combinations_as_material_code()
 
 def test_supplier_order_frontend_uses_clean_material_display():
     html = Path("static/index.html").read_text(encoding="utf-8")
-    assert "{{ so.material_display || so.material_code || '-' }}" in html
-    assert "{{ modal.data.material_display || modal.data.material_code || '-' }}" in html
+    assert "supplierOrderPrintLines(modal.data)" in html
+    assert "{{ line.material_display || line.material_code || '-' }}" in html
     assert "当前报料单存在低于供应商最小切宽/切长的明细" in html
     assert "so.dimension_warnings" in html
 
@@ -216,10 +216,12 @@ class TestSupplierOrders:
         assert data["cutting_mode"] == "一开三"
         assert data["pieces_per_box"] == 2
         assert data["required_piece_qty"] == 16
-        assert len(data["items"]) == 2
+        assert len(data["items"]) == 1
+        assert len(data["items"][0]["source_items"]) == 2
         assert data["status"] == "confirmed"
         assert data["crease_display"] == "130+360+130"
         assert data["items"][0]["cutting_mode"] == "一开三"
+        assert data["items"][0]["requisition_qty"] == 6
         _created_id = data["id"]
         _created_number = data["order_number"]
 
@@ -234,7 +236,8 @@ class TestSupplierOrders:
         assert r.status_code == 200
         data = r.json()
         assert data["order_number"] == _created_number
-        assert len(data["items"]) == 2
+        assert len(data["items"]) == 1
+        assert len(data["items"][0]["source_items"]) == 2
         assert data["cutting_mode"] == "一开三"
 
     def test_get_404(self, client, admin_cookies):

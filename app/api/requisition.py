@@ -403,7 +403,8 @@ def pending_requisitions(
         .where(
             OrderItem.requisition_status == "未报料",
             OrderItem.material_status == "pending",
-            Order.status != "cancelled",
+            Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+            OrderItem.is_force_closed.is_(False),
         )
         .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
     ).all()
@@ -1039,7 +1040,8 @@ def merge_suggestions(
         .where(
             OrderItem.requisition_status == "未报料",
             OrderItem.material_status == "pending",
-            Order.status != "cancelled",
+            Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+            OrderItem.is_force_closed.is_(False),
         )
         .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
     ).all()

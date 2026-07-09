@@ -309,6 +309,32 @@ def test_pending_requisition_sorts_newest_record_first(requisition_app) -> None:
     assert response.json()["items"][0]["item_id"] == newest_id
 
 
+def test_dead_or_force_closed_order_items_are_excluded_from_pending_requisition(
+    requisition_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        order = session.get(Order, 1)
+        item = session.get(OrderItem, 1)
+        order.status = "dead"
+        item.is_force_closed = True
+        item.snapshot_report_length_mm = 800
+        item.snapshot_report_width_mm = 300
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        pending = client.get("/api/requisition/pending")
+        suggestions = client.get("/api/requisition/merge-suggestions")
+
+    assert pending.status_code == 200
+    assert pending.json()["items"] == []
+    assert suggestions.status_code == 200
+    assert suggestions.json()["suggestions"] == []
+
+
 def test_merge_suggestions_never_merge_different_flute_types(requisition_app) -> None:
     from app.models.material import Material
     from app.models.order import OrderItem

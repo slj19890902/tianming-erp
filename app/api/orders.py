@@ -28,7 +28,10 @@ from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
-from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
+from app.models.supplier_requisition_order import (
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryDraft,
     TianhuaPreDeliveryDraftItem,
@@ -107,6 +110,10 @@ _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
 # finished-but-not-yet-archived order is still part of daily work, while the
 # unfinished badge only counts undelivered rows.
 _BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
+_INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES = [
+    "voided", "cancelled", "canceled", "withdrawn", "invalid",
+    "已作废", "已取消", "已撤回",
+]
 
 
 class OrderItemCreate(BaseModel):
@@ -1015,21 +1022,36 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .where(OrderItem.order_id.in_(order_ids))
     ):
-        labels.append("送货")
+        labels.append("送货单")
     if db.scalar(
         select(func.count())
         .select_from(RequisitionItem)
         .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
-        .where(OrderItem.order_id.in_(order_ids))
+        .where(
+            OrderItem.order_id.in_(order_ids),
+            or_(
+                RequisitionItem.status == "已入库",
+                OrderItem.material_status == "received",
+            ),
+        )
     ):
-        labels.append("报料")
+        labels.append("来料入库")
     if db.scalar(
         select(func.count())
         .select_from(SupplierRequisitionOrderItem)
         .join(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
-        .where(OrderItem.order_id.in_(order_ids))
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .where(
+            OrderItem.order_id.in_(order_ids),
+            func.lower(SupplierRequisitionOrder.status).notin_(
+                _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES
+            ),
+        )
     ):
-        labels.append("供应商采购单")
+        labels.append("供应商报料单")
 
     if _active_predelivery_order_ids(db, order_ids):
         labels.append("有效预送货")
@@ -1039,6 +1061,12 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
 def _flow_delete_message(labels: list[str]) -> str:
     if "有效预送货" in labels:
         return "该订单仍存在有效预送货流程，请先撤回或作废预送货后再删除。"
+    if "供应商报料单" in labels:
+        return "该订单已生成供应商报料单，不能直接删除。"
+    if "来料入库" in labels:
+        return "该订单已来料入库，不能直接删除。"
+    if "送货单" in labels:
+        return "该订单已送货，不能直接删除。"
     flow_text = "/".join(dict.fromkeys(labels))
     return f"该订单已进入{flow_text}流程，不能直接删除。"
 
@@ -1090,6 +1118,22 @@ def _delete_orders_in_transaction(
         reason="删除订单前自动释放成品库存预占",
         idempotency_prefix="delete-order-reservation",
     )
+    if item_ids:
+        requisition_ids = set(
+            db.scalars(
+                select(RequisitionItem.requisition_id).where(
+                    RequisitionItem.order_item_id.in_(item_ids)
+                )
+            ).all()
+        )
+        db.execute(delete(RequisitionItem).where(RequisitionItem.order_item_id.in_(item_ids)))
+        for requisition_id in requisition_ids:
+            if db.scalar(
+                select(RequisitionItem.id)
+                .where(RequisitionItem.requisition_id == requisition_id)
+                .limit(1)
+            ) is None:
+                db.execute(delete(Requisition).where(Requisition.id == requisition_id))
     for order in orders:
         db.add(
             OperationLog(

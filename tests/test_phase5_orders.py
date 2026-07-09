@@ -577,7 +577,10 @@ def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
     order_api_app,
 ) -> None:
     from app.models.order import Order
-    from app.models.requisition import Requisition, RequisitionItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
 
     app, session_factory = order_api_app
     first_payload = _payload()
@@ -609,24 +612,24 @@ def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
         blocked_order = client.post("/api/orders", json=blocked_payload).json()
         blocked_item = blocked_order["items"][0]
         with session_factory() as session:
-            requisition = Requisition(
-                requisition_number="MR-PDF-BLOCK",
-                requisition_date=date(2026, 6, 13),
-                status="已报料",
+            supplier_order = SupplierRequisitionOrder(
+                order_number="SR-PDF-BLOCK",
+                supplier_name="苏州纸板供应商",
+                total_quantity=200,
+                requisition_qty=200,
+                status="confirmed",
             )
-            session.add(requisition)
+            session.add(supplier_order)
             session.flush()
             session.add(
-                RequisitionItem(
-                    requisition_id=requisition.id,
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=supplier_order.id,
                     order_item_id=blocked_item["id"],
-                    inventory_deducted_qty=0,
-                    requisition_qty=200,
-                    cardboard_len=Decimal("1000"),
-                    cardboard_width=Decimal("500"),
-                    special_process="一开一",
-                    product_name_snapshot="五层加强纸箱",
-                    status="有效",
+                    order_number=blocked_order["order_number"],
+                    product_code=blocked_item["snapshot_product_code"],
+                    product_name=blocked_item["snapshot_product_name"],
+                    quantity=blocked_item["quantity"],
+                    requisition_qty=blocked_item["quantity"],
                 )
             )
             session.commit()
@@ -636,10 +639,106 @@ def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
         )
 
     assert blocked.status_code == 409
-    assert "报料" in blocked.json()["detail"]
+    assert "已生成供应商报料单" in blocked.json()["detail"]
     assert "不能直接删除" in blocked.json()["detail"]
     with session_factory() as session:
         assert session.get(Order, blocked_order["id"]) is not None
+
+
+@pytest.mark.parametrize("supplier_status", ["voided", "cancelled", "withdrawn", "invalid"])
+def test_inactive_supplier_order_items_do_not_block_order_group_delete(
+    order_api_app,
+    supplier_status: str,
+) -> None:
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = f"PDF-GROUP-INACTIVE-SRO-{supplier_status}"
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=payload).json()
+        order_item_id = created["items"][0]["id"]
+        with session_factory() as session:
+            order = SupplierRequisitionOrder(
+                order_number=f"SR-INACTIVE-{supplier_status}",
+                supplier_name="苏州纸板供应商",
+                total_quantity=created["items"][0]["quantity"],
+                requisition_qty=created["items"][0]["quantity"],
+                status=supplier_status,
+            )
+            session.add(order)
+            session.flush()
+            session.add(SupplierRequisitionOrderItem(
+                supplier_order_id=order.id,
+                order_item_id=order_item_id,
+                order_number=created["order_number"],
+                product_code=created["items"][0]["snapshot_product_code"],
+                product_name=created["items"][0]["snapshot_product_name"],
+                quantity=created["items"][0]["quantity"],
+                requisition_qty=created["items"][0]["quantity"],
+            ))
+            session.commit()
+        deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [created["id"]], "confirm": True},
+        )
+
+    assert deleted.status_code == 200, deleted.text
+
+
+def test_cancelled_requisition_items_do_not_block_order_group_delete(
+    order_api_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PDF-GROUP-CANCELLED-REQ"
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=payload).json()
+        order_item_id = created["items"][0]["id"]
+        with session_factory() as session:
+            requisition = Requisition(
+                requisition_number="MR-CANCELLED-BEFORE-DELETE",
+                requisition_date=date(2026, 6, 13),
+                status="已取消",
+            )
+            session.add(requisition)
+            session.flush()
+            session.add(
+                RequisitionItem(
+                    requisition_id=requisition.id,
+                    order_item_id=order_item_id,
+                    inventory_deducted_qty=0,
+                    requisition_qty=200,
+                    cardboard_len=Decimal("1000"),
+                    cardboard_width=Decimal("500"),
+                    special_process="一开一",
+                    product_name_snapshot="五层加强纸箱",
+                    status="已取消",
+                )
+            )
+            session.commit()
+        deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [created["id"]], "confirm": True},
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_count"] == 1
+    with session_factory() as session:
+        assert session.get(Order, created["id"]) is None
+        assert session.scalar(
+            select(func.count()).select_from(OrderItem).where(OrderItem.order_id == created["id"])
+        ) == 0
+        assert session.scalar(select(func.count()).select_from(RequisitionItem)) == 0
+        assert session.scalar(select(func.count()).select_from(Requisition)) == 0
 
 
 def _seed_tianhua_predelivery(
@@ -1298,6 +1397,90 @@ def test_closed_order_is_excluded_from_business(order_api_app) -> None:
     assert business.status_code == 200
     ids = [row["id"] for row in business.json()["items"]]
     assert created["id"] not in ids
+
+
+def test_frontend_delivery_group_status_uses_aggregate_quantities() -> None:
+    index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'delivered:"已送完"' in index
+    assert "deliveryStatusFromQuantities" in index
+    assert "group.hasDeliveryStatus" in index
+    assert "group.total_delivered_quantity" in index
+    assert "group.group_status = this.deliveryStatusFromQuantities" in index
+
+
+def _expected_delivery_status(quantity: int, delivered_quantity: int) -> str:
+    if quantity > 0 and delivered_quantity >= quantity:
+        return "delivered"
+    if delivered_quantity > 0:
+        return "partially_delivered"
+    return "pending_delivery"
+
+
+def test_frontend_detail_item_status_uses_item_quantities() -> None:
+    index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'v-for="item in row.items"' in index
+    assert '<status-tag v-else :value="itemDeliveryStatusKey(item)"></status-tag>' in index
+    assert "itemDeliveryStatusKey(item)" in index
+    assert "item?.quantity" in index
+    assert "item?.delivered_quantity" in index
+
+    assert _expected_delivery_status(150, 140) == "partially_delivered"
+    assert _expected_delivery_status(150, 0) == "pending_delivery"
+    assert _expected_delivery_status(150, 150) == "delivered"
+    assert _expected_delivery_status(150, 160) == "delivered"
+    assert _expected_delivery_status(300, 140) == "partially_delivered"
+
+
+def test_order_detail_exposes_item_level_delivery_quantities(order_api_app) -> None:
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PO-ITEM-DELIVERY-STATUS"
+    payload["items"][0]["quantity"] = 150
+    payload["items"][1]["quantity"] = 150
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload)
+        assert created.status_code == 201, created.text
+        order_id = created.json()["id"]
+
+    with session_factory() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        order.status = "partially_delivered"
+        items = (
+            session.query(OrderItem)
+            .filter(OrderItem.order_id == order_id)
+            .order_by(OrderItem.item_sequence)
+            .all()
+        )
+        items[0].delivered_quantity = 140
+        items[1].delivered_quantity = 0
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        detail = client.get(f"/api/orders/{order_id}")
+
+    assert detail.status_code == 200, detail.text
+    rows = sorted(detail.json()["items"], key=lambda item: item["item_sequence"])
+    assert rows[0]["quantity"] == 150
+    assert rows[0]["delivered_quantity"] == 140
+    assert _expected_delivery_status(
+        rows[0]["quantity"], rows[0]["delivered_quantity"]
+    ) == "partially_delivered"
+    assert rows[1]["quantity"] == 150
+    assert rows[1]["delivered_quantity"] == 0
+    assert _expected_delivery_status(
+        rows[1]["quantity"], rows[1]["delivered_quantity"]
+    ) == "pending_delivery"
 
 
 def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> None:

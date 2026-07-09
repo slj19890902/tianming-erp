@@ -1293,7 +1293,7 @@
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td>
                                     <td>
                                       <div v-if="row.is_history_order" class="status blue">历史归档</div>
-                                      <status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag>
+                                      <status-tag v-else :value="itemDeliveryStatusKey(item)"></status-tag>
                                     </td>
                                     <td class="toolbar-group">
                                       <button class="btn small" @click="openOrderDetail(row)">详情</button>
@@ -3644,6 +3644,7 @@
                   total_amount: 0,
                   all_received: true,
                   group_status: this.orderDisplayStatusKey(row),
+                  hasDeliveryStatus: false,
                   hasHistoryOnly: true,
                   orders: [],
                 });
@@ -3655,13 +3656,22 @@
               group.total_delivered_quantity += this.sum(row.items, "delivered_quantity");
               group.total_amount += Number(row.total_amount || 0);
               group.all_received = group.all_received && row.items.every((item) => item.material_status === "received");
+              group.hasDeliveryStatus = group.hasDeliveryStatus || this.isDeliveryStatus(row.status);
               group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
               if (!group.hasHistoryOnly) group.group_status = this.orderDisplayStatusKey(row);
               if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
                 group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
               }
             }
-            return [...groups.values()];
+            return [...groups.values()].map((group) => {
+              if (!group.hasHistoryOnly && group.hasDeliveryStatus) {
+                group.group_status = this.deliveryStatusFromQuantities(
+                  group.total_quantity,
+                  group.total_delivered_quantity,
+                );
+              }
+              return group;
+            });
           },
           orderStatusOptions() {
             return [
@@ -3908,7 +3918,7 @@
               active:"启用", inactive:"停用", pending:"待处理", received:"材料已到",
               business:"日常订单", history:"历史订单", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", production:"生产中", pending_delivery:"待送货",
               partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
-              delivered:"已送货", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
+              delivered:"已送完", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
               unsettled:"未结清", settled:"已结清", draft:"草稿", quoted:"已报价", accepted:"客户接受", converted:"已转常用箱", voided:"作废",
               "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
@@ -3919,10 +3929,34 @@
           // 但列表 / 详情展示需要显示为"待报料"，直到至少一条明细的
           // requisition_status 脱离"未报料"（即已经满足系统原有的"已报料/可生产"条件）。
           orderDisplayStatusKey(row) {
-            if (!row || row.status !== "pending_production") return row ? row.status : row;
+            if (!row) return row;
+            if (this.isDeliveryStatus(row.status)) {
+              const items = Array.isArray(row.items) ? row.items : [];
+              return this.deliveryStatusFromQuantities(
+                this.sum(items, "quantity"),
+                this.sum(items, "delivered_quantity"),
+              );
+            }
+            if (row.status !== "pending_production") return row.status;
             const items = Array.isArray(row.items) ? row.items : [];
             const noneRequisitioned = items.every((item) => (item?.requisition_status || "未报料") === "未报料");
             return noneRequisitioned ? "pending_material" : "pending_production";
+          },
+          isDeliveryStatus(value) {
+            return ["pending_delivery", "partially_delivered", "delivered"].includes(value);
+          },
+          deliveryStatusFromQuantities(totalQuantity, deliveredQuantity) {
+            const total = Number(totalQuantity || 0);
+            const delivered = Number(deliveredQuantity || 0);
+            if (total > 0 && delivered >= total) return "delivered";
+            if (delivered > 0) return "partially_delivered";
+            return "pending_delivery";
+          },
+          itemDeliveryStatusKey(item) {
+            return this.deliveryStatusFromQuantities(
+              item?.quantity,
+              item?.delivered_quantity,
+            );
           },
           showToast(message, error=false) {
             clearTimeout(this.toastTimer);

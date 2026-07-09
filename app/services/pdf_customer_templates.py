@@ -37,6 +37,26 @@ GAOTAI_TEMPLATE_RULE = {
 }
 
 
+SINGLETON_TEMPLATE_RULE = {
+    "customer_name": "辛格顿（常州）新材料科技有限公司",
+    "customer_type": "singleton",
+    "aliases": ["辛格顿", "辛格顿（常州）"],
+    "keywords": ["采购合同", "辛格顿（常州）新材料科技有限公司"],
+    "order_no_labels": ["合同号/P O", "合同号", "PO"],
+    "delivery_date_labels": ["交货期", "交期"],
+    "item_code_rules": [
+        {
+            "name": "singleton_3d_code",
+            "pattern": r"^30(\d{5})$",
+            "replace": r"3D\1",
+            "reason": "辛格顿存货编码应为 3D + 5位数字，OCR 易把 D 识别成 0",
+        }
+    ],
+    "item_columns": dict(GAOTAI_TEMPLATE_RULE["item_columns"]),
+    "_source": "builtin",
+}
+
+
 def _json_dict(raw: str | None) -> dict:
     if not raw:
         return {}
@@ -57,6 +77,7 @@ def load_active_pdf_template_rules(db: Session) -> list[dict]:
 
     rules: list[dict] = []
     has_gaotai = False
+    has_singleton = False
     for template, customer_name in rows:
         payload = _json_dict(template.column_map_json)
         merged = {
@@ -85,7 +106,11 @@ def load_active_pdf_template_rules(db: Session) -> list[dict]:
         )
         if "高泰" in joined_text:
             has_gaotai = True
+        if "辛格顿" in joined_text:
+            has_singleton = True
 
     if not has_gaotai:
         rules.append(dict(GAOTAI_TEMPLATE_RULE))
+    if not has_singleton:
+        rules.append(dict(SINGLETON_TEMPLATE_RULE))
     return rules

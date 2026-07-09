@@ -310,6 +310,11 @@ class TestCustomerTypeDetect(unittest.TestCase):
         ct = _detect_customer_type("苏州高泰电子技术股份有限公司", None)
         self.assertEqual(ct, "gaotai")
 
+    def test_singleton_detected_by_name(self):
+        """含'辛格顿'的客户名应识别为 singleton。"""
+        ct = _detect_customer_type("辛格顿（常州）新材料科技有限公司", None)
+        self.assertEqual(ct, "singleton")
+
 
 class TestSimairMissingTemplate(unittest.TestCase):
     """思迈尔缺少完整模板时返回明确失败原因。"""
@@ -372,7 +377,7 @@ class TestGaotaiTemplateRules(unittest.TestCase):
             detect_pdf_customer_by_template,
             parse_purchase_order_text,
         )
-        from app.services.pdf_customer_templates import GAOTAI_TEMPLATE_RULE
+        from app.services.pdf_customer_templates import GAOTAI_TEMPLATE_RULE, SINGLETON_TEMPLATE_RULE
 
         text = """
 采购合同
@@ -383,7 +388,7 @@ PO2026050269
 10 21312009 中性内箱 28.5*19.5*5.5cm 个 25.00000 5.410000 135.25 2026.06.25
 合计 25.00000 135.25
 """
-        rules = [dict(GAOTAI_TEMPLATE_RULE)]
+        rules = [dict(GAOTAI_TEMPLATE_RULE), dict(SINGLETON_TEMPLATE_RULE)]
 
         self.assertIsNone(detect_pdf_customer_by_template(text, rules))
         result = parse_purchase_order_text(text, "tianhua-contract.pdf", template_rules=rules)
@@ -459,6 +464,76 @@ PO2026050269
         self.assertTrue(any("3D90078" in warning for warning in result["warnings"]))
         # 中文率 = 0% < 1%，应触发 OCR
         self.assertTrue(result, "纯 ASCII 文本中文率=0，应触发 OCR")
+
+    def test_singleton_purchase_contract_snippet_can_parse_3d_code(self):
+        from app.services.order_pdf_import import parse_purchase_order_text
+
+        text = """
+辛格顿（常州）新材料科技有限公司 采购合同 苏州工业园区天明纸品包装厂
+合同号/P O : 0200-CG260603-12 日期/Date: 2026/6/3
+序号 产品编号 名称 规格 数量 单位 单价(含税) 金额 税率 交货期 备注
+3D30285 纸箱 645*360*320 1000 Pcs 1.23 1230.00 13.00 2026-6-10
+合计
+"""
+        result = parse_purchase_order_text(text, "singleton.pdf")
+
+        self.assertEqual(result["customer_type"], "singleton")
+        self.assertEqual(result["customer_name"], "辛格顿（常州）新材料科技有限公司")
+        self.assertEqual(result["customer_po"], "0200-CG260603-12")
+        self.assertEqual(result["item_count"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["product_code"], "3D30285")
+        self.assertEqual(item["normalized_product_code"], "3D30285")
+        self.assertEqual(item["product_name"], "纸箱")
+        self.assertEqual(item["quantity"], 1000)
+        self.assertEqual(item["unit"], "Pcs")
+        self.assertEqual(item["delivery_date"], "2026-6-10")
+
+    def test_singleton_ocr_30_code_is_normalized_only_for_singleton(self):
+        from app.services.order_pdf_import import apply_customer_template_postprocess
+
+        singleton = {
+            "customer_name": "辛格顿（常州）新材料科技有限公司",
+            "customer_type": "singleton",
+            "items": [{"product_code": "3030285"}],
+            "warnings": [],
+        }
+        result = apply_customer_template_postprocess(
+            singleton,
+            "辛格顿（常州）新材料科技有限公司 采购合同",
+        )
+        self.assertEqual(result["items"][0]["product_code"], "3D30285")
+        self.assertEqual(result["items"][0]["raw_product_code"], "3030285")
+        self.assertEqual(result["items"][0]["normalized_product_code"], "3D30285")
+        self.assertTrue(any("3030285" in warning and "3D30285" in warning for warning in result["warnings"]))
+
+        unknown = {
+            "customer_name": "普通客户",
+            "customer_type": "unknown",
+            "items": [{"product_code": "3030285"}],
+            "warnings": [],
+        }
+        untouched = apply_customer_template_postprocess(unknown, "采购合同")
+        self.assertEqual(untouched["items"][0]["product_code"], "3030285")
+
+    def test_singleton_ocr_contract_number_and_code_are_normalized(self):
+        from app.services.order_pdf_import import parse_purchase_order_text
+
+        text = """
+辛格顿(常州)新材料科技有限公司 采购合同 苏州工业园区天明纸品包装厂
+合同号/0 : 0200-C6260603-12 日期/0ate: 2026/6/3
+序号 产品编号 名称 规格 数量 单位 单价(含税) 金额 税率 交货期 备注
+3030285 纸箱 1000 Pcs 78.2000001 13.00 2026-6-10
+合计
+"""
+        result = parse_purchase_order_text(text, "singleton-ocr.pdf")
+
+        self.assertEqual(result["customer_type"], "singleton")
+        self.assertEqual(result["customer_po"], "0200-CG260603-12")
+        self.assertEqual(result["items"][0]["product_code"], "3D30285")
+        self.assertEqual(result["items"][0]["raw_product_code"], "3030285")
+        self.assertEqual(result["items"][0]["normalized_product_code"], "3D30285")
+        self.assertEqual(result["items"][0]["delivery_date"], "2026-6-10")
 
     def test_should_use_ocr_empty_text(self):
         """空文本应触发 OCR。"""

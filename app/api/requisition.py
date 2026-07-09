@@ -204,6 +204,156 @@ class CancelPayload(BaseModel):
         return reason
 
 
+class MergeGroupCreatePayload(BaseModel):
+    member_item_ids: list[int] = Field(min_length=2)
+    supplier_name: str | None = None
+    report_length_mm: Decimal = Field(gt=0)
+    report_width_mm: Decimal = Field(gt=0)
+    cutting_mode: str = DEFAULT_CUTTING_MODE
+    remark: str | None = None
+
+    @field_validator("member_item_ids")
+    @classmethod
+    def validate_member_item_ids(cls, value: list[int]) -> list[int]:
+        unique_ids = list(dict.fromkeys(int(item_id) for item_id in value))
+        if len(unique_ids) < 2:
+            raise ValueError("至少选择两条待报料明细才能确认合并")
+        return unique_ids
+
+    @field_validator("cutting_mode")
+    @classmethod
+    def validate_cutting_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
+
+
+class MergeGroupUpdatePayload(BaseModel):
+    supplier_name: str | None = None
+    report_length_mm: Decimal | None = Field(default=None, gt=0)
+    report_width_mm: Decimal | None = Field(default=None, gt=0)
+    cutting_mode: str | None = None
+    remark: str | None = None
+
+    @field_validator("cutting_mode")
+    @classmethod
+    def validate_cutting_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
+
+
+class PendingSupplierOrderSelection(BaseModel):
+    type: str
+    order_item_id: int | None = None
+    merge_group_id: int | None = None
+    supplier_name: str | None = None
+    report_length_mm: Decimal | None = Field(default=None, gt=0)
+    report_width_mm: Decimal | None = Field(default=None, gt=0)
+    cutting_mode: str = DEFAULT_CUTTING_MODE
+    remark: str | None = None
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized not in {"order_item", "merge_group"}:
+            raise ValueError("待报料选择类型仅允许 order_item 或 merge_group")
+        return normalized
+
+    @field_validator("cutting_mode")
+    @classmethod
+    def validate_cutting_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
+
+
+class PendingSupplierOrderCreatePayload(BaseModel):
+    selections: list[PendingSupplierOrderSelection] = Field(min_length=1)
+
+
+class PendingSupplierOrderDraftItem(BaseModel):
+    source_type: str
+    order_item_id: int
+    merge_group_id: int | None = None
+    report_length_mm: Decimal = Field(gt=0)
+    report_width_mm: Decimal = Field(gt=0)
+    cutting_mode: str = DEFAULT_CUTTING_MODE
+    inventory_deducted_qty: int = 0
+    requisition_qty: int
+    remark: str | None = None
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_source_type(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized not in {"order_item", "merge_group_item"}:
+            raise ValueError("报料草稿来源类型仅允许 order_item 或 merge_group_item")
+        return normalized
+
+    @field_validator("cutting_mode")
+    @classmethod
+    def validate_cutting_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
+
+
+class PendingSupplierOrderDraftSourceItem(BaseModel):
+    source_type: str
+    order_item_id: int
+    merge_group_id: int | None = None
+    source_quantity: int | None = None
+    inventory_deducted_qty: int | None = None
+    requisition_qty: int | None = None
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_source_type(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized not in {"order_item", "merge_group_item"}:
+            raise ValueError("采购草稿来源类型仅允许 order_item 或 merge_group_item")
+        return normalized
+
+
+class PendingSupplierOrderDraftLine(BaseModel):
+    line_key: str | None = None
+    source_type: str | None = None
+    report_length_mm: Decimal = Field(gt=0)
+    report_width_mm: Decimal = Field(gt=0)
+    cutting_mode: str = DEFAULT_CUTTING_MODE
+    inventory_deducted_qty: int = 0
+    requisition_qty: int
+    remark: str | None = None
+    source_items: list[PendingSupplierOrderDraftSourceItem] = Field(min_length=1)
+
+    @field_validator("cutting_mode")
+    @classmethod
+    def validate_cutting_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip() or DEFAULT_CUTTING_MODE
+        if normalized not in CUTTING_MODE_FACTORS:
+            raise ValueError("开料方式仅允许：一开一、一开二、一开三、一开四、一开五")
+        return normalized
+
+
+class PendingSupplierOrderDraftGroup(BaseModel):
+    supplier_name: str | None = None
+    lines: list[PendingSupplierOrderDraftLine] = Field(default_factory=list)
+    # Backward-compatible input for the previous flat source-item draft shape.
+    items: list[dict] = Field(default_factory=list)
+
+
+class PendingSupplierOrderFinalizePayload(BaseModel):
+    supplier_groups: list[PendingSupplierOrderDraftGroup] = Field(min_length=1)
+
+
 def _plain(value: Decimal | None) -> str | None:
     if value is None:
         return None
@@ -389,13 +539,1104 @@ def _item_response(item: OrderItem, db: Session | None = None) -> dict:
     }
 
 
+def _unique_text(values: list[str | None]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text_value = str(value or "").strip()
+        if not text_value or text_value in seen:
+            continue
+        seen.add(text_value)
+        result.append(text_value)
+    return result
+
+
+def _merge_group_rows(db: Session, group_id: int) -> list[tuple[RequisitionItem, OrderItem, Order, Customer, Product]]:
+    return db.execute(
+        select(RequisitionItem, OrderItem, Order, Customer, Product)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(RequisitionItem.requisition_id == group_id)
+        .order_by(RequisitionItem.id)
+    ).all()
+
+
+def _merge_group_dict(
+    group: Requisition,
+    db: Session,
+    *,
+    display_registry=None,
+) -> dict:
+    rows = _merge_group_rows(db, group.id)
+    registry = display_registry or build_display_registry(db)
+    members = []
+    product_codes: list[str | None] = []
+    order_numbers: list[str | None] = []
+    customer_names: list[str | None] = []
+    product_names: list[str | None] = []
+    total_quantity = 0
+    total_required_piece_qty = 0
+    total_requisition_qty = 0
+    first_item: OrderItem | None = None
+    first_req_item: RequisitionItem | None = None
+    first_material: Material | None = None
+    for req_item, order_item, order, customer, product in rows:
+        if first_item is None:
+            first_item = order_item
+            first_req_item = req_item
+            first_material = db.get(Material, order_item.material_id) if order_item.material_id else None
+        display_no = display_order_number(order, registry)
+        product_code = req_item.product_code_snapshot or order_item.snapshot_product_code or product.product_code
+        product_name = req_item.product_name_snapshot or order_item.snapshot_product_name
+        required_piece_qty = int(req_item.required_piece_qty or 0)
+        product_codes.append(product_code)
+        order_numbers.append(display_no)
+        customer_names.append(customer.name)
+        product_names.append(product_name)
+        total_quantity += int(order_item.quantity or 0)
+        total_required_piece_qty += required_piece_qty
+        total_requisition_qty += int(req_item.requisition_qty or 0)
+        members.append(
+            {
+                "item_id": order_item.id,
+                "requisition_item_id": req_item.id,
+                "order_number": display_no,
+                "display_order_number": display_no,
+                "customer_name": customer.name,
+                "product_code": product_code,
+                "product_name": product_name,
+                "specification": req_item.specification_snapshot or order_item.snapshot_spec,
+                "quantity": order_item.quantity,
+                "requisition_qty": req_item.requisition_qty,
+                "required_piece_qty": required_piece_qty,
+                "cardboard_len": req_item.cardboard_len,
+                "cardboard_width": req_item.cardboard_width,
+                "cutting_mode": req_item.special_process,
+                "special_process": req_item.special_process,
+                "delivery_date": order.delivery_date,
+            }
+        )
+    material_display = ""
+    if first_item is not None:
+        material_display = _format_supplier_material(
+            first_material.code if first_material else first_item.snapshot_material,
+            first_item.layer_count or (first_material.layer_count if first_material else None),
+            first_item.flute_type,
+            fallback_text=first_item.snapshot_material,
+        )
+    supplier_name = (group.supplier_name or "").strip()
+    cardboard_len = first_req_item.cardboard_len if first_req_item else None
+    cardboard_width = first_req_item.cardboard_width if first_req_item else None
+    cutting_mode = first_req_item.special_process if first_req_item else DEFAULT_CUTTING_MODE
+    return {
+        "item_id": f"mg{group.id}",
+        "id": group.id,
+        "is_merge_group": True,
+        "merge_group_id": group.id,
+        "status": group.status,
+        "order_number": "合并组",
+        "display_order_number": "合并组",
+        "order_numbers": _unique_text(order_numbers),
+        "customer_name": " / ".join(_unique_text(customer_names)),
+        "customer_names": _unique_text(customer_names),
+        "product_code": " / ".join(_unique_text(product_codes)),
+        "product_codes": _unique_text(product_codes),
+        "product_name": " / ".join(_unique_text(product_names)),
+        "product_names": _unique_text(product_names),
+        "specification": f"{len(members)} 个来源",
+        "quantity": total_quantity,
+        "finished_inventory_reserved_qty": 0,
+        "production_required_qty": total_quantity,
+        "fully_covered_by_finished_inventory": False,
+        "requisition_qty": total_requisition_qty,
+        "requisition_status": "待报料合并组",
+        "required_piece_qty": total_required_piece_qty,
+        "total_quantity": total_quantity,
+        "total_required_piece_qty": total_required_piece_qty,
+        "suggested_cardboard_len": cardboard_len,
+        "suggested_cardboard_width": cardboard_width,
+        "report_length_mm": cardboard_len,
+        "report_width_mm": cardboard_width,
+        "cardboard_len": cardboard_len,
+        "cardboard_width": cardboard_width,
+        "cutting_mode": cutting_mode,
+        "special_process": cutting_mode,
+        "remark": first_req_item.remark if first_req_item else None,
+        "snapshot_supplier_name": supplier_name,
+        "supplier_name": supplier_name,
+        "material_display": material_display,
+        "material": first_item.snapshot_material if first_item else None,
+        "material_id": first_item.material_id if first_item else None,
+        "layer_count": first_item.layer_count if first_item else None,
+        "flute_type": first_item.flute_type if first_item else None,
+        "members": members,
+        "dimension_warnings": _supplier_dimension_warnings(
+            supplier_name,
+            cardboard_len,
+            cardboard_width,
+            cutting_mode,
+        ),
+    }
+
+
+def _validate_merge_member_rows(
+    db: Session,
+    member_item_ids: list[int],
+) -> list[tuple[OrderItem, Order, Customer, Product]]:
+    rows = db.execute(
+        select(OrderItem, Order, Customer, Product)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(OrderItem.id.in_(member_item_ids))
+    ).all()
+    found_ids = {item.id for item, *_ in rows}
+    missing = [item_id for item_id in member_item_ids if item_id not in found_ids]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"订单明细不存在：{missing}")
+    existing_group_item = db.scalar(
+        select(RequisitionItem)
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .where(
+            RequisitionItem.order_item_id.in_(member_item_ids),
+            Requisition.status == "merged_pending",
+            RequisitionItem.status == "merged_pending",
+        )
+        .limit(1)
+    )
+    if existing_group_item is not None:
+        raise HTTPException(status_code=409, detail="所选明细已属于待报料合并组，请勿重复合并")
+    by_id = {item.id: (item, order, customer, product) for item, order, customer, product in rows}
+    ordered_rows = [by_id[item_id] for item_id in member_item_ids]
+    for item, order, *_ in ordered_rows:
+        if is_history_order_number(order.order_number):
+            raise HTTPException(status_code=409, detail="历史订单不能创建待报料合并组")
+        if order.status in {"cancelled", "dead", "closed", "archived"}:
+            raise HTTPException(status_code=409, detail="已取消、死单、结单或归档订单不能创建待报料合并组")
+        if item.is_force_closed:
+            raise HTTPException(status_code=409, detail="强制结案明细不能创建待报料合并组")
+        if item.material_status != "pending":
+            raise HTTPException(status_code=409, detail="已入库或非待生产明细不能创建待报料合并组")
+        if item.requisition_status != "未报料":
+            raise HTTPException(status_code=409, detail="已报料明细不能创建待报料合并组")
+    return ordered_rows
+
+
+def _active_supplier_order_item_exists(db: Session, order_item_id: int) -> bool:
+    return (
+        db.scalar(
+            select(SupplierRequisitionOrderItem.id)
+            .join(
+                SupplierRequisitionOrder,
+                SupplierRequisitionOrder.id
+                == SupplierRequisitionOrderItem.supplier_order_id,
+            )
+            .where(
+                SupplierRequisitionOrderItem.order_item_id == order_item_id,
+                SupplierRequisitionOrder.status != "voided",
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _ensure_pending_order_item_for_supplier_order(
+    db: Session,
+    order_item_id: int,
+) -> tuple[OrderItem, Order, Customer, Product]:
+    row = db.execute(
+        select(OrderItem, Order, Customer, Product)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(OrderItem.id == order_item_id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    item, order, customer, product = row
+    if is_history_order_number(order.order_number):
+        raise HTTPException(status_code=409, detail="历史订单不能生成供应商报料单")
+    if order.status in {"cancelled", "dead", "closed", "archived"}:
+        raise HTTPException(status_code=409, detail="已取消、死单、结单或归档订单不能生成供应商报料单")
+    if item.is_force_closed:
+        raise HTTPException(status_code=409, detail="强制结档明细不能生成供应商报料单")
+    if item.material_status != "pending":
+        raise HTTPException(status_code=409, detail="已入库或非待生产明细不能生成供应商报料单")
+    if item.requisition_status != "未报料":
+        raise HTTPException(status_code=409, detail="订单明细已经报料")
+    if _active_supplier_order_item_exists(db, item.id):
+        raise HTTPException(status_code=409, detail="订单明细已经存在有效供应商报料单")
+    return item, order, customer, product
+
+
+def _order_item_in_merged_pending_group(db: Session, order_item_id: int) -> bool:
+    return (
+        db.scalar(
+            select(RequisitionItem.id)
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .where(
+                RequisitionItem.order_item_id == order_item_id,
+                Requisition.status == "merged_pending",
+                RequisitionItem.status == "merged_pending",
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _entry_supplier(selection: PendingSupplierOrderSelection, fallback: str | None) -> str:
+    supplier_name = (selection.supplier_name or fallback or "").strip()
+    if not supplier_name:
+        raise HTTPException(status_code=400, detail="每条待报料选择必须有供应商")
+    return supplier_name
+
+
+def _entry_decimal(
+    value: Decimal | None,
+    fallback: Decimal | int | None,
+    field_name: str,
+) -> Decimal:
+    chosen = value if value is not None else fallback
+    if chosen is None:
+        raise HTTPException(status_code=400, detail=f"缺少{field_name}")
+    decimal_value = Decimal(str(chosen))
+    if decimal_value <= 0:
+        raise HTTPException(status_code=400, detail=f"{field_name}必须大于 0")
+    return decimal_value
+
+
+def _pending_selection_entries(
+    db: Session,
+    payload: PendingSupplierOrderCreatePayload,
+) -> tuple[dict[str, list[dict]], list[Requisition]]:
+    grouped: dict[str, list[dict]] = {}
+    touched_groups: list[Requisition] = []
+    seen_order_item_ids: set[int] = set()
+    seen_group_ids: set[int] = set()
+
+    def add_entry(supplier_name: str, entry: dict) -> None:
+        if entry["order_item"].id in seen_order_item_ids:
+            raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
+        seen_order_item_ids.add(entry["order_item"].id)
+        grouped.setdefault(supplier_name, []).append(entry)
+
+    for selection in payload.selections:
+        if selection.type == "order_item":
+            if not selection.order_item_id:
+                raise HTTPException(status_code=400, detail="普通待报料行缺少 order_item_id")
+            item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
+                db, selection.order_item_id
+            )
+            if _order_item_in_merged_pending_group(db, item.id):
+                raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
+            supplier_name = _entry_supplier(selection, item.snapshot_supplier_name)
+            cardboard_len = _entry_decimal(
+                selection.report_length_mm,
+                item.cardboard_len or item.snapshot_report_length_mm,
+                "报料长",
+            )
+            cardboard_width = _entry_decimal(
+                selection.report_width_mm,
+                item.cardboard_width or item.snapshot_report_width_mm,
+                "报料宽",
+            )
+            cutting_mode = selection.cutting_mode or item.special_process or DEFAULT_CUTTING_MODE
+            pieces_per_box = _pieces_per_box(item)
+            finished_reserved_qty = active_finished_reserved_qty(db, item.id)
+            production_required_qty = max(item.quantity - finished_reserved_qty, 0)
+            if production_required_qty == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
+                )
+            required_piece_qty = _required_piece_qty(
+                production_required_qty, pieces_per_box
+            )
+            add_entry(
+                supplier_name,
+                {
+                    "source_type": "order_item",
+                    "group": None,
+                    "req_item": None,
+                    "order_item": item,
+                    "order": order,
+                    "customer": customer,
+                    "product": product,
+                    "supplier_name": supplier_name,
+                    "cardboard_len": cardboard_len,
+                    "cardboard_width": cardboard_width,
+                    "cutting_mode": cutting_mode,
+                    "remark": (selection.remark or item.requisition_remark or "").strip() or None,
+                    "pieces_per_box": pieces_per_box,
+                    "production_required_qty": production_required_qty,
+                    "required_piece_qty": required_piece_qty,
+                    "requisition_qty": _purchase_qty(
+                        required_piece_qty, 0, cutting_mode
+                    ),
+                },
+            )
+            continue
+
+        if not selection.merge_group_id:
+            raise HTTPException(status_code=400, detail="合并组行缺少 merge_group_id")
+        if selection.merge_group_id in seen_group_ids:
+            raise HTTPException(status_code=409, detail="同一合并组不能重复生成供应商报料单")
+        seen_group_ids.add(selection.merge_group_id)
+        group = db.get(Requisition, selection.merge_group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="待报料合并组不存在")
+        if group.status != "merged_pending":
+            raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
+        rows = _merge_group_rows(db, group.id)
+        if not rows:
+            raise HTTPException(status_code=400, detail="合并组没有来源明细")
+        supplier_name = _entry_supplier(selection, group.supplier_name)
+        first_req_item = rows[0][0]
+        cardboard_len = _entry_decimal(
+            selection.report_length_mm,
+            first_req_item.cardboard_len,
+            "报料长",
+        )
+        cardboard_width = _entry_decimal(
+            selection.report_width_mm,
+            first_req_item.cardboard_width,
+            "报料宽",
+        )
+        cutting_mode = selection.cutting_mode or first_req_item.special_process or DEFAULT_CUTTING_MODE
+        remark = (selection.remark or first_req_item.remark or "").strip() or None
+        group.supplier_name = supplier_name
+        for req_item, order_item, order, customer, product in rows:
+            if req_item.status != "merged_pending":
+                raise HTTPException(status_code=409, detail="合并组状态异常，不能生成供应商报料单")
+            _ensure_pending_order_item_for_supplier_order(db, order_item.id)
+            req_item.cardboard_len = cardboard_len
+            req_item.cardboard_width = cardboard_width
+            req_item.special_process = cutting_mode
+            req_item.remark = remark
+            if req_item.required_piece_qty is not None:
+                req_item.requisition_qty = _purchase_qty(
+                    req_item.required_piece_qty, 0, cutting_mode
+                )
+            add_entry(
+                supplier_name,
+                {
+                    "source_type": "merge_group",
+                    "group": group,
+                    "req_item": req_item,
+                    "order_item": order_item,
+                    "order": order,
+                    "customer": customer,
+                    "product": product,
+                    "supplier_name": supplier_name,
+                    "cardboard_len": cardboard_len,
+                    "cardboard_width": cardboard_width,
+                    "cutting_mode": cutting_mode,
+                    "remark": remark,
+                    "pieces_per_box": req_item.pieces_per_box or _pieces_per_box(order_item),
+                    "production_required_qty": int(order_item.quantity or 0),
+                    "required_piece_qty": int(req_item.required_piece_qty or 0),
+                    "requisition_qty": int(req_item.requisition_qty or 0),
+                },
+            )
+        touched_groups.append(group)
+
+    return grouped, touched_groups
+
+
+def _pending_entry_dict(entry: dict) -> dict:
+    req_item: RequisitionItem | None = entry.get("req_item")
+    order_item: OrderItem = entry["order_item"]
+    order: Order = entry["order"]
+    customer: Customer = entry["customer"]
+    product: Product = entry["product"]
+    material = db_material = entry.get("material")
+    if material is None and order_item.material_id:
+        db_material = None
+    return {
+        "source_type": entry["source_type"],
+        "order_item_id": order_item.id,
+        "merge_group_id": entry["group"].id if entry.get("group") is not None else None,
+        "order_number": display_order_number(order, entry.get("display_registry") or {}),
+        "customer_name": customer.name,
+        "product_code": (
+            req_item.product_code_snapshot
+            if req_item is not None
+            else order_item.snapshot_product_code or product.product_code
+        ),
+        "product_name": (
+            req_item.product_name_snapshot
+            if req_item is not None
+            else order_item.snapshot_product_name
+        ),
+        "material_display": _format_supplier_material(
+            db_material.code if db_material else order_item.snapshot_material,
+            order_item.layer_count or (db_material.layer_count if db_material else None),
+            order_item.flute_type,
+            fallback_text=order_item.snapshot_material,
+        ),
+        "quantity": order_item.quantity,
+        "report_length_mm": entry["cardboard_len"],
+        "report_width_mm": entry["cardboard_width"],
+        "cutting_mode": entry["cutting_mode"],
+        "inventory_deducted_qty": entry.get("inventory_deducted_qty", 0),
+        "production_required_qty": entry["production_required_qty"],
+        "pieces_per_box": entry["pieces_per_box"],
+        "required_piece_qty": entry["required_piece_qty"],
+        "requisition_qty": entry["requisition_qty"],
+        "remark": entry["remark"] or "",
+    }
+
+
+def _int_value(value, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(Decimal(str(value)))
+    except Exception:
+        return default
+
+
+def _purchase_line_spec_from_entry(entry: dict) -> dict:
+    order_item: OrderItem = entry["order_item"]
+    material: Material | None = entry.get("material")
+    material_id = order_item.material_id or (material.id if material else None)
+    material_code = material.code if material else order_item.snapshot_material
+    layer_count = order_item.layer_count or (material.layer_count if material else None)
+    flute_type = _clean_supplier_flute(order_item.flute_type)
+    clean_material_code = _clean_supplier_material_code(material_code, layer_count)
+    return {
+        "material_id": material_id,
+        "material_code": clean_material_code,
+        "material_display": _format_supplier_material(
+            material_code,
+            layer_count,
+            flute_type,
+            fallback_text=order_item.snapshot_material,
+        ),
+        "layer_count": layer_count,
+        "flute_type": flute_type,
+        "report_length_mm": _int_value(entry.get("cardboard_len")),
+        "report_width_mm": _int_value(entry.get("cardboard_width")),
+        "crease_type": order_item.snapshot_crease_type,
+        "crease_left_mm": order_item.snapshot_crease_left_mm,
+        "crease_middle_mm": order_item.snapshot_crease_middle_mm,
+        "crease_right_mm": order_item.snapshot_crease_right_mm,
+        "cutting_mode": entry.get("cutting_mode") or DEFAULT_CUTTING_MODE,
+        "remark": entry.get("remark") or "",
+    }
+
+
+def _purchase_line_key(supplier_name: str | None, spec: dict) -> str:
+    key_payload = {
+        "supplier_name": (supplier_name or "").strip(),
+        "material_id": spec.get("material_id"),
+        "material_code": spec.get("material_code") or "",
+        "material_display": spec.get("material_display") or "",
+        "layer_count": spec.get("layer_count"),
+        "flute_type": spec.get("flute_type") or "",
+        "report_length_mm": spec.get("report_length_mm"),
+        "report_width_mm": spec.get("report_width_mm"),
+        "crease_type": spec.get("crease_type") or "",
+        "crease_left_mm": spec.get("crease_left_mm"),
+        "crease_middle_mm": spec.get("crease_middle_mm"),
+        "crease_right_mm": spec.get("crease_right_mm"),
+        "cutting_mode": spec.get("cutting_mode") or DEFAULT_CUTTING_MODE,
+        "remark": spec.get("remark") or "",
+    }
+    return json.dumps(key_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _source_item_from_entry(entry: dict) -> dict:
+    source = _pending_entry_dict(entry)
+    source["source_quantity"] = int(entry.get("production_required_qty") or 0)
+    source["required_piece_qty"] = int(entry.get("required_piece_qty") or 0)
+    return source
+
+
+def _aggregate_entries_to_purchase_lines(
+    supplier_name: str | None,
+    entries: list[dict],
+) -> list[dict]:
+    line_map: dict[str, dict] = {}
+    for entry in entries:
+        spec = _purchase_line_spec_from_entry(entry)
+        line_key = _purchase_line_key(supplier_name, spec)
+        line = line_map.get(line_key)
+        if line is None:
+            line = {
+                "line_key": line_key,
+                "source_type": "normal",
+                **spec,
+                "quantity": 0,
+                "inventory_deducted_qty": 0,
+                "production_required_qty": 0,
+                "required_piece_qty": 0,
+                "requisition_qty": 0,
+                "source_items": [],
+            }
+            line_map[line_key] = line
+        line["inventory_deducted_qty"] += int(entry.get("inventory_deducted_qty") or 0)
+        line["production_required_qty"] += int(entry.get("production_required_qty") or 0)
+        line["quantity"] = line["production_required_qty"]
+        line["required_piece_qty"] += int(entry.get("required_piece_qty") or 0)
+        line["requisition_qty"] += int(entry.get("requisition_qty") or 0)
+        line["source_items"].append(_source_item_from_entry(entry))
+
+    lines = list(line_map.values())
+    for line in lines:
+        source_types = {item.get("source_type") for item in line["source_items"]}
+        if source_types == {"merge_group_item"}:
+            line["source_type"] = "merge_group"
+        elif source_types == {"order_item"}:
+            line["source_type"] = "normal"
+        else:
+            line["source_type"] = "mixed"
+    return lines
+
+
+def _allocate_integer_total(total: int, weights: list[int]) -> list[int]:
+    total = int(total or 0)
+    if not weights:
+        return []
+    if len(weights) == 1:
+        return [total]
+    clean_weights = [max(int(w or 0), 0) for w in weights]
+    weight_sum = sum(clean_weights)
+    if weight_sum <= 0:
+        result = [0 for _ in clean_weights]
+        result[0] = total
+        return result
+    raw = [Decimal(total) * Decimal(weight) / Decimal(weight_sum) for weight in clean_weights]
+    floors = [int(value) for value in raw]
+    remainder = total - sum(floors)
+    order = sorted(range(len(raw)), key=lambda idx: raw[idx] - floors[idx], reverse=True)
+    for idx in order[:remainder]:
+        floors[idx] += 1
+    return floors
+
+
+def _draft_lines_from_group(
+    group_payload: PendingSupplierOrderDraftGroup,
+) -> list[PendingSupplierOrderDraftLine]:
+    if group_payload.lines:
+        return group_payload.lines
+    lines: list[PendingSupplierOrderDraftLine] = []
+    for raw_item in group_payload.items:
+        if "source_items" in raw_item:
+            lines.append(PendingSupplierOrderDraftLine(**raw_item))
+            continue
+        item = PendingSupplierOrderDraftItem(**raw_item)
+        lines.append(
+            PendingSupplierOrderDraftLine(
+                report_length_mm=item.report_length_mm,
+                report_width_mm=item.report_width_mm,
+                cutting_mode=item.cutting_mode,
+                inventory_deducted_qty=item.inventory_deducted_qty,
+                requisition_qty=item.requisition_qty,
+                remark=item.remark,
+                source_items=[
+                    PendingSupplierOrderDraftSourceItem(
+                        source_type=item.source_type,
+                        order_item_id=item.order_item_id,
+                        merge_group_id=item.merge_group_id,
+                        inventory_deducted_qty=item.inventory_deducted_qty,
+                        requisition_qty=item.requisition_qty,
+                    )
+                ],
+            )
+        )
+    return lines
+
+
+def _pending_selection_preview_groups(
+    db: Session,
+    payload: PendingSupplierOrderCreatePayload,
+) -> dict:
+    registry = build_display_registry(db)
+    grouped: dict[str, list[dict]] = {}
+    seen_order_item_ids: set[int] = set()
+    seen_group_ids: set[int] = set()
+
+    def add_preview(supplier_name: str, entry: dict) -> None:
+        if entry["order_item"].id in seen_order_item_ids:
+            raise HTTPException(status_code=409, detail="同一订单明细不能重复加入报料草稿")
+        seen_order_item_ids.add(entry["order_item"].id)
+        entry["display_registry"] = registry
+        grouped.setdefault(supplier_name, []).append(entry)
+
+    for selection in payload.selections:
+        if selection.type == "order_item":
+            if not selection.order_item_id:
+                raise HTTPException(status_code=400, detail="普通待报料行缺少 order_item_id")
+            item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
+                db, selection.order_item_id
+            )
+            if _order_item_in_merged_pending_group(db, item.id):
+                raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
+            supplier_name = (selection.supplier_name or item.snapshot_supplier_name or "").strip()
+            cardboard_len = _entry_decimal(
+                selection.report_length_mm,
+                item.cardboard_len or item.snapshot_report_length_mm,
+                "报料长",
+            )
+            cardboard_width = _entry_decimal(
+                selection.report_width_mm,
+                item.cardboard_width or item.snapshot_report_width_mm,
+                "报料宽",
+            )
+            cutting_mode = selection.cutting_mode or item.special_process or DEFAULT_CUTTING_MODE
+            inventory_deducted_qty = active_finished_reserved_qty(db, item.id)
+            production_required_qty = max(item.quantity - inventory_deducted_qty, 0)
+            pieces_per_box = _pieces_per_box(item)
+            required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)
+            material = db.get(Material, item.material_id) if item.material_id else None
+            add_preview(
+                supplier_name,
+                {
+                    "source_type": "order_item",
+                    "group": None,
+                    "req_item": None,
+                    "order_item": item,
+                    "order": order,
+                    "customer": customer,
+                    "product": product,
+                    "material": material,
+                    "cardboard_len": cardboard_len,
+                    "cardboard_width": cardboard_width,
+                    "cutting_mode": cutting_mode,
+                    "remark": (selection.remark or item.requisition_remark or "").strip() or None,
+                    "inventory_deducted_qty": inventory_deducted_qty,
+                    "pieces_per_box": pieces_per_box,
+                    "production_required_qty": production_required_qty,
+                    "required_piece_qty": required_piece_qty,
+                    "requisition_qty": _purchase_qty(required_piece_qty, 0, cutting_mode),
+                },
+            )
+            continue
+
+        if not selection.merge_group_id:
+            raise HTTPException(status_code=400, detail="合并组行缺少 merge_group_id")
+        if selection.merge_group_id in seen_group_ids:
+            raise HTTPException(status_code=409, detail="同一合并组不能重复加入报料草稿")
+        seen_group_ids.add(selection.merge_group_id)
+        group = db.get(Requisition, selection.merge_group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="待报料合并组不存在")
+        if group.status != "merged_pending":
+            raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
+        rows = _merge_group_rows(db, group.id)
+        if not rows:
+            raise HTTPException(status_code=400, detail="合并组没有来源明细")
+        supplier_name = (selection.supplier_name or group.supplier_name or "").strip()
+        for req_item, order_item, order, customer, product in rows:
+            if req_item.status != "merged_pending":
+                raise HTTPException(status_code=409, detail="合并组状态异常，不能生成报料草稿")
+            _ensure_pending_order_item_for_supplier_order(db, order_item.id)
+            material = db.get(Material, order_item.material_id) if order_item.material_id else None
+            add_preview(
+                supplier_name,
+                {
+                    "source_type": "merge_group_item",
+                    "group": group,
+                    "req_item": req_item,
+                    "order_item": order_item,
+                    "order": order,
+                    "customer": customer,
+                    "product": product,
+                    "material": material,
+                    "cardboard_len": selection.report_length_mm or req_item.cardboard_len,
+                    "cardboard_width": selection.report_width_mm or req_item.cardboard_width,
+                    "cutting_mode": selection.cutting_mode or req_item.special_process,
+                    "remark": (selection.remark or req_item.remark or "").strip() or None,
+                    "inventory_deducted_qty": 0,
+                    "pieces_per_box": req_item.pieces_per_box or _pieces_per_box(order_item),
+                    "production_required_qty": int(order_item.quantity or 0),
+                    "required_piece_qty": int(req_item.required_piece_qty or 0),
+                    "requisition_qty": int(req_item.requisition_qty or 0),
+                },
+            )
+
+    supplier_groups = []
+    for supplier_name, entries in grouped.items():
+        lines = _aggregate_entries_to_purchase_lines(supplier_name, entries)
+        supplier_groups.append(
+            {
+                "supplier_name": supplier_name,
+                "lines": lines,
+                # Compatibility alias. These are purchase-spec lines, not flat sources.
+                "items": lines,
+            }
+        )
+    return {"supplier_groups": supplier_groups}
+
+
+def _draft_group_entries(
+    db: Session,
+    payload: PendingSupplierOrderFinalizePayload,
+) -> tuple[dict[str, list[dict]], list[Requisition]]:
+    grouped: dict[str, list[dict]] = {}
+    touched_groups_by_id: dict[int, Requisition] = {}
+    seen_order_item_ids: set[int] = set()
+
+    for group_payload in payload.supplier_groups:
+        supplier_name = (group_payload.supplier_name or "").strip()
+        if not supplier_name:
+            raise HTTPException(status_code=400, detail="每个供应商组必须选择供应商")
+        for draft_item in group_payload.items:
+            if draft_item.order_item_id in seen_order_item_ids:
+                raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
+            seen_order_item_ids.add(draft_item.order_item_id)
+            item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
+                db, draft_item.order_item_id
+            )
+            req_item: RequisitionItem | None = None
+            merge_group: Requisition | None = None
+            if draft_item.source_type == "order_item":
+                if _order_item_in_merged_pending_group(db, item.id):
+                    raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
+            else:
+                if not draft_item.merge_group_id:
+                    raise HTTPException(status_code=400, detail="合并组来源明细缺少 merge_group_id")
+                merge_group = db.get(Requisition, draft_item.merge_group_id)
+                if merge_group is None:
+                    raise HTTPException(status_code=404, detail="待报料合并组不存在")
+                if merge_group.status != "merged_pending":
+                    raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
+                req_item = db.scalar(
+                    select(RequisitionItem).where(
+                        RequisitionItem.requisition_id == merge_group.id,
+                        RequisitionItem.order_item_id == item.id,
+                    )
+                )
+                if req_item is None or req_item.status != "merged_pending":
+                    raise HTTPException(status_code=409, detail="合并组来源明细状态异常")
+                touched_groups_by_id[merge_group.id] = merge_group
+
+            if draft_item.inventory_deducted_qty < 0:
+                raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
+            if draft_item.inventory_deducted_qty > item.quantity:
+                raise HTTPException(status_code=400, detail="成品库存抵扣不能大于订单数量")
+            if draft_item.requisition_qty <= 0:
+                raise HTTPException(status_code=400, detail="采购张数必须大于 0")
+            production_required_qty = item.quantity - draft_item.inventory_deducted_qty
+            if production_required_qty <= 0:
+                raise HTTPException(status_code=400, detail="成品库存抵扣后仍需报料数量必须大于 0")
+            pieces_per_box = (
+                req_item.pieces_per_box
+                if req_item is not None and req_item.pieces_per_box
+                else _pieces_per_box(item)
+            )
+            required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)
+            material = db.get(Material, item.material_id) if item.material_id else None
+            entry = {
+                "source_type": draft_item.source_type,
+                "group": merge_group,
+                "req_item": req_item,
+                "order_item": item,
+                "order": order,
+                "customer": customer,
+                "product": product,
+                "material": material,
+                "supplier_name": supplier_name,
+                "cardboard_len": draft_item.report_length_mm,
+                "cardboard_width": draft_item.report_width_mm,
+                "cutting_mode": draft_item.cutting_mode,
+                "remark": (draft_item.remark or "").strip() or None,
+                "inventory_deducted_qty": draft_item.inventory_deducted_qty,
+                "pieces_per_box": pieces_per_box,
+                "production_required_qty": production_required_qty,
+                "required_piece_qty": required_piece_qty,
+                "requisition_qty": draft_item.requisition_qty,
+            }
+            if req_item is not None:
+                req_item.cardboard_len = draft_item.report_length_mm
+                req_item.cardboard_width = draft_item.report_width_mm
+                req_item.special_process = draft_item.cutting_mode
+                req_item.requisition_qty = draft_item.requisition_qty
+                req_item.required_piece_qty = required_piece_qty
+                req_item.remark = entry["remark"]
+            grouped.setdefault(supplier_name, []).append(entry)
+
+    return grouped, list(touched_groups_by_id.values())
+
+
+def _draft_group_entries_by_purchase_lines(
+    db: Session,
+    payload: PendingSupplierOrderFinalizePayload,
+) -> tuple[dict[str, list[dict]], list[Requisition]]:
+    grouped: dict[str, list[dict]] = {}
+    touched_groups_by_id: dict[int, Requisition] = {}
+    seen_order_item_ids: set[int] = set()
+
+    for group_payload in payload.supplier_groups:
+        supplier_name = (group_payload.supplier_name or "").strip()
+        if not supplier_name:
+            raise HTTPException(status_code=400, detail="每个供应商组必须选择供应商")
+        draft_lines = _draft_lines_from_group(group_payload)
+        if not draft_lines:
+            raise HTTPException(status_code=400, detail="每个供应商组必须至少包含一条采购规格行")
+
+        for draft_line in draft_lines:
+            if draft_line.inventory_deducted_qty < 0:
+                raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
+            if draft_line.requisition_qty <= 0:
+                raise HTTPException(status_code=400, detail="采购张数必须大于 0")
+
+            source_refs: list[dict] = []
+            for source_payload in draft_line.source_items:
+                if source_payload.order_item_id in seen_order_item_ids:
+                    raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
+                seen_order_item_ids.add(source_payload.order_item_id)
+                item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
+                    db, source_payload.order_item_id
+                )
+                req_item: RequisitionItem | None = None
+                merge_group: Requisition | None = None
+                if source_payload.source_type == "order_item":
+                    if _order_item_in_merged_pending_group(db, item.id):
+                        raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
+                else:
+                    if not source_payload.merge_group_id:
+                        raise HTTPException(status_code=400, detail="合并组来源明细缺少 merge_group_id")
+                    merge_group = db.get(Requisition, source_payload.merge_group_id)
+                    if merge_group is None:
+                        raise HTTPException(status_code=404, detail="待报料合并组不存在")
+                    if merge_group.status != "merged_pending":
+                        raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
+                    req_item = db.scalar(
+                        select(RequisitionItem).where(
+                            RequisitionItem.requisition_id == merge_group.id,
+                            RequisitionItem.order_item_id == item.id,
+                        )
+                    )
+                    if req_item is None or req_item.status != "merged_pending":
+                        raise HTTPException(status_code=409, detail="合并组来源明细状态异常")
+                    touched_groups_by_id[merge_group.id] = merge_group
+                source_refs.append(
+                    {
+                        "source_payload": source_payload,
+                        "item": item,
+                        "order": order,
+                        "customer": customer,
+                        "product": product,
+                        "req_item": req_item,
+                        "merge_group": merge_group,
+                    }
+                )
+
+            explicit_requisition = [
+                int(ref["source_payload"].requisition_qty or 0)
+                for ref in source_refs
+                if ref["source_payload"].requisition_qty is not None
+            ]
+            if (
+                len(explicit_requisition) == len(source_refs)
+                and sum(explicit_requisition) == int(draft_line.requisition_qty)
+            ):
+                requisition_allocations = explicit_requisition
+            else:
+                requisition_allocations = _allocate_integer_total(
+                    int(draft_line.requisition_qty),
+                    [
+                        int(
+                            ref["source_payload"].requisition_qty
+                            or ref["source_payload"].source_quantity
+                            or (
+                                ref["req_item"].requisition_qty
+                                if ref["req_item"] is not None
+                                else ref["item"].quantity
+                            )
+                            or 0
+                        )
+                        for ref in source_refs
+                    ],
+                )
+
+            explicit_inventory = [
+                int(ref["source_payload"].inventory_deducted_qty or 0)
+                for ref in source_refs
+                if ref["source_payload"].inventory_deducted_qty is not None
+            ]
+            if (
+                len(explicit_inventory) == len(source_refs)
+                and sum(explicit_inventory) == int(draft_line.inventory_deducted_qty or 0)
+            ):
+                inventory_allocations = explicit_inventory
+            else:
+                inventory_allocations = _allocate_integer_total(
+                    int(draft_line.inventory_deducted_qty or 0),
+                    [
+                        int(ref["source_payload"].source_quantity or ref["item"].quantity or 0)
+                        for ref in source_refs
+                    ],
+                )
+
+            for ref, requisition_qty, inventory_deducted_qty in zip(
+                source_refs, requisition_allocations, inventory_allocations
+            ):
+                item: OrderItem = ref["item"]
+                order: Order = ref["order"]
+                customer: Customer = ref["customer"]
+                product: Product = ref["product"]
+                req_item: RequisitionItem | None = ref["req_item"]
+                merge_group: Requisition | None = ref["merge_group"]
+                source_payload: PendingSupplierOrderDraftSourceItem = ref["source_payload"]
+
+                if inventory_deducted_qty < 0:
+                    raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
+                if inventory_deducted_qty > item.quantity:
+                    raise HTTPException(status_code=400, detail="成品库存抵扣不能大于订单数量")
+                if requisition_qty <= 0:
+                    raise HTTPException(status_code=400, detail="采购张数必须大于 0")
+                production_required_qty = item.quantity - inventory_deducted_qty
+                if production_required_qty <= 0:
+                    raise HTTPException(status_code=400, detail="成品库存抵扣后仍需报料数量必须大于 0")
+
+                pieces_per_box = (
+                    req_item.pieces_per_box
+                    if req_item is not None and req_item.pieces_per_box
+                    else _pieces_per_box(item)
+                )
+                required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)
+                material = db.get(Material, item.material_id) if item.material_id else None
+                entry = {
+                    "source_type": source_payload.source_type,
+                    "group": merge_group,
+                    "req_item": req_item,
+                    "order_item": item,
+                    "order": order,
+                    "customer": customer,
+                    "product": product,
+                    "material": material,
+                    "supplier_name": supplier_name,
+                    "cardboard_len": draft_line.report_length_mm,
+                    "cardboard_width": draft_line.report_width_mm,
+                    "cutting_mode": draft_line.cutting_mode,
+                    "remark": (draft_line.remark or "").strip() or None,
+                    "inventory_deducted_qty": inventory_deducted_qty,
+                    "pieces_per_box": pieces_per_box,
+                    "production_required_qty": production_required_qty,
+                    "required_piece_qty": required_piece_qty,
+                    "requisition_qty": requisition_qty,
+                }
+                if req_item is not None:
+                    req_item.cardboard_len = draft_line.report_length_mm
+                    req_item.cardboard_width = draft_line.report_width_mm
+                    req_item.special_process = draft_line.cutting_mode
+                    req_item.requisition_qty = requisition_qty
+                    req_item.required_piece_qty = required_piece_qty
+                    req_item.remark = entry["remark"]
+                grouped.setdefault(supplier_name, []).append(entry)
+
+    return grouped, list(touched_groups_by_id.values())
+
+
+def _create_supplier_order_for_pending_entries(
+    db: Session,
+    *,
+    supplier_name: str,
+    entries: list[dict],
+    user: User,
+) -> SupplierRequisitionOrder:
+    first = entries[0]
+    first_item: OrderItem = first["order_item"]
+    material = db.get(Material, first_item.material_id) if first_item.material_id else None
+    order = SupplierRequisitionOrder(
+        order_number=_supplier_order_number(db),
+        supplier_name=supplier_name,
+        material_id=first_item.material_id,
+        layer_count=first_item.layer_count or (material.layer_count if material else None),
+        flute_type=first_item.flute_type,
+        report_length_mm=int(first["cardboard_len"]),
+        report_width_mm=int(first["cardboard_width"]),
+        crease_type=first_item.snapshot_crease_type,
+        crease_left_mm=first_item.snapshot_crease_left_mm,
+        crease_middle_mm=first_item.snapshot_crease_middle_mm,
+        crease_right_mm=first_item.snapshot_crease_right_mm,
+        cutting_mode=first["cutting_mode"],
+        pieces_per_box=first["pieces_per_box"],
+        required_piece_qty=sum(int(entry["required_piece_qty"] or 0) for entry in entries),
+        total_quantity=sum(int(entry["production_required_qty"] or 0) for entry in entries),
+        stock_deduction_qty=sum(int(entry.get("inventory_deducted_qty") or 0) for entry in entries),
+        requisition_qty=sum(int(entry["requisition_qty"] or 0) for entry in entries),
+        remark=first["remark"],
+        status="confirmed",
+        created_by=user.id,
+    )
+    db.add(order)
+    db.flush()
+    requisition_date = date.today()
+    for entry in entries:
+        order_item: OrderItem = entry["order_item"]
+        req_item: RequisitionItem | None = entry["req_item"]
+        db.add(
+            SupplierRequisitionOrderItem(
+                supplier_order_id=order.id,
+                order_item_id=order_item.id,
+                order_number=order_item.item_order_number,
+                product_code=(
+                    req_item.product_code_snapshot
+                    if req_item is not None
+                    else order_item.snapshot_product_code or entry["product"].product_code
+                ),
+                product_name=(
+                    req_item.product_name_snapshot
+                    if req_item is not None
+                    else order_item.snapshot_product_name
+                ),
+                quantity=int(entry["production_required_qty"] or 0),
+                stock_deduction_qty=int(entry.get("inventory_deducted_qty") or 0),
+                requisition_qty=int(entry["requisition_qty"] or 0),
+                cutting_mode=entry["cutting_mode"],
+                pieces_per_box=entry["pieces_per_box"],
+                required_piece_qty=entry["required_piece_qty"],
+                customer_name=entry["customer"].name,
+                delivery_date=entry["order"].delivery_date,
+            )
+        )
+        order_item.inventory_deducted_qty = int(entry.get("inventory_deducted_qty") or 0)
+        order_item.requisition_status = "已报料"
+        order_item.requisition_qty = int(entry["requisition_qty"] or 0)
+        order_item.special_process = entry["cutting_mode"]
+        order_item.cardboard_len = entry["cardboard_len"]
+        order_item.cardboard_width = entry["cardboard_width"]
+        order_item.requisition_spec = (
+            f"{_plain(entry['cardboard_len'])}×{_plain(entry['cardboard_width'])}"
+        )
+        order_item.requisition_date = requisition_date
+        order_item.supplier_order_number = order.order_number
+        order_item.requisition_remark = entry["remark"]
+        if req_item is not None:
+            req_item.status = "supplier_requisition_created"
+    return order
+
+
 @router.get("/pending")
 def pending_requisitions(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
     registry = build_display_registry(db)
-    rows = db.execute(
+    merge_groups = db.scalars(
+        select(Requisition)
+        .where(Requisition.status == "merged_pending")
+        .order_by(Requisition.created_at.desc(), Requisition.id.desc())
+    ).all()
+    merged_order_item_ids = set(
+        db.scalars(
+            select(RequisitionItem.order_item_id)
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .where(
+                Requisition.status == "merged_pending",
+                RequisitionItem.status == "merged_pending",
+            )
+        ).all()
+    )
+    base_query = (
         select(OrderItem, Order, Customer, Product)
         .join(Order, Order.id == OrderItem.order_id)
         .join(Customer, Customer.id == Order.customer_id)
@@ -406,7 +1647,11 @@ def pending_requisitions(
             Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
             OrderItem.is_force_closed.is_(False),
         )
-        .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
+    )
+    if merged_order_item_ids:
+        base_query = base_query.where(~OrderItem.id.in_(merged_order_item_ids))
+    rows = db.execute(
+        base_query.order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
     ).all()
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
@@ -435,6 +1680,7 @@ def pending_requisitions(
         items.append(
             {
                 "item_id": item.id,
+                "is_merge_group": False,
                 "order_number": display_order_number(order, registry),
                 "display_order_number": display_order_number(order, registry),
                 "customer_id": customer.id,
@@ -504,9 +1750,10 @@ def pending_requisitions(
                 ),
             }
         )
+    items = [_merge_group_dict(group, db, display_registry=registry) for group in merge_groups] + items
     supplier_counts: dict[str, int] = {}
     for row in items:
-        supplier = (row.get("snapshot_supplier_name") or "未设置供应商").strip()
+        supplier = (row.get("supplier_name") or row.get("snapshot_supplier_name") or "未设置供应商").strip()
         supplier_counts[supplier] = supplier_counts.get(supplier, 0) + 1
     return {
         "items": items,
@@ -1162,6 +2409,246 @@ def merge_suggestions(
     return {"suggestions": suggestions}
 
 
+@router.post("/merge-groups", status_code=status.HTTP_201_CREATED)
+def create_merge_group(
+    payload: MergeGroupCreatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    rows = _validate_merge_member_rows(db, payload.member_item_ids)
+    reservation_map = active_finished_reservations_by_item_ids(
+        db, [item.id for item, *_ in rows]
+    )
+    requisition_date = date.today()
+    try:
+        group = Requisition(
+            requisition_number=_next_number(db, requisition_date),
+            requisition_date=requisition_date,
+            supplier_name=(payload.supplier_name or "").strip() or None,
+            status="merged_pending",
+            created_by=user.id,
+        )
+        db.add(group)
+        db.flush()
+        for item, _order, _customer, product in rows:
+            pieces_per_box = _pieces_per_box(item)
+            production_required_qty = max(
+                item.quantity - reservation_map.get(item.id, 0),
+                0,
+            )
+            if production_required_qty == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="所选明细已由成品库存全额抵扣，不能创建待报料合并组",
+                )
+            required_piece_qty = _required_piece_qty(
+                production_required_qty,
+                pieces_per_box,
+            )
+            db.add(
+                RequisitionItem(
+                    requisition_id=group.id,
+                    order_item_id=item.id,
+                    inventory_deducted_qty=0,
+                    requisition_qty=_purchase_qty(required_piece_qty, 0, payload.cutting_mode),
+                    cardboard_len=payload.report_length_mm,
+                    cardboard_width=payload.report_width_mm,
+                    pieces_per_box=pieces_per_box,
+                    required_piece_qty=required_piece_qty,
+                    special_process=payload.cutting_mode,
+                    material_snapshot=item.snapshot_material,
+                    product_code_snapshot=item.snapshot_product_code or product.product_code,
+                    product_name_snapshot=item.snapshot_product_name,
+                    specification_snapshot=item.snapshot_spec,
+                    remark=(payload.remark or "").strip() or None,
+                    status="merged_pending",
+                )
+            )
+        _audit(
+            db,
+            user=user,
+            action="CREATE_REQUISITION_MERGE_GROUP",
+            entity_id=group.id,
+            details={"member_item_ids": payload.member_item_ids},
+            description="创建待报料合并组",
+        )
+        db.commit()
+        db.refresh(group)
+        return _merge_group_dict(group, db)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.put("/merge-groups/{group_id}")
+def update_merge_group(
+    group_id: int,
+    payload: MergeGroupUpdatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    group = db.get(Requisition, group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="待报料合并组不存在")
+    if group.status != "merged_pending":
+        raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能修改")
+    try:
+        if payload.supplier_name is not None:
+            group.supplier_name = payload.supplier_name.strip() or None
+        updates = {
+            key: value
+            for key, value in {
+                "cardboard_len": payload.report_length_mm,
+                "cardboard_width": payload.report_width_mm,
+                "special_process": payload.cutting_mode,
+                "remark": (payload.remark.strip() if payload.remark is not None else None),
+            }.items()
+            if value is not None
+        }
+        for item in group.items:
+            for key, value in updates.items():
+                setattr(item, key, value)
+            if item.required_piece_qty is not None and payload.cutting_mode:
+                item.requisition_qty = _purchase_qty(
+                    item.required_piece_qty,
+                    0,
+                    payload.cutting_mode,
+                )
+        _audit(
+            db,
+            user=user,
+            action="UPDATE_REQUISITION_MERGE_GROUP",
+            entity_id=group.id,
+            details={"group_id": group.id},
+            description="修改待报料合并组",
+        )
+        db.commit()
+        db.refresh(group)
+        return _merge_group_dict(group, db)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/merge-groups/{group_id}/supplier-order", status_code=status.HTTP_201_CREATED)
+def create_supplier_order_from_merge_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    group = db.get(Requisition, group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="待报料合并组不存在")
+    if group.status != "merged_pending":
+        raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
+    supplier_name = (group.supplier_name or "").strip()
+    if not supplier_name:
+        raise HTTPException(status_code=400, detail="请先为合并组选择供应商")
+    rows = _merge_group_rows(db, group.id)
+    if not rows:
+        raise HTTPException(status_code=400, detail="合并组没有来源明细")
+    for req_item, order_item, *_ in rows:
+        if req_item.status != "merged_pending":
+            raise HTTPException(status_code=409, detail="合并组状态异常，不能生成供应商报料单")
+        if order_item.requisition_status != "未报料":
+            raise HTTPException(status_code=409, detail="合并组中存在已报料明细，不能重复生成")
+
+    first_req_item, first_order_item, *_ = rows[0]
+    material = db.get(Material, first_order_item.material_id) if first_order_item.material_id else None
+    total_quantity = sum(int(order_item.quantity or 0) for _req, order_item, *_ in rows)
+    total_required_piece_qty = sum(int(req.required_piece_qty or 0) for req, *_ in rows)
+    total_requisition_qty = sum(int(req.requisition_qty or 0) for req, *_ in rows)
+    order = SupplierRequisitionOrder(
+        order_number=_supplier_order_number(db),
+        supplier_name=supplier_name,
+        material_id=first_order_item.material_id,
+        layer_count=first_order_item.layer_count or (material.layer_count if material else None),
+        flute_type=first_order_item.flute_type,
+        report_length_mm=int(first_req_item.cardboard_len),
+        report_width_mm=int(first_req_item.cardboard_width),
+        crease_type=first_order_item.snapshot_crease_type,
+        crease_left_mm=first_order_item.snapshot_crease_left_mm,
+        crease_middle_mm=first_order_item.snapshot_crease_middle_mm,
+        crease_right_mm=first_order_item.snapshot_crease_right_mm,
+        cutting_mode=first_req_item.special_process,
+        pieces_per_box=first_req_item.pieces_per_box,
+        required_piece_qty=total_required_piece_qty,
+        total_quantity=total_quantity,
+        stock_deduction_qty=0,
+        requisition_qty=total_requisition_qty,
+        remark=first_req_item.remark,
+        status="confirmed",
+        created_by=user.id,
+    )
+    try:
+        db.add(order)
+        db.flush()
+        requisition_date = date.today()
+        for req_item, order_item, _order, customer, _product in rows:
+            db.add(
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=order.id,
+                    order_item_id=order_item.id,
+                    order_number=order_item.item_order_number,
+                    product_code=req_item.product_code_snapshot,
+                    product_name=req_item.product_name_snapshot,
+                    quantity=order_item.quantity,
+                    stock_deduction_qty=0,
+                    requisition_qty=req_item.requisition_qty,
+                    cutting_mode=req_item.special_process,
+                    pieces_per_box=req_item.pieces_per_box,
+                    required_piece_qty=req_item.required_piece_qty,
+                    customer_name=customer.name,
+                    delivery_date=_order.delivery_date,
+                )
+            )
+            order_item.inventory_deducted_qty = 0
+            order_item.requisition_status = "已报料"
+            order_item.requisition_qty = req_item.requisition_qty
+            order_item.special_process = req_item.special_process
+            order_item.cardboard_len = req_item.cardboard_len
+            order_item.cardboard_width = req_item.cardboard_width
+            order_item.requisition_spec = (
+                f"{_plain(req_item.cardboard_len)}×{_plain(req_item.cardboard_width)}"
+            )
+            order_item.requisition_date = requisition_date
+            order_item.requisition_remark = req_item.remark
+            req_item.status = "supplier_requisition_created"
+        group.status = "supplier_requisition_created"
+        _audit(
+            db,
+            user=user,
+            action="CREATE_SUPPLIER_ORDER_FROM_MERGE_GROUP",
+            entity_id=group.id,
+            details={
+                "merge_group_id": group.id,
+                "supplier_order_id": order.id,
+                "supplier_order_number": order.order_number,
+            },
+            description="待报料合并组生成供应商报料单",
+        )
+        db.commit()
+        db.refresh(order)
+        return {
+            "supplier_order_id": order.id,
+            "supplier_order_number": order.order_number,
+            "status": "created",
+            "supplier_order": _supplier_order_dict(order, db),
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.get("/batches/{batch_id}/print")
 def print_batch(
     batch_id: int,
@@ -1171,6 +2658,8 @@ def print_batch(
     batch = db.get(Requisition, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="报料单不存在")
+    if batch.status in {"merged_pending", "supplier_requisition_created"}:
+        raise HTTPException(status_code=409, detail="待报料合并组不是正式报料单，不能打印")
     rows = db.execute(
         select(
             RequisitionItem,
@@ -1314,6 +2803,169 @@ def _supplier_order_number(db: Session) -> str:
     return f"{prefix}{count + 1:04d}"
 
 
+def _first_int_value(*values) -> int | None:
+    for value in values:
+        if value is None:
+            continue
+        parsed = _int_value(value, default=0)
+        if parsed:
+            return parsed
+    return None
+
+
+def _source_items_from_supplier_order(order: SupplierRequisitionOrder) -> list[dict]:
+    return [
+        {
+            "id": item.id,
+            "order_item_id": item.order_item_id,
+            "order_number": item.order_number,
+            "product_code": item.product_code,
+            "product_name": item.product_name,
+            "quantity": item.quantity,
+            "source_quantity": item.quantity,
+            "stock_deduction_qty": item.stock_deduction_qty,
+            "inventory_deducted_qty": item.stock_deduction_qty,
+            "requisition_qty": item.requisition_qty,
+            "cutting_mode": item.cutting_mode or order.cutting_mode or DEFAULT_CUTTING_MODE,
+            "pieces_per_box": item.pieces_per_box,
+            "required_piece_qty": item.required_piece_qty,
+            "customer_name": item.customer_name,
+            "delivery_date": item.delivery_date,
+        }
+        for item in order.items
+    ]
+
+
+def _supplier_order_purchase_lines(
+    order: SupplierRequisitionOrder,
+    db: Session,
+) -> list[dict]:
+    line_map: dict[str, dict] = {}
+    for item in order.items:
+        order_item = db.get(OrderItem, item.order_item_id) if item.order_item_id else None
+        material_id = order_item.material_id if order_item and order_item.material_id else order.material_id
+        material = db.get(Material, material_id) if material_id else None
+        layer_count = (
+            order_item.layer_count
+            if order_item is not None and order_item.layer_count
+            else order.layer_count or (material.layer_count if material else None)
+        )
+        flute_type = _clean_supplier_flute(
+            order_item.flute_type if order_item is not None and order_item.flute_type else order.flute_type
+        )
+        material_code = material.code if material else (order_item.snapshot_material if order_item else None)
+        report_length = _first_int_value(
+            order_item.cardboard_len if order_item is not None else None,
+            order_item.snapshot_report_length_mm if order_item is not None else None,
+            order.report_length_mm,
+        )
+        report_width = _first_int_value(
+            order_item.cardboard_width if order_item is not None else None,
+            order_item.snapshot_report_width_mm if order_item is not None else None,
+            order.report_width_mm,
+        )
+        crease_type = (
+            order_item.snapshot_crease_type
+            if order_item is not None and order_item.snapshot_crease_type
+            else order.crease_type
+        )
+        crease_left = (
+            order_item.snapshot_crease_left_mm
+            if order_item is not None and order_item.snapshot_crease_left_mm is not None
+            else order.crease_left_mm
+        )
+        crease_middle = (
+            order_item.snapshot_crease_middle_mm
+            if order_item is not None and order_item.snapshot_crease_middle_mm is not None
+            else order.crease_middle_mm
+        )
+        crease_right = (
+            order_item.snapshot_crease_right_mm
+            if order_item is not None and order_item.snapshot_crease_right_mm is not None
+            else order.crease_right_mm
+        )
+        cutting_mode = item.cutting_mode or (
+            order_item.special_process if order_item is not None else None
+        ) or order.cutting_mode or DEFAULT_CUTTING_MODE
+        remark = (
+            order_item.requisition_remark if order_item is not None and order_item.requisition_remark else order.remark
+        ) or ""
+        material_display = _format_supplier_material(
+            material_code,
+            layer_count,
+            flute_type,
+            fallback_text=order_item.snapshot_material if order_item is not None else None,
+        )
+        spec = {
+            "material_id": material_id,
+            "material_code": _clean_supplier_material_code(material_code, layer_count),
+            "material_display": material_display,
+            "layer_count": layer_count,
+            "flute_type": flute_type,
+            "report_length_mm": report_length,
+            "report_width_mm": report_width,
+            "crease_type": crease_type,
+            "crease_left_mm": crease_left,
+            "crease_middle_mm": crease_middle,
+            "crease_right_mm": crease_right,
+            "cutting_mode": cutting_mode,
+            "remark": remark,
+        }
+        line_key = _purchase_line_key(order.supplier_name, spec)
+        line = line_map.get(line_key)
+        if line is None:
+            crease_display = (
+                f"{crease_left}+{crease_middle}+{crease_right}"
+                if crease_type == "压线" and crease_middle
+                else crease_type or "-"
+            )
+            line = {
+                "line_key": line_key,
+                **spec,
+                "crease_display": crease_display,
+                "dimension_warnings": _supplier_dimension_warnings(
+                    order.supplier_name,
+                    report_length,
+                    report_width,
+                    cutting_mode,
+                ),
+                "quantity": 0,
+                "production_required_qty": 0,
+                "required_piece_qty": 0,
+                "stock_deduction_qty": 0,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 0,
+                "source_items": [],
+            }
+            line_map[line_key] = line
+        line["quantity"] += int(item.quantity or 0)
+        line["production_required_qty"] = line["quantity"]
+        line["required_piece_qty"] += int(item.required_piece_qty or 0)
+        line["stock_deduction_qty"] += int(item.stock_deduction_qty or 0)
+        line["inventory_deducted_qty"] = line["stock_deduction_qty"]
+        line["requisition_qty"] += int(item.requisition_qty or 0)
+        line["source_items"].append(
+            {
+                "id": item.id,
+                "order_item_id": item.order_item_id,
+                "order_number": item.order_number,
+                "product_code": item.product_code,
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "source_quantity": item.quantity,
+                "stock_deduction_qty": item.stock_deduction_qty,
+                "inventory_deducted_qty": item.stock_deduction_qty,
+                "requisition_qty": item.requisition_qty,
+                "cutting_mode": item.cutting_mode or order.cutting_mode or DEFAULT_CUTTING_MODE,
+                "pieces_per_box": item.pieces_per_box,
+                "required_piece_qty": item.required_piece_qty,
+                "customer_name": item.customer_name,
+                "delivery_date": item.delivery_date,
+            }
+        )
+    return list(line_map.values())
+
+
 def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
     material = db.get(Material, order.material_id) if order.material_id else None
     material_code = material.code if material else None
@@ -1324,6 +2976,8 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         if order.crease_type == "压线" and order.crease_middle_mm
         else order.crease_type or "-"
     )
+    source_items = _source_items_from_supplier_order(order)
+    purchase_lines = _supplier_order_purchase_lines(order, db)
     return {
         "id": order.id,
         "order_number": order.order_number,
@@ -1363,25 +3017,75 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "status": order.status,
         "created_at": order.created_at,
         "voided_at": order.voided_at,
-        "items": [
-            {
-                "id": item.id,
-                "order_item_id": item.order_item_id,
-                "order_number": item.order_number,
-                "product_code": item.product_code,
-                "product_name": item.product_name,
-                "quantity": item.quantity,
-                "stock_deduction_qty": item.stock_deduction_qty,
-                "requisition_qty": item.requisition_qty,
-                "cutting_mode": item.cutting_mode or order.cutting_mode or DEFAULT_CUTTING_MODE,
-                "pieces_per_box": item.pieces_per_box,
-                "required_piece_qty": item.required_piece_qty,
-                "customer_name": item.customer_name,
-                "delivery_date": item.delivery_date,
-            }
-            for item in order.items
-        ],
+        "lines": purchase_lines,
+        "items": purchase_lines,
+        "source_items": source_items,
     }
+
+
+@router.post("/supplier-orders/preview-from-pending-selection")
+def preview_supplier_orders_from_pending_selection(
+    payload: PendingSupplierOrderCreatePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_operate),
+) -> dict:
+    return _pending_selection_preview_groups(db, payload)
+
+
+@router.post("/supplier-orders/from-pending-selection", status_code=status.HTTP_201_CREATED)
+def create_supplier_orders_from_pending_selection(
+    payload: PendingSupplierOrderFinalizePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        grouped, touched_groups = _draft_group_entries_by_purchase_lines(db, payload)
+        created_orders: list[SupplierRequisitionOrder] = []
+        for supplier_name, entries in grouped.items():
+            created_orders.append(
+                _create_supplier_order_for_pending_entries(
+                    db,
+                    supplier_name=supplier_name,
+                    entries=entries,
+                    user=user,
+                )
+            )
+        for group in touched_groups:
+            group.status = "supplier_requisition_created"
+        db.flush()
+        _audit(
+            db,
+            user=user,
+            action="CREATE_SUPPLIER_ORDERS_FROM_PENDING_SELECTION",
+            entity_id=created_orders[0].id if created_orders else None,
+            details={
+                "supplier_order_ids": [order.id for order in created_orders],
+                "supplier_names": [order.supplier_name for order in created_orders],
+                "supplier_group_count": len(payload.supplier_groups),
+            },
+            description="待报料列表按供应商合并生成供应商报料单",
+        )
+        db.commit()
+        for order in created_orders:
+            db.refresh(order)
+        return {
+            "created_orders": [
+                {
+                    "supplier_name": order.supplier_name,
+                    "supplier_order_id": order.id,
+                    "supplier_order_number": order.order_number,
+                    "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
+                    "item_count": len(order.items),
+                }
+                for order in created_orders
+            ]
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/supplier-orders", status_code=status.HTTP_201_CREATED)
@@ -1549,6 +3253,90 @@ def list_supplier_orders(
         "page_size": page_size,
         "items": [_supplier_order_dict(o, db) for o in orders],
     }
+
+
+@router.get("/reported-documents")
+def list_reported_documents(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    registry = build_display_registry(db)
+    documents: list[dict] = []
+    supplier_orders = db.scalars(
+        select(SupplierRequisitionOrder).order_by(
+            SupplierRequisitionOrder.created_at.desc(),
+            SupplierRequisitionOrder.id.desc(),
+        )
+    ).all()
+    for order in supplier_orders:
+        order_numbers = _unique_text([item.order_number for item in order.items])
+        product_codes = _unique_text([item.product_code for item in order.items])
+        customer_names = _unique_text([item.customer_name for item in order.items])
+        documents.append(
+            {
+                "source_type": "supplier_order",
+                "id": order.id,
+                "document_number": order.order_number,
+                "supplier_name": order.supplier_name,
+                "status": order.status,
+                "incoming_status": "已作废" if order.status == "voided" else "待入库",
+                "created_at": order.created_at,
+                "item_count": len(order.items),
+                "order_numbers": order_numbers,
+                "product_codes": product_codes,
+                "customer_names": customer_names,
+                "requisition_qty": order.requisition_qty,
+                "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
+            }
+        )
+
+    legacy_batches = db.scalars(
+        select(Requisition)
+        .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]))
+        .order_by(Requisition.created_at.desc(), Requisition.id.desc())
+    ).all()
+    for batch in legacy_batches:
+        order_numbers: list[str | None] = []
+        product_codes: list[str | None] = []
+        customer_names: list[str | None] = []
+        total_requisition_qty = 0
+        for item in batch.items:
+            total_requisition_qty += int(item.requisition_qty or 0)
+            product_codes.append(item.product_code_snapshot)
+            order_item = db.get(OrderItem, item.order_item_id)
+            if order_item is None:
+                continue
+            order = db.get(Order, order_item.order_id)
+            if order is not None:
+                order_numbers.append(display_order_number(order, registry))
+                customer = db.get(Customer, order.customer_id)
+                if customer is not None:
+                    customer_names.append(customer.name)
+        documents.append(
+            {
+                "source_type": "legacy_material_requisition",
+                "id": batch.id,
+                "document_number": batch.requisition_number,
+                "supplier_name": batch.supplier_name,
+                "status": batch.status,
+                "incoming_status": "待入库",
+                "created_at": batch.created_at,
+                "item_count": len(batch.items),
+                "order_numbers": _unique_text(order_numbers),
+                "product_codes": _unique_text(product_codes),
+                "customer_names": _unique_text(customer_names),
+                "requisition_qty": total_requisition_qty,
+                "pdf_url": f"/requisition-print.html?id={batch.id}",
+            }
+        )
+    documents.sort(
+        key=lambda row: (
+            row["created_at"] or datetime.min,
+            row["id"],
+        ),
+        reverse=True,
+    )
+    return {"total": len(documents), "items": documents}
 
 
 @router.get("/supplier-orders/{order_id}")

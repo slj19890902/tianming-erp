@@ -453,6 +453,7 @@ def test_product_reject_3layer_ab(flute_api):
         assert resp.status_code == 422, (
             f"Expected 422 for 3-layer+AB, got {resp.status_code}: {resp.text[:200]}"
         )
+        assert "三层瓦楞只能是 A / B / E" in resp.text
 
 
 def test_product_reject_5layer_b(flute_api):
@@ -478,3 +479,4 @@ def test_product_reject_5layer_b(flute_api):
         assert resp.status_code == 422, (
             f"Expected 422 for 5-layer+B, got {resp.status_code}: {resp.text[:200]}"
         )
+        assert "五层瓦楞只能是 AB / BE" in resp.text

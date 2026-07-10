@@ -404,58 +404,44 @@ class TestB1MaterialLayerFilter:
         assert res.json()["items"] == []
 
 
-class TestB5MaterialApiValidation:
-    """B-5: 材质新增/编辑后端校验。"""
+class TestB5MaterialDictionaryBoundary:
+    """材质字典只保存材质代码/层数，不绑定产品实际楞型。"""
 
-    def test_create_3_plus_ab_rejected(self, v192_app):
+    @pytest.mark.parametrize(
+        ("code", "layer_count", "submitted_flute"),
+        (("DICT3", 3, "AB"), ("DICT5", 5, "A")),
+    )
+    def test_create_and_update_discard_product_flute_dimension(
+        self,
+        v192_app,
+        code: str,
+        layer_count: int,
+        submitted_flute: str,
+    ):
         app, _, _ = v192_app
         with TestClient(app) as client:
             _login(client)
-            res = client.post(
+            created = client.post(
                 "/api/master/materials",
-                json={"code": "BAD3AB", "layer_count": 3, "flute_type": "AB"},
+                json={
+                    "code": code,
+                    "layer_count": layer_count,
+                    "flute_type": submitted_flute,
+                },
             )
-        assert res.status_code == 400, res.text
+            assert created.status_code == 201, created.text
+            assert created.json()["flute_type"] is None
 
-    def test_create_5_plus_a_rejected(self, v192_app):
-        app, _, _ = v192_app
-        with TestClient(app) as client:
-            _login(client)
-            res = client.post(
-                "/api/master/materials",
-                json={"code": "BAD5A", "layer_count": 5, "flute_type": "A"},
+            updated = client.put(
+                f"/api/master/materials/{created.json()['id']}",
+                json={
+                    "code": code,
+                    "layer_count": layer_count,
+                    "flute_type": "BE" if submitted_flute == "A" else "B",
+                },
             )
-        assert res.status_code == 400, res.text
-
-    def test_create_3_plus_b_accepted(self, v192_app):
-        app, _, _ = v192_app
-        with TestClient(app) as client:
-            _login(client)
-            res = client.post(
-                "/api/master/materials",
-                json={"code": "OK3B", "layer_count": 3, "flute_type": "B"},
-            )
-        assert res.status_code == 201, res.text
-
-    def test_create_5_plus_ab_accepted(self, v192_app):
-        app, _, _ = v192_app
-        with TestClient(app) as client:
-            _login(client)
-            res = client.post(
-                "/api/master/materials",
-                json={"code": "OK5AB", "layer_count": 5, "flute_type": "AB"},
-            )
-        assert res.status_code == 201, res.text
-
-    def test_create_7_layer_rejected(self, v192_app):
-        app, _, _ = v192_app
-        with TestClient(app) as client:
-            _login(client)
-            res = client.post(
-                "/api/master/materials",
-                json={"code": "SEVEN", "layer_count": 7, "flute_type": "AB"},
-            )
-        assert res.status_code == 400, res.text
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["flute_type"] is None
 
 
 class TestA4ProductionNotesDisplay:

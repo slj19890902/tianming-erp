@@ -24,6 +24,10 @@ from app.models.material import Material
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
 from app.models.user import User
+from app.services.flute_mapping import (
+    normalize_flute_type,
+    validate_flute_consistency,
+)
 from app.services.product_drawings import (
     DrawingValidationError,
     remove_drawing_files,
@@ -116,7 +120,7 @@ class ProductPayload(BaseModel):
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合（3层只能 A/B/E，5层只能 AB/BE）。"""
-        from app.services.flute_mapping import validate_flute_consistency
+        self.flute_type = normalize_flute_type(self.flute_type)
         err = validate_flute_consistency(self.flute_type, self.layer_count)
         if err:
             raise ValueError(err)
@@ -735,10 +739,22 @@ def sync_product_fields(
         "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content",
     }
     product = _product_or_404(db, product_id)
+    prospective_layer = payload.fields.get("layer_count", product.layer_count)
+    prospective_flute = normalize_flute_type(
+        payload.fields.get("flute_type", product.flute_type)
+    )
+    if "layer_count" in payload.fields or "flute_type" in payload.fields:
+        flute_error = validate_flute_consistency(
+            prospective_flute, prospective_layer
+        )
+        if flute_error:
+            raise HTTPException(status_code=400, detail=flute_error)
     updated = []
     for k, v in payload.fields.items():
         if k not in ALLOWED:
             continue
+        if k == "flute_type":
+            v = prospective_flute
         setattr(product, k, v)
         updated.append(k)
     if not updated:

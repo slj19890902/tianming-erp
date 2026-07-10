@@ -16,6 +16,7 @@ from app.models.product import Product
 from app.models.quotation import QuotationItem, QuotationOrder
 from app.models.user import User
 from app.services import material_pricing
+from app.services.flute_mapping import validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 
 
@@ -434,8 +435,8 @@ def convert_to_product(
     if material.layer_count not in {3, 5}:
         raise HTTPException(status_code=400, detail="所选材质缺少有效层数，请先完善材质资料")
     flute_type = (payload.flute_type or item.flute_type or "").strip().upper()
-    allowed_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
-    if flute_type not in allowed_flutes[material.layer_count]:
+    flute_error = validate_flute_consistency(flute_type, material.layer_count)
+    if not flute_type or flute_error:
         expected = "A、B 或 E" if material.layer_count == 3 else "AB 或 BE"
         raise HTTPException(
             status_code=400,

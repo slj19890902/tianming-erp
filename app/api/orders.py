@@ -44,6 +44,10 @@ from app.services.history_orders import (
     sanitize_user_text,
     serialize_order_number_fields,
 )
+from app.services.flute_mapping import (
+    normalize_flute_type,
+    validate_flute_consistency,
+)
 from app.services.order_numbering import (
     format_item_order_number,
     preview_next_order_number,
@@ -1916,12 +1920,28 @@ def update_order_item(
         product = db.get(Product, item.product_id)
         if product is None:
             raise HTTPException(status_code=409, detail="关联常用箱不存在，订单明细未保存")
+        prospective_layer = (
+            payload.layer_count
+            if payload.layer_count is not None
+            else product.layer_count
+        )
+        prospective_flute = (
+            normalize_flute_type(payload.flute_type)
+            if payload.flute_type is not None
+            else normalize_flute_type(product.flute_type)
+        )
+        if payload.layer_count is not None or payload.flute_type is not None:
+            flute_error = validate_flute_consistency(
+                prospective_flute, prospective_layer
+            )
+            if flute_error:
+                raise HTTPException(status_code=400, detail=flute_error)
         if payload.material_id is not None:
             product.material_id = payload.material_id
         if payload.layer_count is not None:
             product.layer_count = payload.layer_count
         if payload.flute_type is not None:
-            product.flute_type = (payload.flute_type or "").strip().upper() or None
+            product.flute_type = prospective_flute
         for field_name in (
             "box_style",
             "length_mm",

@@ -290,6 +290,29 @@ class TestProductReportFields:
         assert "report_length_mm" in r.json()["updated"]
         assert "crease_type" in r.json()["updated"]
 
+    def test_sync_fields_enforces_product_layer_flute_boundary(
+        self, client, admin_cookies, product_id_a
+    ):
+        rejected = client.post(
+            f"/api/master/products/{product_id_a}/sync-fields",
+            json={"fields": {"layer_count": 3, "flute_type": "AB"}},
+            cookies=admin_cookies,
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert "三层瓦楞只能是 A / B / E" in rejected.json()["detail"]
+
+        unchanged = client.get(
+            f"/api/master/products/{product_id_a}", cookies=admin_cookies
+        ).json()
+        assert (unchanged["layer_count"], unchanged["flute_type"]) == (5, "AB")
+
+        accepted = client.post(
+            f"/api/master/products/{product_id_a}/sync-fields",
+            json={"fields": {"layer_count": 5, "flute_type": "AB"}},
+            cookies=admin_cookies,
+        )
+        assert accepted.status_code == 200, accepted.text
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ORDER: 新建订单时写入报料快照

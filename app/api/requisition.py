@@ -28,6 +28,7 @@ from app.services.history_orders import (
     display_order_number,
     is_history_order_number,
 )
+from app.services.flute_mapping import validate_flute_consistency
 from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
@@ -405,6 +406,58 @@ def _purchase_qty(required_piece_qty: int, inventory_deducted_qty: int, cutting_
     return (remaining + factor - 1) // factor
 
 
+def _current_requisition_requirements(
+    db: Session,
+    item: OrderItem,
+    *,
+    cutting_mode: str | None = None,
+    pieces_per_box: int | None = None,
+    finished_reserved_qty: int | None = None,
+) -> dict[str, int | str | bool]:
+    """Derive current purchase demand from active finished-stock reservations."""
+    resolved_cutting_mode = cutting_mode or item.special_process
+    if resolved_cutting_mode not in CUTTING_MODE_FACTORS:
+        resolved_cutting_mode = DEFAULT_CUTTING_MODE
+    resolved_pieces_per_box = max(
+        int(
+            pieces_per_box
+            if pieces_per_box is not None
+            else _pieces_per_box(item)
+        ),
+        1,
+    )
+    resolved_reserved_qty = max(
+        int(
+            finished_reserved_qty
+            if finished_reserved_qty is not None
+            else active_finished_reserved_qty(db, item.id)
+        ),
+        0,
+    )
+    production_required_qty = max(
+        int(item.quantity or 0) - resolved_reserved_qty,
+        0,
+    )
+    required_piece_qty = _required_piece_qty(
+        production_required_qty,
+        resolved_pieces_per_box,
+    )
+    return {
+        "cutting_mode": resolved_cutting_mode,
+        "cutting_factor": _cutting_factor(resolved_cutting_mode),
+        "pieces_per_box": resolved_pieces_per_box,
+        "finished_inventory_reserved_qty": resolved_reserved_qty,
+        "production_required_qty": production_required_qty,
+        "fully_covered_by_finished_inventory": production_required_qty == 0,
+        "required_piece_qty": required_piece_qty,
+        "requisition_qty": _purchase_qty(
+            required_piece_qty,
+            0,
+            resolved_cutting_mode,
+        ),
+    }
+
+
 def _purchase_dimensions(
     report_length_mm: int | None,
     report_width_mm: int | None,
@@ -577,6 +630,8 @@ def _merge_group_dict(
     customer_names: list[str | None] = []
     product_names: list[str | None] = []
     total_quantity = 0
+    total_finished_reserved_qty = 0
+    total_production_required_qty = 0
     total_required_piece_qty = 0
     total_requisition_qty = 0
     first_item: OrderItem | None = None
@@ -590,14 +645,27 @@ def _merge_group_dict(
         display_no = display_order_number(order, registry)
         product_code = req_item.product_code_snapshot or order_item.snapshot_product_code or product.product_code
         product_name = req_item.product_name_snapshot or order_item.snapshot_product_name
-        required_piece_qty = int(req_item.required_piece_qty or 0)
+        requirements = _current_requisition_requirements(
+            db,
+            order_item,
+            cutting_mode=req_item.special_process,
+            pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
+        )
+        finished_reserved_qty = int(
+            requirements["finished_inventory_reserved_qty"]
+        )
+        production_required_qty = int(requirements["production_required_qty"])
+        required_piece_qty = int(requirements["required_piece_qty"])
+        requisition_qty = int(requirements["requisition_qty"])
         product_codes.append(product_code)
         order_numbers.append(display_no)
         customer_names.append(customer.name)
         product_names.append(product_name)
         total_quantity += int(order_item.quantity or 0)
+        total_finished_reserved_qty += finished_reserved_qty
+        total_production_required_qty += production_required_qty
         total_required_piece_qty += required_piece_qty
-        total_requisition_qty += int(req_item.requisition_qty or 0)
+        total_requisition_qty += requisition_qty
         members.append(
             {
                 "item_id": order_item.id,
@@ -609,12 +677,17 @@ def _merge_group_dict(
                 "product_name": product_name,
                 "specification": req_item.specification_snapshot or order_item.snapshot_spec,
                 "quantity": order_item.quantity,
-                "requisition_qty": req_item.requisition_qty,
+                "finished_inventory_reserved_qty": finished_reserved_qty,
+                "production_required_qty": production_required_qty,
+                "fully_covered_by_finished_inventory": production_required_qty == 0,
+                "requisition_qty": requisition_qty,
                 "required_piece_qty": required_piece_qty,
+                "pieces_per_box": int(requirements["pieces_per_box"]),
+                "cutting_factor": int(requirements["cutting_factor"]),
                 "cardboard_len": req_item.cardboard_len,
                 "cardboard_width": req_item.cardboard_width,
-                "cutting_mode": req_item.special_process,
-                "special_process": req_item.special_process,
+                "cutting_mode": str(requirements["cutting_mode"]),
+                "special_process": str(requirements["cutting_mode"]),
                 "delivery_date": order.delivery_date,
             }
         )
@@ -647,9 +720,9 @@ def _merge_group_dict(
         "product_names": _unique_text(product_names),
         "specification": f"{len(members)} 个来源",
         "quantity": total_quantity,
-        "finished_inventory_reserved_qty": 0,
-        "production_required_qty": total_quantity,
-        "fully_covered_by_finished_inventory": False,
+        "finished_inventory_reserved_qty": total_finished_reserved_qty,
+        "production_required_qty": total_production_required_qty,
+        "fully_covered_by_finished_inventory": total_production_required_qty == 0,
         "requisition_qty": total_requisition_qty,
         "requisition_status": "待报料合并组",
         "required_piece_qty": total_required_piece_qty,
@@ -871,6 +944,7 @@ def _pending_selection_entries(
                     "cardboard_width": cardboard_width,
                     "cutting_mode": cutting_mode,
                     "remark": (selection.remark or item.requisition_remark or "").strip() or None,
+                    "inventory_deducted_qty": finished_reserved_qty,
                     "pieces_per_box": pieces_per_box,
                     "production_required_qty": production_required_qty,
                     "required_piece_qty": required_piece_qty,
@@ -917,10 +991,20 @@ def _pending_selection_entries(
             req_item.cardboard_width = cardboard_width
             req_item.special_process = cutting_mode
             req_item.remark = remark
-            if req_item.required_piece_qty is not None:
-                req_item.requisition_qty = _purchase_qty(
-                    req_item.required_piece_qty, 0, cutting_mode
+            requirements = _current_requisition_requirements(
+                db,
+                order_item,
+                cutting_mode=cutting_mode,
+                pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
+            )
+            if bool(requirements["fully_covered_by_finished_inventory"]):
+                raise HTTPException(
+                    status_code=409,
+                    detail="合并组中存在已由成品库存全额抵扣的明细，请刷新后重试",
                 )
+            req_item.pieces_per_box = int(requirements["pieces_per_box"])
+            req_item.required_piece_qty = int(requirements["required_piece_qty"])
+            req_item.requisition_qty = int(requirements["requisition_qty"])
             add_entry(
                 supplier_name,
                 {
@@ -936,10 +1020,15 @@ def _pending_selection_entries(
                     "cardboard_width": cardboard_width,
                     "cutting_mode": cutting_mode,
                     "remark": remark,
-                    "pieces_per_box": req_item.pieces_per_box or _pieces_per_box(order_item),
-                    "production_required_qty": int(order_item.quantity or 0),
-                    "required_piece_qty": int(req_item.required_piece_qty or 0),
-                    "requisition_qty": int(req_item.requisition_qty or 0),
+                    "inventory_deducted_qty": int(
+                        requirements["finished_inventory_reserved_qty"]
+                    ),
+                    "pieces_per_box": int(requirements["pieces_per_box"]),
+                    "production_required_qty": int(
+                        requirements["production_required_qty"]
+                    ),
+                    "required_piece_qty": int(requirements["required_piece_qty"]),
+                    "requisition_qty": int(requirements["requisition_qty"]),
                 },
             )
         touched_groups.append(group)
@@ -983,6 +1072,9 @@ def _pending_entry_dict(entry: dict) -> dict:
         "report_width_mm": entry["cardboard_width"],
         "cutting_mode": entry["cutting_mode"],
         "inventory_deducted_qty": entry.get("inventory_deducted_qty", 0),
+        "finished_inventory_reserved_qty": entry.get(
+            "inventory_deducted_qty", 0
+        ),
         "production_required_qty": entry["production_required_qty"],
         "pieces_per_box": entry["pieces_per_box"],
         "required_piece_qty": entry["required_piece_qty"],
@@ -1073,6 +1165,7 @@ def _aggregate_entries_to_purchase_lines(
                 **spec,
                 "quantity": 0,
                 "inventory_deducted_qty": 0,
+                "finished_inventory_reserved_qty": 0,
                 "production_required_qty": 0,
                 "required_piece_qty": 0,
                 "requisition_qty": 0,
@@ -1080,6 +1173,9 @@ def _aggregate_entries_to_purchase_lines(
             }
             line_map[line_key] = line
         line["inventory_deducted_qty"] += int(entry.get("inventory_deducted_qty") or 0)
+        line["finished_inventory_reserved_qty"] = line[
+            "inventory_deducted_qty"
+        ]
         line["production_required_qty"] += int(entry.get("production_required_qty") or 0)
         line["quantity"] = line["production_required_qty"]
         line["required_piece_qty"] += int(entry.get("required_piece_qty") or 0)
@@ -1189,10 +1285,24 @@ def _pending_selection_preview_groups(
                 "报料宽",
             )
             cutting_mode = selection.cutting_mode or item.special_process or DEFAULT_CUTTING_MODE
-            inventory_deducted_qty = active_finished_reserved_qty(db, item.id)
-            production_required_qty = max(item.quantity - inventory_deducted_qty, 0)
-            pieces_per_box = _pieces_per_box(item)
-            required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)
+            requirements = _current_requisition_requirements(
+                db,
+                item,
+                cutting_mode=cutting_mode,
+            )
+            inventory_deducted_qty = int(
+                requirements["finished_inventory_reserved_qty"]
+            )
+            production_required_qty = int(
+                requirements["production_required_qty"]
+            )
+            if production_required_qty == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
+                )
+            pieces_per_box = int(requirements["pieces_per_box"])
+            required_piece_qty = int(requirements["required_piece_qty"])
             material = db.get(Material, item.material_id) if item.material_id else None
             add_preview(
                 supplier_name,
@@ -1213,7 +1323,7 @@ def _pending_selection_preview_groups(
                     "pieces_per_box": pieces_per_box,
                     "production_required_qty": production_required_qty,
                     "required_piece_qty": required_piece_qty,
-                    "requisition_qty": _purchase_qty(required_piece_qty, 0, cutting_mode),
+                    "requisition_qty": int(requirements["requisition_qty"]),
                 },
             )
             continue
@@ -1237,6 +1347,18 @@ def _pending_selection_preview_groups(
                 raise HTTPException(status_code=409, detail="合并组状态异常，不能生成报料草稿")
             _ensure_pending_order_item_for_supplier_order(db, order_item.id)
             material = db.get(Material, order_item.material_id) if order_item.material_id else None
+            cutting_mode = selection.cutting_mode or req_item.special_process
+            requirements = _current_requisition_requirements(
+                db,
+                order_item,
+                cutting_mode=cutting_mode,
+                pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
+            )
+            if bool(requirements["fully_covered_by_finished_inventory"]):
+                raise HTTPException(
+                    status_code=409,
+                    detail="合并组中存在已由成品库存全额抵扣的明细，请刷新后重试",
+                )
             add_preview(
                 supplier_name,
                 {
@@ -1250,13 +1372,17 @@ def _pending_selection_preview_groups(
                     "material": material,
                     "cardboard_len": selection.report_length_mm or req_item.cardboard_len,
                     "cardboard_width": selection.report_width_mm or req_item.cardboard_width,
-                    "cutting_mode": selection.cutting_mode or req_item.special_process,
+                    "cutting_mode": requirements["cutting_mode"],
                     "remark": (selection.remark or req_item.remark or "").strip() or None,
-                    "inventory_deducted_qty": 0,
-                    "pieces_per_box": req_item.pieces_per_box or _pieces_per_box(order_item),
-                    "production_required_qty": int(order_item.quantity or 0),
-                    "required_piece_qty": int(req_item.required_piece_qty or 0),
-                    "requisition_qty": int(req_item.requisition_qty or 0),
+                    "inventory_deducted_qty": int(
+                        requirements["finished_inventory_reserved_qty"]
+                    ),
+                    "pieces_per_box": int(requirements["pieces_per_box"]),
+                    "production_required_qty": int(
+                        requirements["production_required_qty"]
+                    ),
+                    "required_piece_qty": int(requirements["required_piece_qty"]),
+                    "requisition_qty": int(requirements["requisition_qty"]),
                 },
             )
 
@@ -1381,8 +1507,6 @@ def _draft_group_entries_by_purchase_lines(
             raise HTTPException(status_code=400, detail="每个供应商组必须至少包含一条采购规格行")
 
         for draft_line in draft_lines:
-            if draft_line.inventory_deducted_qty < 0:
-                raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
             if draft_line.requisition_qty <= 0:
                 raise HTTPException(status_code=400, detail="采购张数必须大于 0")
 
@@ -1428,55 +1552,45 @@ def _draft_group_entries_by_purchase_lines(
                     }
                 )
 
-            explicit_requisition = [
-                int(ref["source_payload"].requisition_qty or 0)
-                for ref in source_refs
-                if ref["source_payload"].requisition_qty is not None
-            ]
-            if (
-                len(explicit_requisition) == len(source_refs)
-                and sum(explicit_requisition) == int(draft_line.requisition_qty)
-            ):
-                requisition_allocations = explicit_requisition
-            else:
-                requisition_allocations = _allocate_integer_total(
-                    int(draft_line.requisition_qty),
-                    [
-                        int(
-                            ref["source_payload"].requisition_qty
-                            or ref["source_payload"].source_quantity
-                            or (
-                                ref["req_item"].requisition_qty
-                                if ref["req_item"] is not None
-                                else ref["item"].quantity
-                            )
-                            or 0
-                        )
-                        for ref in source_refs
-                    ],
+            current_requirements = [
+                _current_requisition_requirements(
+                    db,
+                    ref["item"],
+                    cutting_mode=draft_line.cutting_mode,
+                    pieces_per_box=(
+                        ref["req_item"].pieces_per_box
+                        if ref["req_item"] is not None
+                        and ref["req_item"].pieces_per_box
+                        else _pieces_per_box(ref["item"])
+                    ),
                 )
-
-            explicit_inventory = [
-                int(ref["source_payload"].inventory_deducted_qty or 0)
                 for ref in source_refs
-                if ref["source_payload"].inventory_deducted_qty is not None
             ]
-            if (
-                len(explicit_inventory) == len(source_refs)
-                and sum(explicit_inventory) == int(draft_line.inventory_deducted_qty or 0)
-            ):
-                inventory_allocations = explicit_inventory
-            else:
-                inventory_allocations = _allocate_integer_total(
-                    int(draft_line.inventory_deducted_qty or 0),
-                    [
-                        int(ref["source_payload"].source_quantity or ref["item"].quantity or 0)
-                        for ref in source_refs
-                    ],
+            actual_inventory_allocations = [
+                int(requirements["finished_inventory_reserved_qty"])
+                for requirements in current_requirements
+            ]
+            actual_inventory_total = sum(actual_inventory_allocations)
+            submitted_line_total = int(draft_line.inventory_deducted_qty or 0)
+            if submitted_line_total not in {0, actual_inventory_total}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="成品库存抵扣只能来自当前有效的真实库存预占，请刷新后重试",
                 )
+            for ref, actual_quantity in zip(
+                source_refs, actual_inventory_allocations
+            ):
+                submitted_quantity = ref[
+                    "source_payload"
+                ].inventory_deducted_qty
+                if submitted_quantity not in {None, 0, actual_quantity}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="成品库存抵扣只能来自当前有效的真实库存预占，请刷新后重试",
+                    )
 
-            for ref, requisition_qty, inventory_deducted_qty in zip(
-                source_refs, requisition_allocations, inventory_allocations
+            for ref, requirements in zip(
+                source_refs, current_requirements
             ):
                 item: OrderItem = ref["item"]
                 order: Order = ref["order"]
@@ -1485,6 +1599,10 @@ def _draft_group_entries_by_purchase_lines(
                 req_item: RequisitionItem | None = ref["req_item"]
                 merge_group: Requisition | None = ref["merge_group"]
                 source_payload: PendingSupplierOrderDraftSourceItem = ref["source_payload"]
+                inventory_deducted_qty = int(
+                    requirements["finished_inventory_reserved_qty"]
+                )
+                requisition_qty = int(requirements["requisition_qty"])
 
                 if inventory_deducted_qty < 0:
                     raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
@@ -1492,16 +1610,17 @@ def _draft_group_entries_by_purchase_lines(
                     raise HTTPException(status_code=400, detail="成品库存抵扣不能大于订单数量")
                 if requisition_qty <= 0:
                     raise HTTPException(status_code=400, detail="采购张数必须大于 0")
-                production_required_qty = item.quantity - inventory_deducted_qty
-                if production_required_qty <= 0:
-                    raise HTTPException(status_code=400, detail="成品库存抵扣后仍需报料数量必须大于 0")
-
-                pieces_per_box = (
-                    req_item.pieces_per_box
-                    if req_item is not None and req_item.pieces_per_box
-                    else _pieces_per_box(item)
+                production_required_qty = int(
+                    requirements["production_required_qty"]
                 )
-                required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)
+                if production_required_qty <= 0:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
+                    )
+
+                pieces_per_box = int(requirements["pieces_per_box"])
+                required_piece_qty = int(requirements["required_piece_qty"])
                 material = db.get(Material, item.material_id) if item.material_id else None
                 entry = {
                     "source_type": source_payload.source_type,
@@ -1598,7 +1717,9 @@ def _create_supplier_order_for_pending_entries(
                 delivery_date=entry["order"].delivery_date,
             )
         )
-        order_item.inventory_deducted_qty = int(entry.get("inventory_deducted_qty") or 0)
+        # The legacy free-entry field stays zero.  Real deductions are recorded
+        # by InventoryReservation and copied only to supplier-order snapshots.
+        order_item.inventory_deducted_qty = 0
         order_item.requisition_status = "已报料"
         order_item.requisition_qty = int(entry["requisition_qty"] or 0)
         order_item.special_process = entry["cutting_mode"]
@@ -1661,15 +1782,18 @@ def pending_requisitions(
         if is_history_order_number(order.order_number):
             continue
         material = db.get(Material, item.material_id) if item.material_id else None
-        pieces_per_box = _pieces_per_box(item)
-        cutting_mode = item.special_process if item.special_process in CUTTING_MODE_FACTORS else DEFAULT_CUTTING_MODE
-        finished_reserved_qty = reservation_map.get(item.id, 0)
-        production_required_qty = max(
-            item.quantity - finished_reserved_qty, 0
+        requirements = _current_requisition_requirements(
+            db,
+            item,
+            finished_reserved_qty=reservation_map.get(item.id, 0),
         )
-        required_piece_qty = _required_piece_qty(
-            production_required_qty, pieces_per_box
+        pieces_per_box = int(requirements["pieces_per_box"])
+        cutting_mode = str(requirements["cutting_mode"])
+        finished_reserved_qty = int(
+            requirements["finished_inventory_reserved_qty"]
         )
+        production_required_qty = int(requirements["production_required_qty"])
+        required_piece_qty = int(requirements["required_piece_qty"])
         suggested_len, suggested_width = _purchase_dimensions(
             item.snapshot_report_length_mm,
             item.snapshot_report_width_mm,
@@ -1708,14 +1832,12 @@ def pending_requisitions(
                 "requisition_qty": (
                     0
                     if production_required_qty == 0
-                    else item.requisition_qty
-                    if item.requisition_qty is not None
-                    else _purchase_qty(required_piece_qty, 0, cutting_mode)
+                    else int(requirements["requisition_qty"])
                 ),
                 "requisition_status": item.requisition_status,
                 "special_process": item.special_process,
                 "cutting_mode": cutting_mode,
-                "cutting_factor": _cutting_factor(cutting_mode),
+                "cutting_factor": int(requirements["cutting_factor"]),
                 "pieces_per_box": pieces_per_box,
                 "required_piece_qty": required_piece_qty,
                 "suggested_cardboard_len": item.cardboard_len or suggested_len,
@@ -1784,10 +1906,9 @@ def update_pending_material(
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
     layer_count = payload.layer_count or material.layer_count
     flute_type = payload.flute_type or item.flute_type
-    if layer_count == 3 and flute_type not in {"A", "B", "E"}:
-        raise HTTPException(status_code=400, detail="三层纸板楞型只能选择 A、B 或 E")
-    if layer_count == 5 and flute_type not in {"AB", "BE"}:
-        raise HTTPException(status_code=400, detail="五层纸板楞型只能选择 AB 或 BE")
+    flute_error = validate_flute_consistency(flute_type, layer_count)
+    if flute_error:
+        raise HTTPException(status_code=400, detail=flute_error)
     before = {
         "material_id": item.material_id,
         "supplier_name": item.snapshot_supplier_name,
@@ -2321,16 +2442,20 @@ def merge_suggestions(
         if not (item.snapshot_report_length_mm and item.snapshot_report_width_mm):
             continue
         material = db.get(Material, item.material_id) if item.material_id else None
-        pieces_per_box = _pieces_per_box(item)
-        finished_reserved_qty = reservation_map.get(item.id, 0)
-        production_required_qty = max(
-            item.quantity - finished_reserved_qty, 0
+        requirements = _current_requisition_requirements(
+            db,
+            item,
+            cutting_mode=DEFAULT_CUTTING_MODE,
+            finished_reserved_qty=reservation_map.get(item.id, 0),
         )
+        pieces_per_box = int(requirements["pieces_per_box"])
+        finished_reserved_qty = int(
+            requirements["finished_inventory_reserved_qty"]
+        )
+        production_required_qty = int(requirements["production_required_qty"])
         if production_required_qty == 0:
             continue
-        required_piece_qty = _required_piece_qty(
-            production_required_qty, pieces_per_box
-        )
+        required_piece_qty = int(requirements["required_piece_qty"])
         groups[_merge_key(item)].append({
             "item_id": item.id,
             "order_number": display_order_number(order, registry),
@@ -2353,11 +2478,7 @@ def merge_suggestions(
             "production_required_qty": production_required_qty,
             "pieces_per_box": pieces_per_box,
             "required_piece_qty": required_piece_qty,
-            "requisition_qty": _purchase_qty(
-                required_piece_qty,
-                0,
-                DEFAULT_CUTTING_MODE,
-            ),
+            "requisition_qty": int(requirements["requisition_qty"]),
             "delivery_date": order.delivery_date,
         })
 
@@ -2511,12 +2632,18 @@ def update_merge_group(
         for item in group.items:
             for key, value in updates.items():
                 setattr(item, key, value)
-            if item.required_piece_qty is not None and payload.cutting_mode:
-                item.requisition_qty = _purchase_qty(
-                    item.required_piece_qty,
-                    0,
-                    payload.cutting_mode,
-                )
+            order_item = db.get(OrderItem, item.order_item_id)
+            if order_item is None:
+                raise HTTPException(status_code=404, detail="合并组订单明细不存在")
+            requirements = _current_requisition_requirements(
+                db,
+                order_item,
+                cutting_mode=item.special_process,
+                pieces_per_box=item.pieces_per_box or _pieces_per_box(order_item),
+            )
+            item.pieces_per_box = int(requirements["pieces_per_box"])
+            item.required_piece_qty = int(requirements["required_piece_qty"])
+            item.requisition_qty = int(requirements["requisition_qty"])
         _audit(
             db,
             user=user,
@@ -2553,17 +2680,55 @@ def create_supplier_order_from_merge_group(
     rows = _merge_group_rows(db, group.id)
     if not rows:
         raise HTTPException(status_code=400, detail="合并组没有来源明细")
-    for req_item, order_item, *_ in rows:
+    current_rows: list[tuple] = []
+    for req_item, order_item, order_row, customer, product in rows:
         if req_item.status != "merged_pending":
             raise HTTPException(status_code=409, detail="合并组状态异常，不能生成供应商报料单")
         if order_item.requisition_status != "未报料":
             raise HTTPException(status_code=409, detail="合并组中存在已报料明细，不能重复生成")
+        requirements = _current_requisition_requirements(
+            db,
+            order_item,
+            cutting_mode=req_item.special_process,
+            pieces_per_box=req_item.pieces_per_box or _pieces_per_box(order_item),
+        )
+        if bool(requirements["fully_covered_by_finished_inventory"]):
+            raise HTTPException(
+                status_code=409,
+                detail="合并组中存在已由成品库存全额抵扣的明细，请刷新后重试",
+            )
+        req_item.pieces_per_box = int(requirements["pieces_per_box"])
+        req_item.required_piece_qty = int(requirements["required_piece_qty"])
+        req_item.requisition_qty = int(requirements["requisition_qty"])
+        current_rows.append(
+            (
+                req_item,
+                order_item,
+                order_row,
+                customer,
+                product,
+                requirements,
+            )
+        )
 
-    first_req_item, first_order_item, *_ = rows[0]
+    first_req_item, first_order_item, *_ = current_rows[0]
     material = db.get(Material, first_order_item.material_id) if first_order_item.material_id else None
-    total_quantity = sum(int(order_item.quantity or 0) for _req, order_item, *_ in rows)
-    total_required_piece_qty = sum(int(req.required_piece_qty or 0) for req, *_ in rows)
-    total_requisition_qty = sum(int(req.requisition_qty or 0) for req, *_ in rows)
+    total_quantity = sum(
+        int(requirements["production_required_qty"])
+        for *_, requirements in current_rows
+    )
+    total_stock_deduction_qty = sum(
+        int(requirements["finished_inventory_reserved_qty"])
+        for *_, requirements in current_rows
+    )
+    total_required_piece_qty = sum(
+        int(requirements["required_piece_qty"])
+        for *_, requirements in current_rows
+    )
+    total_requisition_qty = sum(
+        int(requirements["requisition_qty"])
+        for *_, requirements in current_rows
+    )
     order = SupplierRequisitionOrder(
         order_number=_supplier_order_number(db),
         supplier_name=supplier_name,
@@ -2580,7 +2745,7 @@ def create_supplier_order_from_merge_group(
         pieces_per_box=first_req_item.pieces_per_box,
         required_piece_qty=total_required_piece_qty,
         total_quantity=total_quantity,
-        stock_deduction_qty=0,
+        stock_deduction_qty=total_stock_deduction_qty,
         requisition_qty=total_requisition_qty,
         remark=first_req_item.remark,
         status="confirmed",
@@ -2590,7 +2755,14 @@ def create_supplier_order_from_merge_group(
         db.add(order)
         db.flush()
         requisition_date = date.today()
-        for req_item, order_item, _order, customer, _product in rows:
+        for (
+            req_item,
+            order_item,
+            _order,
+            customer,
+            _product,
+            requirements,
+        ) in current_rows:
             db.add(
                 SupplierRequisitionOrderItem(
                     supplier_order_id=order.id,
@@ -2598,20 +2770,22 @@ def create_supplier_order_from_merge_group(
                     order_number=order_item.item_order_number,
                     product_code=req_item.product_code_snapshot,
                     product_name=req_item.product_name_snapshot,
-                    quantity=order_item.quantity,
-                    stock_deduction_qty=0,
-                    requisition_qty=req_item.requisition_qty,
-                    cutting_mode=req_item.special_process,
-                    pieces_per_box=req_item.pieces_per_box,
-                    required_piece_qty=req_item.required_piece_qty,
+                    quantity=int(requirements["production_required_qty"]),
+                    stock_deduction_qty=int(
+                        requirements["finished_inventory_reserved_qty"]
+                    ),
+                    requisition_qty=int(requirements["requisition_qty"]),
+                    cutting_mode=str(requirements["cutting_mode"]),
+                    pieces_per_box=int(requirements["pieces_per_box"]),
+                    required_piece_qty=int(requirements["required_piece_qty"]),
                     customer_name=customer.name,
                     delivery_date=_order.delivery_date,
                 )
             )
             order_item.inventory_deducted_qty = 0
             order_item.requisition_status = "已报料"
-            order_item.requisition_qty = req_item.requisition_qty
-            order_item.special_process = req_item.special_process
+            order_item.requisition_qty = int(requirements["requisition_qty"])
+            order_item.special_process = str(requirements["cutting_mode"])
             order_item.cardboard_len = req_item.cardboard_len
             order_item.cardboard_width = req_item.cardboard_width
             order_item.requisition_spec = (
@@ -3168,7 +3342,7 @@ def create_supplier_order(
 
     order_number = _supplier_order_number(db)
     total_qty = sum(row["production_required_qty"] for row in validated_members)
-    total_deduct = 0
+    total_deduct = sum(row["finished_reserved_qty"] for row in validated_members)
     total_req = sum(row["requisition_qty"] for row in validated_members)
     total_required_piece_qty = sum(
         row["required_piece_qty"] for row in validated_members
@@ -3210,7 +3384,7 @@ def create_supplier_order(
             product_code=m.product_code,
             product_name=m.product_name,
             quantity=validated["production_required_qty"],
-            stock_deduction_qty=0,
+            stock_deduction_qty=validated["finished_reserved_qty"],
             requisition_qty=req_qty,
             cutting_mode=validated["cutting_mode"],
             pieces_per_box=validated["pieces_per_box"],

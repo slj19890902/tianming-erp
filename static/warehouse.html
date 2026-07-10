@@ -122,6 +122,46 @@
   </main>
   <div id="message" class="message hidden"></div>
   <script>
+    // BEGIN IDEMPOTENCY_KEY_HELPER
+    var idempotencyKeyFallbackCounter = 0;
+    function createIdempotencyKey() {
+      var cryptoApi = typeof crypto !== "undefined" ? crypto : null;
+      if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+        try {
+          return cryptoApi.randomUUID();
+        } catch (error) {
+          // Continue to the compatible fallbacks.
+        }
+      }
+      if (cryptoApi && typeof cryptoApi.getRandomValues === "function") {
+        try {
+          var bytes = new Uint8Array(16);
+          cryptoApi.getRandomValues(bytes);
+          bytes[6] = (bytes[6] & 15) | 64;
+          bytes[8] = (bytes[8] & 63) | 128;
+          var hex = "";
+          for (var index = 0; index < bytes.length; index += 1) {
+            var byteHex = bytes[index].toString(16);
+            hex += byteHex.length === 1 ? "0" + byteHex : byteHex;
+          }
+          return (
+            hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" +
+            hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" +
+            hex.slice(20)
+          );
+        } catch (error) {
+          // Date/random fallback is sufficient for a non-secret idempotency key.
+        }
+      }
+      idempotencyKeyFallbackCounter += 1;
+      return (
+        "idemp-" + Date.now().toString(36) + "-" +
+        Math.random().toString(36).slice(2, 12) + "-" +
+        idempotencyKeyFallbackCounter.toString(36)
+      );
+    }
+    // END IDEMPOTENCY_KEY_HELPER
+
     const state={user:null,tab:"finished",locations:[],customers:[],lots:[]};
     const $=id=>document.getElementById(id);
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
@@ -202,10 +242,10 @@
     }
     function updateFlutes(){$("siFlute").innerHTML=($("siLayer").value==="3"?["A","B","E"]:["AB","BE"]).map(x=>`<option>${x}</option>`).join("")}
     async function saveFinished(e){
-      e.preventDefault();try{await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:+$("fgCustomer").value,product_id:+$("fgProduct").value,location_id:+$("fgLocation").value,quantity:+$("fgQuantity").value,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:crypto.randomUUID()})});toast("成品入库成功");e.target.reset();$("fgDate").value=today();await loadLots()}catch(err){toast(err.message,true)}
+      e.preventDefault();try{await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:+$("fgCustomer").value,product_id:+$("fgProduct").value,location_id:+$("fgLocation").value,quantity:+$("fgQuantity").value,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:createIdempotencyKey()})});toast("成品入库成功");e.target.reset();$("fgDate").value=today();await loadLots()}catch(err){toast(err.message,true)}
     }
     async function saveSemi(e){
-      e.preventDefault();try{await api("/api/warehouse/semi-finished/manual-in",{method:"POST",body:JSON.stringify({location_id:+$("siLocation").value,quantity:+$("siQuantity").value,stock_date:$("siDate").value,source_type:$("siSource").value,material_code:$("siMaterial").value,layer_count:+$("siLayer").value,flute_type:$("siFlute").value,board_length_mm:+$("siLength").value,board_width_mm:+$("siWidth").value,sheet_type:$("siSheetType").value,supplier_name:$("siSupplier").value||null,customer_id:$("siCustomer").value?+$("siCustomer").value:null,cutting_note:$("siCuttingNote").value||null,remarks:$("siRemarks").value||null,idempotency_key:crypto.randomUUID()})});toast("半成品入库成功");e.target.reset();$("siDate").value=today();updateFlutes();await loadLots()}catch(err){toast(err.message,true)}
+      e.preventDefault();try{await api("/api/warehouse/semi-finished/manual-in",{method:"POST",body:JSON.stringify({location_id:+$("siLocation").value,quantity:+$("siQuantity").value,stock_date:$("siDate").value,source_type:$("siSource").value,material_code:$("siMaterial").value,layer_count:+$("siLayer").value,flute_type:$("siFlute").value,board_length_mm:+$("siLength").value,board_width_mm:+$("siWidth").value,sheet_type:$("siSheetType").value,supplier_name:$("siSupplier").value||null,customer_id:$("siCustomer").value?+$("siCustomer").value:null,cutting_note:$("siCuttingNote").value||null,remarks:$("siRemarks").value||null,idempotency_key:createIdempotencyKey()})});toast("半成品入库成功");e.target.reset();$("siDate").value=today();updateFlutes();await loadLots()}catch(err){toast(err.message,true)}
     }
     async function loadLots(){
       const p=queryString({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
@@ -239,7 +279,7 @@
       return freeze+normal+general;
     }
     async function operate(id,operation,version){
-      let body={expected_version:version,idempotency_key:crypto.randomUUID()},label=operation;
+      let body={expected_version:version,idempotency_key:createIdempotencyKey()},label=operation;
       if(operation==="adjust"){const value=prompt("输入调整数量：增加填正数，减少填负数");if(value===null)return;body.quantity_delta=+value;body.reason=prompt("请输入调整原因")||""}
       if(["damage","scrap"].includes(operation)){const value=prompt(operation==="damage"?"输入报损数量":"输入报废数量");if(value===null)return;body.quantity=+value;body.reason=prompt("请输入原因")||""}
       if(operation==="transfer-to-general"){if(!confirm("确认转为通用成品库存？后续跨客户使用仍需人工确认。"))return;body.reason=prompt("请输入转通用原因")||""}

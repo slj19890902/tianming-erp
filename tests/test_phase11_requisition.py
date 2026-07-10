@@ -806,7 +806,7 @@ def test_pending_selection_rejects_missing_supplier_and_duplicate_generation(
         assert session.get(OrderItem, regular_id).requisition_status == "已报料"
 
 
-def test_pending_selection_rejects_invalid_deduction_and_requisition_qty(
+def test_pending_selection_rejects_fabricated_deduction_and_invalid_requisition_qty(
     requisition_app,
 ) -> None:
     from app.models.order import OrderItem
@@ -830,17 +830,27 @@ def test_pending_selection_rejects_invalid_deduction_and_requisition_qty(
         )
         negative_deduction = deepcopy(draft)
         negative_deduction["supplier_groups"][0]["lines"][0]["inventory_deducted_qty"] = -1
-        too_large_deduction = deepcopy(draft)
-        too_large_deduction["supplier_groups"][0]["lines"][0]["inventory_deducted_qty"] = 101
+        fabricated_deduction = deepcopy(draft)
+        fabricated_deduction["supplier_groups"][0]["lines"][0]["inventory_deducted_qty"] = 1
+        fabricated_source = deepcopy(draft)
+        fabricated_source["supplier_groups"][0]["lines"][0]["source_items"][0][
+            "inventory_deducted_qty"
+        ] = 1
         zero_requisition_qty = deepcopy(draft)
         zero_requisition_qty["supplier_groups"][0]["lines"][0]["requisition_qty"] = 0
 
         negative = _save_supplier_order_draft(client, negative_deduction)
-        too_large = _save_supplier_order_draft(client, too_large_deduction)
+        fabricated = _save_supplier_order_draft(client, fabricated_deduction)
+        fabricated_source_response = _save_supplier_order_draft(
+            client, fabricated_source
+        )
         zero_qty = _save_supplier_order_draft(client, zero_requisition_qty)
 
     assert negative.status_code == 400
-    assert too_large.status_code == 400
+    assert fabricated.status_code == 400
+    assert "真实库存预占" in fabricated.json()["detail"]
+    assert fabricated_source_response.status_code == 400
+    assert "真实库存预占" in fabricated_source_response.json()["detail"]
     assert zero_qty.status_code == 400
     with session_factory() as session:
         assert session.query(SupplierRequisitionOrder).count() == 0

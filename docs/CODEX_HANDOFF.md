@@ -1,5 +1,18 @@
 # Codex 项目交接
 
+## 2026-07-10 Phase 0-D | v0.22.1 稳定化基线（待复核，未提交）
+
+- 当前目标分支为 `release/v0221-stabilization`，基准提交为 `ff6b007`；本轮只保留未提交 WIP，不 commit、不 push。
+- SPA 已补齐 11 个业务深链，登录后保留目标页面，根地址仍进入首页仪表盘；`/incoming.html` 明确返回 `no-store/no-cache` 响应头。
+- `static/index.html` 与 `static/warehouse.html` 统一使用兼容幂等键 helper：优先 `crypto.randomUUID()`，旧浏览器依次回退到 `crypto.getRandomValues()` 和 `Date.now()+Math.random()`，不再直接调用缺失的 `randomUUID()`。
+- `create_app()` 重复初始化会先清空已构建的 middleware stack，再按当前配置重建 CORS，避免同一测试进程中重复创建报错。
+- 普通待报料、合并建议、`merged_pending` 与供应商草稿预览/保存统一按当前 active 成品库存预占、每箱片数和开料系数重算；不再沿用旧 `requisition_qty`。供应商草稿不信任客户端填写的库存抵扣数量，也不会改订单数量、送货数量、库存批次数量或清零预占。
+- 精确临时库验收已覆盖订单 10、双拼 2、active 预占 9：页面/API 均得到预占 9、需生产 1、需小片 2、采购 2；即使客户端携带旧值 20，保存快照仍为 `1/9/2/2`，lot 保持 `11/9/0`、reservation 保持 active，库存流水数不变。
+- 层数与楞型校验集中复用到产品保存、产品字段同步、订单同步、待报料同步和报价转常用箱入口；材质字典继续只管理材质代码，保存时丢弃楞型字段。
+- 测试使用显式临时 `ERP_DATABASE_PATH`、备份目录和密钥；安全全量基线为 `948 passed, 27 skipped, 7 deselected`。排除未证明隔离的 phase18、依赖 checkout 数据库的旧测试、两个 phase191 数据库迁移测试及 phase19 API 隔离缺陷用例。
+- 隔离浏览器 smoke 已覆盖首页、`/requisition`、`/orders`、`/deliveries`、`/system`、`/incoming.html`；标题与目标页正常，刷新不丢失深链，最终服务日志无 500。
+- 本轮无数据库迁移、无历史数据修改；所有任务测试和验收服务均以临时库为目标。正式库存在独立运行服务的外部写入，不能用整库哈希变化推断本任务写入归因。
+
 ## 2026-07-08 N-027 多箱型报料公式与天地盖盖/底拆分
 
 - 常用箱箱型推荐已扩展：A1/0201 保持原有单拼/双拼逻辑；A3 天地盖按盖/底两套报料尺寸和压线保存；平卡、刀卡、隔板、围套、半开槽箱、全搭盖箱支持自动推荐，仍允许手工修改后保存。

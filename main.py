@@ -2127,7 +2127,14 @@ def customer_management_page() -> FileResponse:
 
 @app.get("/incoming.html")
 def incoming_management_page() -> FileResponse:
-    return FileResponse(static_dir() / "incoming.html")
+    return FileResponse(
+        static_dir() / "incoming.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/delivery-print.html")

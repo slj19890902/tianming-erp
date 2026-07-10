@@ -2698,7 +2698,7 @@
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" /></td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" /></td>
                         <td><select class="select merge-cutter-select" v-model="line.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td>
-                        <td><input class="input merge-size-input" type="number" min="0" :max="line.production_required_qty || line.quantity || 0" v-model.number="line.inventory_deducted_qty" /></td>
+                        <td><strong>{{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }}</strong><div class="muted">仅来自真实库存预占</div></td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.requisition_qty" /></td>
                         <td><input class="input merge-remark-input" v-model.trim="line.remark" /></td>
                       </tr>
@@ -2735,7 +2735,7 @@
                 <button v-if="!deliveryForm.editingId" class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">批量选择待送货</button>
                 <span class="muted">默认先显示 5 行空白明细，按存货编码查询当前客户下仍有未送数量的产品。</span>
               </div>
-              <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库且仍有未送数量的订单明细才能生成送货单。</div>
+              <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再按存货编码查询待送货产品。</div>
               <div v-if="deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
                 <div class="toolbar" style="margin-bottom:8px">
@@ -3164,6 +3164,46 @@
     </div>
 
     <script>
+      // BEGIN IDEMPOTENCY_KEY_HELPER
+      var idempotencyKeyFallbackCounter = 0;
+      function createIdempotencyKey() {
+        var cryptoApi = typeof crypto !== "undefined" ? crypto : null;
+        if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+          try {
+            return cryptoApi.randomUUID();
+          } catch (error) {
+            // Continue to the compatible fallbacks.
+          }
+        }
+        if (cryptoApi && typeof cryptoApi.getRandomValues === "function") {
+          try {
+            var bytes = new Uint8Array(16);
+            cryptoApi.getRandomValues(bytes);
+            bytes[6] = (bytes[6] & 15) | 64;
+            bytes[8] = (bytes[8] & 63) | 128;
+            var hex = "";
+            for (var index = 0; index < bytes.length; index += 1) {
+              var byteHex = bytes[index].toString(16);
+              hex += byteHex.length === 1 ? "0" + byteHex : byteHex;
+            }
+            return (
+              hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" +
+              hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" +
+              hex.slice(20)
+            );
+          } catch (error) {
+            // Date/random fallback is sufficient for a non-secret idempotency key.
+          }
+        }
+        idempotencyKeyFallbackCounter += 1;
+        return (
+          "idemp-" + Date.now().toString(36) + "-" +
+          Math.random().toString(36).slice(2, 12) + "-" +
+          idempotencyKeyFallbackCounter.toString(36)
+        );
+      }
+      // END IDEMPOTENCY_KEY_HELPER
+
       axios.defaults.withCredentials = true;
       axios.interceptors.response.use(
         (response) => response,
@@ -4144,6 +4184,13 @@
             const target = new URLSearchParams(window.location.search).get("redirect") || "";
             return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
           },
+          initialPageFromLocation() {
+            const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","deliveries","finance","system"]);
+            const queryPage = new URLSearchParams(window.location.search).get("page") || "";
+            if (pages.has(queryPage)) return queryPage;
+            const pathPage = window.location.pathname.replace(/^\/+|\/+$/g, "");
+            return pages.has(pathPage) ? pathPage : "dashboard";
+          },
           redirectAfterLogin() {
             const target = this.loginRedirectPath();
             if (!target || this.user?.must_change_password) return false;
@@ -4155,9 +4202,10 @@
               const { data } = await axios.get("/api/auth/me");
               this.user = data.user;
               if (this.redirectAfterLogin()) return;
-              this.activePage = "dashboard";
+              const initialPage = this.initialPageFromLocation();
+              this.activePage = initialPage;
               await this.loadBase();
-              await this.loadPage("dashboard");
+              await this.loadPage(initialPage);
               if (this.user.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
@@ -4174,8 +4222,9 @@
               const currentPassword = this.loginForm.password;
               this.loginForm.password = "";
               if (this.redirectAfterLogin()) return;
-              this.activePage = "dashboard";
-              await this.loadBase(); await this.loadPage("dashboard");
+              const initialPage = this.initialPageFromLocation();
+              this.activePage = initialPage;
+              await this.loadBase(); await this.loadPage(initialPage);
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
             finally { this.loading = false; }
@@ -6632,7 +6681,7 @@
                 inventory_lot_id:candidate.lot_id,
                 quantity,
                 expected_version:candidate.version,
-                idempotency_key:crypto.randomUUID(),
+                idempotency_key:createIdempotencyKey(),
                 warning_acknowledged_codes:general?["GENERAL_FINISHED_STOCK"]:[],
               });
               await Promise.all([
@@ -6652,7 +6701,7 @@
             try {
               await axios.post(`/api/warehouse/reservations/${reservation.id}/release`,{
                 release_reason:reason.trim(),
-                idempotency_key:crypto.randomUUID(),
+                idempotency_key:createIdempotencyKey(),
               });
               await Promise.all([
                 this.refreshOrderItemInventorySummary(),
@@ -6795,8 +6844,6 @@
                 const label = `第 ${groupIndex + 1} 组第 ${lineIndex + 1} 行`;
                 if (Number(line.report_length_mm) <= 0) return `${label} 报料长必须大于 0`;
                 if (Number(line.report_width_mm) <= 0) return `${label} 报料宽必须大于 0`;
-                if (Number(line.inventory_deducted_qty || 0) < 0) return `${label} 成品抵扣不能小于 0`;
-                if (Number(line.inventory_deducted_qty || 0) > Number(line.production_required_qty || line.quantity || 0)) return `${label} 成品抵扣不能大于本行需生产数量`;
                 if (Number(line.requisition_qty) <= 0) return `${label} 采购张数必须大于 0`;
                 if (!Array.isArray(line.source_items) || !line.source_items.length) return `${label} 缺少来源明细`;
               }
@@ -6815,7 +6862,6 @@
                   report_length_mm: line.report_length_mm,
                   report_width_mm: line.report_width_mm,
                   cutting_mode: line.cutting_mode || "一开一",
-                  inventory_deducted_qty: Number(line.inventory_deducted_qty || 0),
                   requisition_qty: Number(line.requisition_qty || 0),
                   remark: line.remark || null,
                   source_items: (line.source_items || []).map(source => ({
@@ -6823,7 +6869,6 @@
                     order_item_id: source.order_item_id,
                     merge_group_id: source.merge_group_id || null,
                     source_quantity: Number(source.source_quantity || source.quantity || 0),
-                    inventory_deducted_qty: Number(source.inventory_deducted_qty || 0),
                     requisition_qty: Number(source.requisition_qty || 0),
                   })),
                 })),

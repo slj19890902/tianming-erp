@@ -96,10 +96,17 @@ def test_initial_session_probe_does_not_report_expired_login() -> None:
     assert "if (!window.erpCheckingSession)" in source
 
 
-def test_role_switch_resets_active_page_to_dashboard() -> None:
+def test_auth_reset_uses_dashboard_but_login_preserves_deep_link() -> None:
     source = INDEX.read_text(encoding="utf-8")
 
-    assert source.count('this.activePage = "dashboard";') >= 3
+    auth_reset = source.split("window.erpAuthRequired = () => {", 1)[1].split(
+        "};", 1
+    )[0]
+    logout = source.split("async logout() {", 1)[1].split("},", 1)[0]
+    assert 'this.activePage = "dashboard";' in auth_reset
+    assert 'this.activePage = "dashboard";' in logout
+    assert "const initialPage = this.initialPageFromLocation();" in source
+    assert "this.activePage = initialPage;" in source
 
 
 def test_core_lists_keep_server_side_pagination() -> None:

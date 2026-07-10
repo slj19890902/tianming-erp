@@ -1,9 +1,24 @@
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 INCOMING = (ROOT / "static" / "incoming.html").read_text(encoding="utf-8")
+SPA_PAGE_PATHS = (
+    "/dashboard",
+    "/customers",
+    "/quotations",
+    "/products",
+    "/orders",
+    "/orders_legacy",
+    "/requisition",
+    "/incoming",
+    "/deliveries",
+    "/finance",
+    "/system",
+)
 
 
 def test_phase12_customer_and_product_uat_controls_are_present() -> None:
@@ -57,6 +72,54 @@ def test_requisition_print_page_is_registered() -> None:
     )
 
 
+@pytest.mark.parametrize("page_path", SPA_PAGE_PATHS)
+def test_desktop_spa_deep_links_return_an_erp_page(page_path: str) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get(page_path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "ERP" in response.text
+    assert "Not Found" not in response.text
+
+
+def test_requisition_spa_route_returns_index_page_after_refresh() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/requisition")
+
+    assert response.status_code == 200
+    assert "天明包装ERP" in response.text
+    assert "智能报料工作台" in response.text
+    assert "Not Found" not in response.text
+
+
+def test_desktop_spa_preserves_deep_link_and_defaults_root_to_dashboard() -> None:
+    assert "initialPageFromLocation" in INDEX
+    assert 'window.location.pathname.replace(/^\\/+|\\/+$/g, "")' in INDEX
+    assert 'return pages.has(pathPage) ? pathPage : "dashboard"' in INDEX
+    assert "await this.loadPage(initialPage)" in INDEX
+
+
+def test_root_address_still_returns_the_dashboard_shell() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert "天明包装ERP" in response.text
+
+
 def test_incoming_pending_cards_show_cardboard_requisition_size() -> None:
     assert "报料尺寸" in INCOMING
     assert "item.cardboard_len" in INCOMING
@@ -90,9 +153,9 @@ def test_new_order_status_displays_as_pending_material_until_requisitioned() -> 
     # 显示为"待报料"，等至少一条明细报料后再恢复显示"待生产"。
     assert "orderDisplayStatusKey" in INDEX
     assert 'pending_material:"待报料"' in INDEX
-    assert ':value="orderDisplayStatusKey(row)"' in INDEX
-    assert ':value="orderDisplayStatusKey(orderDetail)"' in INDEX
     assert "group_status: this.orderDisplayStatusKey(row)" in INDEX
+    assert ':value="group.group_status"' in INDEX
+    assert ':value="orderDisplayStatusKey(orderDetail)"' in INDEX
 
 
 def test_incoming_mobile_login_return_and_cache_protection_are_present() -> None:

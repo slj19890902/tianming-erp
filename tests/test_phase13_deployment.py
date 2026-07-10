@@ -140,7 +140,7 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port(
     assert "scripts\\windows\\start_erp.bat" in bat
     assert ".venv\\Scripts\\python.exe" in launcher
     assert "app.main:app" in launcher
-    assert '"--host", "127.0.0.1"' in launcher
+    assert '"--host", "0.0.0.0"' in launcher
     assert '"--port", "8000"' in launcher
     assert '"--workers", "1"' in launcher
     assert "erp_server.log" in launcher

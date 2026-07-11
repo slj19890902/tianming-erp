@@ -921,7 +921,7 @@ def test_direct_merged_pending_supplier_order_recomputes_current_reservation(
     ) == lot_before
 
 
-def test_full_reservation_has_zero_requisition_and_is_delivery_eligible(
+def test_full_reservation_is_not_pending_requisition_and_is_delivery_eligible(
     reservation_db,
 ) -> None:
     from app.api.deliveries import _pending_query
@@ -931,11 +931,9 @@ def test_full_reservation_has_zero_requisition_and_is_delivery_eligible(
     lot = add_lot(db, data, quantity=100, key="full-lot")
     reserve(db, data, lot, 100, "full-reserve")
     result = pending_requisitions(db=db, _user=data["admin"])
-    row = next(item for item in result["items"] if item["item_id"] == data["item"].id)
-    assert row["fully_covered_by_finished_inventory"] is True
-    assert row["production_required_qty"] == 0
-    assert row["required_piece_qty"] == 0
-    assert row["requisition_qty"] == 0
+    assert all(
+        item["item_id"] != data["item"].id for item in result["items"]
+    )
     pending_delivery_ids = {
         item.item_id for item in db.execute(_pending_query()).all()
     }

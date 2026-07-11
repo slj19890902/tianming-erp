@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import json
+import re
+import unicodedata
 from uuid import uuid4
 
 from sqlalchemy import func, or_, select, update
@@ -10,10 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
 from app.models.delivery import DeliveryItem
+from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import RequisitionItem
 from app.models.warehouse_inventory import (
+    DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
@@ -36,8 +40,23 @@ class AgeWarning:
     text: str | None
 
 
+@dataclass(frozen=True)
+class FinishedReservationMutation:
+    reservation: InventoryReservation
+    movement: InventoryMovement
+    allocation: DeliveryInventoryAllocation | None = None
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def normalize_material_code(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").upper()
+    normalized = re.sub(r"\s+", "", normalized)
+    if not normalized:
+        raise WarehouseInventoryError("材质代码不能为空")
+    return normalized
 
 
 def inventory_age_warning(lot: InventoryLot, *, today: date | None = None) -> AgeWarning:
@@ -105,6 +124,8 @@ def _movement(
     reservation_id: int | None = None,
     related_order_id: int | None = None,
     related_order_item_id: int | None = None,
+    related_delivery_id: int | None = None,
+    reversal_of_movement_id: int | None = None,
 ) -> InventoryMovement:
     after = _balances(lot)
     row = InventoryMovement(
@@ -130,6 +151,8 @@ def _movement(
         reservation_id=reservation_id,
         related_order_id=related_order_id,
         related_order_item_id=related_order_item_id,
+        related_delivery_id=related_delivery_id,
+        reversal_of_movement_id=reversal_of_movement_id,
     )
     db.add(row)
     return row
@@ -147,6 +170,8 @@ def manual_finished_in(
     remarks: str | None,
     operator_id: int | None,
     idempotency_key: str | None,
+    source_ref_type: str | None = None,
+    source_ref_id: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -174,6 +199,8 @@ def manual_finished_in(
         unit="boxes",
         status="active",
         source_type=source_type,
+        source_ref_type=source_ref_type,
+        source_ref_id=source_ref_id,
         stock_date=stock_date,
         last_movement_at=now,
         remarks=remarks,
@@ -211,16 +238,20 @@ def manual_finished_in(
 
 
 def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
-    return int(
-        db.scalar(
-            select(func.coalesce(func.sum(InventoryReservation.credited_requirement_quantity), 0))
-            .where(
-                InventoryReservation.order_item_id == order_item_id,
-                InventoryReservation.reservation_type == "finished_order",
-                InventoryReservation.status == "active",
-            )
+    rows = db.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.order_item_id == order_item_id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status != "cancelled",
         )
-        or 0
+    ).all()
+    return sum(
+        max(
+            int(row.credited_requirement_quantity or 0)
+            - int(row.released_requirement_quantity or 0),
+            0,
+        )
+        for row in rows
     )
 
 
@@ -229,21 +260,23 @@ def active_finished_reservations_by_item_ids(
 ) -> dict[int, int]:
     if not order_item_ids:
         return {}
-    rows = db.execute(
-        select(
-            InventoryReservation.order_item_id,
-            func.coalesce(
-                func.sum(InventoryReservation.credited_requirement_quantity), 0
-            ),
-        )
-        .where(
+    rows = db.scalars(
+        select(InventoryReservation).where(
             InventoryReservation.order_item_id.in_(order_item_ids),
             InventoryReservation.reservation_type == "finished_order",
-            InventoryReservation.status == "active",
+            InventoryReservation.status != "cancelled",
         )
-        .group_by(InventoryReservation.order_item_id)
     ).all()
-    return {int(item_id): int(quantity or 0) for item_id, quantity in rows if item_id}
+    result: dict[int, int] = {}
+    for row in rows:
+        if row.order_item_id is None:
+            continue
+        result[row.order_item_id] = result.get(row.order_item_id, 0) + max(
+            int(row.credited_requirement_quantity or 0)
+            - int(row.released_requirement_quantity or 0),
+            0,
+        )
+    return result
 
 
 def finished_inventory_candidates(db: Session, order_item_id: int) -> list[InventoryLot]:
@@ -279,6 +312,60 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
             InventoryLot.id,
         )
     ).all()
+
+
+def finished_inventory_candidates_for_product(
+    db: Session,
+    *,
+    customer_id: int,
+    product_id: int,
+) -> list[InventoryLot]:
+    product = db.get(Product, product_id)
+    if product is None or product.deleted_at is not None:
+        raise WarehouseInventoryError("产品不存在", 404)
+    if product.customer_id != customer_id:
+        raise WarehouseInventoryError("产品不属于所选客户", 409)
+    return db.scalars(
+        select(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.quantity_available > 0,
+            FinishedGoodsInventoryDetail.product_id == product_id,
+            FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            FinishedGoodsInventoryDetail.inventory_code_snapshot
+            == product.product_code,
+        )
+        .order_by(
+            InventoryLot.stock_date,
+            InventoryLot.id,
+        )
+    ).all()
+
+
+def has_unconsumed_inventory_reservations(
+    db: Session,
+    order_item_id: int,
+) -> bool:
+    return (
+        db.scalar(
+            select(InventoryReservation.id)
+            .where(
+                InventoryReservation.order_item_id == order_item_id,
+                InventoryReservation.status != "cancelled",
+                InventoryReservation.reserved_stock_quantity
+                > InventoryReservation.consumed_stock_quantity
+                + InventoryReservation.released_stock_quantity,
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 
 def reserve_finished_inventory(
@@ -401,6 +488,257 @@ def reserve_finished_inventory(
     return reservation
 
 
+def _finished_reservation_status(reservation: InventoryReservation) -> str:
+    consumed = int(reservation.consumed_stock_quantity or 0)
+    released = int(reservation.released_stock_quantity or 0)
+    remaining = int(reservation.reserved_stock_quantity) - consumed - released
+    if remaining > 0:
+        return "active" if consumed == 0 and released == 0 else "partial"
+    if consumed == reservation.reserved_stock_quantity:
+        return "consumed"
+    if released == reservation.reserved_stock_quantity:
+        return "released"
+    return "partial"
+
+
+def _finished_idempotent_mutation(
+    db: Session,
+    *,
+    idempotency_key: str,
+    movement_type: str,
+    reservation_id: int,
+) -> FinishedReservationMutation | None:
+    movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == idempotency_key
+        )
+    )
+    if movement is None:
+        return None
+    if movement.movement_type != movement_type or movement.reservation_id != reservation_id:
+        raise WarehouseInventoryError("该请求标识已用于其他库存操作", 409)
+    reservation = db.get(InventoryReservation, reservation_id)
+    if reservation is None:
+        raise WarehouseInventoryError("库存预占记录不存在", 404)
+    consume_movement_id = (
+        movement.reversal_of_movement_id
+        if movement_type == "reverse_consume"
+        else movement.id
+    )
+    allocation = db.scalar(
+        select(DeliveryInventoryAllocation).where(
+            DeliveryInventoryAllocation.consume_movement_id == consume_movement_id
+        )
+    )
+    return FinishedReservationMutation(reservation, movement, allocation)
+
+
+def consume_finished_reservation(
+    db: Session,
+    *,
+    reservation_id: int,
+    stock_quantity: int,
+    expected_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    delivery_item_id: int,
+) -> FinishedReservationMutation:
+    repeated = _finished_idempotent_mutation(
+        db,
+        idempotency_key=idempotency_key,
+        movement_type="consume",
+        reservation_id=reservation_id,
+    )
+    if repeated is not None:
+        return repeated
+    if stock_quantity <= 0:
+        raise WarehouseInventoryError("成品消耗数量必须大于0")
+    with db.begin_nested():
+        reservation = db.get(InventoryReservation, reservation_id)
+        if reservation is None:
+            raise WarehouseInventoryError("库存预占记录不存在", 404)
+        if reservation.reservation_type != "finished_order":
+            raise WarehouseInventoryError("该记录不是成品订单预占")
+        remaining = (
+            int(reservation.reserved_stock_quantity)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0)
+        )
+        if stock_quantity > remaining:
+            raise WarehouseInventoryError("消耗数量不能超过未消耗成品预占余额", 409)
+        delivery_item = db.get(DeliveryItem, delivery_item_id)
+        if delivery_item is None:
+            raise WarehouseInventoryError("送货明细不存在", 404)
+        if delivery_item.order_item_id != reservation.order_item_id:
+            raise WarehouseInventoryError("送货明细与成品预占订单不一致", 409)
+        order_item = db.get(OrderItem, reservation.order_item_id)
+        order = db.get(Order, reservation.order_id)
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if order_item is None or order is None or lot is None or lot.finished_detail is None:
+            raise WarehouseInventoryError("成品预占关联数据不完整", 409)
+        detail = lot.finished_detail
+        if detail.product_id != order_item.product_id:
+            raise WarehouseInventoryError("成品库存与订单产品不一致", 409)
+        if not detail.is_general and detail.owner_customer_id != order.customer_id:
+            raise WarehouseInventoryError("其他客户专用成品库存不能用于当前订单", 409)
+        if lot.version != expected_version:
+            raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
+        if lot.quantity_reserved < stock_quantity:
+            raise WarehouseInventoryError("成品库存预占余额异常，请联系管理员", 409)
+        before = _balances(lot)
+        now = utc_now()
+        result = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version,
+                InventoryLot.quantity_reserved >= stock_quantity,
+            )
+            .values(
+                quantity_reserved=InventoryLot.quantity_reserved - stock_quantity,
+                quantity_consumed=InventoryLot.quantity_consumed + stock_quantity,
+                version=InventoryLot.version + 1,
+                last_movement_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            raise WarehouseInventoryError("成品库存数量或版本已变化，请重试", 409)
+        reservation.consumed_stock_quantity += stock_quantity
+        reservation.consumed_requirement_quantity += stock_quantity
+        reservation.consumed_by = operator_id
+        reservation.consumed_at = now
+        reservation.status = _finished_reservation_status(reservation)
+        db.flush()
+        db.expire(lot)
+        refreshed_lot = db.get(InventoryLot, lot.id)
+        assert refreshed_lot is not None
+        movement = _movement(
+            db,
+            lot=refreshed_lot,
+            movement_type="consume",
+            quantity=stock_quantity,
+            before=before,
+            operator_id=operator_id,
+            reason="送货出库消耗成品预占",
+            idempotency_key=idempotency_key,
+            reservation_id=reservation.id,
+            related_order_id=reservation.order_id,
+            related_order_item_id=reservation.order_item_id,
+            related_delivery_id=delivery_item.delivery_id,
+        )
+        db.flush()
+        allocation = DeliveryInventoryAllocation(
+            delivery_item_id=delivery_item.id,
+            reservation_id=reservation.id,
+            consume_movement_id=movement.id,
+            consumed_stock_quantity=stock_quantity,
+            credited_requirement_quantity=stock_quantity,
+            reversed_stock_quantity=0,
+            reversed_requirement_quantity=0,
+            status="active",
+            created_by=operator_id,
+        )
+        db.add(allocation)
+        db.flush()
+    return FinishedReservationMutation(reservation, movement, allocation)
+
+
+def reverse_finished_consumption(
+    db: Session,
+    *,
+    reservation_id: int,
+    stock_quantity: int,
+    expected_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    allocation_id: int,
+) -> FinishedReservationMutation:
+    repeated = _finished_idempotent_mutation(
+        db,
+        idempotency_key=idempotency_key,
+        movement_type="reverse_consume",
+        reservation_id=reservation_id,
+    )
+    if repeated is not None:
+        return repeated
+    if stock_quantity <= 0:
+        raise WarehouseInventoryError("成品逆转数量必须大于0")
+    with db.begin_nested():
+        reservation = db.get(InventoryReservation, reservation_id)
+        allocation = db.get(DeliveryInventoryAllocation, allocation_id)
+        if reservation is None or reservation.reservation_type != "finished_order":
+            raise WarehouseInventoryError("成品库存预占记录不存在", 404)
+        if allocation is None or allocation.reservation_id != reservation.id:
+            raise WarehouseInventoryError("送货成品库存分配记录不存在", 404)
+        allocation_remaining = (
+            int(allocation.consumed_stock_quantity)
+            - int(allocation.reversed_stock_quantity or 0)
+        )
+        if stock_quantity > allocation_remaining:
+            raise WarehouseInventoryError("逆转数量不能超过该送货成品分配余额", 409)
+        if stock_quantity > int(reservation.consumed_stock_quantity or 0):
+            raise WarehouseInventoryError("逆转数量不能超过累计成品消耗", 409)
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if lot is None or lot.version != expected_version:
+            raise WarehouseInventoryError("成品库存版本已变化，请重试", 409)
+        if lot.quantity_consumed < stock_quantity:
+            raise WarehouseInventoryError("成品库存累计消耗余额异常", 409)
+        before = _balances(lot)
+        now = utc_now()
+        result = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version,
+                InventoryLot.quantity_consumed >= stock_quantity,
+            )
+            .values(
+                quantity_reserved=InventoryLot.quantity_reserved + stock_quantity,
+                quantity_consumed=InventoryLot.quantity_consumed - stock_quantity,
+                version=InventoryLot.version + 1,
+                last_movement_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            raise WarehouseInventoryError("成品库存数量或版本已变化，请重试", 409)
+        reservation.consumed_stock_quantity -= stock_quantity
+        reservation.consumed_requirement_quantity -= stock_quantity
+        if reservation.consumed_stock_quantity == 0:
+            reservation.consumed_by = None
+            reservation.consumed_at = None
+        reservation.status = _finished_reservation_status(reservation)
+        allocation.reversed_stock_quantity += stock_quantity
+        allocation.reversed_requirement_quantity += stock_quantity
+        allocation.reversed_by = operator_id
+        allocation.reversed_at = now
+        allocation.status = (
+            "reversed"
+            if allocation.reversed_stock_quantity == allocation.consumed_stock_quantity
+            else "partial"
+        )
+        db.flush()
+        db.expire(lot)
+        refreshed_lot = db.get(InventoryLot, lot.id)
+        assert refreshed_lot is not None
+        movement = _movement(
+            db,
+            lot=refreshed_lot,
+            movement_type="reverse_consume",
+            quantity=stock_quantity,
+            before=before,
+            operator_id=operator_id,
+            reason="撤销送货出库成品消耗",
+            idempotency_key=idempotency_key,
+            reservation_id=reservation.id,
+            related_order_id=reservation.order_id,
+            related_order_item_id=reservation.order_item_id,
+            related_delivery_id=db.get(DeliveryItem, allocation.delivery_item_id).delivery_id,
+            reversal_of_movement_id=allocation.consume_movement_id,
+        )
+        db.flush()
+    return FinishedReservationMutation(reservation, movement, allocation)
+
+
 def release_finished_reservation(
     db: Session,
     *,
@@ -429,7 +767,12 @@ def release_finished_reservation(
         raise WarehouseInventoryError("库存预占记录不存在", 404)
     if reservation.reservation_type != "finished_order":
         raise WarehouseInventoryError("该记录不是成品订单预占")
-    if reservation.status != "active":
+    remaining = (
+        int(reservation.reserved_stock_quantity)
+        - int(reservation.consumed_stock_quantity or 0)
+        - int(reservation.released_stock_quantity or 0)
+    )
+    if remaining <= 0:
         raise WarehouseInventoryError("该预占已释放或已消耗，不能重复释放", 409)
     reason = release_reason.strip()
     if not reason:
@@ -447,7 +790,7 @@ def release_finished_reservation(
     lot = db.get(InventoryLot, reservation.inventory_lot_id)
     if lot is None:
         raise WarehouseInventoryError("关联库存批次不存在", 409)
-    quantity = reservation.reserved_stock_quantity
+    quantity = remaining
     if lot.quantity_reserved < quantity:
         raise WarehouseInventoryError("库存预占余额异常，请联系管理员处理", 409)
     before = _balances(lot)
@@ -468,7 +811,9 @@ def release_finished_reservation(
     )
     if result.rowcount != 1:
         raise WarehouseInventoryError("库存数量已变化，请刷新后重试", 409)
-    reservation.status = "released"
+    reservation.released_stock_quantity += quantity
+    reservation.released_requirement_quantity += quantity
+    reservation.status = _finished_reservation_status(reservation)
     reservation.released_by = operator_id
     reservation.released_at = now
     reservation.release_reason = reason
@@ -509,7 +854,10 @@ def release_active_finished_reservations_for_items(
         .where(
             InventoryReservation.order_item_id.in_(order_item_ids),
             InventoryReservation.reservation_type == "finished_order",
-            InventoryReservation.status == "active",
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
         )
         .order_by(InventoryReservation.id)
     ).all()
@@ -539,6 +887,9 @@ def manual_semi_finished_in(
     board_length_mm: int,
     board_width_mm: int,
     sheet_type: str,
+    component_type: str = "whole",
+    pieces_per_box: int = 1,
+    stock_yield_per_sheet: int = 1,
     supplier_name: str | None,
     customer_id: int | None,
     crease_type: str | None,
@@ -549,12 +900,20 @@ def manual_semi_finished_in(
     remarks: str | None,
     operator_id: int | None,
     idempotency_key: str | None,
+    source_ref_type: str | None = None,
+    source_ref_id: int | None = None,
+    material_id: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
         return existing
     if quantity <= 0 or board_length_mm <= 0 or board_width_mm <= 0:
         raise WarehouseInventoryError("数量和纸板长宽必须大于0")
+    component = component_type.strip().lower()
+    if component not in {"whole", "cover", "base"}:
+        raise WarehouseInventoryError("半成品组件仅允许整片、天地盖盖片或底片")
+    if pieces_per_box <= 0 or stock_yield_per_sheet <= 0:
+        raise WarehouseInventoryError("每箱片数和每库存张产出片数必须大于0")
     valid_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
     flute = flute_type.strip().upper()
     if layer_count not in valid_flutes or flute not in valid_flutes[layer_count]:
@@ -565,6 +924,13 @@ def manual_semi_finished_in(
     customer = db.get(Customer, customer_id) if customer_id else None
     if customer_id and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)
+    material = db.get(Material, material_id) if material_id else None
+    if material_id and (material is None or not material.is_active):
+        raise WarehouseInventoryError("材质主数据不存在或已停用", 404)
+    if material is not None:
+        material_code = material.code
+        if material.layer_count is not None:
+            layer_count = material.layer_count
     now = utc_now()
     lot = InventoryLot(
         lot_number=_number("SI"),
@@ -574,6 +940,8 @@ def manual_semi_finished_in(
         unit="sheets",
         status="active",
         source_type=source_type,
+        source_ref_type=source_ref_type,
+        source_ref_id=source_ref_id,
         stock_date=stock_date,
         last_movement_at=now,
         remarks=remarks,
@@ -585,11 +953,16 @@ def manual_semi_finished_in(
         supplier_name=(supplier_name or "").strip() or None,
         owner_customer_id=customer.id if customer else None,
         owner_customer_name_snapshot=customer.name if customer else None,
-        material_code_snapshot=material_code.strip().upper(),
+        material_id=material.id if material else None,
+        material_code_snapshot=material_code.strip(),
+        normalized_material_code=normalize_material_code(material_code),
         layer_count=layer_count,
         flute_type=flute,
         board_length_mm=board_length_mm,
         board_width_mm=board_width_mm,
+        component_type=component,
+        pieces_per_box=pieces_per_box,
+        stock_yield_per_sheet=stock_yield_per_sheet,
         sheet_type=sheet_type,
         crease_type=crease_type,
         crease_left_mm=crease_left_mm,

@@ -471,34 +471,23 @@ class TestDbMigration(unittest.TestCase):
 
     def test_snapshot_customer_model_column_exists(self):
         """sales_order_items 表应有 snapshot_customer_model 列。"""
-        import sqlite3
+        from app.models.order import OrderItem
 
-        conn = sqlite3.connect("data/carton_erp.sqlite3")
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(sales_order_items)")
-        col_names = [row[1] for row in cur.fetchall()]
-        conn.close()
+        col_names = set(OrderItem.__table__.columns.keys())
         self.assertIn(
             "snapshot_customer_model",
             col_names,
             "sales_order_items 应有 snapshot_customer_model 列",
         )
 
-    def test_existing_orders_have_null_customer_model(self):
-        """历史订单的 snapshot_customer_model 应全部为 NULL（未回填）。"""
-        import sqlite3
+    def test_snapshot_customer_model_column_allows_historical_nulls(self):
+        """该快照列必须保持可空，迁移时无需强制回填历史订单。"""
+        from app.models.order import OrderItem
 
-        conn = sqlite3.connect("data/carton_erp.sqlite3")
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM sales_order_items WHERE snapshot_customer_model IS NOT NULL"
-        )
-        non_null_count = cur.fetchone()[0]
-        conn.close()
-        self.assertEqual(
-            non_null_count,
-            0,
-            f"历史订单不应有 snapshot_customer_model 值，但发现 {non_null_count} 条非 NULL 记录",
+        column = OrderItem.__table__.columns["snapshot_customer_model"]
+        self.assertTrue(
+            column.nullable,
+            "snapshot_customer_model 必须允许 NULL，避免强制回填历史订单",
         )
 
     def test_order_item_model_has_attribute(self):

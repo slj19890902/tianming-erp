@@ -10,7 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_db
+from app.api.deliveries import _inventory_sources_for_order_item
 from app.core.security import create_tianhua_pick_token, decode_tianhua_pick_token
+from app.models.order import OrderItem
+from app.models.product import Product
 from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryDraft,
     TianhuaPreDeliveryDraftItem,
@@ -108,6 +111,39 @@ def _token_scope(token:str,db:Session) -> tuple[TianhuaPreDeliveryImportBatch,Ti
     return batch,draft
 
 
+def _mobile_specification(order_item:OrderItem|None,product:Product|None) -> str:
+    if order_item is not None and (order_item.snapshot_spec or "").strip():
+        return order_item.snapshot_spec.strip()
+    if product is None:
+        return ""
+    dimensions=(product.length_mm,product.width_mm,product.height_mm)
+    if any(value is None for value in dimensions):
+        return ""
+    formatted=[]
+    for value in dimensions:
+        number=float(value)
+        formatted.append(str(int(number)) if number.is_integer() else f"{number:g}")
+    return f"{'×'.join(formatted)}mm"
+
+
+def _mobile_finished_inventory_sources(
+    db:Session,draft_item:TianhuaPreDeliveryDraftItem,order_item:OrderItem|None
+) -> list[dict]:
+    if order_item is None:
+        return []
+    return [
+        source
+        for source in _inventory_sources_for_order_item(
+            db,
+            order_item=order_item,
+            planned_delivery_quantity=int(draft_item.delivery_qty or 0),
+            delivery_item_id=draft_item.delivery_item_id,
+            dispatched=False,
+        )
+        if source.get("source_type")=="finished"
+    ]
+
+
 def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
     rows=db.execute(
         select(TianhuaPreDeliveryDraftItem,TianhuaPreDeliveryImportItem)
@@ -115,23 +151,32 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
         .where(TianhuaPreDeliveryDraftItem.draft_id==draft.id)
         .order_by(TianhuaPreDeliveryDraftItem.row_no)
     ).all()
-    return [{
-        "item_id":draft_item.id,
-        "delivery_item_id":draft_item.delivery_item_id,
-        "stock_code":draft_item.stock_code,
-        "product_name":import_item.product_name,
-        "order_no":draft_item.order_number,
-        "customer_order_no":draft_item.customer_order_no,
-        "suggested_qty":import_item.suggested_qty,
-        "final_delivery_qty":draft_item.delivery_qty,
-        "mobile_picked_qty":draft_item.mobile_picked_qty,
-        "mobile_pick_status":draft_item.mobile_pick_status,
-        "mobile_pick_note":draft_item.mobile_pick_note or "",
-        "mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item.mobile_picked_at else None,
-        "status":import_item.status,
-        "status_label":STATUS_LABELS.get(import_item.status,import_item.status),
-        "warning":import_item.warning or "",
-    } for draft_item,import_item in rows]
+    items=[]
+    for draft_item,import_item in rows:
+        order_item=db.get(OrderItem,draft_item.order_item_id)
+        product=db.get(Product,draft_item.product_id)
+        items.append({
+            "item_id":draft_item.id,
+            "delivery_item_id":draft_item.delivery_item_id,
+            "stock_code":draft_item.stock_code,
+            "product_name":import_item.product_name,
+            "specification":_mobile_specification(order_item,product),
+            "finished_inventory_sources":_mobile_finished_inventory_sources(
+                db,draft_item,order_item
+            ),
+            "order_no":draft_item.order_number,
+            "customer_order_no":draft_item.customer_order_no,
+            "suggested_qty":import_item.suggested_qty,
+            "final_delivery_qty":draft_item.delivery_qty,
+            "mobile_picked_qty":draft_item.mobile_picked_qty,
+            "mobile_pick_status":draft_item.mobile_pick_status,
+            "mobile_pick_note":draft_item.mobile_pick_note or "",
+            "mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item.mobile_picked_at else None,
+            "status":import_item.status,
+            "status_label":STATUS_LABELS.get(import_item.status,import_item.status),
+            "warning":import_item.warning or "",
+        })
+    return items
 
 
 @router.post("/tianhua-preimport/{batch_id}/mobile-token")

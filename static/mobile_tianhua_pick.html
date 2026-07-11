@@ -16,35 +16,32 @@
         --line: #d9d5c9;
       }
       * { box-sizing: border-box; }
-      body { margin: 0; color: var(--ink); background: radial-gradient(circle at 90% 0, #dcebdc, transparent 35%), var(--paper); font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif; }
-      header { position: sticky; top: 0; z-index: 5; padding: 18px 16px 14px; color: white; background: #183f2c; box-shadow: 0 4px 16px #17372838; }
-      h1 { margin: 0; font-size: 22px; letter-spacing: .04em; }
-      .sub { margin-top: 5px; color: #d8e9de; font-size: 13px; }
-      .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 12px; }
-      .stat { padding: 9px 3px; text-align: center; background: #fffdf8; border: 1px solid var(--line); border-radius: 11px; font-size: 11px; }
-      .stat strong { display: block; margin-bottom: 2px; font-size: 19px; }
-      main { padding: 0 12px 30px; }
-      .card { margin-bottom: 12px; padding: 15px; background: #fffdf8; border: 1px solid var(--line); border-left: 7px solid var(--green); border-radius: 14px; box-shadow: 0 5px 18px #4b4b3520; }
+      body { min-height: 100vh; margin: 0; color: var(--ink); background: radial-gradient(circle at 90% 0, #dcebdc, transparent 35%), var(--paper); font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif; }
+      .stats { position: sticky; top: 0; z-index: 5; display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px; background: #183f2cf2; box-shadow: 0 3px 12px #17372830; scrollbar-width: none; }
+      .stats::-webkit-scrollbar { display: none; }
+      .stat { flex: 0 0 auto; min-width: 68px; min-height: 38px; padding: 5px 9px; color: #244432; background: #fffdf8; border: 1px solid #d8e4dc; border-radius: 99px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+      .stat strong { margin-right: 4px; font-size: 15px; }
+      .stat.active { color: white; background: var(--green); border-color: #74bd96; }
+      main { padding: 8px 10px 24px; }
+      .card { margin-bottom: 8px; padding: 11px 12px; background: #fffdf8; border: 1px solid var(--line); border-left: 5px solid var(--green); border-radius: 11px; box-shadow: 0 3px 12px #4b4b3518; }
       .card.duplicate_warning { border-left-color: var(--yellow); }
       .card.qty_mismatch, .card.partial { border-left-color: var(--orange); }
       .card.stock_shortage, .card.no_stock { border-left-color: var(--red); }
-      .card.picked { opacity: .78; box-shadow: none; }
-      .code { font: 800 21px/1.1 Consolas, monospace; letter-spacing: .05em; }
-      .name { margin: 7px 0 12px; color: var(--muted); }
-      .warning { margin: 10px 0; padding: 9px; color: #8b2d27; background: #fff0ed; border-radius: 8px; font-size: 13px; }
-      .row { display: flex; gap: 9px; align-items: center; margin-top: 10px; }
-      label { flex: 1; font-size: 13px; color: var(--muted); }
-      input { width: 100%; margin-top: 4px; padding: 12px; font-size: 18px; border: 1px solid #bbb7ac; border-radius: 9px; background: white; }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
-      button { min-height: 48px; border: 0; border-radius: 10px; color: white; font-size: 17px; font-weight: 700; }
+      .card.picked { border-left-color: var(--green); box-shadow: none; }
+      .name { color: #13271c; font-size: 19px; font-weight: 800; line-height: 1.3; }
+      .spec { margin-top: 3px; color: var(--muted); font-size: 14px; line-height: 1.35; }
+      .locations { display: grid; gap: 3px; margin-top: 7px; padding: 7px 9px; color: #31553e; background: #edf7f0; border-radius: 8px; font-size: 13px; }
+      .pick-row { display: grid; grid-template-columns: auto minmax(88px, 132px); gap: 8px; align-items: center; margin-top: 8px; }
+      .pick-row label { color: var(--muted); font-size: 13px; font-weight: 700; }
+      input { width: 100%; padding: 7px 9px; font-size: 17px; text-align: center; border: 1px solid #bbb7ac; border-radius: 8px; background: white; }
+      .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+      .action { min-height: 40px; border: 0; border-radius: 9px; color: white; font-size: 15px; font-weight: 700; }
       button:disabled { opacity: .55; }
       .picked-btn { background: var(--green); }
+      .partial-btn { background: var(--orange); }
       .stock-btn { background: var(--red); }
-      .badge { display: inline-block; margin-top: 8px; padding: 5px 9px; border-radius: 99px; color: white; background: #777; font-size: 12px; }
-      .badge.picked { background: var(--green); }
-      .badge.partial { background: var(--orange); }
-      .badge.no_stock { background: var(--red); }
       .message { margin: 40px 18px; padding: 22px; text-align: center; background: white; border-radius: 14px; }
+      .empty { padding: 36px 12px; color: var(--muted); text-align: center; }
       .toast { position: fixed; left: 50%; bottom: 20px; z-index: 10; transform: translateX(-50%); padding: 12px 18px; color: white; background: #17211be8; border-radius: 10px; }
     </style>
   </head>
@@ -52,49 +49,62 @@
     <div id="loading" class="message">正在加载拿货明细...</div>
     <div id="error" class="message" hidden></div>
     <div id="app" hidden>
-      <header><h1>天华预送货拿货</h1><div id="subtitle" class="sub"></div><div id="deliveryDate" class="sub"></div></header>
-      <div id="stats" class="stats"></div>
+      <nav id="stats" class="stats" aria-label="拿货状态筛选"></nav>
       <main id="items"></main>
     </div>
     <div id="toast" class="toast" hidden></div>
     <script>
       const token = new URLSearchParams(location.search).get("token") || "";
       let data = null;
-      const labels = {pending:"待处理",picked:"已拿货",no_stock:"没货",partial:"部分拿货"};
+      let activeFilter = "open";
+      const statusOf = (item) => item.mobile_pick_status || "pending";
+      const filters = [
+        ["open","未完成",item => statusOf(item) !== "picked"],
+        ["pending","待拿货",item => statusOf(item) === "pending"],
+        ["partial","部分",item => statusOf(item) === "partial"],
+        ["no_stock","没货",item => statusOf(item) === "no_stock"],
+        ["picked","已拿货",item => statusOf(item) === "picked"],
+        ["all","全部",() => true],
+      ];
       const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
       const toast = (text) => {
         const node = document.getElementById("toast");
         node.textContent = text; node.hidden = false;
         setTimeout(() => node.hidden = true, 2200);
       };
-      const counts = () => {
-        const result = {picked:0,no_stock:0,partial:0,pending:0};
-        data.items.forEach(item => result[item.mobile_pick_status || "pending"]++);
-        return result;
+      const filterCount = (key) => {
+        const row=filters.find(candidate => candidate[0] === key);
+        return row ? data.items.filter(row[2]).length : 0;
       };
+      function setFilter(key) {
+        if (!filters.some(row => row[0] === key)) return;
+        activeFilter=key;
+        render();
+      }
       function render() {
-        const count = counts();
-        document.getElementById("subtitle").textContent = `${data.customer_name} · 草稿 ${data.draft_number}`;
-        document.getElementById("deliveryDate").textContent = `预送货日期：${data.pre_delivery_date || "-"}`;
-        document.getElementById("stats").innerHTML = [
-          ["总数",data.items.length],["已拿货",count.picked],["没货",count.no_stock],["部分",count.partial],["待处理",count.pending]
-        ].map(([label,value]) => `<div class="stat"><strong>${value}</strong>${label}</div>`).join("");
-        document.getElementById("items").innerHTML = data.items.map(item => {
-          const pickStatus=item.mobile_pick_status || "pending";
+        document.getElementById("stats").innerHTML = filters.map(([key,label]) =>
+          `<button type="button" class="stat ${activeFilter===key?"active":""}" data-filter="${key}" aria-pressed="${activeFilter===key}" onclick="setFilter('${key}')"><strong>${filterCount(key)}</strong>${label}</button>`
+        ).join("");
+        const predicate=filters.find(row => row[0] === activeFilter)[2];
+        const visibleItems=data.items.filter(predicate);
+        document.getElementById("items").innerHTML = visibleItems.length ? visibleItems.map(item => {
+          const pickStatus=statusOf(item);
           const qty=item.mobile_picked_qty ?? item.final_delivery_qty ?? item.suggested_qty ?? 0;
-          const shortage=item.status === "stock_shortage" ? '<div class="warning">系统显示库存不足，但允许现场按实际拿货数量确认。此操作不会自动入库或扣库存。</div>' : "";
-          const warning=item.warning ? `<div class="warning">${escapeHtml(item.warning)}</div>` : "";
+          const locations=(item.finished_inventory_sources || []).map(source => {
+            const location=source.location_code && source.location_name && source.location_code !== source.location_name
+              ? `${source.location_code}（${source.location_name}）`
+              : (source.location_code || source.location_name || "库位未标定");
+            const amount=source.quantity_to_pick_stock ?? 0;
+            return `<div>成品库位：<strong>${escapeHtml(location)}</strong> · 拿取 ${escapeHtml(amount)}</div>`;
+          }).join("");
           return `<article class="card ${escapeHtml(item.status)} ${escapeHtml(pickStatus)}" data-id="${item.item_id}">
-            <div class="code">${escapeHtml(item.stock_code)}</div>
-            <div class="name">${escapeHtml(item.product_name || "-")}</div>
-            <div class="sub" style="color:var(--muted)">订单：${escapeHtml(item.order_no || "-")}${item.customer_order_no ? ` · 客户单号 ${escapeHtml(item.customer_order_no)}` : ""}</div>
-            <span class="badge ${escapeHtml(pickStatus)}">${labels[pickStatus] || pickStatus}</span>
-            ${shortage}${warning}
-            <div class="row"><label>建议数量<input value="${item.suggested_qty ?? "-"}" disabled /></label><label>实际数量<input class="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></label></div>
-            <div class="row"><label>拿货备注<input class="note" maxlength="500" value="${escapeHtml(item.mobile_pick_note || "")}" placeholder="可选" /></label></div>
-            <div class="actions"><button class="picked-btn" onclick="saveItem(${item.item_id},'picked')">√ 已拿货</button><button class="stock-btn" onclick="saveItem(${item.item_id},'no_stock')">× 没货</button></div>
+            <div class="name">${escapeHtml(item.product_name || "未命名产品")}</div>
+            <div class="spec">规格：${escapeHtml(item.specification || "-")}</div>
+            ${locations ? `<div class="locations">${locations}</div>` : ""}
+            <div class="pick-row"><label for="qty-${item.item_id}">拿货数量</label><input id="qty-${item.item_id}" class="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
+            <div class="actions"><button class="action picked-btn" onclick="saveItem(${item.item_id},'picked')">已拿货</button><button class="action partial-btn" onclick="saveItem(${item.item_id},'partial')">部分拿货</button><button class="action stock-btn" onclick="saveItem(${item.item_id},'no_stock')">没货</button></div>
           </article>`;
-        }).join("");
+        }).join("") : '<div class="empty">当前筛选暂无拿货明细</div>';
       }
       async function request(url, options={}) {
         const response=await fetch(url,options);
@@ -104,23 +114,33 @@
       }
       async function saveItem(id,status) {
         const card=document.querySelector(`[data-id="${id}"]`);
-        const qty=Number(card.querySelector(".qty").value);
-        if (status !== "no_stock" && (!Number.isFinite(qty) || qty < 0)) return toast("请输入正确的实际数量");
         const current=data.items.find(item => item.item_id===id);
-        if (status !== "no_stock" && qty > Number(current.suggested_qty || 0) && !confirm("实际拿货数量大于建议数量，请确认是否保存？")) return;
-        card.querySelectorAll("button").forEach(button => button.disabled=true);
+        const target=Number(current.suggested_qty ?? current.final_delivery_qty ?? 0);
+        let qty=Number(card.querySelector(".qty").value);
+        if (status === "picked") {
+          if (!Number.isFinite(target) || target <= 0) return toast("本单拿货数量无效，请联系电脑端确认");
+          qty=target;
+          card.querySelector(".qty").value=target;
+        } else if (status === "no_stock") {
+          qty=0;
+        } else {
+          if (!Number.isFinite(qty) || qty <= 0) return toast("部分拿货数量必须大于 0");
+          if (qty >= target) return toast("已全部拿齐，请点击“已拿货”");
+        }
+        card.querySelectorAll("button.action").forEach(button => button.disabled=true);
         try {
           const result=await request(`/api/mobile/tianhua-pick/items/${id}`,{
             method:"PUT",
             headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({token,mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:card.querySelector(".note").value})
+            body:JSON.stringify({token,mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:current.mobile_pick_note || ""})
           });
           Object.assign(current,result.item);
           render();
-          toast(result.item.mobile_pick_status==="partial" ? "已记录部分拿货" : "拿货状态已保存");
+          const messages={picked:"已转入“已拿货”",partial:"已记录部分拿货",no_stock:"已记录没货"};
+          toast(messages[result.item.mobile_pick_status] || "拿货状态已保存");
         } catch (error) {
           toast(error.message);
-          card.querySelectorAll("button").forEach(button => button.disabled=false);
+          card.querySelectorAll("button.action").forEach(button => button.disabled=false);
         }
       }
       (async () => {

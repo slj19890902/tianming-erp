@@ -41,7 +41,12 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
         TianhuaPreDeliveryImportItem,
     )
     from app.models.user import User
+    from app.models.warehouse_inventory import WarehouseLocation
     from app.services import tianhua_pre_delivery as service
+    from app.services.warehouse_inventory import (
+        manual_finished_in,
+        reserve_finished_inventory,
+    )
 
     monkeypatch.setenv("ERP_SECRET_KEY", "mobile-pick-api-secret")
     monkeypatch.setattr(
@@ -83,6 +88,9 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             customer_material_code="21301877",
             product_name="测试产品",
             box_category="normal",
+            length_mm=800,
+            width_mm=200,
+            height_mm=100,
         )
         product_shortage = Product(
             customer_id=customer.id,
@@ -90,6 +98,9 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             customer_material_code="21302001",
             product_name="库存不足产品",
             box_category="normal",
+            length_mm=300,
+            width_mm=200,
+            height_mm=100,
         )
         db.add_all([product, product_shortage])
         db.flush()
@@ -103,30 +114,61 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
         )
         db.add(order)
         db.flush()
-        db.add_all([
-            OrderItem(
-                order_id=order.id,
-                product_id=product.id,
-                quantity=200,
-                delivered_quantity=0,
-                unit_price=Decimal("0"),
-                subtotal=Decimal("0"),
-                material_status="received",
-                snapshot_product_name="测试产品",
-                snapshot_product_code="21301877",
-            ),
-            OrderItem(
-                order_id=order.id,
-                product_id=product_shortage.id,
-                quantity=300,
-                delivered_quantity=0,
-                unit_price=Decimal("0"),
-                subtotal=Decimal("0"),
-                material_status="pending",
-                snapshot_product_name="库存不足产品",
-                snapshot_product_code="21302001",
-            ),
-        ])
+        item_with_finished_stock = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=200,
+            delivered_quantity=0,
+            unit_price=Decimal("0"),
+            subtotal=Decimal("0"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_name="测试产品",
+            snapshot_product_code="21301877",
+            snapshot_spec="800×200×100mm",
+        )
+        item_shortage = OrderItem(
+            order_id=order.id,
+            product_id=product_shortage.id,
+            quantity=300,
+            delivered_quantity=0,
+            unit_price=Decimal("0"),
+            subtotal=Decimal("0"),
+            material_status="pending",
+            snapshot_product_name="库存不足产品",
+            snapshot_product_code="21302001",
+        )
+        db.add_all([item_with_finished_stock, item_shortage])
+        db.flush()
+        location = WarehouseLocation(
+            location_code="FG-A01",
+            location_name="成品 A 区 01",
+            warehouse_type="finished",
+        )
+        db.add(location)
+        db.flush()
+        lot = manual_finished_in(
+            db,
+            customer_id=customer.id,
+            product_id=product.id,
+            location_id=location.id,
+            quantity=50,
+            stock_date=date.today(),
+            source_type="manual",
+            remarks=None,
+            operator_id=user.id,
+            idempotency_key="mobile-finished-in",
+        )
+        reserve_finished_inventory(
+            db,
+            order_item_id=item_with_finished_stock.id,
+            inventory_lot_id=lot.id,
+            quantity=50,
+            expected_version=lot.version,
+            operator_id=user.id,
+            idempotency_key="mobile-finished-reserve",
+            warning_acknowledged_codes=[],
+        )
         db.commit()
 
     app = FastAPI()
@@ -181,9 +223,18 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
         mobile = client.get("/api/mobile/tianhua-pick", params={"token": token})
         assert mobile.status_code == 200
         assert len(mobile.json()["items"]) == 2
+        stocked = mobile.json()["items"][0]
+        assert stocked["specification"] == "800×200×100mm"
+        sources = stocked["finished_inventory_sources"]
+        assert len(sources) == 1
+        assert sources[0]["source_type"] == "finished"
+        assert sources[0]["location_code"] == "FG-A01"
+        assert sources[0]["location_name"] == "成品 A 区 01"
+        assert sources[0]["quantity_to_pick_stock"] == 50
         shortage = mobile.json()["items"][1]
         assert shortage["status"] == "stock_shortage"
         assert shortage["order_no"] == "TH-MOBILE-1"
+        assert shortage["specification"] == "300×200×100mm"
         expired_token, _expires = create_tianhua_pick_token(
             uploaded.json()["batch_id"],
             draft.json()["draft_id"],
@@ -356,12 +407,34 @@ def test_mobile_page_is_standalone_and_supports_stock_shortage():
         / "mobile_tianhua_pick.html"
     ).read_text(encoding="utf-8")
     for text in (
-        "天华预送货拿货",
         "/api/mobile/tianhua-pick",
+        "未完成",
+        "待拿货",
         "已拿货",
-        "没货",
         "部分拿货",
-        "此操作不会自动入库或扣库存",
+        "没货",
+        "拿货数量",
+        "成品库位",
+        "specification",
+        "finished_inventory_sources",
     ):
         assert text in html
-    assert "后台菜单" not in html
+    for hidden_text in (
+        "<h1>天华预送货拿货</h1>",
+        "订单：",
+        "客户单号",
+        "建议数量",
+        "实际数量",
+        "拿货备注<input",
+        "此操作不会自动入库或扣库存",
+        "class=\"code\"",
+        "class=\"warning\"",
+        "class=\"badge",
+        "后台菜单",
+    ):
+        assert hidden_text not in html
+    assert 'let activeFilter = "open"' in html
+    assert 'statusOf(item) !== "picked"' in html
+    assert 'if (status === "picked")' in html
+    assert "qty=target" in html
+    assert "已转入“已拿货”" in html

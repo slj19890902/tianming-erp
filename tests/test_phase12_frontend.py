@@ -158,6 +158,46 @@ def test_new_order_status_displays_as_pending_material_until_requisitioned() -> 
     assert ':value="orderDisplayStatusKey(orderDetail)"' in INDEX
 
 
+def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
+    assert "toggleOrderSort('customer_name')" in INDEX
+    assert "toggleOrderSort('order_date')" in INDEX
+    assert "toggleOrderSort('delivery_date')" in INDEX
+    assert "params.sort_by = this.filters.orderSortBy" in INDEX
+    assert "params.sort_direction = this.filters.orderSortDirection" in INDEX
+    assert "params.keyword = this.filters.orderKeyword" in INDEX
+    assert "params.customer_name = this.filters.orderKeyword" not in INDEX
+    assert '{ label: "已送完", value: "finished_delivery" }' in INDEX
+    assert ':style="customerRowStyle(group.customer_id)"' in INDEX
+
+    style_start = INDEX.index("customerRowStyle(customerId)")
+    style_end = INDEX.index("showToast(message", style_start)
+    customer_style_block = INDEX[style_start:style_end]
+    assert "137.508" in customer_style_block
+    assert "hsl(${hue} 58% 94%)" in customer_style_block
+    assert "Math.random" not in customer_style_block
+
+    detail_start = INDEX.index('<div class="order-group-detail-card">')
+    detail_end = INDEX.index("</table>", detail_start)
+    detail_block = INDEX[detail_start:detail_end]
+    ordered_fields = [
+        "item.item_order_number",
+        "item.snapshot_product_code",
+        "item.snapshot_product_name",
+        "item.snapshot_spec",
+        "orderItemMaterialText(item)",
+        "item.delivered_quantity",
+        "item.unit_price",
+        "item.subtotal",
+        "item.total_estimated_cost",
+        "itemDeliveryStatusKey(item)",
+        "item.completion_date",
+        "openOrderDetail(row)",
+    ]
+    positions = [detail_block.index(field) for field in ordered_fields]
+    assert positions == sorted(positions)
+    assert "item.remaining_quantity" in detail_block
+
+
 def test_incoming_mobile_login_return_and_cache_protection_are_present() -> None:
     assert '/?redirect=/incoming.html' in INCOMING
     assert "loginRedirectPath" in INDEX

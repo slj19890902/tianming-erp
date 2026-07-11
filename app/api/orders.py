@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -124,10 +124,10 @@ _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
 # Terminal / archived statuses that should NOT appear in the day-to-day
 # "business" (日常订单) view. Active orders — including freshly saved PDF
 # imports that are still pending_production / awaiting requisition — stay in
-# business. "completed" is intentionally kept (see
-# test_business_orders_show_completed_but_badge_counts_only_undelivered): a
-# finished-but-not-yet-archived order is still part of daily work, while the
-# unfinished badge only counts undelivered rows.
+# business. Orders whose item quantities are already fully delivered are also
+# excluded below even if an old status snapshot has not been refreshed yet.
+# Do not hide solely on completed/delivered snapshots: quantity is the source
+# of truth for this view, and inconsistent legacy rows must stay discoverable.
 _BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
 _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES = [
     "voided", "cancelled", "canceled", "withdrawn", "invalid",
@@ -748,6 +748,30 @@ def _order_group_key(order: Order) -> str:
     return f"single::{order.order_number}"
 
 
+def _completion_dates_by_item(
+    db: Session,
+    item_ids: list[int],
+) -> dict[int, date]:
+    if not item_ids:
+        return {}
+    return {
+        int(item_id): completion_date
+        for item_id, completion_date in db.execute(
+            select(
+                DeliveryItem.order_item_id,
+                func.max(Delivery.delivery_date),
+            )
+            .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+            .where(
+                DeliveryItem.order_item_id.in_(item_ids),
+                Delivery.status == "dispatched",
+            )
+            .group_by(DeliveryItem.order_item_id)
+        ).all()
+        if completion_date is not None
+    }
+
+
 def _order_response(
     order: Order,
     user: User,
@@ -755,6 +779,7 @@ def _order_response(
     db: Session | None = None,
     customer_name: str | None = None,
     display_registry=None,
+    completion_dates: dict[int, date] | None = None,
 ) -> dict:
     reservation_map = (
         active_finished_reservations_by_item_ids(
@@ -763,6 +788,12 @@ def _order_response(
         if db is not None
         else {}
     )
+    completion_date_map = completion_dates
+    if completion_date_map is None and db is not None:
+        completion_date_map = _completion_dates_by_item(
+            db, [item.id for item in order.items]
+        )
+    completion_date_map = completion_date_map or {}
     data = {
         "id": order.id,
         **serialize_order_number_fields(order, display_registry),
@@ -808,7 +839,18 @@ def _order_response(
                 "item_order_number": item.item_order_number,
                 "item_sequence": item.item_sequence,
                 "quantity": item.quantity,
+                "ordered_quantity": item.quantity,
                 "delivered_quantity": item.delivered_quantity,
+                "remaining_quantity": max(
+                    int(item.quantity or 0) - int(item.delivered_quantity or 0),
+                    0,
+                ),
+                "completion_date": (
+                    completion_date_map.get(item.id)
+                    if int(item.quantity or 0) > 0
+                    and int(item.delivered_quantity or 0) >= int(item.quantity or 0)
+                    else None
+                ),
                 "is_force_closed": item.is_force_closed,
                 "unit_price": item.unit_price,
                 "subtotal": item.subtotal,
@@ -925,19 +967,26 @@ def list_orders(
     date_from: date | None = None,
     date_to: date | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
+    sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
+    sort_direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     display_registry = build_display_registry(db)
-    ids_query = select(Order.id).distinct()
+    ids_query = (
+        select(Order.id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .distinct()
+    )
+    joined_items = False
 
     if customer_id is not None:
         ids_query = ids_query.where(Order.customer_id == customer_id)
 
     if customer_name and customer_name.strip():
-        ids_query = ids_query.join(Customer, Customer.id == Order.customer_id).where(
+        ids_query = ids_query.where(
             Customer.name.ilike(f"%{customer_name.strip()}%")
         )
 
@@ -949,13 +998,24 @@ def list_orders(
         ids_query = ids_query.where(Order.order_date <= date_to)
 
     history_condition = Order.order_number.like("RUIDA-%")
+    fully_delivered_condition = and_(
+        Order.items.any(),
+        ~Order.items.any(OrderItem.delivered_quantity < OrderItem.quantity),
+    )
     if status_filter == "business":
         ids_query = ids_query.where(
             ~history_condition,
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+            ~fully_delivered_condition,
         )
     elif status_filter == "history":
         ids_query = ids_query.where(history_condition)
+    elif status_filter == "finished_delivery":
+        ids_query = ids_query.where(
+            ~history_condition,
+            Order.status.notin_(("dead", "cancelled", "closed", "archived")),
+            fully_delivered_condition,
+        )
     elif status_filter == "unfinished":
         ids_query = ids_query.where(
             ~history_condition,
@@ -984,17 +1044,25 @@ def list_orders(
             or_(
                 Order.order_number.ilike(f"%{trimmed}%"),
                 Order.customer_po.ilike(f"%{trimmed}%"),
+                Customer.name.ilike(f"%{trimmed}%"),
                 OrderItem.item_order_number.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_product_code.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_product_name.ilike(f"%{trimmed}%"),
+                OrderItem.snapshot_spec.ilike(f"%{trimmed}%"),
+                OrderItem.snapshot_material.ilike(f"%{trimmed}%"),
                 Order.id.in_(display_ids) if display_ids else False,
             )
         )
+        joined_items = True
 
     if order_number and order_number.strip():
         trimmed = order_number.strip()
         display_ids = filter_order_ids_for_display_search(db, trimmed, display_registry)
-        ids_query = ids_query.outerjoin(OrderItem, OrderItem.order_id == Order.id).where(
+        if not joined_items:
+            ids_query = ids_query.outerjoin(
+                OrderItem, OrderItem.order_id == Order.id
+            )
+        ids_query = ids_query.where(
             or_(
                 Order.order_number == trimmed,
                 OrderItem.item_order_number == trimmed,
@@ -1002,12 +1070,29 @@ def list_orders(
             )
         )
 
+    # Explicit table-header sorting is constrained to a fixed whitelist above.
+    if sort_by:
+        sort_column = {
+            "customer_name": Customer.name,
+            "order_date": Order.order_date,
+            "delivery_date": Order.delivery_date,
+        }[sort_by]
+        primary_sort = (
+            sort_column.asc() if sort_direction == "asc" else sort_column.desc()
+        )
+        tie_breaker = Order.id.asc() if sort_direction == "asc" else Order.id.desc()
+        if sort_by == "delivery_date":
+            ids_query = ids_query.order_by(
+                Order.delivery_date.is_(None), primary_sort, tie_breaker
+            )
+        else:
+            ids_query = ids_query.order_by(primary_sort, tie_breaker)
     # History (RUIDA legacy) keeps chronological order_date ordering. All other
     # views — especially "business" — sort by creation time so a freshly saved
     # order surfaces at the top even when its order_date is back-dated to the
     # source document date (e.g. PDF imports), instead of being buried below
     # newer-dated rows where users assume it "disappeared".
-    if status_filter == "history":
+    elif status_filter == "history":
         ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
     else:
         ids_query = ids_query.order_by(
@@ -1047,6 +1132,10 @@ def list_orders(
         if customer_ids
         else {}
     )
+    completion_dates = _completion_dates_by_item(
+        db,
+        [item.id for order in orders for item in order.items],
+    )
     unfinished_total = db.scalar(
         select(func.count(Order.id)).where(
             ~history_condition,
@@ -1078,6 +1167,7 @@ def list_orders(
                 db=db,
                 customer_name=customer_names.get(order.customer_id),
                 display_registry=display_registry,
+                completion_dates=completion_dates,
             )
             for order in orders
         ],

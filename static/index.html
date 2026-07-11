@@ -225,8 +225,14 @@
       .order-filter-grid .search-keyword { min-width: 360px; }
       .order-group-table th,
       .order-group-table td { vertical-align: middle; }
-      .order-group-row td { background: var(--panel); }
-      .order-group-row:hover td { background: #f7f7fa; }
+      .order-group-row td { background: var(--customer-row-bg, var(--panel)); }
+      .order-group-row:hover td { box-shadow: inset 0 0 0 9999px rgba(255,255,255,.24); }
+      .order-sort-button {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 0; border: 0; color: inherit; background: transparent;
+        font: inherit; font-weight: 700; cursor: pointer;
+      }
+      .order-sort-indicator { min-width: 12px; color: var(--primary); font-size: 11px; }
       .col-customer-name { min-width: 220px; }
       .col-customer-po { width: 160px; max-width: 160px; }
       .col-actions { min-width: 140px; }
@@ -1272,10 +1278,10 @@
                 <table class="order-group-table">
                   <thead>
                     <tr>
-                      <th class="col-customer-name">客户名称</th>
+                      <th class="col-customer-name"><button class="order-sort-button" @click="toggleOrderSort('customer_name')">客户名称 <span class="order-sort-indicator">{{ orderSortIndicator('customer_name') }}</span></button></th>
                       <th class="col-customer-po">客户单号</th>
-                      <th>下单日期</th>
-                      <th>交期</th>
+                      <th><button class="order-sort-button" @click="toggleOrderSort('order_date')">下单日期 <span class="order-sort-indicator">{{ orderSortIndicator('order_date') }}</span></button></th>
+                      <th><button class="order-sort-button" @click="toggleOrderSort('delivery_date')">交期 <span class="order-sort-indicator">{{ orderSortIndicator('delivery_date') }}</span></button></th>
                       <th>子单数</th>
                       <th class="cell-right">总数量</th>
                       <th v-if="!isWorkshop" class="sensitive-price cell-right">总金额</th>
@@ -1286,7 +1292,7 @@
                   </thead>
                   <tbody>
                     <template v-for="group in groupedOrderRows" :key="group.key">
-                      <tr class="order-group-row">
+                      <tr class="order-group-row" :style="customerRowStyle(group.customer_id)">
                         <td class="col-customer-name">
                           <div class="order-group-summary">
                             <strong>{{ group.customer_name || "-" }}</strong>
@@ -1312,7 +1318,7 @@
                         </td>
                       </tr>
                       <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
-                        <td :colspan="isWorkshop ? 8 : 9">
+                        <td :colspan="isWorkshop ? 9 : 10">
                           <div class="order-group-detail-card">
                             <table>
                               <thead>
@@ -1320,14 +1326,14 @@
                                   <th>明细系统单号</th>
                                   <th>存货编码</th>
                                   <th>产品名称</th>
-                                  <th>规格</th>
-                                  <th>材质</th>
-                                  <th class="cell-right">数量</th>
+                                  <th>规格 / 尺寸</th>
+                                  <th>材质 / 楞型</th>
+                                  <th class="cell-right">已送 / 未送</th>
                                   <th v-if="!isWorkshop" class="sensitive-price cell-right">单价</th>
                                   <th v-if="!isWorkshop" class="sensitive-price cell-right">金额</th>
-                                  <th v-if="!isWorkshop" class="sensitive-price cell-right">总预估成本</th>
-                                  <th v-if="!isWorkshop" class="sensitive-price cell-right">总预估毛利</th>
+                                  <th v-if="!isWorkshop" class="sensitive-price cell-right">总预估成本 / 毛利</th>
                                   <th>状态</th>
+                                  <th>完成日期</th>
                                   <th>操作</th>
                                 </tr>
                               </thead>
@@ -1339,15 +1345,15 @@
                                     <td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
                                     <td>{{ item.snapshot_spec || "-" }}</td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px">{{ orderItemMaterialText(item) }}</td>
-                                    <td class="cell-right">{{ item.quantity }}</td>
+                                    <td class="cell-right"><strong>已送 {{ item.delivered_quantity || 0 }}</strong><div class="muted" style="font-size:11px">未送 {{ item.remaining_quantity ?? Math.max(Number(item.quantity || 0) - Number(item.delivered_quantity || 0), 0) }}</div></td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
-                                    <td v-if="!isWorkshop" class="sensitive-price cell-right"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td>
-                                    <td v-if="!isWorkshop" class="sensitive-price cell-right"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td>
+                                    <td v-if="!isWorkshop" class="sensitive-price cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
                                     <td>
                                       <div v-if="row.is_history_order" class="status blue">历史归档</div>
                                       <status-tag v-else :value="itemDeliveryStatusKey(item)"></status-tag>
                                     </td>
+                                    <td>{{ item.completion_date || "-" }}</td>
                                     <td class="toolbar-group">
                                       <button class="btn small" @click="openOrderDetail(row)">详情</button>
                                       <button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button>
@@ -3567,17 +3573,18 @@
             selectedProductCustomer: null, productCustomerSearch: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [],
-            filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"business", orderView:"customer_po" },
+            filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderStatusTabs: [
               { label: "日常订单", value: "business" },
               { label: "待处理", value: "pending_confirmation" },
               { label: "生产中", value: "production" },
               { label: "待送货", value: "pending_delivery" },
-              { label: "已完成", value: "history" },
+              { label: "已送完", value: "finished_delivery" },
             ],
             orderStatusMoreTabs: [
               { label: "未送货", value: "unfinished" },
               { label: "待生产", value: "pending_production" },
+              { label: "历史归档", value: "history" },
             ],
             showOrderMoreMenu: false,
             showAdvancedFilter: false,
@@ -3931,6 +3938,7 @@
                   key: normalizedKey,
                   label: row.customer_po || "未填写客户单号",
                   customer_po: row.customer_po || null,
+                  customer_id: row.customer_id || null,
                   customer_name: row.customer_name || null,
                   order_date: row.order_date || null,
                   latest_delivery_date: row.delivery_date || null,
@@ -3973,6 +3981,7 @@
             return [
               "business",
               "unfinished",
+              "finished_delivery",
               "history",
               "pending_confirmation",
               "pending_production",
@@ -4362,7 +4371,7 @@
           statusText(value) {
             return ({
               active:"启用", inactive:"停用", pending:"待处理", received:"材料已到",
-              business:"日常订单", history:"历史订单", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", production:"生产中", pending_delivery:"待送货",
+              business:"日常订单", finished_delivery:"已送完", history:"历史归档", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", production:"生产中", pending_delivery:"待送货",
               partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
               delivered:"已送完", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
@@ -4403,6 +4412,27 @@
               item?.quantity,
               item?.delivered_quantity,
             );
+          },
+          toggleOrderSort(field) {
+            const allowed = ["customer_name", "order_date", "delivery_date"];
+            if (!allowed.includes(field)) return;
+            if (this.filters.orderSortBy === field) {
+              this.filters.orderSortDirection = this.filters.orderSortDirection === "asc" ? "desc" : "asc";
+            } else {
+              this.filters.orderSortBy = field;
+              this.filters.orderSortDirection = field === "customer_name" ? "asc" : "desc";
+            }
+            this.pages.orders = 1;
+            this.loadOrders();
+          },
+          orderSortIndicator(field) {
+            if (this.filters.orderSortBy !== field) return "↕";
+            return this.filters.orderSortDirection === "asc" ? "↑" : "↓";
+          },
+          customerRowStyle(customerId) {
+            const numericId = Math.abs(Number(customerId || 0));
+            const hue = Math.round((numericId * 137.508) % 360);
+            return { "--customer-row-bg": `hsl(${hue} 58% 94%)` };
           },
           showToast(message, error=false) {
             clearTimeout(this.toastTimer);
@@ -4461,6 +4491,8 @@
             this.filters.orderDateFrom = "";
             this.filters.orderDateTo = "";
             this.filters.orderStatus = "business";
+            this.filters.orderSortBy = "";
+            this.filters.orderSortDirection = "desc";
             this.showAdvancedFilter = false;
             this.pages.orders = 1;
             this.loadOrders();
@@ -5246,9 +5278,10 @@
             if (this.filters.orderDateFrom) params.date_from = this.filters.orderDateFrom;
             if (this.filters.orderDateTo) params.date_to = this.filters.orderDateTo;
             if (this.filters.orderStatus) params.status = this.filters.orderStatus;
-            if (this.filters.orderKeyword) {
-              params.keyword = this.filters.orderKeyword;
-              params.customer_name = this.filters.orderKeyword;
+            if (this.filters.orderKeyword) params.keyword = this.filters.orderKeyword;
+            if (this.filters.orderSortBy) {
+              params.sort_by = this.filters.orderSortBy;
+              params.sort_direction = this.filters.orderSortDirection;
             }
             const { data } = await axios.get("/api/orders", { params });
             this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;

@@ -265,7 +265,7 @@ class TestProductReportFields:
                              "product_name", "material_id", "length_mm", "width_mm",
                              "height_mm", "box_category", "layer_count", "flute_type",
                              "sale_unit_price", "report_length_mm", "report_width_mm"}}
-        payload.update(crease_type="压线", crease_left_mm=162,
+        payload.update(report_width_mm=600, crease_type="压线", crease_left_mm=162,
                        crease_middle_mm=276, crease_right_mm=162)
         r2 = client.put(f"/api/master/products/{product_id_a}", json=payload, cookies=admin_cookies)
         assert r2.status_code == 200, r2.text

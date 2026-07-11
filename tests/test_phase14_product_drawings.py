@@ -223,7 +223,7 @@ def test_common_box_process_and_print_type_round_trip_without_drawing(
         "height_mm": 165,
         "box_category": "normal",
         "print_content": "双色印刷",
-        "production_process": "粘贴,打钉,模切",
+        "production_process": "粘贴,打钉",
         "sale_unit_price": "4.1600",
         "remark": "常用箱编辑回显测试",
     }
@@ -235,6 +235,6 @@ def test_common_box_process_and_print_type_round_trip_without_drawing(
     assert updated.status_code == 200, updated.text
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    assert body["production_process"] == "粘贴,打钉,模切"
+    assert body["production_process"] == "粘贴,打钉"
     assert body["print_content"] == "双色印刷"
     assert body["drawings"] == []

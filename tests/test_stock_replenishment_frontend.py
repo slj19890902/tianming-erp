@@ -27,7 +27,7 @@ def test_replenishment_form_keeps_stock_now_explicit_and_location_visible() -> N
 def test_replenishment_save_and_print_paths_are_wired() -> None:
     assert 'axios.post("/api/requisition/stock-replenishment/orders"' in INDEX
     assert "/api/requisition/stock-replenishment/orders/${data.id}/print" in INDEX
-    assert "stock-replenishment-print-area" in INDEX
+    assert "openStockReplenishmentPrint(printable)" in INDEX
     assert "补库单已保存，库存批次已生成" in INDEX
 
 
@@ -49,7 +49,20 @@ def test_saved_replenishment_is_reopenable_from_reported_history() -> None:
     assert 'row.source_type === "stock_replenishment"' in INDEX
     assert 'return "库存补库单"' in INDEX
     assert 'stockReportedReplenishment(row)' in INDEX
-    assert 'this.modal={type:"stockReplenishmentPrint"' in INDEX
+    assert "this.openStockReplenishmentPrint(data)" in INDEX
+
+
+def test_replenishment_print_reuses_supplier_purchase_order_sheet() -> None:
+    assert "(modal.type === 'supplierOrderPrint' || modal.type === 'stockReplenishmentPrint')" in INDEX
+    assert "stockReplenishmentPrintData(data)" in INDEX
+    assert 'title: `供应商报料单 ${data.order_number}`' in INDEX
+    assert "纸板长宽（mm）" in INDEX
+    assert "压线(mm）" in INDEX
+    assert "材质/楞型" in INDEX
+    assert "报料备注" in INDEX
+    assert "printStockReplenishmentArea" not in INDEX
+    assert "stock-replenishment-print-area" not in INDEX
+    assert "<div>库存补库报料单</div>" not in INDEX
 
 
 def test_replenishment_links_common_box_material_and_crease_fields() -> None:

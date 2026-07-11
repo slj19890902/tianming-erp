@@ -2690,7 +2690,7 @@
               </div>
             </div>
             <!-- 供应商报料单打印预览 -->
-            <div v-else-if="modal.type === 'supplierOrderPrint' && modal.data" style="max-width:900px;margin:0 auto">
+            <div v-else-if="(modal.type === 'supplierOrderPrint' || modal.type === 'stockReplenishmentPrint') && modal.data" style="max-width:900px;margin:0 auto">
               <div id="supplier-order-print-area" class="supplier-print-sheet" style="font-size:14px;padding:20px">
                 <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || "苏州工业园区天明纸品包装厂" }}</h2><div>采购单</div></div>
                 <div class="supplier-print-head">
@@ -2790,14 +2790,6 @@
                   </div>
                 </div>
               </div>
-            </div>
-            <div v-else-if="modal.type === 'stockReplenishmentPrint' && modal.data" style="max-width:1000px;margin:0 auto">
-              <div id="stock-replenishment-print-area" class="supplier-print-sheet" style="font-size:14px;padding:20px">
-                <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || '天明包装ERP' }}</h2><div>库存补库报料单</div></div>
-                <div class="supplier-print-head"><div><strong>TO：{{ modal.data.supplier_name || '未指定供应商' }}</strong></div><div class="supplier-print-meta"><div>NO：{{ modal.data.order_number }}</div><div>状态：{{ modal.data.status }}</div></div></div>
-                <table style="width:100%;border-collapse:collapse"><thead><tr><th>序号</th><th>库存名称</th><th>材质/楞型</th><th>报料长宽(mm)</th><th>压线(mm)</th><th>数量</th><th>库位</th></tr></thead><tbody><tr v-for="(line,index) in modal.data.items" :key="line.id"><td>{{ index+1 }}</td><td>{{ line.product_code || '' }} {{ line.product_name }}</td><td>{{ line.material_code || '-' }} / {{ line.flute_type || '-' }}</td><td>{{ line.report_length_mm || '-' }} × {{ line.report_width_mm || '-' }}</td><td>{{ [line.crease_left_mm,line.crease_middle_mm,line.crease_right_mm].filter(v=>v!==null&&v!==undefined).join(' + ') || '-' }}</td><td><strong>{{ line.quantity }}</strong></td><td>{{ line.location ? line.location.location_code + ' ' + line.location.location_name : '-' }}</td></tr></tbody></table>
-              </div>
-              <div style="text-align:center;margin-top:12px"><button class="btn primary" type="button" @click="printStockReplenishmentArea">打印</button></div>
             </div>
             <div v-else-if="modal.type === 'supplierRequisitionDraft'">
               <div class="muted" style="margin-bottom:10px">当前只是报料草稿，点击保存后才正式生成供应商采购报料单。</div>
@@ -4134,6 +4126,32 @@
               ? order.lines
               : (Array.isArray(order?.items) && order.items.length ? order.items : []);
             return lines.length ? lines : [order || {}];
+          },
+          stockReplenishmentPrintData(data) {
+            const lines = (data?.items || []).map((line, index) => {
+              const creaseDisplay = line.crease_type === "压线"
+                ? [line.crease_left_mm, line.crease_middle_mm, line.crease_right_mm].map(value => Number(value || 0)).join("+")
+                : line.crease_type === "毛片" ? "毛" : line.crease_type === "净料" ? "净" : (line.crease_type || "-");
+              const materialCode = String(line.material_code || "").trim();
+              const fluteType = String(line.flute_type || "").trim();
+              return {
+                ...line,
+                line_key: `stock-${line.id || index}`,
+                crease_display: creaseDisplay,
+                material_display: [materialCode, fluteType].filter(Boolean).join(" / ") || "-",
+                requisition_qty: Number(line.quantity || 0),
+                remark: line.remark || data.remark || "",
+                cutting_mode: "一开一",
+              };
+            });
+            return {...data, lines};
+          },
+          openStockReplenishmentPrint(data) {
+            this.modal = {
+              type: "stockReplenishmentPrint",
+              title: `供应商报料单 ${data.order_number}`,
+              data: this.stockReplenishmentPrintData(data),
+            };
           },
           draftGroupLines(group) {
             if (Array.isArray(group?.lines) && group.lines.length) return group.lines;
@@ -5482,11 +5500,6 @@
               this.showToast("库存预警模板已保存");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
-          printStockReplenishmentArea() {
-            const area=document.getElementById("stock-replenishment-print-area"); if(!area)return;
-            const w=window.open("","_blank"); if(!w)return;
-            w.document.write(`<html><head><title>库存补库报料单</title><style>body{font-family:Arial,"Microsoft YaHei",sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:6px;text-align:center}.supplier-print-head{display:flex;justify-content:space-between;margin:12px 0}</style></head><body>${area.outerHTML}</body></html>`); w.document.close(); w.print();
-          },
           async loadIncoming() {
             const [pending,received]=await Promise.all([
               axios.get("/api/incoming/pending"),
@@ -6289,7 +6302,7 @@
             }
             if (row.source_type === "stock_replenishment") {
               const {data}=await axios.get("/api/requisition/stock-replenishment/orders/"+row.id+"/print");
-              this.modal={type:"stockReplenishmentPrint",title:"库存补库单 "+data.order_number,data};
+              this.openStockReplenishmentPrint(data);
               return;
             }
             if (row.source_type === "legacy_material_requisition") {
@@ -8548,7 +8561,7 @@
                 };
                 const {data} = await axios.post("/api/requisition/stock-replenishment/orders",payload);
                 const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
-                this.modal = {type:"stockReplenishmentPrint",title:`库存补库单 ${data.order_number}`,data:printable};
+                this.openStockReplenishmentPrint(printable);
                 await this.loadRequisition();
                 this.showToast(data.status === "stocked" ? "补库单已保存，库存批次已生成" : "补库单已保存，可打印后等待实际到库");
                 return;

@@ -41,6 +41,7 @@ from app.services.product_lifecycle import (
     move_to_trash,
     restore_from_trash,
 )
+from app.services.report_crease import crease_width_error
 
 
 router = APIRouter()
@@ -100,23 +101,15 @@ def _crease_width_error(
     middle_mm: int | None,
     right_mm: int | None,
 ) -> str | None:
-    """Return a write-time error without breaking reads of legacy records."""
-    if crease_type != "压线":
-        return None
-    segments = (left_mm, middle_mm, right_mm)
-    if any(value is None for value in segments):
-        return f"{label}必须完整填写三段尺寸"
-    if left_mm < 0 or middle_mm <= 0 or right_mm < 0:
-        return f"{label}尺寸必须是有效毫米数"
-    if report_width_mm is None or report_width_mm <= 0:
-        return f"{label}对应报料宽必须大于 0"
-    total = left_mm + middle_mm + right_mm
-    if total != report_width_mm:
-        return (
-            f"{label}三段合计 {total}mm 必须等于报料宽 "
-            f"{report_width_mm}mm"
-        )
-    return None
+    """Compatibility wrapper for the shared write-time validator."""
+    return crease_width_error(
+        label=label,
+        crease_type=crease_type,
+        report_width_mm=report_width_mm,
+        left_mm=left_mm,
+        middle_mm=middle_mm,
+        right_mm=right_mm,
+    )
 
 
 def _validate_product_crease_widths(payload: ProductPayload) -> None:
@@ -141,6 +134,63 @@ def _validate_product_crease_widths(payload: ProductPayload) -> None:
     error = next((item for item in errors if item), None)
     if error:
         raise HTTPException(status_code=400, detail=error)
+
+
+def _validate_changed_product_crease_widths(
+    payload: ProductPayload,
+    product: Product,
+) -> None:
+    def normalized(field_name: str, value: object) -> object:
+        if field_name in {"crease_type", "base_crease_type"}:
+            return value or None
+        return value
+
+    main_fields = {
+        "report_length_mm",
+        "report_width_mm",
+        "crease_type",
+        "crease_left_mm",
+        "crease_middle_mm",
+        "crease_right_mm",
+    }
+    base_fields = {
+        "base_report_length_mm",
+        "base_report_width_mm",
+        "base_crease_type",
+        "base_crease_left_mm",
+        "base_crease_middle_mm",
+        "base_crease_right_mm",
+    }
+
+    def changed(field_names: set[str]) -> bool:
+        return any(
+            normalized(field_name, getattr(payload, field_name))
+            != normalized(field_name, getattr(product, field_name))
+            for field_name in field_names
+        )
+
+    if changed(main_fields):
+        error = _crease_width_error(
+            label="压线",
+            crease_type=payload.crease_type,
+            report_width_mm=payload.report_width_mm,
+            left_mm=payload.crease_left_mm,
+            middle_mm=payload.crease_middle_mm,
+            right_mm=payload.crease_right_mm,
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+    if changed(base_fields):
+        error = _crease_width_error(
+            label="底压线",
+            crease_type=payload.base_crease_type,
+            report_width_mm=payload.base_report_width_mm,
+            left_mm=payload.base_crease_left_mm,
+            middle_mm=payload.base_crease_middle_mm,
+            right_mm=payload.base_crease_right_mm,
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
 
 
 class ProductPayload(BaseModel):
@@ -693,8 +743,8 @@ def update_product(
         material_id=payload.material_id,
         mold_tool_id=payload.mold_tool_id,
     )
-    _validate_product_crease_widths(payload)
     product = _product_or_404(db, product_id)
+    _validate_changed_product_crease_widths(payload, product)
     before = _product_payload_snapshot(product)
     for key, value in payload.model_dump().items():
         setattr(product, key, value)

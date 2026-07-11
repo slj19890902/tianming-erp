@@ -74,6 +74,7 @@ from app.services.product_import import (
     parse_dimensions,
     resolve_or_create_product,
 )
+from app.services.report_crease import crease_width_error, product_crease_width_error
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -2021,6 +2022,15 @@ def create_order(
                     raise HTTPException(
                         status_code=400, detail=f"第{index}条明细{error}"
                     ) from error
+            crease_error = product_crease_width_error(product)
+            if crease_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"第{index}条明细常用箱报料尺寸不一致：{crease_error}。"
+                        "请先在常用箱中确认报料宽和压线尺寸后再下单"
+                    ),
+                )
             resolved_products[index] = product
 
         reservation_plan_states = _preflight_reservation_plans(
@@ -2361,6 +2371,123 @@ def update_order_item(
     if unit_price < 0:
         raise HTTPException(status_code=400, detail="单价不能为负数")
     order = db.get(Order, item.order_id)
+    report_field_mapping = {
+        "snapshot_report_length_mm": "report_length_mm",
+        "snapshot_report_width_mm": "report_width_mm",
+        "snapshot_crease_type": "crease_type",
+        "snapshot_crease_left_mm": "crease_left_mm",
+        "snapshot_crease_middle_mm": "crease_middle_mm",
+        "snapshot_crease_right_mm": "crease_right_mm",
+        "snapshot_report_notes": "report_notes",
+        "snapshot_base_report_length_mm": "base_report_length_mm",
+        "snapshot_base_report_width_mm": "base_report_width_mm",
+        "snapshot_base_crease_type": "base_crease_type",
+        "snapshot_base_crease_left_mm": "base_crease_left_mm",
+        "snapshot_base_crease_middle_mm": "base_crease_middle_mm",
+        "snapshot_base_crease_right_mm": "base_crease_right_mm",
+        "snapshot_base_report_notes": "base_report_notes",
+    }
+
+    def normalized_report_value(field_name: str, value: object) -> object:
+        if field_name in {
+            "snapshot_crease_type",
+            "snapshot_base_crease_type",
+            "snapshot_report_notes",
+            "snapshot_base_report_notes",
+        }:
+            return value or None
+        return value
+
+    changed_report_fields: set[str] = set()
+    for field_name in report_field_mapping:
+        value = getattr(payload, field_name)
+        if value is None:
+            continue
+        normalized = normalized_report_value(field_name, value)
+        if normalized != getattr(item, field_name):
+            changed_report_fields.add(field_name)
+
+    main_validation_fields = {
+        "snapshot_report_length_mm",
+        "snapshot_report_width_mm",
+        "snapshot_crease_type",
+        "snapshot_crease_left_mm",
+        "snapshot_crease_middle_mm",
+        "snapshot_crease_right_mm",
+    }
+    if main_validation_fields.intersection(changed_report_fields):
+        error = crease_width_error(
+            label="压线",
+            crease_type=normalized_report_value(
+                "snapshot_crease_type",
+                payload.snapshot_crease_type
+                if payload.snapshot_crease_type is not None
+                else item.snapshot_crease_type,
+            ),
+            report_width_mm=(
+                payload.snapshot_report_width_mm
+                if payload.snapshot_report_width_mm is not None
+                else item.snapshot_report_width_mm
+            ),
+            left_mm=(
+                payload.snapshot_crease_left_mm
+                if payload.snapshot_crease_left_mm is not None
+                else item.snapshot_crease_left_mm
+            ),
+            middle_mm=(
+                payload.snapshot_crease_middle_mm
+                if payload.snapshot_crease_middle_mm is not None
+                else item.snapshot_crease_middle_mm
+            ),
+            right_mm=(
+                payload.snapshot_crease_right_mm
+                if payload.snapshot_crease_right_mm is not None
+                else item.snapshot_crease_right_mm
+            ),
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+
+    base_validation_fields = {
+        "snapshot_base_report_length_mm",
+        "snapshot_base_report_width_mm",
+        "snapshot_base_crease_type",
+        "snapshot_base_crease_left_mm",
+        "snapshot_base_crease_middle_mm",
+        "snapshot_base_crease_right_mm",
+    }
+    if base_validation_fields.intersection(changed_report_fields):
+        error = crease_width_error(
+            label="底压线",
+            crease_type=normalized_report_value(
+                "snapshot_base_crease_type",
+                payload.snapshot_base_crease_type
+                if payload.snapshot_base_crease_type is not None
+                else item.snapshot_base_crease_type,
+            ),
+            report_width_mm=(
+                payload.snapshot_base_report_width_mm
+                if payload.snapshot_base_report_width_mm is not None
+                else item.snapshot_base_report_width_mm
+            ),
+            left_mm=(
+                payload.snapshot_base_crease_left_mm
+                if payload.snapshot_base_crease_left_mm is not None
+                else item.snapshot_base_crease_left_mm
+            ),
+            middle_mm=(
+                payload.snapshot_base_crease_middle_mm
+                if payload.snapshot_base_crease_middle_mm is not None
+                else item.snapshot_base_crease_middle_mm
+            ),
+            right_mm=(
+                payload.snapshot_base_crease_right_mm
+                if payload.snapshot_base_crease_right_mm is not None
+                else item.snapshot_base_crease_right_mm
+            ),
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
     before = {
         "quantity": item.quantity,
         "unit_price": str(item.unit_price),
@@ -2474,34 +2601,14 @@ def update_order_item(
         )
         if payload.snapshot_flap_mm is not None:
             product.flap_mm = payload.snapshot_flap_mm
-        if payload.snapshot_report_length_mm is not None:
-            product.report_length_mm = payload.snapshot_report_length_mm
-        if payload.snapshot_report_width_mm is not None:
-            product.report_width_mm = payload.snapshot_report_width_mm
-        if payload.snapshot_crease_type is not None:
-            product.crease_type = payload.snapshot_crease_type or None
-        if payload.snapshot_crease_left_mm is not None:
-            product.crease_left_mm = payload.snapshot_crease_left_mm
-        if payload.snapshot_crease_middle_mm is not None:
-            product.crease_middle_mm = payload.snapshot_crease_middle_mm
-        if payload.snapshot_crease_right_mm is not None:
-            product.crease_right_mm = payload.snapshot_crease_right_mm
-        if payload.snapshot_report_notes is not None:
-            product.report_notes = payload.snapshot_report_notes or None
-        if payload.snapshot_base_report_length_mm is not None:
-            product.base_report_length_mm = payload.snapshot_base_report_length_mm
-        if payload.snapshot_base_report_width_mm is not None:
-            product.base_report_width_mm = payload.snapshot_base_report_width_mm
-        if payload.snapshot_base_crease_type is not None:
-            product.base_crease_type = payload.snapshot_base_crease_type or None
-        if payload.snapshot_base_crease_left_mm is not None:
-            product.base_crease_left_mm = payload.snapshot_base_crease_left_mm
-        if payload.snapshot_base_crease_middle_mm is not None:
-            product.base_crease_middle_mm = payload.snapshot_base_crease_middle_mm
-        if payload.snapshot_base_crease_right_mm is not None:
-            product.base_crease_right_mm = payload.snapshot_base_crease_right_mm
-        if payload.snapshot_base_report_notes is not None:
-            product.base_report_notes = payload.snapshot_base_report_notes or None
+        for snapshot_field, product_field in report_field_mapping.items():
+            if snapshot_field not in changed_report_fields:
+                continue
+            value = normalized_report_value(
+                snapshot_field,
+                getattr(payload, snapshot_field),
+            )
+            setattr(product, product_field, value)
         if payload.product_remark is not None:
             product.remark = payload.product_remark.strip() or None
     _refresh_total(db, order)

@@ -208,6 +208,33 @@ def test_inactive_product_cannot_be_used_for_new_order(order_api_app) -> None:
     assert response.json()["detail"] == "该纸箱已停用，不能用于新建订单"
 
 
+def test_new_order_rejects_common_box_with_mismatched_crease_width(
+    order_api_app,
+) -> None:
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        product = session.get(Product, 1)
+        product.report_length_mm = 1030
+        product.report_width_mm = 355
+        product.crease_type = "压线"
+        product.crease_left_mm = 100
+        product.crease_middle_mm = 150
+        product.crease_right_mm = 100
+        session.commit()
+
+    payload = _payload()
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 400
+    assert "第1条明细常用箱报料尺寸不一致" in response.json()["detail"]
+    assert "三段合计 350mm" in response.json()["detail"]
+
+
 def test_invalid_money_rolls_back_order(order_api_app) -> None:
     from app.models.order import Order
 
@@ -480,7 +507,7 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
                 "snapshot_pieces_per_box": 2,
                 "snapshot_flap_mm": 30,
                 "snapshot_report_length_mm": 3130,
-                "snapshot_report_width_mm": 785,
+                "snapshot_report_width_mm": 780,
                 "snapshot_crease_type": "压线",
                 "snapshot_crease_left_mm": 335,
                 "snapshot_crease_middle_mm": 110,
@@ -518,6 +545,77 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
         assert product.production_process == "粘贴"
         assert product.print_content == "单色印刷"
         assert product.remark == "订单编辑同步"
+
+
+def test_legacy_crease_mismatch_allows_unrelated_edit_without_overwriting_product(
+    order_api_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = client.post("/api/orders", json={**_payload(), "items": [_payload()["items"][0]]})
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+
+    with session_factory() as session:
+        item = session.get(OrderItem, item_id)
+        product = session.get(Product, item.product_id)
+        item.snapshot_report_length_mm = 1030
+        item.snapshot_report_width_mm = 355
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 100
+        item.snapshot_crease_middle_mm = 150
+        item.snapshot_crease_right_mm = 100
+        product.report_length_mm = 1030
+        product.report_width_mm = 350
+        product.crease_type = "压线"
+        product.crease_left_mm = 100
+        product.crease_middle_mm = 150
+        product.crease_right_mm = 100
+        session.commit()
+
+    edit_payload = {
+        "quantity": 200,
+        "unit_price": "3.75",
+        "product_code": "SME-001",
+        "product_name": "五层加强纸箱",
+        "material": "K=A-BC",
+        "specification": "520×350×300mm",
+        "snapshot_report_length_mm": 1030,
+        "snapshot_report_width_mm": 355,
+        "snapshot_crease_type": "压线",
+        "snapshot_crease_left_mm": 100,
+        "snapshot_crease_middle_mm": 150,
+        "snapshot_crease_right_mm": 100,
+        "sync_product": True,
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        unrelated_edit = client.put(
+            f"/api/orders/items/{item_id}",
+            json=edit_payload,
+        )
+        rejected_mismatch = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**edit_payload, "snapshot_report_width_mm": 356},
+        )
+        corrected = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**edit_payload, "snapshot_report_width_mm": 350},
+        )
+
+    assert unrelated_edit.status_code == 200, unrelated_edit.text
+    assert rejected_mismatch.status_code == 400
+    assert "三段合计 350mm" in rejected_mismatch.json()["detail"]
+    assert corrected.status_code == 200, corrected.text
+    with session_factory() as session:
+        item = session.get(OrderItem, item_id)
+        product = session.get(Product, item.product_id)
+        assert item.snapshot_report_width_mm == 350
+        assert product.report_width_mm == 350
 
 
 def test_order_item_sync_rejects_invalid_common_box_flute_without_partial_save(

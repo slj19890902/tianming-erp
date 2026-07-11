@@ -252,3 +252,34 @@ def test_pdf_training_detail_supports_single_sample_reparse() -> None:
     assert "重新解析当前样本" in INDEX
     assert "async reparsePdfSample()" in INDEX
     assert "/api/pdf-training/samples/${safeSampleId}/reparse" in INDEX
+
+
+def test_quotation_conversion_uses_visible_report_and_crease_form() -> None:
+    assert "modal.type === 'quotationConvert'" in INDEX
+    assert "正式存货编码" in INDEX
+    assert "单片报料长宽" in INDEX
+    assert "盖报料长宽" in INDEX
+    assert "底报料长宽" in INDEX
+    assert "syncQuotationConvertReportWidthFromCrease" in INDEX
+    assert "quotationConvertCreaseMismatch" in INDEX
+    assert "applyQuotationConvertRecommendations({force:true})" in INDEX
+    assert "用户手填值不会被自动覆盖" in INDEX
+
+
+def test_quotation_conversion_no_longer_uses_prompt_chain() -> None:
+    start = INDEX.index("convertQuotationItem(quotation,item)")
+    end = INDEX.index("async openProduct(row=null)", start)
+    conversion_block = INDEX[start:end]
+
+    assert "prompt(" not in conversion_block
+    assert "quotationConvertPayload()" in conversion_block
+    assert "report_width_mm = values.reduce" not in conversion_block
+    assert "form[`${prefix}report_width_mm`] = values.reduce" in conversion_block
+
+
+def test_order_item_crease_edit_syncs_width_without_blocking_untouched_legacy_data() -> None:
+    assert '@input="syncOrderItemReportWidthFromCrease"' in INDEX
+    assert "syncOrderItemReportWidthFromCrease()" in INDEX
+    assert "form.snapshot_report_width_mm = values.reduce" in INDEX
+    assert "_report_crease_touched:false" in INDEX
+    assert "!this.orderItemForm._report_crease_touched" in INDEX

@@ -1495,6 +1495,10 @@ def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> No
         item.snapshot_pieces_per_box = 2
         item.snapshot_report_length_mm = 800
         item.snapshot_report_width_mm = 200
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 50
+        item.snapshot_crease_middle_mm = 100
+        item.snapshot_crease_right_mm = 50
         session.commit()
 
     payload = {
@@ -1530,6 +1534,45 @@ def test_double_splice_with_one_to_three_uses_piece_count(requisition_app) -> No
         item = session.get(OrderItem, 1)
         assert item.requisition_qty == 67
         assert item.special_process == "一开三"
+
+
+def test_requisition_blocks_mismatched_unit_crease_but_not_purchase_width_factor(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.snapshot_report_length_mm = 800
+        item.snapshot_report_width_mm = 205
+        item.snapshot_crease_type = "压线"
+        item.snapshot_crease_left_mm = 50
+        item.snapshot_crease_middle_mm = 100
+        item.snapshot_crease_right_mm = 50
+        session.commit()
+
+    payload = {
+        "supplier_name": "苏州纸板供应商",
+        "items": [
+            {
+                "order_item_id": 1,
+                "inventory_deducted_qty": 0,
+                "requisition_qty": 50,
+                "cardboard_len": "800",
+                "cardboard_width": "400",
+                "special_process": "一开二",
+                "remark": "采购宽可以按开料倍数放大",
+            }
+        ],
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        rejected = client.post("/api/requisition/batches", json=payload)
+
+    assert rejected.status_code == 409
+    assert "订单明细压线三段合计 200mm" in rejected.json()["detail"]
+    assert "采购宽" not in rejected.json()["detail"]
 
 
 def test_telescoping_lid_requisition_splits_cover_and_base_rows(

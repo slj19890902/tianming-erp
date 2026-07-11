@@ -373,7 +373,13 @@ def test_order_detail_get_returns_nested_items_and_404_without_writing(
 def test_order_list_supports_search_by_item_number_product_code_and_product_name(
     order_api_app,
 ) -> None:
-    app, _ = order_api_app
+    from app.models.customer import Customer
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        customer_name = session.scalar(select(Customer.name).where(Customer.id == 1))
+    assert customer_name
+
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/orders", json=_payload())
@@ -385,12 +391,20 @@ def test_order_list_supports_search_by_item_number_product_code_and_product_name
         )
         by_product_code = client.get("/api/orders", params={"keyword": "SME-002"})
         by_product_name = client.get("/api/orders", params={"keyword": "物流周转箱"})
+        by_customer_name = client.get(
+            "/api/orders", params={"keyword": customer_name}
+        )
+        by_spec = client.get("/api/orders", params={"keyword": "380"})
+        by_material = client.get("/api/orders", params={"keyword": "A=B"})
 
     assert by_item_number.status_code == 200
     assert by_item_number.json()["total"] == 1
     assert by_item_number.json()["items"][0]["order_number"] == "TM20260613001"
     assert by_product_code.json()["total"] == 1
     assert by_product_name.json()["total"] == 1
+    assert by_customer_name.json()["total"] == 1
+    assert by_spec.json()["total"] == 1
+    assert by_material.json()["total"] == 1
 
 
 def test_sales_can_edit_order_header_customer_po_without_changing_order_number(
@@ -1093,23 +1107,104 @@ def test_duplicate_formal_order_is_not_generated_twice(order_api_app) -> None:
     assert "未重复生成" in duplicate.json()["detail"]
 
 
-def test_business_orders_show_completed_but_badge_counts_only_undelivered(
+def test_business_hides_fully_delivered_orders_and_finished_view_lists_them(
+    order_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=_payload()).json()
+    with session_factory() as session:
+        order = session.get(Order, created["id"])
+        assert order is not None
+        items = list(
+            session.scalars(
+                select(OrderItem)
+                .where(OrderItem.order_id == order.id)
+                .order_by(OrderItem.item_sequence)
+            ).all()
+        )
+        order.status = "pending_delivery"
+        for item in items:
+            item.delivered_quantity = item.quantity
+        delivery = Delivery(
+            delivery_number="DN-N026-FINISHED",
+            customer_id=order.customer_id,
+            delivery_date=date(2026, 6, 25),
+            status="dispatched",
+            total_quantity=sum(item.quantity for item in items),
+        )
+        session.add(delivery)
+        session.flush()
+        session.add_all(
+            [
+                DeliveryItem(
+                    delivery_id=delivery.id,
+                    order_item_id=item.id,
+                    delivered_quantity=item.quantity,
+                )
+                for item in items
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        business = client.get("/api/orders", params={"status": "business"})
+        finished = client.get(
+            "/api/orders", params={"status": "finished_delivery"}
+        )
+
+    assert business.status_code == 200
+    assert business.json()["total"] == 0
+    assert business.json()["unfinished_total"] == 0
+    assert finished.status_code == 200
+    assert finished.json()["total"] == 1
+    assert finished.json()["items"][0]["id"] == created["id"]
+    for item in finished.json()["items"][0]["items"]:
+        assert item["ordered_quantity"] == item["delivered_quantity"]
+        assert item["remaining_quantity"] == 0
+        assert item["completion_date"] == "2026-06-25"
+
+    with session_factory() as session:
+        order = session.get(Order, created["id"])
+        assert order is not None
+        order.status = "dead"
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        finished_after_dead = client.get(
+            "/api/orders", params={"status": "finished_delivery"}
+        )
+    assert finished_after_dead.status_code == 200
+    assert finished_after_dead.json()["total"] == 0
+
+
+def test_completed_status_with_undelivered_items_stays_discoverable(
     order_api_app,
 ) -> None:
     app, _ = order_api_app
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/orders", json=_payload()).json()
-        client.put(
+        marked = client.put(
             f"/api/orders/{created['id']}/status",
-            json={"status": "completed", "remark": ""},
+            json={"status": "completed", "remark": "legacy status mismatch"},
         )
+        assert marked.status_code == 200, marked.text
         business = client.get("/api/orders", params={"status": "business"})
+        finished = client.get(
+            "/api/orders", params={"status": "finished_delivery"}
+        )
 
     assert business.status_code == 200
     assert business.json()["total"] == 1
-    assert business.json()["unfinished_total"] == 0
-    assert business.json()["items"][0]["status"] == "completed"
+    assert business.json()["items"][0]["id"] == created["id"]
+    assert finished.status_code == 200
+    assert finished.json()["total"] == 0
 
 
 def test_admin_can_rollback_order_to_unreported_state(order_api_app) -> None:
@@ -1451,13 +1546,127 @@ def test_invalid_later_row_rolls_back_auto_created_products(order_api_app) -> No
         assert session.scalar(select(func.count()).select_from(Product)) == 2
 
 
-def _create_order(client: TestClient, *, customer_po: str, order_date: str) -> dict:
+def _create_order(
+    client: TestClient,
+    *,
+    customer_po: str,
+    order_date: str,
+    delivery_date: str | None = None,
+) -> dict:
     payload = _payload()
     payload["customer_po"] = customer_po
     payload["order_date"] = order_date
+    if delivery_date is not None:
+        payload["delivery_date"] = delivery_date
     response = client.post("/api/orders", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_order_list_supports_whitelisted_header_sorting(order_api_app) -> None:
+    from app.models.customer import Customer
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        alpha_customer = Customer(
+            customer_number=2,
+            customer_code="ALPHA",
+            name="A Customer",
+        )
+        session.add(alpha_customer)
+        session.flush()
+        alpha_product = Product(
+            customer_id=alpha_customer.id,
+            product_code="ALPHA-001",
+            customer_material_code="ALPHA-MAT-001",
+            product_name="Alpha Box",
+            legacy_material_text="A=B",
+            length_mm=Decimal("300"),
+            width_mm=Decimal("200"),
+            height_mm=Decimal("100"),
+            box_category="normal",
+        )
+        session.add(alpha_product)
+        session.flush()
+        alpha_customer_id = alpha_customer.id
+        alpha_product_id = alpha_product.id
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = _create_order(
+            client,
+            customer_po="PO-SORT-FIRST",
+            order_date="2026-06-13",
+            delivery_date="2026-06-22",
+        )
+        second = _create_order(
+            client,
+            customer_po="PO-SORT-SECOND",
+            order_date="2026-06-14",
+            delivery_date="2026-06-21",
+        )
+        alpha_payload = _payload()
+        alpha_payload.update(
+            {
+                "customer_id": alpha_customer_id,
+                "customer_po": "PO-SORT-ALPHA",
+                "order_date": "2026-06-12",
+                "delivery_date": "2026-06-18",
+                "items": [
+                    {
+                        "product_id": alpha_product_id,
+                        "quantity": 10,
+                        "unit_price": "1.20",
+                    }
+                ],
+            }
+        )
+        alpha = client.post("/api/orders", json=alpha_payload)
+        assert alpha.status_code == 201, alpha.text
+        alpha = alpha.json()
+
+        order_date_asc = client.get(
+            "/api/orders",
+            params={"sort_by": "order_date", "sort_direction": "asc"},
+        )
+        order_date_desc = client.get(
+            "/api/orders",
+            params={"sort_by": "order_date", "sort_direction": "desc"},
+        )
+        delivery_date_asc = client.get(
+            "/api/orders",
+            params={"sort_by": "delivery_date", "sort_direction": "asc"},
+        )
+        customer_name_asc = client.get(
+            "/api/orders",
+            params={"sort_by": "customer_name", "sort_direction": "asc"},
+        )
+        customer_name_desc = client.get(
+            "/api/orders",
+            params={"sort_by": "customer_name", "sort_direction": "desc"},
+        )
+        invalid_sort = client.get("/api/orders", params={"sort_by": "total_amount"})
+
+    assert [row["id"] for row in order_date_asc.json()["items"]] == [
+        alpha["id"],
+        first["id"],
+        second["id"],
+    ]
+    assert [row["id"] for row in order_date_desc.json()["items"]] == [
+        second["id"],
+        first["id"],
+        alpha["id"],
+    ]
+    assert [row["id"] for row in delivery_date_asc.json()["items"]] == [
+        alpha["id"],
+        second["id"],
+        first["id"],
+    ]
+    assert customer_name_asc.json()["items"][0]["id"] == alpha["id"]
+    assert customer_name_desc.json()["items"][-1]["id"] == alpha["id"]
+    assert invalid_sort.status_code == 422
 
 
 def test_back_dated_pdf_order_surfaces_at_top_of_business(order_api_app) -> None:
@@ -1614,15 +1823,105 @@ def test_order_detail_exposes_item_level_delivery_quantities(order_api_app) -> N
     assert detail.status_code == 200, detail.text
     rows = sorted(detail.json()["items"], key=lambda item: item["item_sequence"])
     assert rows[0]["quantity"] == 150
+    assert rows[0]["ordered_quantity"] == 150
     assert rows[0]["delivered_quantity"] == 140
+    assert rows[0]["remaining_quantity"] == 10
+    assert rows[0]["completion_date"] is None
     assert _expected_delivery_status(
         rows[0]["quantity"], rows[0]["delivered_quantity"]
     ) == "partially_delivered"
     assert rows[1]["quantity"] == 150
+    assert rows[1]["ordered_quantity"] == 150
     assert rows[1]["delivered_quantity"] == 0
+    assert rows[1]["remaining_quantity"] == 150
+    assert rows[1]["completion_date"] is None
     assert _expected_delivery_status(
         rows[1]["quantity"], rows[1]["delivered_quantity"]
     ) == "pending_delivery"
+
+
+def test_order_item_completion_date_uses_latest_dispatched_delivery(
+    order_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PO-N026-COMPLETION-DATE"
+    payload["items"] = [
+        {"product_id": 1, "quantity": 150, "unit_price": "3.60"}
+    ]
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload)
+        assert created.status_code == 201, created.text
+        order_id = created.json()["id"]
+
+    with session_factory() as session:
+        order = session.get(Order, order_id)
+        item = session.scalar(select(OrderItem).where(OrderItem.order_id == order_id))
+        assert order is not None
+        assert item is not None
+        order.status = "pending_delivery"
+        item.delivered_quantity = 160
+
+        deliveries = [
+            Delivery(
+                delivery_number="DN-N026-OLD",
+                customer_id=order.customer_id,
+                delivery_date=date(2026, 6, 24),
+                status="dispatched",
+                total_quantity=100,
+            ),
+            Delivery(
+                delivery_number="DN-N026-LATEST",
+                customer_id=order.customer_id,
+                delivery_date=date(2026, 6, 25),
+                status="dispatched",
+                total_quantity=60,
+            ),
+            Delivery(
+                delivery_number="DN-N026-PENDING",
+                customer_id=order.customer_id,
+                delivery_date=date(2026, 6, 30),
+                status="pending",
+                total_quantity=10,
+            ),
+        ]
+        session.add_all(deliveries)
+        session.flush()
+        session.add_all(
+            [
+                DeliveryItem(
+                    delivery_id=deliveries[0].id,
+                    order_item_id=item.id,
+                    delivered_quantity=100,
+                ),
+                DeliveryItem(
+                    delivery_id=deliveries[1].id,
+                    order_item_id=item.id,
+                    delivered_quantity=60,
+                ),
+                DeliveryItem(
+                    delivery_id=deliveries[2].id,
+                    order_item_id=item.id,
+                    delivered_quantity=10,
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        detail = client.get(f"/api/orders/{order_id}")
+
+    assert detail.status_code == 200, detail.text
+    item = detail.json()["items"][0]
+    assert item["ordered_quantity"] == 150
+    assert item["delivered_quantity"] == 160
+    assert item["remaining_quantity"] == 0
+    assert item["completion_date"] == "2026-06-25"
 
 
 def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> None:

@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,9 +20,24 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.requisition import RequisitionItem
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryReservation
+from app.models.warehouse_inventory import (
+    DeliveryInventoryAllocation,
+    InventoryLot,
+    InventoryReservation,
+    OrderItemSemiRequirement,
+    WarehouseLocation,
+)
 from app.services.history_orders import build_display_registry, display_order_number
-from app.services.warehouse_inventory import active_finished_reserved_qty
+from app.services.semi_finished_inventory import (
+    active_semi_requirement_credited_quantity,
+    consume_delivery_item_inventory,
+    inventory_fully_covers_order_item,
+    reverse_delivery_item_inventory,
+)
+from app.services.warehouse_inventory import (
+    WarehouseInventoryError,
+    active_finished_reserved_qty,
+)
 
 
 router = APIRouter()
@@ -77,11 +93,70 @@ def _received_telescoping_capacity(db: Session, order_item_id: int) -> int | Non
 
 def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     max_deliverable = int(order_item.quantity or 0)
-    if active_finished_reserved_qty(db, order_item.id) < max_deliverable:
-        component_capacity = _received_telescoping_capacity(db, order_item.id)
-        if component_capacity is not None:
-            max_deliverable = min(max_deliverable, component_capacity)
+    inventory_covered = inventory_fully_covers_order_item(db, order_item.id)
+    component_capacity = _received_telescoping_capacity(db, order_item.id)
+    if not inventory_covered and component_capacity is not None:
+        max_deliverable = min(max_deliverable, component_capacity)
+    elif order_item.material_status != "received" and not inventory_covered:
+        return 0
     return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
+
+
+_DELIVERY_ROUTE_AREAS = (
+    ("苏州工业园区", ("苏州工业园区", "工业园区")),
+    ("相城区", ("相城区",)),
+    ("吴中区", ("吴中区",)),
+    ("吴江区", ("吴江区",)),
+    ("虎丘区/高新区", ("虎丘区", "高新区", "苏州新区")),
+    ("姑苏区", ("姑苏区",)),
+    ("昆山市", ("昆山市", "昆山")),
+    ("常熟市", ("常熟市", "常熟")),
+    ("太仓市", ("太仓市", "太仓")),
+    ("张家港市", ("张家港市", "张家港")),
+)
+
+
+def _delivery_route_area(address: str | None) -> tuple[str, str | None]:
+    text = re.sub(r"\s+", "", str(address or "").strip())
+    if not text:
+        return "地址未登记", None
+    area = "其他区域"
+    for label, aliases in _DELIVERY_ROUTE_AREAS:
+        if any(alias in text for alias in aliases):
+            area = label
+            break
+    if area == "其他区域":
+        match = re.search(r"([\u4e00-\u9fff]{2,8}(?:区|县|市))", text)
+        if match:
+            area = match.group(1)
+    subarea_match = re.search(
+        r"([\u4e00-\u9fff]{2,12}(?:镇|街道|开发区|产业园|工业园))",
+        text,
+    )
+    return area, subarea_match.group(1) if subarea_match else None
+
+
+def _baidu_delivery_direction_url(
+    origin: str | None,
+    destination: str | None,
+) -> str | None:
+    if not origin or not destination:
+        return None
+    return "https://api.map.baidu.com/direction?" + urlencode(
+        {
+            "origin": origin,
+            "destination": destination,
+            "mode": "driving",
+            "region": "苏州",
+            "output": "html",
+            "coord_type": "bd09ll",
+            "src": "webapp.tianming.erp",
+        }
+    )
+
+
+def _normalized_delivery_address(address: str | None) -> str:
+    return re.sub(r"[\s,，/]+", "", str(address or "").strip()).lower()
 
 
 class DeliveryLineCreate(BaseModel):
@@ -164,16 +239,63 @@ def _pending_query(
     active_finished_reserved = (
         select(
             func.coalesce(
-                func.sum(InventoryReservation.credited_requirement_quantity), 0
+                func.sum(
+                    func.coalesce(
+                        InventoryReservation.credited_requirement_quantity, 0
+                    )
+                    - InventoryReservation.released_requirement_quantity
+                ),
+                0,
             )
         )
         .where(
             InventoryReservation.order_item_id == OrderItem.id,
             InventoryReservation.reservation_type == "finished_order",
-            InventoryReservation.status == "active",
+            InventoryReservation.status != "cancelled",
         )
         .correlate(OrderItem)
         .scalar_subquery()
+    )
+    active_semi_for_requirement = (
+        select(
+            func.coalesce(
+                func.sum(
+                    func.coalesce(
+                        InventoryReservation.credited_requirement_quantity, 0
+                    )
+                    - InventoryReservation.released_requirement_quantity
+                ),
+                0,
+            )
+        )
+        .where(
+            InventoryReservation.semi_requirement_id
+            == OrderItemSemiRequirement.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+        )
+        .correlate(OrderItemSemiRequirement)
+        .scalar_subquery()
+    )
+    semi_requirement_count = (
+        select(func.count(OrderItemSemiRequirement.id))
+        .where(OrderItemSemiRequirement.order_item_id == OrderItem.id)
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    uncovered_semi_requirement_count = (
+        select(func.count(OrderItemSemiRequirement.id))
+        .where(
+            OrderItemSemiRequirement.order_item_id == OrderItem.id,
+            active_semi_for_requirement
+            < OrderItemSemiRequirement.required_piece_quantity,
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    semi_fully_covered = and_(
+        semi_requirement_count > 0,
+        uncovered_semi_requirement_count == 0,
     )
     received_telescoping_components = (
         select(func.count(RequisitionItem.id))
@@ -217,6 +339,7 @@ def _pending_query(
             or_(
                 OrderItem.material_status == "received",
                 active_finished_reserved >= OrderItem.quantity,
+                semi_fully_covered,
                 received_telescoping_components > 0,
             ),
             OrderItem.delivered_quantity < OrderItem.quantity,
@@ -321,6 +444,182 @@ def _delivery_or_404(db: Session, delivery_id: int) -> Delivery:
     return delivery
 
 
+def _inventory_sources_for_order_item(
+    db: Session,
+    *,
+    order_item: OrderItem,
+    planned_delivery_quantity: int,
+    delivery_item_id: int | None = None,
+    dispatched: bool = False,
+) -> list[dict]:
+    reservations = db.scalars(
+        select(InventoryReservation)
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .where(
+            InventoryReservation.order_item_id == order_item.id,
+            InventoryReservation.reservation_type.in_(("finished_order", "semi_order")),
+            InventoryReservation.status != "cancelled",
+            func.coalesce(InventoryReservation.credited_requirement_quantity, 0)
+            > InventoryReservation.released_requirement_quantity,
+        )
+        .order_by(
+            case(
+                (InventoryReservation.reservation_type == "finished_order", 0),
+                else_=1,
+            ),
+            InventoryLot.stock_date,
+            InventoryLot.id,
+            InventoryReservation.id,
+        )
+    ).all()
+    requirements = {
+        row.id: row
+        for row in db.scalars(
+            select(OrderItemSemiRequirement).where(
+                OrderItemSemiRequirement.order_item_id == order_item.id
+            )
+        ).all()
+    }
+    allocated_by_reservation: dict[int, tuple[int, int]] = {}
+    if delivery_item_id is not None:
+        allocations = db.scalars(
+            select(DeliveryInventoryAllocation).where(
+                DeliveryInventoryAllocation.delivery_item_id == delivery_item_id
+            )
+        ).all()
+        for allocation in allocations:
+            stock = (
+                int(allocation.consumed_stock_quantity)
+                - int(allocation.reversed_stock_quantity or 0)
+            )
+            credit = (
+                int(allocation.credited_requirement_quantity)
+                - int(allocation.reversed_requirement_quantity or 0)
+            )
+            previous_stock, previous_credit = allocated_by_reservation.get(
+                allocation.reservation_id, (0, 0)
+            )
+            allocated_by_reservation[allocation.reservation_id] = (
+                previous_stock + stock,
+                previous_credit + credit,
+            )
+
+    planned_stock: dict[int, tuple[int, int]] = {}
+    if not dispatched:
+        target_delivered = min(
+            int(order_item.delivered_quantity or 0)
+            + max(int(planned_delivery_quantity), 0),
+            int(order_item.quantity or 0),
+        )
+        finished_coverage = active_finished_reserved_qty(db, order_item.id)
+        finished_target = min(target_delivered, finished_coverage)
+        finished_current = sum(
+            int(row.consumed_stock_quantity or 0)
+            for row in reservations
+            if row.reservation_type == "finished_order"
+        )
+        finished_need = max(finished_target - finished_current, 0)
+        for reservation in reservations:
+            available_stock = (
+                int(reservation.reserved_stock_quantity)
+                - int(reservation.consumed_stock_quantity or 0)
+                - int(reservation.released_stock_quantity or 0)
+            )
+            if reservation.reservation_type == "finished_order":
+                stock = min(available_stock, finished_need)
+                planned_stock[reservation.id] = (stock, stock)
+                finished_need -= stock
+
+        semi_boxes = max(target_delivered - finished_coverage, 0)
+        for requirement in requirements.values():
+            coverage = active_semi_requirement_credited_quantity(db, requirement.id)
+            target_pieces = min(
+                semi_boxes * max(int(requirement.pieces_per_box or 1), 1),
+                coverage,
+            )
+            current_pieces = sum(
+                int(row.consumed_requirement_quantity or 0)
+                for row in reservations
+                if row.semi_requirement_id == requirement.id
+            )
+            for reservation in reservations:
+                if reservation.semi_requirement_id != requirement.id:
+                    continue
+                available_stock = (
+                    int(reservation.reserved_stock_quantity)
+                    - int(reservation.consumed_stock_quantity or 0)
+                    - int(reservation.released_stock_quantity or 0)
+                )
+                yield_factor = max(int(reservation.yield_factor or 1), 1)
+                needed_pieces = max(target_pieces - current_pieces, 0)
+                stock = min(
+                    available_stock,
+                    (needed_pieces + yield_factor - 1) // yield_factor,
+                )
+                credit = min(
+                    max(
+                        int(reservation.credited_requirement_quantity or 0)
+                        - int(reservation.consumed_requirement_quantity or 0)
+                        - int(reservation.released_requirement_quantity or 0),
+                        0,
+                    ),
+                    stock * yield_factor,
+                )
+                planned_stock[reservation.id] = (stock, credit)
+                current_pieces += credit
+
+    items: list[dict] = []
+    for reservation in reservations:
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if lot is None:
+            continue
+        location = db.get(WarehouseLocation, lot.warehouse_location_id)
+        requirement = requirements.get(reservation.semi_requirement_id)
+        pick_stock, pick_credit = (
+            allocated_by_reservation.get(reservation.id, (0, 0))
+            if dispatched
+            else planned_stock.get(reservation.id, (0, 0))
+        )
+        if pick_stock <= 0 and pick_credit <= 0:
+            continue
+        items.append(
+            {
+                "source_type": (
+                    "finished"
+                    if reservation.reservation_type == "finished_order"
+                    else "semi_finished"
+                ),
+                "reservation_id": reservation.id,
+                "lot_id": lot.id,
+                "lot_number": lot.lot_number,
+                "location_id": location.id if location else None,
+                "location_code": location.location_code if location else None,
+                "location_name": location.location_name if location else None,
+                "component_type": (
+                    requirement.component_type if requirement else "whole"
+                ),
+                "yield_factor": max(int(reservation.yield_factor or 1), 1),
+                "reserved_stock_quantity": int(
+                    reservation.reserved_stock_quantity or 0
+                ),
+                "remaining_reserved_stock_quantity": max(
+                    int(reservation.reserved_stock_quantity or 0)
+                    - int(reservation.consumed_stock_quantity or 0)
+                    - int(reservation.released_stock_quantity or 0),
+                    0,
+                ),
+                "covered_requirement_quantity": max(
+                    int(reservation.credited_requirement_quantity or 0)
+                    - int(reservation.released_requirement_quantity or 0),
+                    0,
+                ),
+                "quantity_to_pick_stock": pick_stock,
+                "quantity_to_pick_requirement": pick_credit,
+            }
+        )
+    return items
+
+
 def _delivery_response(db: Session, delivery_id: int) -> dict:
     from app.models.finance import ReturnReceipt
 
@@ -389,6 +688,13 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
                 )
                 if "order_id" in row._mapping
                 else row._mapping["order_number"],
+                "inventory_sources": _inventory_sources_for_order_item(
+                    db,
+                    order_item=db.get(OrderItem, row._mapping["order_item_id"]),
+                    planned_delivery_quantity=row._mapping["delivered_quantity"],
+                    delivery_item_id=row._mapping["id"],
+                    dispatched=delivery.status == "dispatched",
+                ),
             }
             for row in items
         ],
@@ -482,9 +788,8 @@ def _collect_delivery_lines(
                 status_code=400,
                 detail=f"第{index}条订单明细不属于当前客户",
             )
-        full_finished_reservation = (
-            active_finished_reserved_qty(db, order_item.id)
-            >= order_item.quantity
+        full_inventory_coverage = inventory_fully_covers_order_item(
+            db, order_item.id
         )
         if line.delivered_quantity > remaining:
             raise HTTPException(
@@ -494,7 +799,8 @@ def _collect_delivery_lines(
         if (
             (
                 order_item.material_status != "received"
-                and not full_finished_reservation
+                and not full_inventory_coverage
+                and _received_telescoping_capacity(db, order_item.id) is None
             )
             or order_item.is_force_closed
             or remaining <= 0
@@ -519,6 +825,139 @@ def _collect_delivery_lines(
     return built, total_quantity, warnings
 
 
+@router.get("/route-suggestions")
+def delivery_route_suggestions(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    raw_rows = list(db.execute(_pending_query()))
+    customer_ids = {
+        int(row._mapping["customer_id"])
+        for row in raw_rows
+        if row._mapping["customer_id"] is not None
+    }
+    customers = {
+        row.id: row
+        for row in db.scalars(
+            select(Customer).where(Customer.id.in_(customer_ids))
+        ).all()
+    }
+    aggregate: dict[int, dict] = {}
+    for row in raw_rows:
+        mapping = row._mapping
+        order_item = db.get(OrderItem, mapping["order_item_id"])
+        remaining = _delivery_remaining_quantity(db, order_item) if order_item else 0
+        if remaining <= 0:
+            continue
+        customer_id = int(mapping["customer_id"])
+        customer = customers.get(customer_id)
+        if customer is None:
+            continue
+        entry = aggregate.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": customer.name,
+                "address": (customer.address or "").strip() or None,
+                "contact_person": customer.contact_person,
+                "phone": customer.phone,
+                "pending_item_count": 0,
+                "pending_quantity": 0,
+                "earliest_delivery_date": None,
+                "product_codes": set(),
+            },
+        )
+        entry["pending_item_count"] += 1
+        entry["pending_quantity"] += int(remaining)
+        if mapping["product_code"]:
+            entry["product_codes"].add(str(mapping["product_code"]))
+        delivery_date = mapping["delivery_date"]
+        if delivery_date and (
+            entry["earliest_delivery_date"] is None
+            or delivery_date < entry["earliest_delivery_date"]
+        ):
+            entry["earliest_delivery_date"] = delivery_date
+
+    company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
+    origin_address = (company.address or "").strip() if company else ""
+    origin_area, _origin_subarea = _delivery_route_area(origin_address)
+    grouped: dict[str, list[dict]] = {}
+    for entry in aggregate.values():
+        area, subarea = _delivery_route_area(entry["address"])
+        entry["area"] = area
+        entry["subarea"] = subarea
+        entry["product_codes"] = sorted(entry["product_codes"])
+        grouped.setdefault(area, []).append(entry)
+
+    groups = []
+    for area, entries in grouped.items():
+        entries.sort(
+            key=lambda row: (
+                row["subarea"] or "",
+                row["earliest_delivery_date"] or date.max,
+                row["customer_name"],
+            )
+        )
+        previous_address = origin_address or None
+        for sequence, entry in enumerate(entries, start=1):
+            entry["sequence"] = sequence
+            entry["navigation_from"] = previous_address
+            is_same_address = bool(
+                _normalized_delivery_address(previous_address)
+                and _normalized_delivery_address(previous_address)
+                == _normalized_delivery_address(entry["address"])
+            )
+            entry["same_as_previous_address"] = is_same_address
+            if is_same_address:
+                entry["navigation_url"] = None
+                entry["navigation_note"] = "与上一站同地址，可同站处理"
+            else:
+                entry["navigation_url"] = _baidu_delivery_direction_url(
+                    previous_address, entry["address"]
+                )
+                entry["navigation_note"] = (
+                    None if entry["navigation_url"] else "缺少起点或地址"
+                )
+            if entry["address"]:
+                previous_address = entry["address"]
+        groups.append(
+            {
+                "area": area,
+                "same_as_origin_area": bool(origin_address and area == origin_area),
+                "customer_count": len(entries),
+                "pending_item_count": sum(
+                    row["pending_item_count"] for row in entries
+                ),
+                "pending_quantity": sum(row["pending_quantity"] for row in entries),
+                "customers": entries,
+            }
+        )
+    groups.sort(
+        key=lambda group: (
+            not group["same_as_origin_area"],
+            min(
+                (
+                    row["earliest_delivery_date"] or date.max
+                    for row in group["customers"]
+                ),
+                default=date.max,
+            ),
+            group["area"],
+        )
+    )
+    return {
+        "origin_address": origin_address or None,
+        "origin_area": origin_area if origin_address else None,
+        "customer_count": len(aggregate),
+        "groups": groups,
+        "planning_mode": "regional_grouping_with_segment_navigation",
+        "disclaimer": (
+            "这是按客户地址区域和交期生成的同车辅助建议，不是实时路况最优解；"
+            "请在百度地图打开每一段后由司机确认最终顺序。"
+        ),
+    }
+
+
 @router.get("/pending_items")
 def pending_delivery_items(
     db: Session = Depends(get_db),
@@ -541,6 +980,11 @@ def pending_delivery_items(
                 "remaining_quantity": remaining_quantity,
                 "order_number": display,
                 "display_order_number": display,
+                "inventory_sources": _inventory_sources_for_order_item(
+                    db,
+                    order_item=order_item,
+                    planned_delivery_quantity=remaining_quantity,
+                ),
             }
         )
     return {"items": items}
@@ -626,6 +1070,11 @@ def search_pending_delivery_items(
                     f"{material} / {flute_type}"
                     if material and flute_type
                     else material
+                ),
+                "inventory_sources": _inventory_sources_for_order_item(
+                    db,
+                    order_item=order_item,
+                    planned_delivery_quantity=remaining_quantity,
                 ),
             }
         )
@@ -785,12 +1234,24 @@ def dispatch_delivery(
                     ),
                 )
             order_id = order_item.order_id
+            delivered_before = int(order_item.delivered_quantity or 0)
+            consume_delivery_item_inventory(
+                db,
+                delivery_item_id=line.id,
+                delivered_quantity_after_dispatch=(
+                    delivered_before + line.delivered_quantity
+                ),
+                operator_id=user.id,
+                operation_key=(
+                    f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
+                ),
+            )
             result = db.execute(
                 update(OrderItem)
                 .where(
                     OrderItem.id == line.order_item_id,
-                    OrderItem.material_status == "received",
                     OrderItem.is_force_closed.is_(False),
+                    OrderItem.delivered_quantity == delivered_before,
                 )
                 .values(
                     delivered_quantity=(
@@ -824,6 +1285,12 @@ def dispatch_delivery(
     except HTTPException:
         db.rollback()
         raise
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -968,6 +1435,7 @@ def cancel_delivery(
 ) -> dict:
     from app.models.finance import ReturnReceipt, ReturnReceiptItem, StatementItem
 
+    cancelled_at = _utc_now()
     try:
         # 先原子抢占 dispatched -> pending 并取得写锁，再检查回单/对账。
         # 若门禁不通过，整个事务 rollback，状态仍保持 dispatched。
@@ -1031,22 +1499,36 @@ def cancel_delivery(
         ).all()
         affected_order_ids: set[int] = set()
         for line in lines:
-            order_id = db.scalar(
-                select(OrderItem.order_id).where(
-                    OrderItem.id == line.order_item_id
+            order_item = db.get(OrderItem, line.order_item_id)
+            if order_item is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"订单明细{line.order_item_id}不存在，无法回滚",
                 )
+            order_id = order_item.order_id
+            delivered_before = int(order_item.delivered_quantity or 0)
+            if delivered_before < line.delivered_quantity:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"订单明细{line.order_item_id}已送数量异常，无法回滚",
+                )
+            delivered_after = delivered_before - line.delivered_quantity
+            reverse_delivery_item_inventory(
+                db,
+                delivery_item_id=line.id,
+                delivered_quantity_after_cancel=delivered_after,
+                operator_id=user.id,
+                operation_key=(
+                    f"c{delivery_id}-{cancelled_at:%Y%m%d%H%M%S%f}-i{line.id}"
+                ),
             )
             result = db.execute(
                 update(OrderItem)
                 .where(
                     OrderItem.id == line.order_item_id,
-                    OrderItem.delivered_quantity >= line.delivered_quantity,
+                    OrderItem.delivered_quantity == delivered_before,
                 )
-                .values(
-                    delivered_quantity=(
-                        OrderItem.delivered_quantity - line.delivered_quantity
-                    )
-                )
+                .values(delivered_quantity=delivered_after)
             )
             if result.rowcount != 1:
                 raise HTTPException(
@@ -1075,6 +1557,12 @@ def cancel_delivery(
     except HTTPException:
         db.rollback()
         raise
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
     except Exception:
         db.rollback()
         raise

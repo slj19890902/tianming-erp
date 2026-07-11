@@ -4,10 +4,11 @@ import json
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -38,6 +39,7 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportItem,
 )
 from app.models.user import User
+from app.models.warehouse_inventory import InventoryLot
 from app.services.history_orders import (
     build_display_registry,
     filter_order_ids_for_display_search,
@@ -76,7 +78,19 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
+    has_unconsumed_inventory_reservations,
     release_active_finished_reservations_for_items,
+    reserve_finished_inventory,
+)
+from app.services.semi_finished_inventory import (
+    SIGNATURE_OVERRIDE_WARNING,
+    SemiFinishedLotVersion,
+    active_semi_coverage_by_order_item,
+    browse_semi_finished_inventory,
+    release_active_semi_reservations_for_items,
+    reserve_semi_finished_inventory,
+    save_order_item_semi_requirement,
+    semi_finished_inventory_candidates,
 )
 
 
@@ -120,7 +134,52 @@ _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES = [
 ]
 
 
+class FinishedReservationPlanEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    lot_id: int
+    expected_version: int = Field(gt=0)
+    requested_qty: int = Field(
+        validation_alias=AliasChoices(
+            "requested_qty", "requested_quantity", "quantity"
+        ),
+        gt=0,
+    )
+    recommendation_source: str = "dedicated"
+    match_rule_id: int | None = None
+    override: bool = False
+    confirmed: bool = False
+
+
+class SemiReservationPlanEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    lot_id: int
+    expected_version: int = Field(gt=0)
+    requested_qty: int = Field(
+        validation_alias=AliasChoices(
+            "requested_qty", "requested_quantity", "quantity"
+        ),
+        gt=0,
+    )
+    component_type: Literal["whole", "cover", "base"] = "whole"
+    recommendation_source: Literal["learned", "signature", "manual"]
+    match_rule_id: int | None = None
+    override: bool = False
+    confirmed: bool = False
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+
+
+class OrderItemReservationPlan(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    finished: list[FinishedReservationPlanEntry] = Field(default_factory=list)
+    semi: list[SemiReservationPlanEntry] = Field(default_factory=list)
+
+
 class OrderItemCreate(BaseModel):
+    client_line_id: str | None = Field(default=None, max_length=100)
+    reservation_plan: OrderItemReservationPlan | None = None
     product_id: int | None = None
     quantity: int | float
     unit_price: Decimal
@@ -235,6 +294,349 @@ def _validated_order_quantity(value: int | float, index: int) -> int:
             detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
         )
     return int(decimal_value)
+
+
+def _preflight_reservation_plans(
+    db: Session,
+    *,
+    customer_id: int,
+    payload_items: list[OrderItemCreate],
+    resolved_products: dict[int, Product],
+) -> dict[int, dict[str, int]]:
+    states: dict[int, dict[str, int]] = {}
+    client_line_ids: set[str] = set()
+    for index, item_payload in enumerate(payload_items, start=1):
+        if item_payload.client_line_id:
+            client_line_id = item_payload.client_line_id.strip()
+            if client_line_id in client_line_ids:
+                raise WarehouseInventoryError(
+                    f"第{index}条明细 client_line_id 重复", 409
+                )
+            client_line_ids.add(client_line_id)
+        plan = item_payload.reservation_plan
+        if plan is None:
+            continue
+        product = resolved_products[index]
+        for entry in [*plan.finished, *plan.semi]:
+            if not entry.confirmed:
+                raise WarehouseInventoryError(
+                    f"第{index}条明细库存抵扣计划尚未人工确认", 409
+                )
+            lot = db.get(InventoryLot, entry.lot_id)
+            if lot is None:
+                raise WarehouseInventoryError(
+                    f"第{index}条明细所选库存批次不存在", 404
+                )
+            state = states.get(lot.id)
+            if state is None:
+                if lot.version != entry.expected_version:
+                    raise WarehouseInventoryError(
+                        "库存已被其他人修改，请刷新订单草稿候选后重试", 409
+                    )
+                states[lot.id] = {
+                    "external_version": entry.expected_version,
+                    "current_version": entry.expected_version,
+                }
+            elif state["external_version"] != entry.expected_version:
+                raise WarehouseInventoryError(
+                    "同一库存批次的草稿版本不一致，请刷新后重试", 409
+                )
+            if isinstance(entry, FinishedReservationPlanEntry):
+                detail = lot.finished_detail
+                if lot.inventory_type != "finished" or detail is None:
+                    raise WarehouseInventoryError("所选批次不是成品库存", 409)
+                if detail.is_general:
+                    raise WarehouseInventoryError(
+                        "新建订单不能使用通用成品库存，请选择同客户同存货编码的专用库存",
+                        409,
+                    )
+                if detail.owner_customer_id != customer_id:
+                    raise WarehouseInventoryError(
+                        "其他客户专用成品库存不能用于当前订单", 409
+                    )
+                if (
+                    detail.product_id != product.id
+                    or detail.inventory_code_snapshot != product.product_code
+                ):
+                    raise WarehouseInventoryError(
+                        "成品库存与订单存货编码不一致", 409
+                    )
+            else:
+                detail = lot.semi_finished_detail
+                if lot.inventory_type != "semi_finished" or detail is None:
+                    raise WarehouseInventoryError("所选批次不是半成品库存", 409)
+                if detail.owner_customer_id != customer_id:
+                    raise WarehouseInventoryError(
+                        "其他客户或未归属半成品库存不能用于当前订单", 409
+                    )
+                if detail.component_type != entry.component_type:
+                    raise WarehouseInventoryError("半成品库存组件与计划不一致", 409)
+                if entry.recommendation_source == "learned" and entry.match_rule_id is None:
+                    raise WarehouseInventoryError("learned 推荐缺少学习规则标识", 409)
+                if entry.recommendation_source == "manual":
+                    if not entry.override:
+                        raise WarehouseInventoryError(
+                            "人工选择半成品库存必须明确 override", 409
+                        )
+                    if (
+                        SIGNATURE_OVERRIDE_WARNING
+                        not in entry.warning_acknowledged_codes
+                    ):
+                        raise WarehouseInventoryError(
+                            "人工 override 必须确认半成品签名差异警告", 409
+                        )
+    return states
+
+
+def _plan_current_version(
+    db: Session,
+    *,
+    lot_id: int,
+    expected_version: int,
+    states: dict[int, dict[str, int]],
+) -> tuple[InventoryLot, int]:
+    state = states.get(lot_id)
+    lot = db.get(InventoryLot, lot_id)
+    if state is None or lot is None:
+        raise WarehouseInventoryError("库存计划状态不存在，请刷新后重试", 409)
+    if state["external_version"] != expected_version:
+        raise WarehouseInventoryError("同一库存批次的草稿版本不一致", 409)
+    if lot.version != state["current_version"]:
+        raise WarehouseInventoryError("库存已被其他请求修改，整单保存已取消", 409)
+    return lot, state["current_version"]
+
+
+def _advance_plan_version(
+    db: Session,
+    *,
+    lot_id: int,
+    states: dict[int, dict[str, int]],
+) -> None:
+    lot = db.get(InventoryLot, lot_id)
+    if lot is None:
+        raise WarehouseInventoryError("库存批次不存在", 409)
+    states[lot_id]["current_version"] = lot.version
+
+
+def _is_telescoping_product(product: Product) -> bool:
+    value = (product.box_style or "").strip().upper()
+    return bool(value) and ("天地盖" in value or "A3" in value)
+
+
+def _semi_component_specs(
+    item: OrderItem,
+    product: Product,
+) -> list[dict[str, object]]:
+    if _is_telescoping_product(product):
+        return [
+            {
+                "component_type": "cover",
+                "board_length_mm": item.snapshot_report_length_mm,
+                "board_width_mm": item.snapshot_report_width_mm,
+                "pieces_per_box": 1,
+            },
+            {
+                "component_type": "base",
+                "board_length_mm": item.snapshot_base_report_length_mm,
+                "board_width_mm": item.snapshot_base_report_width_mm,
+                "pieces_per_box": 1,
+            },
+        ]
+    return [
+        {
+            "component_type": "whole",
+            "board_length_mm": item.snapshot_report_length_mm,
+            "board_width_mm": item.snapshot_report_width_mm,
+            "pieces_per_box": max(int(item.snapshot_pieces_per_box or 1), 1),
+        }
+    ]
+
+
+def _apply_order_reservation_plans(
+    db: Session,
+    *,
+    order: Order,
+    payload_items: list[OrderItemCreate],
+    created_items: list[OrderItem],
+    resolved_products: dict[int, Product],
+    states: dict[int, dict[str, int]],
+    operator_id: int | None,
+) -> None:
+    for index, (item_payload, item) in enumerate(
+        zip(payload_items, created_items, strict=True), start=1
+    ):
+        plan = item_payload.reservation_plan
+        if plan is None:
+            continue
+        for plan_index, entry in enumerate(plan.finished, start=1):
+            lot, current_version = _plan_current_version(
+                db,
+                lot_id=entry.lot_id,
+                expected_version=entry.expected_version,
+                states=states,
+            )
+            remaining_boxes = max(
+                item.quantity - active_finished_reserved_qty(db, item.id), 0
+            )
+            allocated_boxes = min(
+                entry.requested_qty,
+                remaining_boxes,
+                lot.quantity_available,
+            )
+            if allocated_boxes <= 0:
+                continue
+            reserve_finished_inventory(
+                db,
+                order_item_id=item.id,
+                inventory_lot_id=lot.id,
+                quantity=allocated_boxes,
+                expected_version=current_version,
+                operator_id=operator_id,
+                idempotency_key=(
+                    f"order-{order.id}-item-{item.id}-finished-{plan_index}"
+                ),
+                warning_acknowledged_codes=[],
+            )
+            _advance_plan_version(db, lot_id=lot.id, states=states)
+
+    requirement_map: dict[tuple[int, str], object] = {}
+    for index, (item_payload, item) in enumerate(
+        zip(payload_items, created_items, strict=True), start=1
+    ):
+        product = resolved_products[index]
+        plan = item_payload.reservation_plan or OrderItemReservationPlan()
+        production_required_boxes = max(
+            item.quantity - active_finished_reserved_qty(db, item.id), 0
+        )
+        if production_required_boxes <= 0:
+            if plan.semi:
+                raise WarehouseInventoryError(
+                    f"第{index}条明细已被成品库存全额覆盖，不能再预占半成品", 409
+                )
+            continue
+        specs = _semi_component_specs(item, product)
+        allowed_components = {str(spec["component_type"]) for spec in specs}
+        for entry in plan.semi:
+            if entry.component_type not in allowed_components:
+                raise WarehouseInventoryError(
+                    f"第{index}条明细半成品组件与箱型不一致", 409
+                )
+        material_code = (item.snapshot_material or "").strip()
+        flute_type = (item.flute_type or "").strip().upper()
+        planned_by_component: dict[str, list[SemiReservationPlanEntry]] = {}
+        for entry in plan.semi:
+            planned_by_component.setdefault(entry.component_type, []).append(entry)
+        for spec in specs:
+            component_type = str(spec["component_type"])
+            component_plans = planned_by_component.get(component_type, [])
+            board_length_mm = spec["board_length_mm"]
+            board_width_mm = spec["board_width_mm"]
+            if not (
+                board_length_mm
+                and board_width_mm
+                and material_code
+                and flute_type
+            ):
+                if component_plans:
+                    raise WarehouseInventoryError(
+                        f"第{index}条明细缺少{component_type}半成品签名字段", 409
+                    )
+                continue
+            stock_yield_per_sheet = 1
+            if component_plans:
+                planned_lot = db.get(InventoryLot, component_plans[0].lot_id)
+                if planned_lot is None or planned_lot.semi_finished_detail is None:
+                    raise WarehouseInventoryError("半成品库存批次不存在", 404)
+                stock_yield_per_sheet = (
+                    planned_lot.semi_finished_detail.stock_yield_per_sheet
+                )
+            pieces_per_box = int(spec["pieces_per_box"])
+            requirement = save_order_item_semi_requirement(
+                db,
+                order_item_id=item.id,
+                component_type=component_type,
+                board_length_mm=int(board_length_mm),
+                board_width_mm=int(board_width_mm),
+                material_code=material_code,
+                flute_type=flute_type,
+                pieces_per_box=pieces_per_box,
+                stock_yield_per_sheet=stock_yield_per_sheet,
+                required_piece_quantity=production_required_boxes * pieces_per_box,
+                operator_id=operator_id,
+            )
+            requirement_map[(item.id, component_type)] = requirement
+
+    for index, (item_payload, item) in enumerate(
+        zip(payload_items, created_items, strict=True), start=1
+    ):
+        plan = item_payload.reservation_plan
+        if plan is None:
+            continue
+        for plan_index, entry in enumerate(plan.semi, start=1):
+            requirement = requirement_map.get((item.id, entry.component_type))
+            if requirement is None:
+                raise WarehouseInventoryError(
+                    f"第{index}条明细无法建立{entry.component_type}半成品需求", 409
+                )
+            lot, current_version = _plan_current_version(
+                db,
+                lot_id=entry.lot_id,
+                expected_version=entry.expected_version,
+                states=states,
+            )
+            if lot.quantity_available <= 0:
+                continue
+            candidates = {
+                candidate.lot.id: candidate
+                for candidate in semi_finished_inventory_candidates(
+                    db, requirement.id
+                )
+            }
+            candidate = candidates.get(lot.id)
+            if entry.recommendation_source == "learned":
+                if (
+                    candidate is None
+                    or candidate.source != "learned"
+                    or candidate.match_rule_id != entry.match_rule_id
+                ):
+                    raise WarehouseInventoryError("learned 推荐规则已变化，请刷新", 409)
+                if SIGNATURE_OVERRIDE_WARNING in candidate.warning_codes:
+                    if not entry.override:
+                        raise WarehouseInventoryError(
+                            "learned 推荐存在已学习的签名差异，必须明确 override",
+                            409,
+                        )
+                    if (
+                        SIGNATURE_OVERRIDE_WARNING
+                        not in entry.warning_acknowledged_codes
+                    ):
+                        raise WarehouseInventoryError(
+                            "learned 推荐必须确认半成品签名差异警告", 409
+                        )
+            elif entry.recommendation_source == "signature":
+                if candidate is None or candidate.signature_differences:
+                    raise WarehouseInventoryError("signature 推荐签名已变化，请刷新", 409)
+            else:
+                browsed_ids = {
+                    row.lot.id
+                    for row in browse_semi_finished_inventory(db, requirement.id)
+                }
+                if lot.id not in browsed_ids or not entry.override:
+                    raise WarehouseInventoryError("人工半成品匹配确认无效", 409)
+            reserve_semi_finished_inventory(
+                db,
+                requirement_id=requirement.id,
+                requested_requirement_quantity=entry.requested_qty,
+                lots=[SemiFinishedLotVersion(lot.id, current_version)],
+                operator_id=operator_id,
+                idempotency_key=(
+                    f"order-{order.id}-item-{item.id}-semi-{plan_index}"
+                ),
+                confirmed=True,
+                override=entry.override,
+                warning_acknowledged_codes=entry.warning_acknowledged_codes,
+            )
+            _advance_plan_version(db, lot_id=lot.id, states=states)
 
 
 class OrderUpdate(BaseModel):
@@ -376,6 +778,20 @@ def _order_response(
         "items": [],
     }
     for item in order.items:
+        mold_tool = (
+            item.product.mold_tool
+            if item.product_id
+            and item.product is not None
+            and "模切"
+            in {
+                value.strip()
+                for value in re.split(
+                    r"[,，、]", str(item.product.production_process or "")
+                )
+                if value.strip()
+            }
+            else None
+        )
         finished_reserved_quantity = reservation_map.get(item.id, 0)
         production_required_quantity = max(
             item.quantity - finished_reserved_quantity, 0
@@ -437,6 +853,10 @@ def _order_response(
                     and item.product.drawings
                     else None
                 ),
+                "mold_tool_id": mold_tool.id if mold_tool else None,
+                "mold_code": mold_tool.mold_code if mold_tool else None,
+                "mold_name": mold_tool.mold_name if mold_tool else None,
+                "mold_location": mold_tool.rack_location if mold_tool else None,
                 "inventory_deducted_qty": item.inventory_deducted_qty,
                 "finished_inventory_reserved_qty": finished_reserved_quantity,
                 "production_required_qty": production_required_quantity,
@@ -605,7 +1025,10 @@ def list_orders(
             .options(
                 selectinload(Order.items).selectinload(OrderItem.product).selectinload(
                     Product.drawings  # type: ignore[attr-defined]
-                )
+                ),
+                selectinload(Order.items).selectinload(OrderItem.product).selectinload(
+                    Product.mold_tool  # type: ignore[attr-defined]
+                ),
             )
             .where(Order.id.in_(page_ids))
         ).all()
@@ -1093,6 +1516,13 @@ def _release_order_reservations(
             idempotency_prefix=idempotency_prefix,
             allow_downstream=allow_downstream,
         )
+        release_active_semi_reservations_for_items(
+            db,
+            order_item_ids=order_item_ids,
+            operator_id=operator_id,
+            reason=reason.replace("成品库存", "库存"),
+            idempotency_prefix=f"{idempotency_prefix}-semi",
+        )
     except WarehouseInventoryError as error:
         raise HTTPException(
             status_code=error.status_code,
@@ -1451,7 +1881,10 @@ def get_order_detail(
         .options(
             selectinload(Order.items).selectinload(OrderItem.product).selectinload(
                 Product.drawings  # type: ignore[attr-defined]
-            )
+            ),
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(
+                Product.mold_tool  # type: ignore[attr-defined]
+            ),
         )
         .where(Order.id == order_id)
     )
@@ -1589,6 +2022,13 @@ def create_order(
                         status_code=400, detail=f"第{index}条明细{error}"
                     ) from error
             resolved_products[index] = product
+
+        reservation_plan_states = _preflight_reservation_plans(
+            db,
+            customer_id=customer.id,
+            payload_items=payload.items,
+            resolved_products=resolved_products,
+        )
 
         if customer_po:
             existing_orders = db.scalars(
@@ -1798,17 +2238,37 @@ def create_order(
                     thumbnail_path=item.drawing_file,
                     uploaded_by=user.id,
                 ))
+        _apply_order_reservation_plans(
+            db,
+            order=order,
+            payload_items=payload.items,
+            created_items=created_items,
+            resolved_products=resolved_products,
+            states=reservation_plan_states,
+            operator_id=user.id,
+        )
         db.commit()
         db.refresh(order)
-        return _order_response(
+        response = _order_response(
             order,
             user,
             db=db,
             customer_name=customer.name,
         )
+        for response_item, request_item in zip(
+            response["items"], payload.items, strict=True
+        ):
+            response_item["client_line_id"] = request_item.client_line_id
+        return response
     except HTTPException:
         db.rollback()
         raise
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="订单号或订单数据冲突") from error
@@ -1842,6 +2302,59 @@ def update_order_item(
         )
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="请先取消报料再修改订单明细")
+    if has_unconsumed_inventory_reservations(db, item.id):
+        sensitive_changes = []
+        if payload.quantity != item.quantity:
+            sensitive_changes.append("数量")
+        if (payload.material or "").strip() != (item.snapshot_material or "").strip():
+            sensitive_changes.append("材质")
+        if payload.material_id is not None and payload.material_id != item.material_id:
+            sensitive_changes.append("材质")
+        if (
+            payload.flute_type is not None
+            and payload.flute_type.strip().upper() != (item.flute_type or "").strip().upper()
+        ):
+            sensitive_changes.append("楞型")
+        for label, field_name in (
+            ("报料长", "snapshot_report_length_mm"),
+            ("报料宽", "snapshot_report_width_mm"),
+            ("底料长", "snapshot_base_report_length_mm"),
+            ("底料宽", "snapshot_base_report_width_mm"),
+            ("每箱片数", "snapshot_pieces_per_box"),
+        ):
+            value = getattr(payload, field_name)
+            if value is not None and value != getattr(item, field_name):
+                sensitive_changes.append(label)
+        if (
+            payload.snapshot_splice_mode is not None
+            and payload.snapshot_splice_mode != item.snapshot_splice_mode
+        ):
+            sensitive_changes.append("拼版方式")
+        product = db.get(Product, item.product_id)
+        if (
+            payload.box_style is not None
+            and product is not None
+            and payload.box_style != product.box_style
+        ):
+            sensitive_changes.append("产品箱型")
+        if product is not None:
+            for label, field_name in (
+                ("产品长", "length_mm"),
+                ("产品宽", "width_mm"),
+                ("产品高", "height_mm"),
+            ):
+                value = getattr(payload, field_name)
+                if value is not None and Decimal(value) != getattr(product, field_name):
+                    sensitive_changes.append(label)
+        if sensitive_changes:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "该订单明细已有未消耗库存预占，不能修改"
+                    + "、".join(dict.fromkeys(sensitive_changes))
+                    + "；请先释放库存预占。"
+                ),
+            )
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="数量必须大于0")
     unit_price = Decimal(str(payload.unit_price))

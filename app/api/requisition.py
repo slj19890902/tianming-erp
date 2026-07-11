@@ -50,6 +50,7 @@ from app.services.stock_replenishment import (
     validate_stock_policy,
 )
 from app.services.flute_mapping import validate_flute_consistency
+from app.services.report_crease import crease_width_error
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -1308,6 +1309,7 @@ def _validate_merge_member_rows(
             raise HTTPException(status_code=409, detail="已入库或非待生产明细不能创建待报料合并组")
         if item.requisition_status != "未报料":
             raise HTTPException(status_code=409, detail="已报料明细不能创建待报料合并组")
+        _ensure_order_item_crease_width(item)
     return ordered_rows
 
 
@@ -1328,6 +1330,37 @@ def _active_supplier_order_item_exists(db: Session, order_item_id: int) -> bool:
         )
         is not None
     )
+
+
+def _order_item_crease_width_error(item: OrderItem) -> str | None:
+    errors = (
+        crease_width_error(
+            label="订单明细压线",
+            crease_type=item.snapshot_crease_type,
+            report_width_mm=item.snapshot_report_width_mm,
+            left_mm=item.snapshot_crease_left_mm,
+            middle_mm=item.snapshot_crease_middle_mm,
+            right_mm=item.snapshot_crease_right_mm,
+        ),
+        crease_width_error(
+            label="订单明细底压线",
+            crease_type=item.snapshot_base_crease_type,
+            report_width_mm=item.snapshot_base_report_width_mm,
+            left_mm=item.snapshot_base_crease_left_mm,
+            middle_mm=item.snapshot_base_crease_middle_mm,
+            right_mm=item.snapshot_base_crease_right_mm,
+        ),
+    )
+    return next((error for error in errors if error), None)
+
+
+def _ensure_order_item_crease_width(item: OrderItem) -> None:
+    error = _order_item_crease_width_error(item)
+    if error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{error}。请先在订单明细中确认单片报料宽和压线尺寸",
+        )
 
 
 def _ensure_pending_order_item_for_supplier_order(
@@ -1356,6 +1389,7 @@ def _ensure_pending_order_item_for_supplier_order(
         raise HTTPException(status_code=409, detail="订单明细已经报料")
     if _active_supplier_order_item_exists(db, item.id):
         raise HTTPException(status_code=409, detail="订单明细已经存在有效供应商报料单")
+    _ensure_order_item_crease_width(item)
     return item, order, customer, product
 
 
@@ -2686,6 +2720,7 @@ def create_batch(
                 raise HTTPException(status_code=409, detail="已入库明细不能报料")
             if item.requisition_status != "未报料":
                 raise HTTPException(status_code=409, detail="订单明细已经报料")
+            _ensure_order_item_crease_width(item)
             base_requirements = _current_requisition_requirements(db, item)
             production_required_qty = int(
                 base_requirements["production_required_qty"]
@@ -3344,19 +3379,16 @@ def _build_replenishment_item(
         valid_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
         if layer_count not in valid_flutes or flute_type not in valid_flutes[layer_count]:
             raise StockReplenishmentError("三层只允许A/B/E楞，五层只允许AB/BE楞。")
-        if payload.crease_type == "压线":
-            crease_total = sum(
-                int(value or 0)
-                for value in (
-                    payload.crease_left_mm,
-                    payload.crease_middle_mm,
-                    payload.crease_right_mm,
-                )
-            )
-            if crease_total != int(report_width or 0):
-                raise StockReplenishmentError(
-                    f"压线三段合计 {crease_total}mm 必须等于报料宽 {report_width}mm。"
-                )
+        crease_error = crease_width_error(
+            label="压线",
+            crease_type=payload.crease_type,
+            report_width_mm=report_width,
+            left_mm=payload.crease_left_mm,
+            middle_mm=payload.crease_middle_mm,
+            right_mm=payload.crease_right_mm,
+        )
+        if crease_error:
+            raise StockReplenishmentError(f"{crease_error}。")
 
     return StockReplenishmentOrderItem(
         stock_policy_id=policy.id if policy else None,
@@ -3883,6 +3915,7 @@ def create_supplier_order_from_merge_group(
             raise HTTPException(status_code=409, detail="合并组状态异常，不能生成供应商报料单")
         if order_item.requisition_status != "未报料":
             raise HTTPException(status_code=409, detail="合并组中存在已报料明细，不能重复生成")
+        _ensure_order_item_crease_width(order_item)
         requirements = _current_requisition_requirements(
             db,
             order_item,

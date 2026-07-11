@@ -1872,6 +1872,39 @@
               <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
               <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
             </div>
+            <div v-else-if="modal.type === 'quotationConvert'" class="product-edit-grid">
+              <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
+                转入常用箱前请确认单片报料尺寸。用户手填值不会被自动覆盖；只有点击“重新推荐”才会重算。
+              </div>
+              <div class="product-form-row product-core-row">
+                <div class="field"><label>正式存货编码</label><input class="input" v-model.trim="quotationConvertForm.product_code" /></div>
+                <div class="field"><label>产品名称</label><input class="input" v-model.trim="quotationConvertForm.product_name" /></div>
+                <div class="field"><label>箱型</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.box_type || "-" }}</div></div>
+                <div class="field"><label>纸箱规格</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.length_mm || "-" }} × {{ quotationConvertForm.width_mm || "-" }} × {{ quotationConvertForm.height_mm || "-" }} mm</div></div>
+              </div>
+              <div class="product-form-row order-item-material-row">
+                <div class="field"><label>材质</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.material_display || "-" }}</div></div>
+                <div class="field"><label>层数</label><div class="input" style="background:#f5f7fa">{{ quotationConvertForm.layer_count ? quotationConvertForm.layer_count + "层" : "-" }}</div></div>
+                <div class="field"><label>楞型</label><select class="select" v-model="quotationConvertForm.flute_type"><option value="">请选择</option><option v-for="opt in orderItemFluteOptions(quotationConvertForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
+                <template v-if="isA1BoxStyle(quotationConvertForm.box_type)">
+                  <div class="field"><label>拼箱方式</label><select class="select" v-model="quotationConvertForm.splice_mode" @change="markQuotationConvertManual"><option value="single">单拼</option><option value="double">双拼</option></select></div>
+                  <div class="field"><label>舌头(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="quotationConvertForm.flap_mm" @input="markQuotationConvertManual" /></div>
+                </template>
+              </div>
+              <div class="product-form-row order-item-report-row">
+                <div class="field"><label>{{ isTelescopingLidBoxStyle(quotationConvertForm.box_type) ? "盖报料长宽" : "单片报料长宽" }}</label><div class="report-size-line"><input class="input" type="number" min="1" step="1" v-model.number="quotationConvertForm.report_length_mm" @input="markQuotationConvertManual" placeholder="长" /><span class="muted">×</span><input class="input" type="number" min="1" step="1" v-model.number="quotationConvertForm.report_width_mm" @input="markQuotationConvertManual" placeholder="宽" /><span class="muted">mm</span></div></div>
+                <div class="field"><label>{{ isTelescopingLidBoxStyle(quotationConvertForm.box_type) ? "盖压线类型" : "压线类型" }}</label><select class="select" v-model="quotationConvertForm.crease_type" @change="markQuotationConvertManual"><option value="">请选择</option><option value="压线">压线</option><option value="毛片">毛</option><option value="净料">净</option><option value="其他">其他</option></select></div>
+                <div class="field"><label>{{ isTelescopingLidBoxStyle(quotationConvertForm.box_type) ? "盖压线尺寸" : "压线尺寸" }}</label><div v-if="quotationConvertForm.crease_type==='压线'" class="crease-segments"><input class="input" type="number" min="0" step="1" v-model.number="quotationConvertForm.crease_left_mm" @input="syncQuotationConvertReportWidthFromCrease(false)" placeholder="上摇盖" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="1" step="1" v-model.number="quotationConvertForm.crease_middle_mm" @input="syncQuotationConvertReportWidthFromCrease(false)" placeholder="高/中段" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="0" step="1" v-model.number="quotationConvertForm.crease_right_mm" @input="syncQuotationConvertReportWidthFromCrease(false)" placeholder="下摇盖" /></div><span v-else class="muted">{{ quotationConvertForm.crease_type || "未设置" }}</span></div>
+                <div class="field"><label>&nbsp;</label><button type="button" class="btn small" @click="applyQuotationConvertRecommendations({force:true})">重新推荐</button></div>
+              </div>
+              <div v-if="isTelescopingLidBoxStyle(quotationConvertForm.box_type)" class="product-form-row order-item-report-row">
+                <div class="field"><label>底报料长宽</label><div class="report-size-line"><input class="input" type="number" min="1" step="1" v-model.number="quotationConvertForm.base_report_length_mm" @input="markQuotationConvertManual" placeholder="底长" /><span class="muted">×</span><input class="input" type="number" min="1" step="1" v-model.number="quotationConvertForm.base_report_width_mm" @input="markQuotationConvertManual" placeholder="底宽" /><span class="muted">mm</span></div></div>
+                <div class="field"><label>底压线类型</label><select class="select" v-model="quotationConvertForm.base_crease_type" @change="markQuotationConvertManual"><option value="">请选择</option><option value="压线">压线</option><option value="毛片">毛</option><option value="净料">净</option><option value="其他">其他</option></select></div>
+                <div class="field"><label>底压线尺寸</label><div v-if="quotationConvertForm.base_crease_type==='压线'" class="crease-segments"><input class="input" type="number" min="0" step="1" v-model.number="quotationConvertForm.base_crease_left_mm" @input="syncQuotationConvertReportWidthFromCrease(true)" placeholder="边高" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="1" step="1" v-model.number="quotationConvertForm.base_crease_middle_mm" @input="syncQuotationConvertReportWidthFromCrease(true)" placeholder="底宽" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="0" step="1" v-model.number="quotationConvertForm.base_crease_right_mm" @input="syncQuotationConvertReportWidthFromCrease(true)" placeholder="边高" /></div><span v-else class="muted">{{ quotationConvertForm.base_crease_type || "未设置" }}</span></div>
+              </div>
+              <div v-if="quotationConvertForm._recommendation_message" class="muted" style="margin-top:8px">{{ quotationConvertForm._recommendation_message }}</div>
+              <div v-if="quotationConvertCreaseMismatch" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ quotationConvertCreaseMismatch }}</div>
+            </div>
             <div v-else-if="modal.type === 'product'" class="product-edit-grid">
               <div class="product-form-row product-core-row">
                 <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
@@ -2550,10 +2583,11 @@
                 <div class="field"><label>拼箱方式</label><select class="select" v-model="orderItemForm.snapshot_splice_mode" @change="orderItemForm.snapshot_pieces_per_box=orderItemForm.snapshot_splice_mode==='double'?2:1"><option value="single">单拼</option><option value="double">双拼</option></select></div>
                 <div class="field"><label>每箱片数</label><input class="input" type="number" min="1" max="2" step="1" v-model.number="orderItemForm.snapshot_pieces_per_box" /></div>
                 <div class="field"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_flap_mm" /></div>
-                <div class="field"><label>报料长宽</label><div class="report-size-line"><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_report_length_mm" placeholder="长" /><span class="muted">×</span><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_report_width_mm" placeholder="宽" /><span class="muted">mm</span></div></div>
-                <div class="field"><label>压线类型</label><select class="select" v-model="orderItemForm.snapshot_crease_type"><option :value="null">未设置</option><option value="压线">压线</option><option value="毛片">毛</option><option value="净料">净</option><option value="其他">其他</option></select></div>
-                <div class="field"><label>压线尺寸</label><div v-if="orderItemForm.snapshot_crease_type==='压线'" class="crease-segments"><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_left_mm" placeholder="上摇盖" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_middle_mm" placeholder="高" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_right_mm" placeholder="下摇盖" /></div><span v-else class="muted">{{ orderItemForm.snapshot_crease_type || "未设置" }}</span></div>
+                <div class="field"><label>报料长宽</label><div class="report-size-line"><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_report_length_mm" @input="markOrderItemReportManual" placeholder="长" /><span class="muted">×</span><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_report_width_mm" @input="markOrderItemReportManual" placeholder="宽" /><span class="muted">mm</span></div></div>
+                <div class="field"><label>压线类型</label><select class="select" v-model="orderItemForm.snapshot_crease_type" @change="markOrderItemReportManual"><option :value="null">未设置</option><option value="压线">压线</option><option value="毛片">毛</option><option value="净料">净</option><option value="其他">其他</option></select></div>
+                <div class="field"><label>压线尺寸</label><div v-if="orderItemForm.snapshot_crease_type==='压线'" class="crease-segments"><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_left_mm" @input="syncOrderItemReportWidthFromCrease" placeholder="上摇盖" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_crease_middle_mm" @input="syncOrderItemReportWidthFromCrease" placeholder="高" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_right_mm" @input="syncOrderItemReportWidthFromCrease" placeholder="下摇盖" /></div><span v-else class="muted">{{ orderItemForm.snapshot_crease_type || "未设置" }}</span></div>
               </div>
+              <div v-if="orderItemCreaseMismatch" class="status orange" style="display:block;white-space:normal;margin-bottom:8px">{{ orderItemCreaseMismatch }}</div>
               <div class="product-form-row order-item-notes-row">
                 <div class="field"><label>生产工艺</label><input class="input" v-model.trim="orderItemForm.production_process" placeholder="粘贴、打钉、模切等" /></div>
                 <div class="field"><label>印刷内容</label><select class="select" v-model="orderItemForm.print_content"><option value="无印刷">无印刷</option><option value="单色印刷">单色印刷</option><option value="双色印刷">双色印刷</option><option value="多色印刷">多色印刷</option></select></div>
@@ -3300,7 +3334,7 @@
               <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
             </template>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && !!deliveryValidationError)" @click="saveModal">保存</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && !!deliveryValidationError)" @click="saveModal">保存</button>
           </div>
         </div>
       </div>
@@ -3450,6 +3484,7 @@
             kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
             quotationCustomer: null,
             quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
+            quotationConvertForm: {},
             quotationHistory: [],
             materialLayerFilter: 3,
             materialLayerTabs: [
@@ -3764,7 +3799,33 @@
           isForcedPassword() { return this.modal?.type === "password" && this.modal.force; },
           productCreaseMismatch() {
             if (!this.modal || this.modal.type !== "product") return "";
+            if (this.productForm.id && !this.productReportCreaseTouched()) return "";
             return this.validateProductCreaseAndReport(this.productForm) || "";
+          },
+          quotationConvertCreaseMismatch() {
+            if (!this.modal || this.modal.type !== "quotationConvert") return "";
+            const form = this.quotationConvertForm || {};
+            const mainLabel = this.isTelescopingLidBoxStyle(form.box_type) ? "盖压线" : "压线";
+            const mainError = this.validateCreaseWidthSet(
+              mainLabel, form.crease_type, form.report_width_mm,
+              form.crease_left_mm, form.crease_middle_mm, form.crease_right_mm
+            );
+            if (mainError) return mainError;
+            if (!this.isTelescopingLidBoxStyle(form.box_type)) return "";
+            return this.validateCreaseWidthSet(
+              "底压线", form.base_crease_type, form.base_report_width_mm,
+              form.base_crease_left_mm, form.base_crease_middle_mm, form.base_crease_right_mm
+            ) || "";
+          },
+          orderItemCreaseMismatch() {
+            if (!this.modal || this.modal.type !== "orderItem" || !this.orderItemForm._report_crease_touched) return "";
+            return this.validateCreaseWidthSet(
+              "压线", this.orderItemForm.snapshot_crease_type,
+              this.orderItemForm.snapshot_report_width_mm,
+              this.orderItemForm.snapshot_crease_left_mm,
+              this.orderItemForm.snapshot_crease_middle_mm,
+              this.orderItemForm.snapshot_crease_right_mm
+            ) || "";
           },
           productMoldError() {
             if (!this.modal || this.modal.type !== "product") return "";
@@ -3786,7 +3847,7 @@
           canSaveModal() {
             if (!this.modal) return false;
             if (["customer","product","material"].includes(this.modal.type)) return this.canAdmin;
-            if (["order","orderEdit","orderItem"].includes(this.modal.type)) return this.canSales;
+            if (["order","orderEdit","orderItem","quotationConvert"].includes(this.modal.type)) return this.canSales;
             if (this.modal.type === "requisitionMaterial") return this.canRequisition;
             if (this.modal.type === "delivery") return this.canDelivery;
             if (this.modal.type === "statement") return this.canFinance;
@@ -5802,61 +5863,147 @@
               this.showToast("报价单已作废");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
-          async convertQuotationItem(quotation,item) {
+          convertQuotationItem(quotation,item) {
             if (quotation.status !== "accepted") {
               this.showToast("请先将报价标记为客户接受",true);
               return;
             }
-            const code = prompt("请输入并确认正式存货编码：", item.temporary_code || "");
-            if (code === null) return;
-            if (!code.trim()) {
-              this.showToast("没有存货编码，不能转入常用箱",true);
-              return;
-            }
-            const productName = prompt("请确认产品名称：", item.product_name || "");
-            if (productName === null) return;
-            const payload = {
-              product_code:code.trim(),
-              product_name:(productName || item.product_name).trim(),
-            };
             const material = this._findMaterial(item.material_id);
             const layerCount = Number(material?.layer_count || 0);
             const allowedFlutes = layerCount === 3 ? ["A","B","E"]
               : (layerCount === 5 ? ["AB","BE"] : ["A","B","E","AB","BE"]);
             const currentFlute = String(item.flute_type || "").trim().toUpperCase();
-            if (!allowedFlutes.includes(currentFlute)) {
-              const fluteType = prompt(
-                `该报价明细的楞型未确认或与${layerCount || "当前"}层材质不匹配，请输入 ${allowedFlutes.join("、")}：`,
-                ""
+            this.quotationConvertForm = {
+              quotation_item_id:item.id,
+              product_code:String(item.temporary_code || "").trim(),
+              product_name:String(item.product_name || "").trim(),
+              box_type:item.box_type || "",
+              length_mm:item.length_mm || null,
+              width_mm:item.width_mm || null,
+              height_mm:item.height_mm || null,
+              material_id:item.material_id || null,
+              material_display:material ? this.buildMaterialDisplay(material) : (item.material_code || ""),
+              layer_count:layerCount || null,
+              flute_type:allowedFlutes.includes(currentFlute) ? currentFlute : "",
+              splice_mode:"single",
+              flap_mm:30,
+              report_length_mm:null,
+              report_width_mm:null,
+              crease_type:"",
+              crease_left_mm:null,
+              crease_middle_mm:null,
+              crease_right_mm:null,
+              base_report_length_mm:null,
+              base_report_width_mm:null,
+              base_crease_type:"",
+              base_crease_left_mm:null,
+              base_crease_middle_mm:null,
+              base_crease_right_mm:null,
+              _manual:false,
+              _recommendation_message:"",
+            };
+            this.modal = {type:"quotationConvert",title:"报价明细转常用箱"};
+            this.$nextTick(() => this.applyQuotationConvertRecommendations());
+          },
+          markQuotationConvertManual() {
+            this.quotationConvertForm._manual = true;
+            this.quotationConvertForm._recommendation_message = "当前为手工确认值；系统不会自动覆盖，点击“重新推荐”才会重算。";
+          },
+          syncQuotationConvertReportWidthFromCrease(isBase=false) {
+            const form = this.quotationConvertForm;
+            const prefix = isBase ? "base_" : "";
+            if (form[`${prefix}crease_type`] !== "压线") return;
+            const values = ["left", "middle", "right"].map(part =>
+              this.normalizeMmInteger(form[`${prefix}crease_${part}_mm`])
+            );
+            if (values.every(value => value !== null)) {
+              form[`${prefix}report_width_mm`] = values.reduce((total,value) => total + value, 0);
+            }
+            this.markQuotationConvertManual();
+          },
+          applyQuotationConvertRecommendations({force=false}={}) {
+            const form = this.quotationConvertForm;
+            if (!form || (!force && form._manual)) return;
+            const board = this.calculateBoardSizeByBoxType(
+              form.box_type, form.length_mm, form.width_mm, form.height_mm,
+              form.splice_mode, form.flap_mm
+            );
+            if (!board?.board_length || !board?.board_width) {
+              form._recommendation_message = board?.formula_label || "当前箱型暂无自动推荐，请人工填写并确认。";
+              return;
+            }
+            form.report_length_mm = board.board_length;
+            form.report_width_mm = board.board_width;
+            if (this.isA1BoxStyle(form.box_type) || this.isTelescopingLidBoxStyle(form.box_type)) {
+              form.crease_type = "压线";
+              const crease = this.calculateCreaseByBoxType(
+                form.box_type, form.length_mm, form.width_mm, form.height_mm, "压线"
               );
-              if (fluteType === null) return;
-              const normalizedFlute = String(fluteType).trim().toUpperCase();
-              if (!allowedFlutes.includes(normalizedFlute)) {
-                this.showToast(`当前材质楞型只能填写 ${allowedFlutes.join("、")}`, true);
-                return;
+              if (crease) {
+                form.crease_left_mm = crease.top_flap;
+                form.crease_middle_mm = crease.height;
+                form.crease_right_mm = crease.bottom_flap;
+                form.report_width_mm = crease.top_flap + crease.height + crease.bottom_flap;
+                if (this.isTelescopingLidBoxStyle(form.box_type)) {
+                  form.base_report_length_mm = board.base_board_length;
+                  form.base_report_width_mm = board.base_board_width;
+                  form.base_crease_type = "压线";
+                  form.base_crease_left_mm = crease.base_top_flap;
+                  form.base_crease_middle_mm = crease.base_height;
+                  form.base_crease_right_mm = crease.base_bottom_flap;
+                  form.base_report_width_mm = crease.base_top_flap + crease.base_height + crease.base_bottom_flap;
+                }
               }
-              payload.flute_type = normalizedFlute;
             }
-            const isA1 = String(item.box_type || "").toUpperCase().includes("A1")
-              || String(item.box_type || "").includes("0201");
-            if (!isA1) {
-              const reportLength = prompt("当前箱型没有自动报料公式，请输入并确认报料长(mm)：", "");
-              if (reportLength === null) return;
-              const reportWidth = prompt("请输入并确认报料宽(mm)：", "");
-              if (reportWidth === null) return;
-              if (!(Number(reportLength) > 0) || !(Number(reportWidth) > 0)) {
-                this.showToast("报料长宽必须为大于0的整数", true);
-                return;
-              }
-              payload.report_length_mm = Math.round(Number(reportLength));
-              payload.report_width_mm = Math.round(Number(reportWidth));
+            form._manual = false;
+            form._recommendation_message = `${board.formula_label}；报料宽已按压线三段合计生成。`;
+            if (force) this.showToast("已按当前箱型重新推荐，可继续手工修改。 ");
+          },
+          quotationConvertPayload() {
+            const form = this.quotationConvertForm;
+            if (!String(form.product_code || "").trim()) throw new Error("没有存货编码，不能转入常用箱");
+            if (!String(form.product_name || "").trim()) throw new Error("请填写产品名称");
+            const allowedFlutes = this.orderItemFluteOptions(form.layer_count);
+            if (!allowedFlutes.includes(String(form.flute_type || "").trim().toUpperCase())) {
+              throw new Error(`当前材质楞型只能选择 ${allowedFlutes.join("、")}`);
             }
-            if (!confirm(`确认将“${productName || item.product_name}”以存货编码 ${code.trim()} 转入常用箱吗？`)) return;
-            try {
-              await axios.post(`/api/quotations/items/${item.id}/convert-to-product`, payload);
-              await Promise.all([this.loadQuotationHistory(),this.loadProducts()]);
-              this.showToast("已转入常用箱，可在新建订单时直接选择");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            if (!(Number(form.report_length_mm) > 0) || !(Number(form.report_width_mm) > 0)) throw new Error("请填写单片报料长宽");
+            if (!form.crease_type) throw new Error("请选择压线类型");
+            const creaseError = this.quotationConvertCreaseMismatch;
+            if (creaseError) throw new Error(creaseError);
+            if (this.isTelescopingLidBoxStyle(form.box_type)) {
+              if (!(Number(form.base_report_length_mm) > 0) || !(Number(form.base_report_width_mm) > 0)) throw new Error("请填写天地盖底料报料长宽");
+              if (!form.base_crease_type) throw new Error("请选择天地盖底压线类型");
+            }
+            const integerOrNull = value => value === null || value === undefined || value === ""
+              ? null : this.normalizeMmInteger(value);
+            return {
+              product_code:String(form.product_code).trim(),
+              product_name:String(form.product_name).trim(),
+              flute_type:String(form.flute_type).trim().toUpperCase(),
+              splice_mode:form.splice_mode || "single",
+              flap_mm:integerOrNull(form.flap_mm),
+              report_length_mm:integerOrNull(form.report_length_mm),
+              report_width_mm:integerOrNull(form.report_width_mm),
+              crease_type:form.crease_type,
+              crease_left_mm:integerOrNull(form.crease_left_mm),
+              crease_middle_mm:integerOrNull(form.crease_middle_mm),
+              crease_right_mm:integerOrNull(form.crease_right_mm),
+              base_report_length_mm:integerOrNull(form.base_report_length_mm),
+              base_report_width_mm:integerOrNull(form.base_report_width_mm),
+              base_crease_type:form.base_crease_type || null,
+              base_crease_left_mm:integerOrNull(form.base_crease_left_mm),
+              base_crease_middle_mm:integerOrNull(form.base_crease_middle_mm),
+              base_crease_right_mm:integerOrNull(form.base_crease_right_mm),
+            };
+          },
+          async saveQuotationConversion() {
+            const payload = this.quotationConvertPayload();
+            await axios.post(
+              `/api/quotations/items/${this.quotationConvertForm.quotation_item_id}/convert-to-product`,
+              payload
+            );
+            await Promise.all([this.loadQuotationHistory(),this.loadProducts()]);
           },
           async openProduct(row=null) {
             if (!this.isWorkshop && !this.moldTools.length) await this.loadMoldTools();
@@ -5996,6 +6143,20 @@
             if (this.productFormSnapshot === null) return false;
             if (this.drawingFile !== null) return true;
             return JSON.stringify(this._productFormSaveFields()) !== this.productFormSnapshot;
+          },
+          productReportCreaseTouched() {
+            if (!this.productForm?.id || this.productFormSnapshot === null) return true;
+            let original;
+            try { original = JSON.parse(this.productFormSnapshot); }
+            catch (_) { return true; }
+            const fields = [
+              "report_length_mm", "report_width_mm", "crease_type",
+              "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+              "base_report_length_mm", "base_report_width_mm", "base_crease_type",
+              "base_crease_left_mm", "base_crease_middle_mm", "base_crease_right_mm",
+            ];
+            const canonical = value => value === "" || value === undefined ? null : value;
+            return fields.some(field => canonical(this.productForm[field]) !== canonical(original[field]));
           },
           async deleteProductDrawing(drawing) {
             if (!confirm("确定删除该版本图纸吗？")) return;
@@ -6552,6 +6713,23 @@
             if (left === null || middle === null || right === null) return;
             form.base_report_width_mm = left + middle + right;
             form._base_report_dims_manual = true;
+          },
+          markOrderItemReportManual() {
+            if (!this.orderItemForm) return;
+            this.orderItemForm._report_crease_touched = true;
+          },
+          syncOrderItemReportWidthFromCrease() {
+            const form = this.orderItemForm;
+            if (!form || form.snapshot_crease_type !== "压线") return;
+            const values = [
+              form.snapshot_crease_left_mm,
+              form.snapshot_crease_middle_mm,
+              form.snapshot_crease_right_mm,
+            ].map(value => this.normalizeMmInteger(value));
+            if (values.every(value => value !== null)) {
+              form.snapshot_report_width_mm = values.reduce((total,value) => total + value, 0);
+            }
+            this.markOrderItemReportManual();
           },
           validateCreaseWidthSet(label, creaseType, reportWidth, left, middle, right) {
             if (creaseType !== "压线") return null;
@@ -7516,6 +7694,7 @@
               sync_product:!!item.product_id,
               _material_supplier: mat?.supplier_name || item.snapshot_supplier_name || product.material_supplier_name || "",
               _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
+              _report_crease_touched:false,
             };
             this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
             await this.loadFinishedInventoryReservations(item.id);
@@ -8477,6 +8656,10 @@
                 else await axios.post("/api/master/materials",payload);
                 await this.loadMaterials();
               }
+              if (this.modal.type === "quotationConvert") {
+                await this.saveQuotationConversion();
+                successMessage = "已转入常用箱，可在新建订单时直接选择";
+              }
               if (this.modal.type === "order") {
                 const orderError = this.validateOrderForm();
                 if (orderError) throw new Error(orderError);
@@ -8522,6 +8705,7 @@
               }
               if (this.modal.type === "orderItem") {
                 const payload = {...this.orderItemForm}; delete payload.id; delete payload.order_number;
+                delete payload._report_crease_touched;
                 if (!Number.isInteger(Number(payload.quantity)) || Number(payload.quantity) <= 0) throw new Error("实际数量必须是大于0的整数");
                 payload.material = this.orderItemForm._material_display || this.orderItemForm.material || null;
                 payload.material_id = this.orderItemForm.material_id || null;

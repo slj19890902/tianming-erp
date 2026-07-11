@@ -18,6 +18,7 @@ from app.models.user import User
 from app.services import material_pricing
 from app.services.flute_mapping import validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
+from app.services.report_crease import crease_width_error
 
 
 router = APIRouter()
@@ -62,8 +63,22 @@ class ConvertPayload(BaseModel):
     product_code: str = Field(min_length=1, max_length=150)
     product_name: str | None = Field(default=None, max_length=250)
     flute_type: str | None = Field(default=None, max_length=20)
+    splice_mode: str | None = Field(default=None, max_length=20)
+    flap_mm: int | None = Field(default=None, ge=0)
     report_length_mm: int | None = Field(default=None, gt=0)
     report_width_mm: int | None = Field(default=None, gt=0)
+    crease_type: str | None = Field(default=None, max_length=20)
+    crease_left_mm: int | None = Field(default=None, ge=0)
+    crease_middle_mm: int | None = Field(default=None, gt=0)
+    crease_right_mm: int | None = Field(default=None, ge=0)
+    report_notes: str | None = None
+    base_report_length_mm: int | None = Field(default=None, gt=0)
+    base_report_width_mm: int | None = Field(default=None, gt=0)
+    base_crease_type: str | None = Field(default=None, max_length=20)
+    base_crease_left_mm: int | None = Field(default=None, ge=0)
+    base_crease_middle_mm: int | None = Field(default=None, gt=0)
+    base_crease_right_mm: int | None = Field(default=None, ge=0)
+    base_report_notes: str | None = None
 
     @field_validator("product_code")
     @classmethod
@@ -77,6 +92,145 @@ class ConvertPayload(BaseModel):
 def _is_a1(box_type: str | None) -> bool:
     value = str(box_type or "").strip().upper()
     return "A1" in value or "0201" in value
+
+
+def _is_a3(box_type: str | None) -> bool:
+    value = str(box_type or "").strip().upper()
+    return "A3" in value or "天地盖" in value
+
+
+def _round_mm(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _quotation_report_values(item: QuotationItem, payload: ConvertPayload) -> dict:
+    main_fields = (
+        "report_length_mm",
+        "report_width_mm",
+        "crease_type",
+        "crease_left_mm",
+        "crease_middle_mm",
+        "crease_right_mm",
+    )
+    base_fields = (
+        "base_report_length_mm",
+        "base_report_width_mm",
+        "base_crease_type",
+        "base_crease_left_mm",
+        "base_crease_middle_mm",
+        "base_crease_right_mm",
+    )
+    values = {name: getattr(payload, name) for name in (*main_fields, *base_fields)}
+    is_a1 = _is_a1(item.box_type)
+    is_a3 = _is_a3(item.box_type)
+    manual_report_started = any(values[name] is not None for name in (*main_fields, *base_fields))
+
+    splice_mode = (payload.splice_mode or "single").strip().lower()
+    if splice_mode not in {"single", "double"}:
+        raise HTTPException(status_code=400, detail="拼箱方式只能选择单拼或双拼")
+    if not is_a1:
+        splice_mode = "single"
+    flap_mm = payload.flap_mm if is_a1 else None
+    if is_a1 and flap_mm is None:
+        flap_mm = 30
+
+    dimensions = None
+    if item.length_mm and item.width_mm and item.height_mm:
+        dimensions = (
+            _round_mm(item.length_mm),
+            _round_mm(item.width_mm),
+            _round_mm(item.height_mm),
+        )
+
+    if not manual_report_started and dimensions and (is_a1 or is_a3):
+        length_mm, width_mm, height_mm = dimensions
+        if is_a1:
+            side = _round_mm(Decimal(width_mm) / Decimal("2"))
+            values.update(
+                report_length_mm=(
+                    length_mm + width_mm + int(flap_mm or 0)
+                    if splice_mode == "double"
+                    else 2 * (length_mm + width_mm) + int(flap_mm or 0)
+                ),
+                report_width_mm=side + height_mm + side,
+                crease_type="压线",
+                crease_left_mm=side,
+                crease_middle_mm=height_mm,
+                crease_right_mm=side,
+            )
+        else:
+            base_width = max(width_mm - 25, 1)
+            values.update(
+                report_length_mm=length_mm + 2 * height_mm,
+                report_width_mm=height_mm + width_mm + height_mm,
+                crease_type="压线",
+                crease_left_mm=height_mm,
+                crease_middle_mm=width_mm,
+                crease_right_mm=height_mm,
+                base_report_length_mm=max(length_mm - 25 + 2 * height_mm, 1),
+                base_report_width_mm=height_mm + base_width + height_mm,
+                base_crease_type="压线",
+                base_crease_left_mm=height_mm,
+                base_crease_middle_mm=base_width,
+                base_crease_right_mm=height_mm,
+            )
+
+    if values["report_length_mm"] is None or values["report_width_mm"] is None:
+        raise HTTPException(
+            status_code=400,
+            detail="请确认单片报料长宽后再转入常用箱",
+        )
+    if not (values["crease_type"] or "").strip():
+        raise HTTPException(status_code=400, detail="请选择压线类型后再转入常用箱")
+    error = crease_width_error(
+        label="压线",
+        crease_type=values["crease_type"],
+        report_width_mm=values["report_width_mm"],
+        left_mm=values["crease_left_mm"],
+        middle_mm=values["crease_middle_mm"],
+        right_mm=values["crease_right_mm"],
+    )
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    if is_a3:
+        if values["base_report_length_mm"] is None or values["base_report_width_mm"] is None:
+            raise HTTPException(status_code=400, detail="请确认天地盖底料报料长宽")
+        if not (values["base_crease_type"] or "").strip():
+            raise HTTPException(status_code=400, detail="请选择天地盖底压线类型")
+        error = crease_width_error(
+            label="底压线",
+            crease_type=values["base_crease_type"],
+            report_width_mm=values["base_report_width_mm"],
+            left_mm=values["base_crease_left_mm"],
+            middle_mm=values["base_crease_middle_mm"],
+            right_mm=values["base_crease_right_mm"],
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+    else:
+        for name in base_fields:
+            values[name] = None
+
+    if values["crease_type"] != "压线":
+        for name in ("crease_left_mm", "crease_middle_mm", "crease_right_mm"):
+            values[name] = None
+    if values["base_crease_type"] != "压线":
+        for name in (
+            "base_crease_left_mm",
+            "base_crease_middle_mm",
+            "base_crease_right_mm",
+        ):
+            values[name] = None
+
+    return {
+        **values,
+        "splice_mode": splice_mode,
+        "pieces_per_box": 2 if splice_mode == "double" else 1,
+        "flap_mm": flap_mm,
+        "report_notes": payload.report_notes,
+        "base_report_notes": payload.base_report_notes,
+    }
 
 
 def _material_or_none(db: Session, material_id: int | None) -> Material | None:
@@ -444,17 +598,7 @@ def convert_to_product(
         )
     if item.final_unit_price is None:
         raise HTTPException(status_code=400, detail="报价明细缺少最终单价，不能转入常用箱")
-    is_a1 = _is_a1(item.box_type)
-    report_length = payload.report_length_mm
-    report_width = payload.report_width_mm
-    if is_a1 and item.length_mm and item.width_mm and item.height_mm:
-        report_length = round(2 * (item.length_mm + item.width_mm) + 30)
-        report_width = round(item.width_mm + item.height_mm + 5)
-    if report_length is None or report_width is None:
-        raise HTTPException(
-            status_code=400,
-            detail="当前箱型没有自动报料公式，请确认报料长宽后再转入常用箱",
-        )
+    report_values = _quotation_report_values(item, payload)
     product = Product(
         customer_id=quotation.customer_id,
         product_code=product_code,
@@ -474,11 +618,23 @@ def convert_to_product(
         suggested_price=item.suggested_unit_price,
         flute_type=flute_type,
         layer_count=material.layer_count,
-        report_length_mm=report_length,
-        report_width_mm=report_width,
-        splice_mode="single",
-        pieces_per_box=1,
-        flap_mm=30,
+        report_length_mm=report_values["report_length_mm"],
+        report_width_mm=report_values["report_width_mm"],
+        crease_type=report_values["crease_type"],
+        crease_left_mm=report_values["crease_left_mm"],
+        crease_middle_mm=report_values["crease_middle_mm"],
+        crease_right_mm=report_values["crease_right_mm"],
+        report_notes=report_values["report_notes"],
+        base_report_length_mm=report_values["base_report_length_mm"],
+        base_report_width_mm=report_values["base_report_width_mm"],
+        base_crease_type=report_values["base_crease_type"],
+        base_crease_left_mm=report_values["base_crease_left_mm"],
+        base_crease_middle_mm=report_values["base_crease_middle_mm"],
+        base_crease_right_mm=report_values["base_crease_right_mm"],
+        base_report_notes=report_values["base_report_notes"],
+        splice_mode=report_values["splice_mode"],
+        pieces_per_box=report_values["pieces_per_box"],
+        flap_mm=report_values["flap_mm"],
         remark=item.remarks,
         is_active=True,
     )

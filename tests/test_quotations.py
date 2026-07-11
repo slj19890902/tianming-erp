@@ -216,6 +216,21 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         )
         assert duplicate_history.status_code == 409
         assert "相同存货编码" in duplicate_history.json()["detail"]
+        mismatched_manual = client.post(
+            f"/api/quotations/items/{first_item_id}/convert-to-product",
+            json={
+                "product_code": "Q-001",
+                "product_name": "正式 A1 纸箱",
+                "report_length_mm": 1030,
+                "report_width_mm": 355,
+                "crease_type": "压线",
+                "crease_left_mm": 100,
+                "crease_middle_mm": 150,
+                "crease_right_mm": 100,
+            },
+        )
+        assert mismatched_manual.status_code == 400
+        assert "三段合计 350mm" in mismatched_manual.json()["detail"]
         converted = client.post(
             f"/api/quotations/items/{first_item_id}/convert-to-product",
             json={"product_code": "Q-001", "product_name": "正式 A1 纸箱"},
@@ -246,6 +261,7 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
                 "flute_type": "BE",
                 "report_length_mm": 600,
                 "report_width_mm": 300,
+                "crease_type": "净料",
             },
         )
         assert converted_second.status_code == 201
@@ -285,12 +301,19 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         assert product.product_name == "正式 A1 纸箱"
         assert product.sale_unit_price == Decimal("2.5000")
         assert product.report_length_mm == 1030
-        assert product.report_width_mm == 355
+        assert product.report_width_mm == 350
+        assert product.crease_type == "压线"
+        assert (
+            product.crease_left_mm,
+            product.crease_middle_mm,
+            product.crease_right_mm,
+        ) == (100, 150, 100)
         assert product.flute_type == "AB"
         assert product.material.flute_type is None
         second_product = db.query(Product).filter(Product.product_code == "Q-002").one()
         assert second_product.report_length_mm == 600
         assert second_product.report_width_mm == 300
+        assert second_product.crease_type == "净料"
         assert second_product.flute_type == "BE"
         current_history = {
             row.product_code: (row.customer_id, row.product_name, row.layer_count, row.flute_type)

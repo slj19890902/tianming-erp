@@ -4,7 +4,12 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.api.products import ProductPayload, _validate_product_crease_widths
+from app.api.products import (
+    ProductPayload,
+    _validate_changed_product_crease_widths,
+    _validate_product_crease_widths,
+)
+from app.models.product import Product
 
 
 INDEX = Path(__file__).resolve().parents[1] / "static" / "index.html"
@@ -145,6 +150,43 @@ def test_common_box_write_guard_requires_crease_total_to_equal_report_width() ->
     assert "底压线三段合计 300mm 必须等于报料宽 305mm" in base_exc.value.detail
 
 
+def test_legacy_common_box_mismatch_only_blocks_report_or_crease_edits() -> None:
+    product = Product(
+        customer_id=1,
+        product_code="LEGACY-005",
+        customer_material_code="LEGACY-005",
+        product_name="历史加五毫米纸箱",
+        box_category="normal",
+        sale_unit_price=1,
+        report_length_mm=1000,
+        report_width_mm=355,
+        crease_type="压线",
+        crease_left_mm=100,
+        crease_middle_mm=150,
+        crease_right_mm=100,
+    )
+    unchanged_report = ProductPayload(
+        customer_id=1,
+        product_code="LEGACY-005",
+        customer_material_code="LEGACY-005",
+        product_name="历史加五毫米纸箱",
+        box_category="normal",
+        sale_unit_price=2,
+        report_length_mm=1000,
+        report_width_mm=355,
+        crease_type="压线",
+        crease_left_mm=100,
+        crease_middle_mm=150,
+        crease_right_mm=100,
+    )
+    _validate_changed_product_crease_widths(unchanged_report, product)
+
+    changed_width = unchanged_report.model_copy(update={"report_width_mm": 356})
+    with pytest.raises(HTTPException) as changed_exc:
+        _validate_changed_product_crease_widths(changed_width, product)
+    assert "三段合计 350mm" in changed_exc.value.detail
+
+
 def test_common_box_processes_remove_double_and_print_type_controls_drawings() -> None:
     source = _source()
 
@@ -234,6 +276,8 @@ def test_common_box_all_crease_inputs_sync_width_and_block_manual_mismatch() -> 
     assert "form.report_width_mm = left + middle + right" in sync_block
     assert "form.base_report_width_mm = left + middle + right" in source
     assert '"底压线", form.base_crease_type, form.base_report_width_mm' in source
+    assert "productReportCreaseTouched()" in source
+    assert 'this.productForm.id && !this.productReportCreaseTouched()' in source
     assert "报料宽必须等于压线三段总和" in source
 
 

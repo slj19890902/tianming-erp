@@ -461,15 +461,15 @@
       }
       .product-core-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .product-size-report-row {
-        grid-template-columns:
-          76px 76px 76px
-          108px
-          92px
-          minmax(250px, 1.15fr)
-          104px
-          minmax(245px, 1.1fr)
-          minmax(180px, 1fr);
+        grid-template-columns: repeat(14, minmax(0, 1fr));
       }
+      .product-dimension-field { grid-column: span 1; }
+      .product-splice-field { grid-column: span 2; }
+      .product-flap-field { grid-column: span 1; }
+      .product-report-field { grid-column: span 4; min-width: 0; }
+      .product-crease-type-field { grid-column: span 1; }
+      .product-crease-field { grid-column: span 3; min-width: 0; }
+      .product-crease-warning { grid-column: 1 / -1; }
       .product-material-row {
         grid-template-columns: minmax(130px, .7fr) minmax(90px, .45fr) minmax(110px, .55fr) minmax(360px, 2fr);
       }
@@ -477,7 +477,7 @@
         grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
       }
       .product-final-row {
-        grid-template-columns: minmax(150px, .3fr) minmax(260px, .8fr);
+        grid-template-columns: minmax(150px, .3fr) minmax(220px, .6fr) minmax(260px, .8fr);
         border-bottom: 0;
         padding-bottom: 0;
       }
@@ -573,7 +573,13 @@
         .product-material-row,
         .product-print-row,
         .product-final-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .product-size-report-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .product-size-report-row { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+        .product-dimension-field { grid-column: span 1; }
+        .product-splice-field { grid-column: span 2; }
+        .product-flap-field { grid-column: span 1; }
+        .product-report-field { grid-column: span 3; }
+        .product-crease-type-field { grid-column: span 1; }
+        .product-crease-field { grid-column: span 3; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 680px) {
@@ -582,6 +588,7 @@
         .product-material-row,
         .product-print-row,
         .product-final-row { grid-template-columns: 1fr; }
+        .product-size-report-row > .field { grid-column: 1 / -1; }
       }
 
       /* Toast */
@@ -619,6 +626,10 @@
       .compact-input { min-width: 96px !important; }
       .spec-input { min-width: 145px !important; }
       .requisition-pending-table { min-width: 1580px; }
+      .requisition-demand-cell { min-width: 132px; font-size: 12px; line-height: 1.55; white-space: nowrap; }
+      .requisition-demand-cell .semi-deducted { color: #047857; font-weight: 700; }
+      .requisition-demand-cell .remaining-demand { color: #b45309; font-weight: 700; }
+      .requisition-demand-cell .purchase-demand { color: #1d4ed8; font-weight: 800; }
       .merge-size-editor { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
       .merge-size-input { width: 76px !important; min-width: 76px !important; padding-left: 8px; padding-right: 8px; }
       .merge-cutter-select { width: 104px !important; min-width: 104px !important; margin-top: 4px; padding-left: 8px; padding-right: 8px; }
@@ -631,6 +642,35 @@
       .reported-code-cell { max-width: 220px; line-height: 1.45; }
       .reported-chip { display: inline-block; margin: 0 4px 3px 0; padding: 1px 6px; border-radius: 999px; background: #f1f5f9; font-size: 12px; }
       .reported-more { color: var(--muted); font-size: 12px; }
+      .stock-replenishment-lines { display: grid; gap: 12px; max-height: 440px; overflow: auto; padding-right: 2px; }
+      .stock-replenishment-line-card { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 12px; }
+      .stock-replenishment-line-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+      .stock-replenishment-line-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px 12px; align-items: end; }
+      .stock-replenishment-line-grid > .field { min-width: 0; margin: 0; }
+      .stock-replenishment-line-grid .search-select { width: 100%; min-width: 0; }
+      .stock-replenishment-line-grid .input,
+      .stock-replenishment-line-grid .select { min-width: 0; width: 100%; }
+      .stock-span-1 { grid-column: span 1; }
+      .stock-span-2 { grid-column: span 2; }
+      .stock-span-3 { grid-column: span 3; }
+      .stock-span-4 { grid-column: span 4; }
+      .stock-span-6 { grid-column: span 6; }
+      .stock-span-full { grid-column: 1 / -1; }
+      .stock-paired-inputs { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 6px; align-items: center; }
+      .stock-crease-inputs { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr); gap: 5px; align-items: end; }
+      .stock-crease-inputs label { min-width: 0; font-size: 11px; }
+      .stock-crease-inputs .input { margin-top: 3px; }
+      @media (max-width: 1100px) {
+        .stock-replenishment-line-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+        .stock-span-1 { grid-column: span 2; }
+        .stock-span-2, .stock-span-3 { grid-column: span 3; }
+        .stock-span-4, .stock-span-6 { grid-column: span 6; }
+      }
+      @media (max-width: 680px) {
+        .stock-replenishment-line-grid { grid-template-columns: 1fr; }
+        .stock-replenishment-line-grid > .field,
+        .stock-span-1, .stock-span-2, .stock-span-3, .stock-span-4, .stock-span-6 { grid-column: 1 / -1; }
+      }
 
       /* Order detail expansion */
       .order-detail-row td { padding: 0; background: #f7f7fa; }
@@ -1296,7 +1336,7 @@
                                   <tr v-for="item in row.items" :key="item.id">
                                     <td><span class="sub-order-number">{{ item.item_order_number || "-" }}</span></td>
                                     <td>{{ plainProductText(item.snapshot_product_code) }}</td>
-                                    <td>{{ plainProductText(item.snapshot_product_name) }}</td>
+                                    <td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
                                     <td>{{ item.snapshot_spec || "-" }}</td>
                                     <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px">{{ orderItemMaterialText(item) }}</td>
                                     <td class="cell-right">{{ item.quantity }}</td>
@@ -1396,7 +1436,7 @@
 
             <template v-else-if="activePage === 'requisition'">
               <page-head title="智能报料工作台" desc="历史智索、库存抵扣、合并报料；供应商到货后直接在 WMS 确认入库。"></page-head>
-              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button></div><button class="btn" @click="loadRequisition">刷新</button></div>
+              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button><button v-if="canRequisition" class="btn primary" @click="openStockReplenishment">库存补库 / 历史采购<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button></div><button class="btn" @click="loadRequisition">刷新</button></div>
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
                 <strong>供应商优先选择</strong>
                 <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" @click="requisitionSupplierFilter=''">全部供应商（{{ requisitionPending.length }}）</button>
@@ -1404,8 +1444,8 @@
                   :class="['btn','small','supplier-count-button',{active:requisitionSupplierFilter===row.supplier_name}]"
                   @click="requisitionSupplierFilter=row.supplier_name">{{ row.supplier_name }}（{{ row.count }}）</button>
               </div>
-              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求小片数</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :class="{ 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br>{{ displayOrderNumber(row) }}<div v-if="row.is_merge_group" class="muted">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id">{{ m.order_number }}｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" min="1" v-model.number="row.report_width_mm" /></div><select class="select merge-cutter-select" v-model="row.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></template></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td>{{ row.required_piece_qty }}</td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><button v-else class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
-              <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table"><thead><tr><th>报料单号</th><th>来源</th><th>供应商</th><th>客户 / 订单</th><th>存货编码 / 产品</th><th>明细数</th><th>报料数</th><th>入库状态</th><th>日期</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.source_type + '-' + row.id" :class="{'row-voided': row.status==='voided'}"><td><strong>{{ row.document_number }}</strong></td><td><span :class="['status', row.source_type==='supplier_order' ? 'blue' : 'green']">{{ row.source_type === 'supplier_order' ? '供应商报料单' : '旧报料单' }}</span></td><td>{{ row.supplier_name || '-' }}</td><td class="reported-source-cell" :title="fullJoin(row.order_numbers) + '\\n' + fullJoin(row.customer_names)"><div><span v-for="orderNo in compactList(row.order_numbers)" :key="orderNo" class="reported-chip">{{ orderNo }}</span><span v-if="compactMore(row.order_numbers)" class="reported-more">+{{ compactMore(row.order_numbers) }}</span></div><div class="muted"><span v-for="customerName in compactList(row.customer_names)" :key="customerName" class="reported-chip">{{ shortCustomerName(customerName) }}</span><span v-if="compactMore(row.customer_names)" class="reported-more">+{{ compactMore(row.customer_names) }}</span></div></td><td class="reported-code-cell" :title="fullJoin(row.product_codes)"><strong><span v-for="code in compactList(row.product_codes)" :key="code" class="reported-chip">{{ code }}</span><span v-if="compactMore(row.product_codes)" class="reported-more">+{{ compactMore(row.product_codes) }}</span></strong></td><td>{{ row.item_count }}</td><td><strong>{{ row.requisition_qty || 0 }}</strong></td><td>{{ row.incoming_status || '-' }}</td><td style="font-size:12px">{{ row.created_at ? row.created_at.slice(0,10) : '-' }}</td><td><div class="toolbar-group"><button class="btn small" @click="openReportedDocument(row)">打印</button><button v-if="isWorkshop || canAdmin" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button></div></td></tr></tbody></table></data-panel>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>小片需求 / 库存 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :class="{ 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br>{{ displayOrderNumber(row) }}<div v-if="row.is_merge_group" class="muted">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id">{{ m.order_number }}｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" min="1" v-model.number="row.report_width_mm" /></div><select class="select merge-cutter-select" v-model="row.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></template></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div>需求：{{ row.required_piece_qty || 0 }} 片</div><div class="semi-deducted">半成品抵扣：{{ row.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="remaining-demand">剩余：{{ row.remaining_required_piece_qty || 0 }} 片</div><div class="purchase-demand">采购：{{ row.requisition_qty || 0 }} 张</div></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><button v-else class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
+              <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table"><thead><tr><th>报料单号</th><th>来源</th><th>供应商</th><th>客户 / 订单</th><th>存货编码 / 产品</th><th>明细数</th><th>报料数</th><th>入库状态</th><th>日期</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.source_type + '-' + row.id" :class="{'row-voided': row.status==='voided'}"><td><strong>{{ row.document_number }}</strong></td><td><span :class="['status', row.source_type==='supplier_order' ? 'blue' : row.source_type==='stock_replenishment' ? 'orange' : 'green']">{{ reportedSourceLabel(row) }}</span></td><td>{{ row.supplier_name || '-' }}</td><td class="reported-source-cell" :title="fullJoin(row.order_numbers) + '\\n' + fullJoin(row.customer_names)"><div><span v-for="orderNo in compactList(row.order_numbers)" :key="orderNo" class="reported-chip">{{ orderNo }}</span><span v-if="compactMore(row.order_numbers)" class="reported-more">+{{ compactMore(row.order_numbers) }}</span></div><div class="muted"><span v-for="customerName in compactList(row.customer_names)" :key="customerName" class="reported-chip">{{ shortCustomerName(customerName) }}</span><span v-if="compactMore(row.customer_names)" class="reported-more">+{{ compactMore(row.customer_names) }}</span></div></td><td class="reported-code-cell" :title="fullJoin(row.product_codes)"><strong><span v-for="code in compactList(row.product_codes)" :key="code" class="reported-chip">{{ code }}</span><span v-if="compactMore(row.product_codes)" class="reported-more">+{{ compactMore(row.product_codes) }}</span></strong></td><td>{{ row.item_count }}</td><td><strong>{{ row.requisition_qty || 0 }}</strong></td><td>{{ row.incoming_status || '-' }}</td><td style="font-size:12px">{{ row.created_at ? row.created_at.slice(0,10) : '-' }}</td><td><div class="toolbar-group"><button class="btn small" @click="openReportedDocument(row)">打印</button><button v-if="row.source_type==='stock_replenishment' && row.status==='confirmed' && canRequisition" class="btn small success" @click="stockReportedReplenishment(row)">确认入库</button><button v-else-if="row.source_type!=='stock_replenishment' && (isWorkshop || canAdmin)" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button></div></td></tr></tbody></table></data-panel>
             </template>
 
             <template v-else-if="activePage === 'incoming'">
@@ -1460,10 +1500,10 @@
 
             <template v-else-if="activePage === 'deliveries'">
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
-              <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
                 <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
+                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
               </data-panel>
               <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
@@ -1848,16 +1888,16 @@
               </div>
 
               <div class="product-form-row product-size-report-row">
-                <div class="field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
-                <div class="field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
-                <div class="field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
-                <div class="field" v-if="usesProductSplice(productForm.box_style)"><label>拼箱方式</label>
+                <div class="field product-dimension-field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
+                <div class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
+                <div class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
+                <div class="field product-splice-field" v-if="usesProductSplice(productForm.box_style)"><label>拼箱方式</label>
                   <select class="select" v-model="productForm.splice_mode">
                     <option value="single">单拼</option>
                     <option value="double">双拼</option>
                   </select>
                 </div>
-                <div class="field" v-if="usesProductTongue(productForm.box_style)"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="productForm.flap_mm" /></div>
+                <div class="field product-flap-field" v-if="usesProductTongue(productForm.box_style)"><label>舌头(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="productForm.flap_mm" /></div>
                 <template v-if="isTelescopingLidBoxStyle(productForm.box_style)">
                   <div class="telescoping-component-grid">
                     <div class="field"><label>盖报料长宽</label>
@@ -1923,7 +1963,7 @@
                 </div>
                 </template>
                 <template v-else>
-                  <div class="field"><label>报料长宽</label>
+                  <div class="field product-report-field"><label>报料长宽</label>
                     <div class="report-size-line">
                       <input class="input" type="number" min="1" step="1" v-model.number="productForm.report_length_mm" @input="markProductReportManual" placeholder="长" />
                       <span class="muted">×</span>
@@ -1933,7 +1973,7 @@
                     </div>
                     <div v-if="productForm._recommendation_message" class="product-recommendation-hint muted">{{ productForm._recommendation_message }}</div>
                   </div>
-                  <div class="field"><label>压线类型</label>
+                  <div class="field product-crease-type-field"><label>压线类型</label>
                     <select class="select" v-model="productForm.crease_type">
                       <option :value="null">未设置</option>
                       <option value="压线">压线</option>
@@ -1942,7 +1982,7 @@
                       <option value="其他">其他</option>
                     </select>
                   </div>
-                  <div class="field"><label>压线尺寸</label>
+                  <div class="field product-crease-field"><label>压线尺寸</label>
                     <div v-if="productForm.crease_type === '压线'" class="crease-segments">
                       <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="onCreaseLeftInput" placeholder="上摇盖" aria-label="上摇盖" />
                       <span class="crease-segment-plus" aria-hidden="true">+</span>
@@ -1954,7 +1994,7 @@
                     <span v-else class="muted">请人工选择</span>
                   </div>
                 </template>
-                <div v-if="productCreaseMismatch" class="field wide status orange" style="display:block">{{ productCreaseMismatch }}</div>
+                <div v-if="productCreaseMismatch" class="field wide product-crease-warning status orange" style="display:block">{{ productCreaseMismatch }}</div>
               </div>
 
               <div class="product-form-row product-material-row">
@@ -1989,10 +2029,10 @@
               <div class="product-form-row product-print-row">
                 <div class="field"><label>生产工艺（可多选）</label>
                   <div class="process-options">
-                    <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" />粘贴</label>
-                    <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" />打钉</label>
-                    <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" />模切</label>
-                    <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" />其他</label>
+                    <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
+                    <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
+                    <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" @change="onProductProcessesChanged" />模切</label>
+                    <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" @change="onProductProcessesChanged" />其他</label>
                   </div>
                 </div>
                 <div class="field"><label>印刷内容</label>
@@ -2032,6 +2072,7 @@
 
               <div class="product-form-row product-final-row">
                 <div v-if="!isWorkshop" class="field sensitive-price"><label>默认单价</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+                <div v-if="productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="false"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
             </div>
@@ -2168,7 +2209,7 @@
                       </td>
                       <!-- 数量 -->
                       <td style="padding:4px 6px;vertical-align:top">
-                        <input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:65px" />
+                        <input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:8ch" @input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)" />
                         <div v-if="!Number.isInteger(Number(item.quantity))" style="font-size:10px;color:#dc2626;margin-top:2px">数量不是整数，请人工确认</div>
                       </td>
                       <!-- 客户单价 + 冲突提示 -->
@@ -2286,6 +2327,7 @@
                         <input class="input" style="width:100%" v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" />
                       </td>
                     </tr>
+                    <tr v-if="item.matched_product_id && item._inventory"><td colspan="8" style="padding:3px 6px 7px"><div style="border:1px solid #bfdbfe;border-radius:6px;padding:6px;background:#f8fbff;font-size:12px"><div class="toolbar-group"><strong>共享库存抵扣</strong><span v-if="item._inventory.loading" class="muted">候选加载中…</span><span v-else-if="item._inventory.stale" class="status orange">候选已过期</span><button class="btn small" type="button" @click="loadOrderLineInventory(item,draft.matched_customer_id)">刷新候选</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div><div v-if="item._inventory.error" class="danger-text">{{ item._inventory.error }}</div><div v-if="item._inventory.finished.candidates.length">成品可用 / 建议抵扣：<span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><div v-for="allocation in item._inventory.finished.allocations" :key="`pdf-finished-plan-${allocation.candidate.lot_id}`" class="status green">实际计划 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 箱，{{ inventoryLocation(allocation.candidate) }}</div></div><div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:4px">半成品{{ componentLabel(component) }}可用 / 可抵片数：<span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button v-if="item._inventory.semi[component].candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">展开人工候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`pdf-manual-${candidate.lot_id}`">人工匹配 {{ candidate.lot_number }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 明确 override</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认抵扣</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`pdf-semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">实际计划 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div></div></td></tr>
                   </template>
                   </tbody>
                 </table>
@@ -2363,9 +2405,9 @@
                     <!-- 规格 -->
                     <td><input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
                     <!-- 数量 -->
-                    <td><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" /></td>
+                    <td><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)" /></td>
                     <!-- 单价 -->
-                    <td class="sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
+                    <td class="sensitive-price"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
                     <!-- 图纸 -->
                     <td style="font-size:12px;padding:4px 6px">
                       <div v-if="item.temp_drawing_file || item.drawing_file" style="margin-bottom:4px">
@@ -2413,6 +2455,16 @@
                     <td colspan="5" style="padding:2px 6px 6px">
                       <input class="input" style="width:100%" :disabled="!orderForm.customer_id"
                         v-model.trim="item.production_notes" placeholder="生产说明（印刷/打勾/摆放/颜色等）" />
+                    </td>
+                  </tr>
+                  <tr v-if="item.product_id && item._inventory">
+                    <td colspan="7" style="padding:4px 6px 8px">
+                      <div style="border:1px solid #bfdbfe;border-radius:6px;padding:7px;background:#f8fbff;font-size:12px">
+                        <div class="toolbar-group"><strong>共享库存抵扣</strong><span v-if="item._inventory.loading" class="muted">候选加载中…</span><span v-else-if="item._inventory.stale" class="status orange">候选已过期，请重新获取并确认</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">刷新候选</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div>
+                        <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
+                        <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品可用 / 建议抵扣：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">实际计划：{{ allocation.candidate.lot_number }} 抵扣 {{ allocation.requested_qty }} 箱，{{ inventoryLocation(allocation.candidate) }}</div></div>
+                        <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}可用 / 可抵片数：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">确认系统推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无系统推荐</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">展开人工候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 我已核对差异并明确 override</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认抵扣</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">实际计划：{{ allocation.candidate.lot_number }} 抵扣 {{ allocation.requested_qty }} 片 / 用 {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div>
+                      </div>
                     </td>
                   </tr>
                 </template>
@@ -2580,7 +2632,7 @@
                 <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.snapshot_product_name }}</td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
-                <td>{{ item.snapshot_production_notes || "-" }}</td>
+                <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
                 <td>{{ item.quantity }}</td>
                 <td>{{ item.finished_inventory_reserved_qty || 0 }}</td>
                 <td><strong>{{ item.production_required_qty }}</strong></td>
@@ -2638,7 +2690,7 @@
               </div>
             </div>
             <!-- 供应商报料单打印预览 -->
-            <div v-else-if="modal.type === 'supplierOrderPrint' && modal.data" style="max-width:900px;margin:0 auto">
+            <div v-else-if="(modal.type === 'supplierOrderPrint' || modal.type === 'stockReplenishmentPrint') && modal.data" style="max-width:900px;margin:0 auto">
               <div id="supplier-order-print-area" class="supplier-print-sheet" style="font-size:14px;padding:20px">
                 <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || "苏州工业园区天明纸品包装厂" }}</h2><div>采购单</div></div>
                 <div class="supplier-print-head">
@@ -2682,8 +2734,69 @@
               <img :src="mobileEntry.qr_data_url" alt="手机来料入库二维码" style="width:280px;max-width:90%;border:1px solid var(--line);border-radius:12px" />
               <div style="margin-top:10px"><a :href="mobileEntry.url" target="_blank">{{ mobileEntry.url }}</a></div>
             </div>
+            <div v-else-if="modal.type === 'stockReplenishment'">
+              <div class="status blue" style="white-space:normal;margin-bottom:10px">用于安全库存补库或客户指定库存。默认“保存并立即入库”；如果纸板尚未实际到仓，请取消勾选，仅保存并打印补库单。</div>
+              <div v-if="stockPolicyWarnings.length" class="panel" style="margin-bottom:12px">
+                <div class="section-title">库存预警</div>
+                <table style="font-size:12px"><thead><tr><th>策略</th><th>类型</th><th>可用 / 预警 / 目标</th><th>建议补库</th><th>默认库位</th><th>操作</th></tr></thead><tbody>
+                  <tr v-for="policy in stockPolicyWarnings" :key="policy.id">
+                    <td><strong>{{ policy.policy_name }}</strong><div class="muted">{{ policy.product_code || policy.material_code || '-' }}</div></td>
+                    <td>{{ policy.target_inventory_type === 'finished' ? '成品' : '半成品' }}</td>
+                    <td>{{ policy.available_quantity }} / {{ policy.warning_quantity }} / {{ policy.target_quantity }}</td>
+                    <td><strong>{{ policy.suggested_replenishment_quantity }}</strong></td>
+                    <td>{{ policy.default_location ? policy.default_location.location_code + ' ' + policy.default_location.location_name : '未设置' }}</td>
+                    <td><button class="btn small success" type="button" @click="addStockPolicyDraft(policy)">按预警补库</button></td>
+                  </tr>
+                </tbody></table>
+              </div>
+              <div class="toolbar" style="margin-bottom:10px">
+                <div class="toolbar-group" style="flex:1"><input class="input" style="min-width:320px" v-model.trim="stockHistorySearch.query" @keyup.enter="searchStockHistory" placeholder="输入款号、产品名称或规格，例如 3D90095 / 屏蔽袋 / 46*30.5*22.5" /><button class="btn primary" type="button" :disabled="stockHistorySearch.loading" @click="searchStockHistory">搜索 2020.1-2026</button></div>
+                <button class="btn" type="button" @click="addBlankStockReplenishmentLine">新增空白行</button>
+              </div>
+              <div v-if="stockHistorySearch.items.length" class="panel" style="max-height:260px;overflow:auto;margin-bottom:12px">
+                <div class="muted">共匹配 {{ stockHistorySearch.total_matches }} 种采购规格（源记录 {{ stockHistorySearch.source_record_matches || stockHistorySearch.total_matches }} 条），本次显示 {{ stockHistorySearch.items.length }} 种；相同款号、材质、报料尺寸和压线只显示一行。</div>
+                <table style="font-size:12px"><thead><tr><th>日期 / 来源</th><th>款号 / 名称 / 规格</th><th>材质</th><th>报料长宽</th><th>压线</th><th>历史数量</th><th>操作</th></tr></thead><tbody>
+                  <tr v-for="row in stockHistorySearch.items" :key="row.source_ref">
+                    <td>{{ row.record_date || '-' }}<div class="muted">{{ row.source_ref }}</div></td>
+                    <td style="white-space:normal"><strong>{{ row.product_reference }}</strong><div v-if="row.notes" class="muted">{{ row.notes }}</div></td>
+                    <td>{{ row.material_code }}</td><td>{{ row.report_length_mm }} × {{ row.report_width_mm }} mm</td><td>{{ row.crease_text || '-' }}</td><td>{{ row.historical_quantity || '-' }}<div v-if="row.history_count > 1" class="muted">历史 {{ row.history_count }} 次，仅供参考</div></td>
+                    <td><button class="btn small success" type="button" @click="addHistoricalStockLine(row)">加入补库单</button></td>
+                  </tr>
+                </tbody></table>
+              </div>
+              <div class="form-grid" style="margin-bottom:10px">
+                <div class="field"><label>补库来源</label><select class="select" v-model="stockReplenishmentForm.source_type"><option value="manual_history">历史采购</option><option value="customer_request">客户要求备库</option><option value="stock_warning">库存预警</option></select></div>
+                <div class="field"><label>供应商（随材质联动）</label><select class="select" v-model="stockReplenishmentForm.supplier_name" :disabled="stockReplenishmentMaterialSuppliers().length === 1"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length === 1" class="muted">已按材质主数据自动确定</div><div v-else-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
+                <label class="remember-line"><input type="checkbox" v-model="stockReplenishmentForm.stock_now" /> 保存后立即进入仓库可用库存</label>
+              </div>
+              <div v-if="!stockReplenishmentForm.items.length" class="empty">请从历史记录加入，或新增空白行。</div>
+              <div v-else class="stock-replenishment-lines">
+                <div v-for="(line,index) in stockReplenishmentForm.items" :key="line._key" class="stock-replenishment-line-card">
+                  <div class="stock-replenishment-line-head"><div><strong>补库明细 {{ index + 1 }}</strong><span class="muted" style="margin-left:10px">{{ line.material_supplier_name || stockReplenishmentForm.supplier_name || '供应商待确认' }}｜{{ line.material_code || '材质待选择' }}</span></div><button class="btn small danger" type="button" @click="removeStockReplenishmentLine(index)">删除行</button></div>
+                  <div class="stock-replenishment-line-grid">
+                    <div class="field stock-span-2"><label>库存类型</label><select class="select" v-model="line.target_inventory_type" @change="onStockTargetTypeChanged(line)"><option value="semi_finished">半成品片料</option><option value="finished">成品</option></select></div>
+                    <div class="field stock-span-3"><label>客户</label><select class="select" v-model.number="line.customer_id" @change="onStockCustomerChanged(line)"><option :value="null">通用 / 未指定</option><option v-for="c in activeCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
+                    <div class="field stock-span-4"><label>存货编码 / 常用箱</label><search-select v-model="line.product_id" :options="stockProductSelectOptions(line.customer_id)" label-key="_label" value-key="id" :placeholder="line.customer_id ? '输入存货编码、产品名称或规格' : '请先选择客户'" :allow-empty="true" :disabled="!line.customer_id" @search="searchStockProducts(line.customer_id,$event)" @change="applyStockProduct(line)"></search-select><input v-if="line.target_inventory_type==='semi_finished' && !line.product_id" class="input" v-model.trim="line.product_name" placeholder="未关联常用箱时填写片料名称" /></div>
+                    <div class="field stock-span-3"><label>数量（必填）</label><input class="input" type="number" min="1" step="1" v-model.number="line.quantity" placeholder="请人工填写" /></div>
+                    <div class="field stock-span-4"><label>材质（供应商联动）</label><search-select v-model="line.material_id" :options="materialSelectOptions('',line.layer_count,line.flute_type)" label-key="_label" value-key="id" placeholder="选择材质主数据" :allow-empty="true" @change="applyStockMaterial(line)"></search-select><div class="muted">{{ line.material_supplier_name || '供应商待确认' }}｜{{ line.material_code || '材质待选择' }}</div></div>
+                    <div class="field stock-span-2"><label>层数</label><select class="select" v-model.number="line.layer_count" @change="onStockLayerChanged(line)"><option :value="3">三层</option><option :value="5">五层</option></select></div>
+                    <div class="field stock-span-2"><label>楞型</label><select class="select" v-model="line.flute_type"><option value="">请选择楞型</option><option v-for="f in orderItemFluteOptions(line.layer_count)" :key="f" :value="f">{{ f }}</option></select></div>
+                    <div class="field stock-span-4"><label>报料长宽</label><div class="stock-paired-inputs"><input class="input" type="number" min="1" v-model.number="line.report_length_mm" /><span>×</span><input class="input" type="number" min="1" v-model.number="line.report_width_mm" /></div></div>
+                    <div class="field stock-span-2"><label>压线类型</label><select class="select" v-model="line.crease_type" @change="onStockCreaseTypeChanged(line)"><option :value="null">未指定</option><option value="压线">压线</option><option value="净料">净</option><option value="毛片">毛</option></select></div>
+                    <div class="field stock-span-6"><label>压线尺寸</label><div v-if="line.crease_type==='压线'" class="stock-crease-inputs"><label>上摇盖<input class="input" type="number" min="0" v-model.number="line.crease_left_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>高<input class="input" type="number" min="1" v-model.number="line.crease_middle_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>下摇盖<input class="input" type="number" min="0" v-model.number="line.crease_right_mm" @input="syncStockReportWidthFromCrease(line)" /></label></div><div v-else class="muted">{{ line.crease_type || '无需压线分段' }}</div></div>
+                    <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div>
+                    <div class="field stock-span-4"><label>目标库位</label><select class="select" v-model.number="line.location_id"><option :value="null">请选择库位</option><option v-for="loc in stockLocationsForType(line.target_inventory_type)" :key="loc.id" :value="loc.id">{{ loc.location_code }}｜{{ loc.location_name }}</option></select></div>
+                    <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'supplierRequisitionDraft'">
               <div class="muted" style="margin-bottom:10px">当前只是报料草稿，点击保存后才正式生成供应商采购报料单。</div>
+              <div v-if="supplierDraftSemiInventoryOptions().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #f59e0b;border-radius:8px;background:#fffbeb;color:#92400e;white-space:normal">
+                <strong>发现 {{ supplierDraftSemiInventoryOptions().length }} 条可抵扣半成品库存</strong>
+                <div>请先在下方逐项确认抵扣或选择“本次不用库存”，系统才会允许保存供应商报料单。</div>
+              </div>
               <div v-for="(group, groupIndex) in supplierRequisitionDraft.supplier_groups" :key="groupIndex" class="order-group-detail-card" style="margin-bottom:12px">
                 <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
                 <table style="font-size:12px">
@@ -2692,13 +2805,32 @@
                     <template v-for="line in draftGroupLines(group)" :key="line.line_key || line.source_type + '-' + line.report_length_mm + '-' + line.report_width_mm">
                       <tr>
                         <td><span :class="['status', line.source_type==='merge_group' ? 'blue' : 'green']">{{ line.source_type === 'merge_group' ? '合并组' : (line.source_type === 'mixed' ? '混合来源' : '普通行') }}</span><br>{{ line.report_length_mm }} × {{ line.report_width_mm }}</td>
-                        <td><button class="btn small" type="button" @click="line._expanded = !line._expanded">{{ line._expanded ? '收起来源' : '展开来源' }}</button><div class="muted">{{ draftLineSourceSummary(line) }}</div></td>
+                        <td>
+                          <button class="btn small" type="button" @click="line._expanded = !line._expanded">{{ line._expanded ? '收起来源' : '展开来源' }}</button>
+                          <div class="muted">{{ draftLineSourceSummary(line) }}</div>
+                          <div v-for="option in draftLineSemiInventoryOptions(line)" :key="`late-semi-${option.order_item_id}-${option.component_type}`" style="margin-top:6px;padding:6px;border:1px solid #f59e0b;border-radius:6px;background:#fffbeb;white-space:normal">
+                            <strong>发现可抵扣半成品{{ componentLabel(option.component_type) }}</strong>
+                            <div class="muted">{{ option.order_number }}｜{{ option.product_code }}｜尚需 {{ option.remaining_requirement_quantity }} 片</div>
+                            <div v-for="candidate in draftSemiInventoryCandidates(option)" :key="candidate.lot_id">
+                              批次 {{ candidate.lot_number }}：可用 {{ candidate.available_stock_quantity }} 张 / 可抵 {{ candidate.deductible_requirement_quantity }} 片，{{ inventoryLocation(candidate) }}
+                              <span v-if="candidate.source === 'learned'" class="status blue">按上次人工匹配推荐</span>
+                              <span v-else-if="candidate.source === 'signature'" class="status green">规格自动匹配</span>
+                              <span v-else class="status orange">首次人工匹配</span>
+                              <span v-if="(candidate.signature_differences || []).length" class="status orange">需人工核对：{{ draftSemiDifferenceLabel(candidate.signature_differences) }}</span>
+                            </div>
+                            <label v-if="draftSemiInventoryNeedsOverride(option)" style="display:block;margin-top:4px"><input type="checkbox" v-model="option._override" /> 我已核对换算差异，同意本次匹配并记忆</label>
+                            <div style="margin-top:4px">
+                              <button class="btn small success" type="button" :disabled="draftSemiInventoryNeedsOverride(option) && !option._override" @click="confirmDraftSemiInventory(option)">确认抵扣并重算采购</button>
+                              <button class="btn small" type="button" @click="skipDraftSemiInventory(option)">{{ option._skipped ? '本次已选择不用库存' : '本次不用库存' }}</button>
+                            </div>
+                          </div>
+                        </td>
                         <td>{{ line.material_display || '-' }}</td>
                         <td>{{ line.production_required_qty || line.quantity || 0 }}</td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" /></td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" /></td>
                         <td><select class="select merge-cutter-select" v-model="line.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td>
-                        <td><input class="input merge-size-input" type="number" min="0" :max="line.production_required_qty || line.quantity || 0" v-model.number="line.inventory_deducted_qty" /></td>
+                        <td><strong>{{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }}</strong><div class="muted">仅来自真实库存预占</div></td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.requisition_qty" /></td>
                         <td><input class="input merge-remark-input" v-model.trim="line.remark" /></td>
                       </tr>
@@ -2723,6 +2855,18 @@
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
               <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异原因</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" :max="line.delivered_quantity" v-model.number="line.actual_received_quantity" /></td><td><input class="input" v-model.trim="line.difference_reason" :placeholder="Number(line.actual_received_quantity)!==Number(line.delivered_quantity) ? '差异时必填' : '无差异'" /></td></tr></tbody></table>
             </div>
+            <div v-else-if="modal.type === 'deliveryRoute'">
+              <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
+              <div v-if="!deliveryRoutePlan.disclaimer" class="muted" style="margin-bottom:10px">区域同车建议不是实时路况最优解；请打开地图分段导航后由司机确认最终顺序。</div>
+              <div class="panel" style="margin-bottom:10px"><strong>出发地址：</strong>{{ deliveryRoutePlan.origin_address || '公司地址未登记，请先在系统备份页完善公司信息' }}<span class="muted" style="margin-left:12px">待送客户 {{ deliveryRoutePlan.customer_count || 0 }} 家</span></div>
+              <div v-if="!(deliveryRoutePlan.groups || []).length" class="empty">当前没有可送货客户，或客户地址尚未登记。</div>
+              <div v-for="group in deliveryRoutePlan.groups || []" :key="group.area" class="order-group-detail-card" style="margin-bottom:12px">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><strong>{{ group.area }}同车建议</strong><span v-if="group.same_as_origin_area" class="status green">与工厂同区域</span><span class="muted">{{ group.customer_count }} 家｜{{ group.pending_item_count }} 条｜待送 {{ group.pending_quantity }}</span></div>
+                <table style="font-size:12px"><thead><tr><th>顺序</th><th>客户</th><th>地址</th><th>交期 / 待送</th><th>涉及款号</th><th>分段导航</th></tr></thead><tbody>
+                  <tr v-for="customer in group.customers" :key="customer.customer_id"><td><strong>{{ customer.sequence }}</strong></td><td>{{ customer.customer_name }}<div class="muted">{{ customer.contact_person || '' }} {{ customer.phone || '' }}</div></td><td style="white-space:normal;min-width:240px">{{ customer.address || '地址未登记' }}<div v-if="customer.subarea" class="muted">{{ customer.subarea }}</div></td><td>{{ customer.earliest_delivery_date || '-' }}<div class="muted">{{ customer.pending_item_count }} 条 / {{ customer.pending_quantity }}</div></td><td style="white-space:normal">{{ compactList(customer.product_codes,5).join(' / ') }}<span v-if="compactMore(customer.product_codes,5)" class="muted"> 等 {{ customer.product_codes.length }} 款</span></td><td><a v-if="customer.navigation_url" class="btn small primary" :href="customer.navigation_url" target="_blank" rel="noopener">从上一站导航到此</a><span v-else :class="['status', customer.same_as_previous_address ? 'green' : 'orange']">{{ customer.navigation_note || '缺少起点或地址' }}</span></td></tr>
+                </tbody></table>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"><option :value="null">请选择客户</option><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
@@ -2735,7 +2879,7 @@
                 <button v-if="!deliveryForm.editingId" class="btn small success" type="button" @click="toggleDeliveryBatchPicker()">批量选择待送货</button>
                 <span class="muted">默认先显示 5 行空白明细，按存货编码查询当前客户下仍有未送数量的产品。</span>
               </div>
-              <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库且仍有未送数量的订单明细才能生成送货单。</div>
+              <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再按存货编码查询待送货产品。</div>
               <div v-if="deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
                 <div class="toolbar" style="margin-bottom:8px">
@@ -2750,9 +2894,9 @@
                   </div>
                 </div>
                 <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
-                <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" v-model="deliveryBatchPicker.selected[item.order_item_id]" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
+                <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" v-model="deliveryBatchPicker.selected[item.order_item_id]" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
-              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
+              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -3156,7 +3300,7 @@
               <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
             </template>
-            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && !!productCreaseMismatch) || (modal?.type==='delivery' && !!deliveryValidationError)" @click="saveModal">保存</button>
+            <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && !!deliveryValidationError)" @click="saveModal">保存</button>
           </div>
         </div>
       </div>
@@ -3164,6 +3308,46 @@
     </div>
 
     <script>
+      // BEGIN IDEMPOTENCY_KEY_HELPER
+      var idempotencyKeyFallbackCounter = 0;
+      function createIdempotencyKey() {
+        var cryptoApi = typeof crypto !== "undefined" ? crypto : null;
+        if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+          try {
+            return cryptoApi.randomUUID();
+          } catch (error) {
+            // Continue to the compatible fallbacks.
+          }
+        }
+        if (cryptoApi && typeof cryptoApi.getRandomValues === "function") {
+          try {
+            var bytes = new Uint8Array(16);
+            cryptoApi.getRandomValues(bytes);
+            bytes[6] = (bytes[6] & 15) | 64;
+            bytes[8] = (bytes[8] & 63) | 128;
+            var hex = "";
+            for (var index = 0; index < bytes.length; index += 1) {
+              var byteHex = bytes[index].toString(16);
+              hex += byteHex.length === 1 ? "0" + byteHex : byteHex;
+            }
+            return (
+              hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" +
+              hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" +
+              hex.slice(20)
+            );
+          } catch (error) {
+            // Date/random fallback is sufficient for a non-secret idempotency key.
+          }
+        }
+        idempotencyKeyFallbackCounter += 1;
+        return (
+          "idemp-" + Date.now().toString(36) + "-" +
+          Math.random().toString(36).slice(2, 12) + "-" +
+          idempotencyKeyFallbackCounter.toString(36)
+        );
+      }
+      // END IDEMPOTENCY_KEY_HELPER
+
       axios.defaults.withCredentials = true;
       axios.interceptors.response.use(
         (response) => response,
@@ -3205,7 +3389,7 @@
         box_style: "", print_content: "无印刷", printing_colors: "",
         production_process: "", _production_processes: [], _production_process_legacy: "", unit: "只", sale_unit_price: "0",
         sale_unit_price_no_tax: null, cost_unit_price: null, board_price: null,
-        suggested_price: null, die_cut_path: null, drawings: [],
+        suggested_price: null, die_cut_path: null, mold_tool_id: null, mold_tool: null, drawings: [],
         remark: "", is_active: true,
         flute_type: null, layer_count: null, surface_paper_type: null,
         _material_supplier: "全部供应商",
@@ -3301,7 +3485,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "苏州嘉林亿", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [],
+            deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [], moldTools: [],
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
             companyConfig: {}, companyForm: {}, showCompanyModal: false,
@@ -3331,7 +3515,10 @@
             requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:true },
             mergeSuggestions: [], mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {},
             supplierOrders: [],
-            supplierRequisitionDraft: { supplier_groups: [] },
+            supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
+            stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [],
+            stockHistorySearch: { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0 },
+            stockReplenishmentForm: { source_type:"manual_history", supplier_name:"", customer_id:null, remark:"", stock_now:true, items:[] },
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
             productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
@@ -3386,6 +3573,7 @@
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
             deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", lines: [] },
+            deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false },
             tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
@@ -3578,6 +3766,19 @@
             if (!this.modal || this.modal.type !== "product") return "";
             return this.validateProductCreaseAndReport(this.productForm) || "";
           },
+          productMoldError() {
+            if (!this.modal || this.modal.type !== "product") return "";
+            if (!this.productUsesMold(this.productForm)) return "";
+            return this.productForm.mold_tool_id ? "" : "生产工艺包含模切，必须选择已登记的生产模具及货架位置";
+          },
+          stockReplenishmentCreaseBlocked() {
+            if (!this.modal || this.modal.type !== "stockReplenishment") return false;
+            return (this.stockReplenishmentForm.items || []).some(line => !!this.stockCreaseMismatch(line));
+          },
+          stockReplenishmentSaveBlocked() {
+            if (!this.modal || this.modal.type !== "stockReplenishment") return false;
+            return !!this.validateStockReplenishmentForm();
+          },
           deliveryValidationError() {
             if (!this.modal || this.modal.type !== "delivery") return "";
             return this.validateDeliveryForm();
@@ -3592,6 +3793,7 @@
             if (this.modal.type === "statementEdit") return this.canFinance;
             if (this.modal.type === "requisition") return this.canRequisition;
             if (this.modal.type === "supplierRequisitionDraft") return this.canRequisition;
+            if (this.modal.type === "stockReplenishment") return this.canRequisition;
             if (this.modal.type === "receipt") return this.canFinance;
             if (this.modal.type === "password") return true;
             if (this.modal.type === "resetPassword") return this.user?.role === "admin";
@@ -3925,10 +4127,131 @@
               : (Array.isArray(order?.items) && order.items.length ? order.items : []);
             return lines.length ? lines : [order || {}];
           },
+          stockReplenishmentPrintData(data) {
+            const lines = (data?.items || []).map((line, index) => {
+              const creaseDisplay = line.crease_type === "压线"
+                ? [line.crease_left_mm, line.crease_middle_mm, line.crease_right_mm].map(value => Number(value || 0)).join("+")
+                : line.crease_type === "毛片" ? "毛" : line.crease_type === "净料" ? "净" : (line.crease_type || "-");
+              const materialCode = String(line.material_code || "").trim();
+              const fluteType = String(line.flute_type || "").trim();
+              return {
+                ...line,
+                line_key: `stock-${line.id || index}`,
+                crease_display: creaseDisplay,
+                material_display: [materialCode, fluteType].filter(Boolean).join(" / ") || "-",
+                requisition_qty: Number(line.quantity || 0),
+                remark: line.remark || data.remark || "",
+                cutting_mode: "一开一",
+              };
+            });
+            return {...data, lines};
+          },
+          openStockReplenishmentPrint(data) {
+            this.modal = {
+              type: "stockReplenishmentPrint",
+              title: `供应商报料单 ${data.order_number}`,
+              data: this.stockReplenishmentPrintData(data),
+            };
+          },
           draftGroupLines(group) {
             if (Array.isArray(group?.lines) && group.lines.length) return group.lines;
             if (Array.isArray(group?.items)) return group.items;
             return [];
+          },
+          draftLineSemiInventoryOptions(line) {
+            return (line?.source_items || []).flatMap(source => source?.late_semi_inventory_options || []);
+          },
+          supplierDraftSemiInventoryOptions() {
+            return (this.supplierRequisitionDraft?.supplier_groups || []).flatMap(group =>
+              this.draftGroupLines(group).flatMap(line => this.draftLineSemiInventoryOptions(line))
+            );
+          },
+          draftSemiInventoryCandidates(option) {
+            const recommended = option?.recommended_candidates || [];
+            const review = option?.review_candidates || [];
+            const seenLotIds = new Set();
+            return [...recommended, ...review].filter(candidate => {
+              const lotId = Number(candidate?.lot_id || 0);
+              if (!lotId || seenLotIds.has(lotId)) return false;
+              seenLotIds.add(lotId);
+              return true;
+            });
+          },
+          draftSemiInventoryNeedsOverride(option) {
+            return this.draftSemiInventoryCandidates(option).some(candidate => (candidate.signature_differences || []).length > 0);
+          },
+          draftSemiDifferenceLabel(values) {
+            const labels = { pieces_per_box:"每箱片数", stock_yield_per_sheet:"每张库存产出片数", board_length_mm:"纸板长", board_width_mm:"纸板宽", material_code:"材质", flute:"楞型", component:"天地盖组件" };
+            return (values || []).map(value => labels[value] || value).join("、") || "无";
+          },
+          skipDraftSemiInventory(option) {
+            option._skipped = true;
+          },
+          async refreshSupplierRequisitionDraftAfterSemiReservation() {
+            const pendingItemIds = new Set((this.requisitionPending || []).filter(row => !row.is_merge_group).map(row => Number(row.item_id || row.order_item_id || row.id)));
+            const pendingGroupIds = new Set((this.requisitionPending || []).filter(row => row.is_merge_group).map(row => Number(row.merge_group_id || row.id)));
+            this.supplierRequisitionSelections = this.supplierRequisitionSelections.filter(selection => selection.type === "merge_group" ? pendingGroupIds.has(Number(selection.merge_group_id)) : pendingItemIds.has(Number(selection.order_item_id)));
+            if (!this.supplierRequisitionSelections.length) {
+              this.modal = null;
+              this.supplierRequisitionDraft = { supplier_groups:[] };
+              this.showToast("所选明细已由半成品库存全额抵扣，无需再报料");
+              return;
+            }
+            try {
+              const { data } = await axios.post("/api/requisition/supplier-orders/preview-from-pending-selection", { selections:this.supplierRequisitionSelections });
+              if (!(data.supplier_groups || []).length) {
+                this.modal = null;
+                this.supplierRequisitionDraft = { supplier_groups:[] };
+                this.supplierRequisitionSelections = [];
+                this.showToast("所选明细已由半成品库存全额抵扣，无需再报料");
+                return;
+              }
+              this.supplierRequisitionDraft = data;
+            } catch (error) {
+              const detail = error.response?.data?.detail || "";
+              if (error.response?.status === 409 && /全额抵扣/.test(detail)) {
+                this.modal = null;
+                this.supplierRequisitionDraft = { supplier_groups:[] };
+                this.supplierRequisitionSelections = [];
+                this.showToast("半成品库存抵扣已生效，相关明细已从待报料移除");
+                return;
+              }
+              throw error;
+            }
+          },
+          async confirmDraftSemiInventory(option) {
+            const candidates = this.draftSemiInventoryCandidates(option);
+            if (!candidates.length) return;
+            const override = this.draftSemiInventoryNeedsOverride(option);
+            if (override && !option._override) {
+              this.showToast("该库存与订单换算字段存在差异，请先勾选已核对差异", true);
+              return;
+            }
+            const available = candidates.reduce((sum, candidate) => sum + Number(candidate.deductible_requirement_quantity || 0), 0);
+            const requested = Math.min(Number(option.remaining_requirement_quantity || 0), available);
+            if (requested <= 0) {
+              this.showToast("该半成品候选已无可抵扣数量，请刷新后重试", true);
+              return;
+            }
+            const lotText = candidates.map(candidate => candidate.lot_number).join("、");
+            if (!confirm(`确认使用半成品批次 ${lotText} 抵扣 ${requested} 片？确认后会立即预占库存并重新计算采购张数。`)) return;
+            const warningCodes = [...new Set(candidates.flatMap(candidate => candidate.warning_codes || []))];
+            try {
+              const { data } = await axios.post("/api/requisition/semi-inventory/reserve-from-pending", {
+                order_item_id:option.order_item_id,
+                component_type:option.component_type,
+                requested_requirement_quantity:requested,
+                lots:candidates.map(candidate => ({ lot_id:candidate.lot_id, expected_version:candidate.version })),
+                override,
+                warning_acknowledged_codes:override ? [...new Set([...warningCodes,"SEMI_SIGNATURE_OVERRIDE"])] : warningCodes,
+                idempotency_key:createIdempotencyKey(),
+              });
+              await this.loadRequisition();
+              await this.refreshSupplierRequisitionDraftAfterSemiReservation();
+              this.showToast(`已抵扣 ${data.allocated_requirement_quantity} 片半成品库存，采购张数已重新计算`);
+            } catch (error) {
+              this.showToast("半成品库存抵扣失败：" + this.errorMessage(error), true);
+            }
           },
           draftLineSourceSummary(line) {
             const sources = line?.source_items || [];
@@ -4112,6 +4435,210 @@
               if (Number.isNaN(Number(item.unit_price)) || Number(item.unit_price) < 0) {
                 return `第 ${index + 1} 条单价必须是大于等于 0 的数字`;
               }
+              const inventoryError = this.inventoryDecisionRequired(item);
+              if (inventoryError) return `第${index + 1}条${inventoryError}`;
+            }
+            return "";
+          },
+          newOrderInventoryState() {
+            const part = () => ({ candidates:[], manual_candidates:[], selected:null, selected_candidates:[], allocations:[], skipped:false, manual_override:false, unavailable_reason:"" });
+            return { loading:false, stale:false, api_error:false, error:"", context:null, finished:part(), semi:{ whole:part(), cover:part(), base:part() } };
+          },
+          inventoryCustomerForLine(line) {
+            if (this.orderForm.items.includes(line)) return this.orderForm.customer_id;
+            const draft = this.orderImportDrafts.find(row => (row.items || []).includes(line));
+            return draft?.matched_customer_id || null;
+          },
+          inventoryComponents(line) {
+            const product = line._inventory_product || line;
+            const style = String(product.box_style || "").toUpperCase();
+            return (style.includes("A3") || style.includes("天地盖") || (product.base_report_length_mm && product.base_report_width_mm)) ? ["cover", "base"] : ["whole"];
+          },
+          componentLabel(component) { return ({whole:"",cover:"（盖）",base:"（底）"})[component] || ""; },
+          inventoryLocation(candidate) {
+            const location = candidate?.warehouse_location || candidate?.location || {};
+            return location.location_code || location.location_name || "库位未标注";
+          },
+          inventorySourceLabel(candidate) {
+            return ({learned:"系统推荐（已学习）",signature:"系统推荐（规格一致）",manual:"人工匹配"})[candidate?.source] || "系统推荐（规格一致）";
+          },
+          semiCandidateNeedsOverride(candidate) {
+            return candidate?.source === "manual" || (candidate?.source === "learned" && (candidate.signature_differences || []).length > 0);
+          },
+          inventorySourcesText(sources) {
+            return (sources || []).map(source => `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${source.location_code || source.location_name || "库位未标注"} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? 0}`).join("；");
+          },
+          inventoryCandidatePayload(line, component) {
+            const product = line._inventory_product || line;
+            const isBase = component === "base";
+            return {
+              customer_id:Number(this.inventoryCustomerForLine(line)),
+              board_length_mm:Number(isBase ? product.base_report_length_mm : product.report_length_mm),
+              board_width_mm:Number(isBase ? product.base_report_width_mm : product.report_width_mm),
+              material_code:String(product.material_code || line._material_code || line.material_base_code || line.material || "").split("-")[0],
+              flute_type:String(product.flute_type || line.flute_type || line._flute_filter || "").toUpperCase(),
+              component_type:component,
+              pieces_per_box:component === "whole" ? Math.max(Number(product.pieces_per_box || line.pieces_per_box || 1), 1) : 1,
+              stock_yield_per_sheet:Math.max(Number(product.stock_yield_per_sheet || line.stock_yield_per_sheet || 1), 1),
+            };
+          },
+          inventoryPayloadUnavailableReason(payload) {
+            return (!payload.board_length_mm || !payload.board_width_mm || !payload.material_code || !payload.flute_type) ? "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品" : "";
+          },
+          inventoryStateMatchesLine(line, customerId) {
+            const state = line?._inventory, context = state?.context;
+            return !!context && !state.loading && !state.stale && !state.api_error && Number(context.product_id) === Number(line.product_id || line.matched_product_id) && Number(context.customer_id) === Number(customerId || this.inventoryCustomerForLine(line)) && Number(context.quantity) === Number(line.quantity || 0);
+          },
+          invalidateLineInventory(line) {
+            const state = line._inventory || this.newOrderInventoryState();
+            state.stale = true; state.error = ""; state.api_error = false;
+            [state.finished, ...Object.values(state.semi)].forEach(part => { part.selected = null; part.selected_candidates = []; part.allocations = []; part.skipped = false; part.manual_override = false; });
+            line._inventory = state;
+          },
+          scheduleOrderLineInventoryRefresh(line, customerId) {
+            this.invalidateLineInventory(line);
+            if (line._inventory_refresh_timer) clearTimeout(line._inventory_refresh_timer);
+            line._inventory_refresh_timer = setTimeout(() => {
+              line._inventory_refresh_timer = null;
+              if ((line.product_id || line.matched_product_id) && Number(line.quantity || 0) > 0) this.loadOrderLineInventory(line, customerId);
+            }, 250);
+          },
+          refreshOrderLineInventory(line, customerId) {
+            if (line._inventory_refresh_timer) {
+              clearTimeout(line._inventory_refresh_timer);
+              line._inventory_refresh_timer = null;
+            }
+            this.invalidateLineInventory(line);
+            if (line.product_id || line.matched_product_id) this.loadOrderLineInventory(line, customerId);
+          },
+          async loadOrderLineInventory(line, customerId) {
+            const productId = Number(line.product_id || line.matched_product_id || 0);
+            customerId = Number(customerId || this.inventoryCustomerForLine(line));
+            if (!productId || !customerId) return;
+            const state = this.newOrderInventoryState();
+            line._inventory = state; state.loading = true;
+            try {
+              const product = (await axios.get(`/api/master/products/${productId}`)).data;
+              line._inventory_product = product;
+              state.context = { product_id:productId, customer_id:customerId, quantity:Number(line.quantity || 0) };
+              const components = this.inventoryComponents(line);
+              const requests = [{ key:"finished", label:"成品", promise:axios.get(`/api/warehouse/finished/products/${productId}/candidates`, { params:{ customer_id:customerId } }) }];
+              components.forEach(component => {
+                const payload = this.inventoryCandidatePayload(line, component);
+                const reason = this.inventoryPayloadUnavailableReason(payload);
+                if (reason) state.semi[component].unavailable_reason = reason;
+                else requests.push({ key:component, label:`半成品${this.componentLabel(component)}`, promise:axios.post(`/api/warehouse/semi-finished/products/${productId}/candidates`, payload) });
+              });
+              const responses = await Promise.allSettled(requests.map(request => request.promise));
+              const failures = [];
+              responses.forEach((response, index) => {
+                const request = requests[index];
+                if (response.status === "rejected") failures.push(`${request.label}：${this.errorMessage(response.reason)}`);
+                else if (request.key === "finished") state.finished.candidates = response.value.data.items || [];
+                else state.semi[request.key].candidates = response.value.data.items || [];
+              });
+              state.api_error = failures.length > 0;
+              state.error = failures.length ? `库存候选加载失败：${failures.join("；")}` : "";
+            } catch (error) {
+              state.api_error = true;
+              state.error = `库存候选加载失败：${this.errorMessage(error)}`;
+            } finally {
+              state.loading = false; state.stale = false; this.reallocateAllDraftInventory();
+            }
+          },
+          async loadOrderLineManualInventory(line, component, customerId) {
+            const productId = Number(line.product_id || line.matched_product_id || 0);
+            customerId = Number(customerId || this.inventoryCustomerForLine(line));
+            if (!productId || !customerId) return;
+            const payload = this.inventoryCandidatePayload(line, component);
+            const reason = this.inventoryPayloadUnavailableReason(payload);
+            if (reason) { line._inventory.semi[component].unavailable_reason = reason; return; }
+            try {
+              const { data } = await axios.post(`/api/warehouse/semi-finished/products/${productId}/inventory`, payload);
+              line._inventory.semi[component].manual_candidates = (data.items || []).map(candidate => ({...candidate, source:"manual"}));
+              this.reallocateAllDraftInventory();
+            } catch (error) { line._inventory.api_error = true; line._inventory.error = `人工候选加载失败：${this.errorMessage(error)}`; }
+          },
+          confirmOrderLineInventory(line, component, candidate=null, manual=false) {
+            if (manual && !line._inventory.semi[component].manual_override) return;
+            const label = component === "finished" ? "成品" : `半成品${this.componentLabel(component)}`;
+            const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
+            const candidates = manual ? [candidate] : state.candidates;
+            if (manual) candidate.source = "manual";
+            const warning = component !== "finished" && candidates.some(row => this.semiCandidateNeedsOverride(row)) ? "其中有规格差异，确认即表示已核对并同意 override。" : "";
+            if (!candidates.length || !confirm(`确认按 FIFO 使用 ${candidates.length} 个${label}推荐批次抵扣本订单？${warning}每次抵扣均需人工确认。`)) return;
+            state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false;
+            this.reallocateAllDraftInventory();
+          },
+          skipOrderLineInventory(line, component) {
+            const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
+            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; this.reallocateAllDraftInventory();
+          },
+          rechooseOrderLineInventory(line, component, customerId) {
+            this.invalidateLineInventory(line); this.loadOrderLineInventory(line, customerId || this.inventoryCustomerForLine(line));
+          },
+          reallocateDraftInventorySequentially(lines) {
+            const usedStockByLot = new Map();
+            const allocate = (part, demand, semi) => {
+              part.allocations = [];
+              [...part.candidates, ...part.manual_candidates].forEach(candidate => { candidate._virtual_requirement_quantity = 0; candidate._virtual_stock_quantity = 0; });
+              const selected = part.selected_candidates?.length ? part.selected_candidates : (part.selected ? [part.selected] : []);
+              let remaining = Math.max(Number(demand || 0), 0);
+              selected.forEach(candidate => {
+                if (remaining <= 0) return;
+                const yieldFactor = semi ? Math.max(Number(candidate.stock_yield_per_sheet || 1), 1) : 1;
+                const available = Math.max(Number(semi ? candidate.available_stock_quantity : candidate.quantity_available), 0);
+                const usedStock = usedStockByLot.get(candidate.lot_id) || 0;
+                const allocated = Math.min(remaining, Math.max(available - usedStock, 0) * yieldFactor);
+                const stock = Math.ceil(allocated / yieldFactor);
+                candidate._virtual_requirement_quantity = allocated; candidate._virtual_stock_quantity = stock;
+                if (allocated > 0) part.allocations.push({ candidate, requested_qty:allocated, stock_quantity:stock });
+                usedStockByLot.set(candidate.lot_id, usedStock + stock); remaining -= allocated;
+              });
+            };
+            (lines || []).forEach(line => {
+              const state = line._inventory;
+              if (!state) return;
+              allocate(state.finished, Number(line.quantity || 0), false);
+              const finishedQty = state.finished.allocations.reduce((sum, allocation) => sum + allocation.requested_qty, 0);
+              this.inventoryComponents(line).forEach(component => {
+                const part = state.semi[component];
+                const demand = Math.max(Number(line.quantity || 0) - finishedQty, 0) * this.inventoryCandidatePayload(line, component).pieces_per_box;
+                allocate(part, demand, true);
+              });
+            });
+          },
+          reallocateAllDraftInventory() {
+            this.reallocateDraftInventorySequentially(this.orderForm.items);
+            this.orderImportDrafts.forEach(draft => this.reallocateDraftInventorySequentially(draft.items));
+          },
+          buildReservationPlan(line) {
+            const state = line._inventory || this.newOrderInventoryState();
+            const finished = state.finished.allocations.map(({candidate, requested_qty}) => ({ lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, recommendation_source:"dedicated", confirmed:true }));
+            const finishedQty = finished.reduce((sum, entry) => sum + entry.requested_qty, 0);
+            const semi = finishedQty >= Number(line.quantity || 0) ? [] : this.inventoryComponents(line).flatMap(component => {
+              return state.semi[component].allocations.map(({candidate, requested_qty}) => {
+                const override = this.semiCandidateNeedsOverride(candidate);
+                return { lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, component_type:component, recommendation_source:candidate.source === "manual" ? "manual" : (candidate.source || "signature"), match_rule_id:candidate.match_rule_id || null, override, warning_acknowledged_codes:override ? ["SEMI_SIGNATURE_OVERRIDE"] : [], confirmed:true };
+              });
+            });
+            return { finished, semi };
+          },
+          inventoryDecisionRequired(line) {
+            const state = line?._inventory;
+            if (!state || state.loading) return "库存候选正在加载，请稍候。";
+            if (state.api_error) return state.error || "库存候选加载失败，请刷新后重试。";
+            if (state.stale) return "库存候选已过期，请重新获取并确认。";
+            if (state.context && !this.inventoryStateMatchesLine(line, state.context.customer_id)) return "库存候选与当前产品、客户或数量不一致，请刷新并重新确认。";
+            if (state.finished.candidates.length && !state.finished.skipped && !state.finished.selected_candidates.length) return "存在成品库存候选，请确认抵扣或选择本次不用库存。";
+            if (state.finished.selected_candidates.length && !state.finished.allocations.length && !state.finished.skipped) return "成品推荐批次已无可分配库存，请刷新或选择本次不用库存。";
+            const finishedQty = state.finished.allocations.reduce((sum, allocation) => sum + allocation.requested_qty, 0);
+            if (finishedQty >= Number(line.quantity || 0)) return "";
+            for (const component of this.inventoryComponents(line)) {
+              const part = state.semi[component];
+              if (part.unavailable_reason && !part.skipped) return `${part.unavailable_reason}，请选择本次不用半成品库存。`;
+              if ((part.candidates.length || part.manual_candidates.length) && !part.skipped && !part.selected_candidates.length) return `存在半成品${this.componentLabel(component)}候选，请确认抵扣或选择本次不用库存。`;
+              if (part.selected_candidates.length && !part.allocations.length && !part.skipped) return `半成品${this.componentLabel(component)}推荐批次已无可分配库存，请刷新或选择本次不用库存。`;
             }
             return "";
           },
@@ -4144,6 +4671,13 @@
             const target = new URLSearchParams(window.location.search).get("redirect") || "";
             return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
           },
+          initialPageFromLocation() {
+            const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","deliveries","finance","system"]);
+            const queryPage = new URLSearchParams(window.location.search).get("page") || "";
+            if (pages.has(queryPage)) return queryPage;
+            const pathPage = window.location.pathname.replace(/^\/+|\/+$/g, "");
+            return pages.has(pathPage) ? pathPage : "dashboard";
+          },
           redirectAfterLogin() {
             const target = this.loginRedirectPath();
             if (!target || this.user?.must_change_password) return false;
@@ -4155,9 +4689,10 @@
               const { data } = await axios.get("/api/auth/me");
               this.user = data.user;
               if (this.redirectAfterLogin()) return;
-              this.activePage = "dashboard";
+              const initialPage = this.initialPageFromLocation();
+              this.activePage = initialPage;
               await this.loadBase();
-              await this.loadPage("dashboard");
+              await this.loadPage(initialPage);
               if (this.user.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
@@ -4174,8 +4709,9 @@
               const currentPassword = this.loginForm.password;
               this.loginForm.password = "";
               if (this.redirectAfterLogin()) return;
-              this.activePage = "dashboard";
-              await this.loadBase(); await this.loadPage("dashboard");
+              const initialPage = this.initialPageFromLocation();
+              this.activePage = initialPage;
+              await this.loadBase(); await this.loadPage(initialPage);
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
             finally { this.loading = false; }
@@ -4204,7 +4740,7 @@
               if (page === "dashboard") await Promise.all([this.loadOverview(), this.loadKpi()]);
               if (page === "customers") await this.loadCustomers();
               if (page === "quotations" && this.quotationCustomer) await this.loadQuotationHistory();
-              if (page === "products") await Promise.all([this.loadProducts(), this.loadMaterials()]);
+              if (page === "products") await Promise.all([this.loadProducts(), this.loadMaterials(), this.loadMoldTools()]);
               if (page === "orders") await this.loadOrders();
               if (page === "requisition") await this.loadRequisition();
               if (page === "incoming") await this.loadIncoming();
@@ -4264,6 +4800,17 @@
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
             const { data } = await axios.get("/api/master/products", { params });
             this.products = data.items; this.productsTotal = data.total;
+          },
+          async loadMoldTools() {
+            if (this.isWorkshop) return;
+            const { data } = await axios.get("/api/warehouse/molds", { params:{ limit:500 } });
+            this.moldTools = data.items || [];
+          },
+          moldToolSelectOptions() {
+            return (this.moldTools || []).filter(row=>row.is_active).map(row=>({
+              ...row,
+              _label:`${row.mold_code}｜${row.mold_name}｜${row.rack_location}`,
+            }));
           },
           // 分页拉取材质：后端限制 page_size<=200，因此用 page 翻页拉全部，
           // 单次 limit 永不超过 200，避免一次性全量导致 422（Input should be <= 200）。
@@ -4660,6 +5207,298 @@
               const ms = await axios.get("/api/requisition/merge-suggestions");
               this.mergeSuggestions = ms.data.suggestions || [];
             } catch(e) { this.mergeSuggestions = []; }
+            try {
+              const policies = await axios.get("/api/requisition/stock-policies", {params:{warning_only:true}});
+              this.stockPolicyWarnings = policies.data.items || [];
+            } catch(e) { this.stockPolicyWarnings = []; }
+          },
+          async openStockReplenishment() {
+            this.stockReplenishmentForm = { source_type:"manual_history", supplier_name:"", customer_id:null, remark:"", stock_now:true, items:[] };
+            this.stockHistorySearch = { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0, source_workbook:null, source_sheet:null };
+            this.stockReplenishmentProducts = [];
+            this.modal = { type:"stockReplenishment", title:"库存补库 / 历史采购检索" };
+            try {
+              const [locations, policies] = await Promise.all([
+                axios.get("/api/requisition/stock-replenishment/locations"),
+                axios.get("/api/requisition/stock-policies", {params:{warning_only:true}}),
+              ]);
+              this.stockReplenishmentLocations = locations.data.items || [];
+              this.stockPolicyWarnings = policies.data.items || [];
+            } catch (error) {
+              this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
+            }
+          },
+          async searchStockHistory() {
+            const query = String(this.stockHistorySearch.query || "").trim();
+            if (!query) { this.showToast("请输入款号、产品名称或规格", true); return; }
+            this.stockHistorySearch.loading = true;
+            try {
+              const { data } = await axios.get("/api/requisition/historical-purchases/search", {params:{q:query,limit:30}});
+              this.stockHistorySearch = {...this.stockHistorySearch, ...data, loading:false};
+              if (!(data.items || []).length) this.showToast("未在 2020.1-2026 工作表找到匹配记录", true);
+            } catch (error) {
+              this.stockHistorySearch.loading = false;
+              this.showToast("历史采购检索失败：" + this.errorMessage(error), true);
+            }
+          },
+          parseHistoricalStockMaterial(material) {
+            const raw = String(material || "").trim().toUpperCase();
+            const parts = raw.split("/").map(v=>v.trim()).filter(Boolean);
+            const suffix = parts.length > 1 ? parts[parts.length - 1] : "";
+            const validFlutes = ["A","B","E","AB","BE"];
+            const flute = validFlutes.includes(suffix) ? suffix : "";
+            const code = flute ? parts.slice(0,-1).join("/") : raw;
+            const layer = ["AB","BE"].includes(flute) ? 5 : ["A","B","E"].includes(flute) ? 3 : (code.replace(/[^A-Z0-9]/g,"").length >= 5 ? 5 : 3);
+            return { code, flute, layer };
+          },
+          normalizeStockSupplierName(name) {
+            const value=String(name||"").trim();
+            const aliases={"佳丰":"苏州佳丰","苏州佳丰":"苏州佳丰","鸣朋":"昆山鸣朋","昆山鸣朋":"昆山鸣朋","嘉林亿":"苏州嘉林亿","苏州嘉林亿":"苏州嘉林亿"};
+            return aliases[value] || value;
+          },
+          defaultStockLocation(type) {
+            return this.stockLocationsForType(type)[0]?.id || null;
+          },
+          stockMaterialIdByCode(code, layerCount) {
+            const normalized = String(code || "").trim().toUpperCase().split("-")[0];
+            const source = this.allMaterials.length ? this.allMaterials : this.materials;
+            return source.find(row =>
+              this.materialBaseCode(row).toUpperCase() === normalized &&
+              (!layerCount || Number(row.layer_count) === Number(layerCount))
+            )?.id || null;
+          },
+          async addHistoricalStockLine(row) {
+            const material = this.parseHistoricalStockMaterial(row.material_code);
+            const line={
+              _key:createIdempotencyKey(), stock_policy_id:null, target_inventory_type:"semi_finished",
+              product_id:row.product_id || null, customer_id:row.customer_id || this.stockReplenishmentForm.customer_id || null,
+              product_code:"", product_name:row.product_reference || "历史库存片料",
+              material_id:this.stockMaterialIdByCode(material.code, material.layer), material_code:material.code, material_supplier_name:"", layer_count:material.layer, flute_type:material.flute,
+              report_length_mm:Number(row.report_length_mm || 0), report_width_mm:Number(row.report_width_mm || 0),
+              crease_type:row.crease_type || null, crease_text:row.crease_text || "",
+              crease_left_mm:row.crease_left_mm, crease_middle_mm:row.crease_middle_mm, crease_right_mm:row.crease_right_mm,
+              sheet_type:"raw_board", component_type:"whole", pieces_per_box:1, stock_yield_per_sheet:1,
+              quantity:null, location_id:this.defaultStockLocation("semi_finished"),
+              historical_workbook:this.stockHistorySearch.source_workbook || "2025年采购单.xlsx",
+              historical_sheet:this.stockHistorySearch.source_sheet || "2020.1-2026", historical_row:row.source_row,
+              historical_search_text:row.search_text, remark:row.notes || "",
+            };
+            this.stockReplenishmentForm.items.push(line);
+            if (line.product_id && line.customer_id) {
+              await this.loadStockProducts(line.customer_id);
+              this.applyStockProduct(line,{preserveExisting:true});
+            } else if (line.material_id) {
+              this.applyStockMaterial(line);
+            }
+            if (!line.material_supplier_name && !this.stockReplenishmentForm.supplier_name && row.supplier_name) {
+              this.stockReplenishmentForm.supplier_name = this.normalizeStockSupplierName(row.supplier_name);
+            }
+            this.syncStockReplenishmentSupplier();
+          },
+          addBlankStockReplenishmentLine() {
+            this.stockReplenishmentForm.items.push({
+              _key:createIdempotencyKey(), stock_policy_id:null, target_inventory_type:"semi_finished",
+              product_id:null, customer_id:null, product_code:"", product_name:"", material_id:null, material_code:"", material_supplier_name:"",
+              layer_count:5, flute_type:"AB", report_length_mm:null, report_width_mm:null,
+              crease_type:null, crease_text:"", crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null,
+              sheet_type:"raw_board", component_type:"whole", pieces_per_box:1, stock_yield_per_sheet:1,
+              quantity:null, location_id:this.defaultStockLocation("semi_finished"), remark:"",
+            });
+          },
+          async addStockPolicyDraft(policy) {
+            try {
+              const { data } = await axios.get(`/api/requisition/stock-policies/${policy.id}/replenishment-draft`);
+              const line = data.items[0];
+              if (!Number(line.quantity || 0)) { this.showToast("当前库存已达到目标数量，无需补库", true); return; }
+              this.stockReplenishmentForm.source_type = "stock_warning";
+              this.stockReplenishmentForm.supplier_name = data.supplier_name || this.stockReplenishmentForm.supplier_name;
+              this.stockReplenishmentForm.customer_id = data.customer_id || null;
+              this.stockReplenishmentForm.items.push({...line,_key:createIdempotencyKey(),material_id:line.material_id||null,material_supplier_name:data.supplier_name||"",crease_text:""});
+              if (line.customer_id) await this.loadStockProducts(line.customer_id);
+              this.syncStockReplenishmentSupplier();
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          stockLocationsForType(type) {
+            const allowed = type === "finished" ? ["finished","shared"] : ["semi_finished","shared"];
+            return (this.stockReplenishmentLocations || []).filter(row=>allowed.includes(row.warehouse_type));
+          },
+          async loadStockProducts(customerId, query="") {
+            if (!customerId) return;
+            try {
+              const keyword=String(query||"").trim();
+              const {data} = await axios.get("/api/requisition/stock-replenishment/products", {params:{customer_id:customerId,q:keyword||undefined,limit:keyword?100:2000}});
+              const existing = new Map((this.stockReplenishmentProducts || []).map(row=>[row.id,row]));
+              (data.items || []).forEach(row=>existing.set(row.id,row));
+              this.stockReplenishmentProducts = [...existing.values()];
+            } catch(error) { this.showToast(this.errorMessage(error), true); }
+          },
+          searchStockProducts(customerId, query) {
+            if (!customerId || !String(query||"").trim()) return;
+            this.loadStockProducts(customerId, query);
+          },
+          onStockCustomerChanged(line) {
+            const hadProduct=!!line.product_id;
+            line.product_id=null;
+            line.product_code="";
+            if (hadProduct) {
+              line.product_name="";
+              line.material_id=null; line.material_code=""; line.material_supplier_name="";
+              line.report_length_mm=null; line.report_width_mm=null;
+              line.crease_type=null; line.crease_text="";
+              line.crease_left_mm=null; line.crease_middle_mm=null; line.crease_right_mm=null;
+            }
+            if (line.customer_id) this.loadStockProducts(line.customer_id);
+            this.syncStockReplenishmentSupplier();
+          },
+          stockProductsForCustomer(customerId) {
+            return (this.stockReplenishmentProducts || []).filter(row=>!customerId || Number(row.customer_id)===Number(customerId));
+          },
+          stockProductSelectOptions(customerId) {
+            return this.stockProductsForCustomer(customerId).map(row=>{
+              const size=[row.length_mm,row.width_mm,row.height_mm].filter(value=>value!==null&&value!==undefined&&value!=="").join("×");
+              const label=[row.product_code,row.product_name,size ? size+"mm" : "",row.material_code||""].filter(Boolean).join("｜");
+              return {...row,_label:label};
+            });
+          },
+          applyStockProduct(line, options={}) {
+            const product = (this.stockReplenishmentProducts || []).find(row=>Number(row.id)===Number(line.product_id));
+            if (!product) return;
+            const preserveExisting = !!options.preserveExisting;
+            const assign = (key,value) => {
+              if (value === null || value === undefined || value === "") return;
+              if (!preserveExisting || line[key] === null || line[key] === undefined || line[key] === "" || Number(line[key]) === 0) line[key] = value;
+            };
+            line.customer_id = product.customer_id; line.product_code = product.product_code; line.product_name = product.product_name;
+            assign("material_id",product.material_id);
+            assign("material_code",product.material_code);
+            assign("material_supplier_name",product.material_supplier_name);
+            assign("layer_count",product.layer_count);
+            assign("flute_type",product.flute_type);
+            assign("report_length_mm",product.report_length_mm);
+            assign("report_width_mm",product.report_width_mm);
+            assign("crease_type",product.crease_type);
+            assign("crease_left_mm",product.crease_left_mm);
+            assign("crease_middle_mm",product.crease_middle_mm);
+            assign("crease_right_mm",product.crease_right_mm);
+            assign("pieces_per_box",Number(product.pieces_per_box || 1));
+            if (line.material_id) this.applyStockMaterial(line);
+            this.onStockCreaseTypeChanged(line);
+            this.syncStockReplenishmentSupplier();
+          },
+          applyStockMaterial(line) {
+            const source = this.allMaterials.length ? this.allMaterials : this.materials;
+            const material = source.find(row=>Number(row.id)===Number(line.material_id));
+            if (!material) {
+              line.material_id = null;
+              return;
+            }
+            line.material_code = this.materialBaseCode(material);
+            line.material_supplier_name = material.supplier_name || "";
+            line.layer_count = Number(material.layer_count || line.layer_count || 5);
+            const allowed = this.orderItemFluteOptions(line.layer_count);
+            if (!allowed.includes(line.flute_type)) line.flute_type = allowed[0] || "";
+            this.syncStockReplenishmentSupplier();
+          },
+          stockReplenishmentMaterialSuppliers() {
+            return [...new Set((this.stockReplenishmentForm.items || []).map(line=>String(line.material_supplier_name||"").trim()).filter(Boolean))];
+          },
+          syncStockReplenishmentSupplier() {
+            const suppliers=this.stockReplenishmentMaterialSuppliers();
+            if (suppliers.length === 1) this.stockReplenishmentForm.supplier_name=suppliers[0];
+            else if (suppliers.length > 1) this.stockReplenishmentForm.supplier_name="";
+          },
+          removeStockReplenishmentLine(index) {
+            this.stockReplenishmentForm.items.splice(index,1);
+            this.syncStockReplenishmentSupplier();
+          },
+          onStockLayerChanged(line) {
+            const allowed = this.orderItemFluteOptions(line.layer_count);
+            if (!allowed.includes(line.flute_type)) line.flute_type = allowed[0] || "";
+            const source = this.allMaterials.length ? this.allMaterials : this.materials;
+            const selected = source.find(row=>Number(row.id)===Number(line.material_id));
+            if (selected && Number(selected.layer_count)!==Number(line.layer_count)) {
+              line.material_id = null;
+              line.material_code = "";
+              line.material_supplier_name = "";
+              this.syncStockReplenishmentSupplier();
+            }
+          },
+          onStockTargetTypeChanged(line) {
+            line.location_id = this.defaultStockLocation(line.target_inventory_type);
+            if (line.target_inventory_type === "finished" && !line.customer_id) {
+              line.product_id = null;
+            }
+          },
+          onStockCreaseTypeChanged(line) {
+            if (line.crease_type === "压线") {
+              line.sheet_type = "creased_sheet";
+              return;
+            }
+            line.crease_left_mm = null;
+            line.crease_middle_mm = null;
+            line.crease_right_mm = null;
+            line.sheet_type = line.crease_type === "净料" ? "net_sheet" : "raw_board";
+          },
+          syncStockReportWidthFromCrease(line) {
+            if (!line || line.crease_type !== "压线") return;
+            const raw = [line.crease_left_mm, line.crease_middle_mm, line.crease_right_mm];
+            if (raw.some(value => value === null || value === undefined || value === "")) return;
+            const segments = raw.map(Number);
+            if (!segments.every(Number.isFinite) || segments[0] < 0 || segments[1] <= 0 || segments[2] < 0) return;
+            line.report_width_mm = segments.reduce((sum, value) => sum + value, 0);
+          },
+          stockCreaseMismatch(line) {
+            if (!line || line.crease_type !== "压线") return "";
+            const raw = [line.crease_left_mm, line.crease_middle_mm, line.crease_right_mm];
+            if (raw.some(value => value === null || value === undefined || value === "")) return "请完整填写上摇盖、高、下摇盖";
+            const segments = raw.map(Number);
+            if (!segments.every(Number.isFinite) || segments[0] < 0 || segments[1] <= 0 || segments[2] < 0) return "压线尺寸必须是有效毫米数";
+            const total = segments.reduce((sum, value) => sum + value, 0);
+            const reportWidth = Number(line.report_width_mm);
+            if (!Number.isFinite(reportWidth) || reportWidth <= 0) return `请填写报料宽，且必须等于压线合计 ${total}mm`;
+            return total === reportWidth ? "" : `压线不符：三段合计 ${total}mm，报料宽 ${reportWidth}mm；两者必须相等`;
+          },
+          validateStockReplenishmentForm() {
+            if (!this.stockReplenishmentForm.items.length) return "至少添加一条补库明细";
+            const suppliers=this.stockReplenishmentMaterialSuppliers();
+            if (suppliers.length > 1) return "一张库存补库单只能包含同一供应商的材质，请拆分后保存";
+            for (let i=0;i<this.stockReplenishmentForm.items.length;i+=1) {
+              const line=this.stockReplenishmentForm.items[i], label=`第 ${i+1} 行`;
+              if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity)<=0) return `${label}数量必须是大于0的整数`;
+              if (this.stockReplenishmentForm.stock_now && !line.location_id) return `${label}立即入库前必须选择库位`;
+              if (line.target_inventory_type === "finished" && !line.product_id) return `${label}成品补库必须选择产品`;
+              if (line.target_inventory_type === "semi_finished") {
+                if (!line.material_code || !line.layer_count || !line.flute_type) return `${label}必须填写材质、层数和楞型`;
+                if (!(Number(line.report_length_mm)>0) || !(Number(line.report_width_mm)>0)) return `${label}必须填写报料长宽`;
+                if (line.crease_type === "压线") {
+                  const segments=[line.crease_left_mm,line.crease_middle_mm,line.crease_right_mm].map(Number);
+                  if (segments.some(value=>!Number.isFinite(value)) || segments[1] <= 0 || segments[0] < 0 || segments[2] < 0) return `${label}压线必须完整填写上摇盖、高、下摇盖`;
+                  const total=segments.reduce((sum,value)=>sum+value,0);
+                  if (total !== Number(line.report_width_mm)) return `${label}压线三段合计 ${total}mm 必须等于报料宽 ${line.report_width_mm}mm`;
+                }
+              }
+            }
+            return "";
+          },
+          async saveStockPolicyFromLine(line) {
+            const validation = this.validateStockReplenishmentForm();
+            if (validation) { this.showToast(validation,true); return; }
+            const name = prompt("预警模板名称", line.product_name || line.product_code || "库存预警");
+            if (!name) return;
+            const warningQuantity = Number(prompt("库存低于或等于多少时预警？", "10"));
+            const targetQuantity = Number(prompt("触发后建议补到多少？", String(Math.max(Number(line.quantity||0),warningQuantity))));
+            if (!Number.isInteger(warningQuantity) || warningQuantity<0 || !Number.isInteger(targetQuantity) || targetQuantity<=0 || targetQuantity<warningQuantity) { this.showToast("预警/目标数量输入无效",true); return; }
+            try {
+              await axios.post("/api/requisition/stock-policies", {
+                policy_name:name,target_inventory_type:line.target_inventory_type,product_id:line.product_id||null,customer_id:line.customer_id||null,
+                material_code:line.material_code||null,layer_count:line.layer_count||null,flute_type:line.flute_type||null,
+                report_length_mm:line.report_length_mm||null,report_width_mm:line.report_width_mm||null,
+                sheet_type:line.sheet_type||"raw_board",component_type:line.component_type||"whole",pieces_per_box:Number(line.pieces_per_box||1),stock_yield_per_sheet:Number(line.stock_yield_per_sheet||1),
+                warning_quantity:warningQuantity,target_quantity:targetQuantity,default_location_id:line.location_id||null,supplier_name:this.stockReplenishmentForm.supplier_name||null,remark:line.remark||null,active:true,
+              });
+              const {data}=await axios.get("/api/requisition/stock-policies",{params:{warning_only:true}}); this.stockPolicyWarnings=data.items||[];
+              this.showToast("库存预警模板已保存");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async loadIncoming() {
             const [pending,received]=await Promise.all([
@@ -5020,6 +5859,7 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async openProduct(row=null) {
+            if (!this.isWorkshop && !this.moldTools.length) await this.loadMoldTools();
             let detail = row;
             if (row?.id) detail = (await axios.get(`/api/master/products/${row.id}`)).data;
             this.productForm = this.hydrateProductForm(
@@ -5072,6 +5912,19 @@
             }
             return [...new Set((values || []).filter(Boolean))].join(",");
           },
+          productUsesMold(form) {
+            if (!form) return false;
+            const values=Array.isArray(form._production_processes)
+              ? form._production_processes
+              : this.parseProductionProcesses(form.production_process);
+            return values.includes("模切");
+          },
+          onProductProcessesChanged() {
+            if (!this.productUsesMold(this.productForm)) {
+              this.productForm.mold_tool_id=null;
+              this.productForm.mold_tool=null;
+            }
+          },
           hydrateProductForm(detail) {
             const form = { ...blankProduct(), ...JSON.parse(JSON.stringify(detail || {})) };
             form.box_style = this.normalizeBoxTypeDisplay(form.box_style || "");
@@ -5122,7 +5975,7 @@
               material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
               length_mm: f.length_mm, width_mm: f.width_mm, height_mm: f.height_mm,
               print_content: f.print_content, production_processes: f._production_processes,
-              sale_unit_price: f.sale_unit_price, remark: f.remark,
+              sale_unit_price: f.sale_unit_price, die_cut_path: f.die_cut_path, mold_tool_id: f.mold_tool_id, remark: f.remark,
               layer_count: f.layer_count, flute_type: f.flute_type,
               splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box, flap_mm: f.flap_mm,
               report_length_mm: f.report_length_mm, report_width_mm: f.report_width_mm,
@@ -5436,15 +6289,33 @@
               this.supplierOrders = r.data.items || [];
             } catch(e) { this.supplierOrders = []; }
           },
+          reportedSourceLabel(row) {
+            if (row.source_type === "supplier_order") return "供应商报料单";
+            if (row.source_type === "stock_replenishment") return "库存补库单";
+            return "旧报料单";
+          },
           async openReportedDocument(row) {
             if (row.source_type === "supplier_order") {
               const { data } = await axios.get(`/api/requisition/supplier-orders/${row.id}`);
               this.openSupplierOrderPrint(data);
               return;
             }
+            if (row.source_type === "stock_replenishment") {
+              const {data}=await axios.get("/api/requisition/stock-replenishment/orders/"+row.id+"/print");
+              this.openStockReplenishmentPrint(data);
+              return;
+            }
             if (row.source_type === "legacy_material_requisition") {
               window.open(`/requisition-print.html?id=${row.id}`, "_blank");
             }
+          },
+          async stockReportedReplenishment(row) {
+            if (!confirm("确认将库存补库单 "+row.document_number+" 的未入库数量写入仓库可用库存？")) return;
+            try {
+              const {data}=await axios.post("/api/requisition/stock-replenishment/orders/"+row.id+"/stock");
+              await this.loadRequisition();
+              this.showToast("补库单 "+data.order_number+" 已确认入库");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           openSupplierOrderPrint(so) {
             const warnings = so.dimension_warnings || [];
@@ -5502,6 +6373,10 @@
               return '压线';
             }
             return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
+          },
+          moldLocationText(item) {
+            const parts = [item.mold_code, item.mold_name, item.mold_location].filter(Boolean);
+            return parts.length ? parts.join("｜") : "未绑定模具";
           },
           // ===== 常用箱采购报料/压线推荐（只推荐，不强制覆盖人工值） =====
           normalizeMmInteger(value) {
@@ -5638,6 +6513,7 @@
           },
           markProductBaseCreaseManual() {
             this.productForm._base_crease_dims_manual = true;
+            this.syncProductBaseReportWidthFromCrease();
           },
           // A1/0201 普通开槽箱 + 压线类型=压线时，上摇盖与下摇盖联动：
           // 改其中一侧，另一侧自动同步为同一数值，避免现场把两侧改成不同值
@@ -5656,12 +6532,10 @@
             }
             this.markProductCreaseManual();
           },
-          // 压线尺寸 → 报料宽 单向同步（仅 A1/0201 普通开槽箱 + 压线类型=压线）。
-          // 报料宽比三段压线合计多 5mm 裁切余量；余量不能摊进上下摇盖，
-          // 否则 670mm 宽会错误显示成 338/337，而不是现场确认的 335/335。
+          // 所有箱型统一口径：压线尺寸变化后，报料宽立即同步为三段合计。
           syncProductReportWidthFromCrease() {
             const form = this.productForm;
-            if (!form || !this.isA1BoxStyle(form.box_style) || form.crease_type !== "压线") return;
+            if (!form || form.crease_type !== "压线") return;
             const left = this.normalizeMmInteger(form.crease_left_mm);
             const middle = this.normalizeMmInteger(form.crease_middle_mm);
             const right = this.normalizeMmInteger(form.crease_right_mm);
@@ -5669,25 +6543,46 @@
             form.report_width_mm = left + middle + right;
             form._report_dims_manual = true;
           },
-          // 常用箱编辑保存前校验：压线尺寸完整性/数值有效性/与报料宽一致性
-          validateProductCreaseAndReport(form) {
-            if (!form || !this.isA1BoxStyle(form.box_style) || form.crease_type !== "压线") return null;
-            const rawValues = [form.crease_left_mm, form.crease_middle_mm, form.crease_right_mm];
+          syncProductBaseReportWidthFromCrease() {
+            const form = this.productForm;
+            if (!form || form.base_crease_type !== "压线") return;
+            const left = this.normalizeMmInteger(form.base_crease_left_mm);
+            const middle = this.normalizeMmInteger(form.base_crease_middle_mm);
+            const right = this.normalizeMmInteger(form.base_crease_right_mm);
+            if (left === null || middle === null || right === null) return;
+            form.base_report_width_mm = left + middle + right;
+            form._base_report_dims_manual = true;
+          },
+          validateCreaseWidthSet(label, creaseType, reportWidth, left, middle, right) {
+            if (creaseType !== "压线") return null;
+            const rawValues = [left, middle, right];
             const isBlank = (value) => value === null || value === undefined || value === "";
-            if (rawValues.every(isBlank)) return null;
-            if (rawValues.some(isBlank)) return "请填写完整压线尺寸。";
+            if (rawValues.some(isBlank)) return `${label}必须完整填写三段尺寸。`;
             const numbers = rawValues.map((value) => Number(value));
-            if (!numbers.every((value) => Number.isFinite(value))) return "压线尺寸必须为数字。";
-            const sum = Math.round(numbers.reduce((total, value) => total + value, 0));
-            if (isBlank(form.report_width_mm)) return null;
-            const width = Number(form.report_width_mm);
-            if (!Number.isFinite(width)) return null;
-            const roundedWidth = Math.round(width);
-            const expectedWidth = sum;
-            if (expectedWidth !== roundedWidth) {
-              return `压线不符：压线尺寸合计 ${sum}mm，当前报料宽为 ${roundedWidth}mm。报料宽度必须等于压线三段总和；如需裁切余量，请把余量体现在压线尺寸中。`;
+            if (!numbers.every((value) => Number.isFinite(value)) || numbers[0] < 0 || numbers[1] <= 0 || numbers[2] < 0) return `${label}尺寸必须是有效毫米数。`;
+            const sum = numbers.reduce((total, value) => total + value, 0);
+            if (isBlank(reportWidth)) return `${label}已设置，请填写对应报料宽。`;
+            const width = Number(reportWidth);
+            if (!Number.isFinite(width) || width <= 0) return `${label}对应报料宽必须大于 0。`;
+            if (sum !== width) {
+              return `${label}不符：三段合计 ${sum}mm，当前报料宽为 ${width}mm。报料宽必须等于压线三段总和。`;
             }
             return null;
+          },
+          // 常用箱编辑保存前校验：主料及天地盖底料均必须满足压线合计=报料宽。
+          validateProductCreaseAndReport(form) {
+            if (!form) return null;
+            const mainLabel = this.isTelescopingLidBoxStyle(form.box_style) ? "盖压线" : "压线";
+            const mainError = this.validateCreaseWidthSet(
+              mainLabel, form.crease_type, form.report_width_mm,
+              form.crease_left_mm, form.crease_middle_mm, form.crease_right_mm
+            );
+            if (mainError) return mainError;
+            if (!this.isTelescopingLidBoxStyle(form.box_style)) return null;
+            return this.validateCreaseWidthSet(
+              "底压线", form.base_crease_type, form.base_report_width_mm,
+              form.base_crease_left_mm, form.base_crease_middle_mm, form.base_crease_right_mm
+            );
           },
           onProductBoxStyleChange() {
             const selected = this.productForm.box_style;
@@ -5758,6 +6653,11 @@
                 form.base_crease_left_mm = crease.base_top_flap;
                 form.base_crease_middle_mm = crease.base_height;
                 form.base_crease_right_mm = crease.base_bottom_flap;
+                if (force || this.shouldAutoApplyRecommendation(form._base_report_dims_manual)) {
+                  form.base_report_width_mm = this.normalizeMmInteger(
+                    crease.base_top_flap + crease.base_height + crease.base_bottom_flap
+                  );
+                }
               }
             }
           },
@@ -5980,7 +6880,8 @@
               const form = new FormData();
               this.orderImportBatch.files.forEach(file => form.append("files", file));
               const { data } = await axios.post("/api/orders/pdf-preview-batch", form);
-              this.orderImportDrafts = (data.drafts || []).map(draft => ({...draft, confirmed:false}));
+              this.orderImportDrafts = (data.drafts || []).map(draft => ({...draft, confirmed:false, items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))}));
+              await Promise.all(this.orderImportDrafts.map(draft => Promise.all((draft.items || []).filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id)))));
               this.orderImportBatch.status = "recognized";
             } catch (error) {
               this.orderImportDrafts = [];
@@ -6024,6 +6925,8 @@
             if (draft?.integrity_check?.integrity_status === "failed") reasons.push("PDF识别存在漏行或合计不一致，请先处理完整性异常。");
             if (this.hasImportDraftQuantityReview(draft)) reasons.push("存在非整数数量，不能直接保存，请人工修改后再保存。");
             (draft?.items || []).forEach(item => {
+              const inventoryReason = this.inventoryDecisionRequired(item);
+              if (inventoryReason) reasons.push(`${item.product_name || item.raw_product_name || "明细"}：${inventoryReason}`);
               const line = item.line_no ? `第${item.line_no}行` : "明细行";
               const qty = Number(item.quantity);
               if (qty <= 0) reasons.push(`${line}数量必须大于0。`);
@@ -6066,7 +6969,8 @@
             }));
             const { data } = await axios.post("/api/orders/draft-rematch", { draft, customer_id:draft.matched_customer_id });
             data.items.forEach((item,itemIndex) => Object.assign(item, preserved[itemIndex] || {}));
-            this.orderImportDrafts[index] = {...data, confirmed:false};
+            this.orderImportDrafts[index] = {...data, confirmed:false, items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))};
+            await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
           async selectImportProduct(item) {
             const candidate = (item.product_candidates || []).find(row => row.id === item.matched_product_id);
@@ -6083,6 +6987,7 @@
                 item.material_base_code = (data.material_code || "").split("-")[0];
                 item.material_supplier_name = data.material_supplier_name || "";
                 item.material_weight_structure = data.material_weight || "";
+                item._inventory_product = data;
                 item.product_drawing_file = data.drawings?.[0]?.image_path || null;
                 if (!item.production_notes && data.production_process) item.production_notes = data.production_process;
                 item.product_default_price = data.sale_unit_price != null ? String(data.sale_unit_price) : null;
@@ -6094,6 +6999,7 @@
               } catch(_) {}
             }
             await this.recalculateImportCost(item);
+            this.refreshOrderLineInventory(item);
           },
           pdfItemMaterialText(item) {
             const code = (item.material_base_code || "").split("-")[0];
@@ -6195,13 +7101,18 @@
                   specification: item.specification, sale_unit_price: item.product_default_price,
                   layer_count: item.layer_count, flute_type: item.flute_type
                 } : null,
+                client_line_id: item.client_line_id || createIdempotencyKey(),
+                _inventory: item._inventory || this.newOrderInventoryState(),
+                _inventory_product: item._inventory_product || null,
               })),
             };
             this.orderProductOptions = {};
             this.modal = { type:"order", title:"新建多明细订单（PDF草稿）" };
             for (let index = 0; index < this.orderForm.items.length; index += 1) {
               await this.searchOrderProducts(index, this.orderForm.items[index].product_code || "");
+              if (this.orderForm.items[index].product_id && !this.inventoryStateMatchesLine(this.orderForm.items[index], this.orderForm.customer_id)) await this.loadOrderLineInventory(this.orderForm.items[index], this.orderForm.customer_id);
             }
+            this.reallocateAllDraftInventory();
             await this.refreshOrderNumberPreview();
           },
           async saveConfirmedImportDrafts() {
@@ -6215,6 +7126,11 @@
             try {
               for (const draft of drafts) {
                 try {
+                  const inventoryError = (draft.items || []).map((item, index) => {
+                    const reason = this.inventoryDecisionRequired(item);
+                    return reason ? `第${index + 1}条${reason}` : "";
+                  }).find(Boolean);
+                  if (inventoryError) throw new Error(inventoryError);
                   await axios.post("/api/orders", {
                     customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
                     order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
@@ -6226,6 +7142,8 @@
                       const useStd = !!(item.matched_product_id && !item.is_new_product);
                       const matCode = (item.material_candidates || []).find(row => row.id === item.matched_material_id)?.code || null;
                       return {
+                        client_line_id: item.client_line_id || createIdempotencyKey(),
+                        reservation_plan: this.buildReservationPlan(item),
                         product_id: item.is_new_product ? null : (item.matched_product_id || null),
                         is_new_product: !!item.is_new_product,
                         material_id: item.matched_material_id || null,
@@ -6349,6 +7267,7 @@
             this.orderProductOptions = {};
             for (let index=0; index<this.orderForm.items.length; index+=1) {
               const item=this.orderForm.items[index];
+              this.invalidateLineInventory(item);
               item.product_id=null;
               await this.searchOrderProducts(index, item.product_code || item.product_name || item.specification || "");
             }
@@ -6389,6 +7308,8 @@
               drawing_file: null,           // 订单级图纸（保存后）
               temp_drawing_file: null,      // 新建订单临时图纸路径
               drawing_save_option: "order_only", // "order_only"|"save_to_product"|"overwrite_product"
+              client_line_id: createIdempotencyKey(),
+              _inventory: this.newOrderInventoryState(),
             });
             if (this.orderForm.customer_id) this.searchOrderProducts(index, "");
             if (this.modal?.type === "order") this.refreshOrderNumberPreview();
@@ -6396,6 +7317,7 @@
           removeOrderItem(index) {
             if (this.orderForm.items.length > 1) {
               this.orderForm.items.splice(index,1);
+              this.reallocateAllDraftInventory();
               if (this.modal?.type === "order") this.refreshOrderNumberPreview();
             }
           },
@@ -6429,14 +7351,17 @@
             item._material_supplier_name = data.material_supplier_name || "";
             item._material_weight = data.material_weight || "";
             item._product_drawings = data.drawings || [];
+            item._inventory_product = data;
             // 保存原始常用箱字段，用于提交时比对是否需要同步
             item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type };
             await this.recalculateOrderCost(index);
+            this.refreshOrderLineInventory(item, this.orderForm.customer_id);
           },
           async selectOrderMaterial(index) {
             const item=this.orderForm.items[index];
             item.material=this.materials.find(row => row.id === item.material_id)?.code || "";
             await this.recalculateOrderCost(index);
+            this.refreshOrderLineInventory(item, this.orderForm.customer_id);
           },
           async offerSyncCommonBox(items) {
             // 对每个来自常用箱且有手动修改的明细，询问是否同步回常用箱
@@ -6517,10 +7442,12 @@
             if (item._layer_filter) item._flute_filter = this.getDefaultFluteByLayer(item._layer_filter);
             else item._flute_filter = null;
             this.resetMaterialIfNotMatched(item, item._material_supplier || "", item._layer_filter, item._flute_filter);
+            this.refreshOrderLineInventory(item, this.orderForm.customer_id);
           },
           onOrderItemFluteChange(index) {
             const item = this.orderForm.items[index];
             this.resetMaterialIfNotMatched(item, item._material_supplier || "", item._layer_filter, item._flute_filter);
+            this.refreshOrderLineInventory(item, this.orderForm.customer_id);
           },
           async recalculateOrderCost(index) {
             const item=this.orderForm.items[index];
@@ -6632,7 +7559,7 @@
                 inventory_lot_id:candidate.lot_id,
                 quantity,
                 expected_version:candidate.version,
-                idempotency_key:crypto.randomUUID(),
+                idempotency_key:createIdempotencyKey(),
                 warning_acknowledged_codes:general?["GENERAL_FINISHED_STOCK"]:[],
               });
               await Promise.all([
@@ -6652,7 +7579,7 @@
             try {
               await axios.post(`/api/warehouse/reservations/${reservation.id}/release`,{
                 release_reason:reason.trim(),
-                idempotency_key:crypto.randomUUID(),
+                idempotency_key:createIdempotencyKey(),
               });
               await Promise.all([
                 this.refreshOrderItemInventorySummary(),
@@ -6793,10 +7720,10 @@
               if (!Array.isArray(lines) || !lines.length) return `第 ${groupIndex + 1} 个供应商组没有明细`;
               for (const [lineIndex, line] of lines.entries()) {
                 const label = `第 ${groupIndex + 1} 组第 ${lineIndex + 1} 行`;
+                const undecidedInventory = this.draftLineSemiInventoryOptions(line).find(option => !option._skipped && this.draftSemiInventoryCandidates(option).length);
+                if (undecidedInventory) return `${label} 发现可抵扣半成品库存，请先确认抵扣或选择本次不用库存`;
                 if (Number(line.report_length_mm) <= 0) return `${label} 报料长必须大于 0`;
                 if (Number(line.report_width_mm) <= 0) return `${label} 报料宽必须大于 0`;
-                if (Number(line.inventory_deducted_qty || 0) < 0) return `${label} 成品抵扣不能小于 0`;
-                if (Number(line.inventory_deducted_qty || 0) > Number(line.production_required_qty || line.quantity || 0)) return `${label} 成品抵扣不能大于本行需生产数量`;
                 if (Number(line.requisition_qty) <= 0) return `${label} 采购张数必须大于 0`;
                 if (!Array.isArray(line.source_items) || !line.source_items.length) return `${label} 缺少来源明细`;
               }
@@ -6815,7 +7742,6 @@
                   report_length_mm: line.report_length_mm,
                   report_width_mm: line.report_width_mm,
                   cutting_mode: line.cutting_mode || "一开一",
-                  inventory_deducted_qty: Number(line.inventory_deducted_qty || 0),
                   requisition_qty: Number(line.requisition_qty || 0),
                   remark: line.remark || null,
                   source_items: (line.source_items || []).map(source => ({
@@ -6823,7 +7749,6 @@
                     order_item_id: source.order_item_id,
                     merge_group_id: source.merge_group_id || null,
                     source_quantity: Number(source.source_quantity || source.quantity || 0),
-                    inventory_deducted_qty: Number(source.inventory_deducted_qty || 0),
                     requisition_qty: Number(source.requisition_qty || 0),
                   })),
                 })),
@@ -6832,6 +7757,7 @@
             const { data } = await axios.post("/api/requisition/supplier-orders/from-pending-selection", payload);
             this.requisitionSelected = {};
             this.selectedPendingKeys = [];
+            this.supplierRequisitionSelections = [];
             await Promise.all([this.loadRequisition(), this.loadSupplierOrders()]);
             const first = (data.created_orders || [])[0];
             if (first?.supplier_order_id) {
@@ -6847,8 +7773,11 @@
             if (!selections.length) { this.showToast("已勾选行缺少明细ID，请刷新后重试", true); return; }
             try {
               const { data } = await axios.post("/api/requisition/supplier-orders/preview-from-pending-selection", { selections });
+              this.supplierRequisitionSelections = selections;
               this.supplierRequisitionDraft = data;
               this.modal = { type:"supplierRequisitionDraft", title:"生成供应商采购报料单" };
+              const semiOptions = this.supplierDraftSemiInventoryOptions();
+              if (semiOptions.length) this.showToast(`发现 ${semiOptions.length} 条可抵扣半成品库存，请先确认抵扣或选择本次不用库存`);
             } catch (e) {
               this.showToast('生成报料草稿失败：' + (e.response?.data?.detail || e.message), true);
             }
@@ -6992,6 +7921,7 @@
               candidate_message: "",
               candidate_error: false,
               search_loading: false,
+              inventory_sources: [],
               ...overrides,
             };
           },
@@ -7281,6 +8211,7 @@
               product_name: candidate.product_name || "",
               specification: candidate.specification || "",
               material_display: candidate.material_display || candidate.material || "",
+              inventory_sources: candidate.inventory_sources || [],
               remaining_quantity: candidate.remaining_quantity,
               delivered_quantity: candidate.remaining_quantity,
               remarks: line.remarks || "",
@@ -7297,6 +8228,15 @@
             this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
             this.resetDeliveryLines();
             this.modal = { type:"delivery", title:"新增送货单" };
+          },
+          async openDeliveryRoutePlan() {
+            try {
+              const { data } = await axios.get("/api/deliveries/route-suggestions");
+              this.deliveryRoutePlan = data;
+              this.modal = { type:"deliveryRoute", title:"送货路线辅助建议" };
+            } catch (error) {
+              this.showToast("路线建议加载失败：" + this.errorMessage(error), true);
+            }
           },
           openTianhuaPreimport() {
             this.tianhuaPreimport = { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };
@@ -7482,12 +8422,14 @@
               if (this.modal.type === "product") {
                 const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
                 if (productCreaseError) throw new Error(productCreaseError);
+                if (this.productMoldError) throw new Error(this.productMoldError);
                 const payload = { ...this.productForm };
                 delete payload.id;
                 payload.production_process = this.serializeProductionProcesses(
                   payload._production_processes,
                   payload._production_process_legacy
                 );
+                if (!String(payload.production_process || "").split(/[,，、]/).map(value=>value.trim()).includes("模切")) payload.mold_tool_id=null;
                 delete payload._production_processes;
                 delete payload._production_process_legacy;
                 delete payload._material_supplier;
@@ -7497,6 +8439,7 @@
                 delete payload._base_crease_dims_manual;
                 delete payload._recommendation_message;
                 delete payload.drawings;
+                delete payload.mold_tool;
                 delete payload.manual_modified;
                 delete payload.manual_modified_at;
                 if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
@@ -7541,6 +8484,8 @@
                 const orderPayload = {
                   ...this.orderForm,
                   items: this.orderForm.items.map(item => ({
+                    client_line_id: item.client_line_id || createIdempotencyKey(),
+                    reservation_plan: this.buildReservationPlan(item),
                     product_id: item.product_id,
                     product_code: item.product_code,
                     product_name: item.product_name,
@@ -7599,6 +8544,27 @@
                 });
                 await Promise.all([this.loadRequisition(), this.loadProducts()]);
                 successMessage = data.message || "供应商和材质已更新";
+              }
+              if (this.modal.type === "stockReplenishment") {
+                const validation = this.validateStockReplenishmentForm();
+                if (validation) throw new Error(validation);
+                const payload = {
+                  source_type:this.stockReplenishmentForm.source_type,
+                  supplier_name:this.stockReplenishmentForm.supplier_name || null,
+                  customer_id:this.stockReplenishmentForm.customer_id || null,
+                  remark:this.stockReplenishmentForm.remark || null,
+                  stock_now:!!this.stockReplenishmentForm.stock_now,
+                  items:this.stockReplenishmentForm.items.map(line => {
+                    const item={...line}; delete item._key; delete item.crease_text; delete item.material_supplier_name;
+                    return item;
+                  }),
+                };
+                const {data} = await axios.post("/api/requisition/stock-replenishment/orders",payload);
+                const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
+                this.openStockReplenishmentPrint(printable);
+                await this.loadRequisition();
+                this.showToast(data.status === "stocked" ? "补库单已保存，库存批次已生成" : "补库单已保存，可打印后等待实际到库");
+                return;
               }
               if (this.modal.type === "supplierRequisitionDraft") {
                 const data = await this.saveSupplierRequisitionDraft();
@@ -7725,6 +8691,7 @@
                 product_name: it.product_name || "",
                 specification: it.specification || "",
                 material_display: pending?.material_display || pending?.material || "",
+                inventory_sources: it.inventory_sources || [],
                 remaining_quantity: pending?.remaining_quantity ?? it.delivered_quantity,
                 delivered_quantity: it.delivered_quantity,
                 remarks: it.remarks || "",

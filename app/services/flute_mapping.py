@@ -95,11 +95,17 @@ def _count_weight_segments(text: str) -> int:
 # 一致性校验
 # ---------------------------------------------------------------------------
 
+def normalize_flute_type(flute_type: str | None) -> str | None:
+    normalized = str(flute_type or "").strip().upper()
+    return normalized or None
+
+
 def validate_flute_consistency(flute_type: str | None, layer_count: int | None) -> str | None:
     """
     校验楞型与层数的一致性。
     返回 None 表示合法；返回错误说明字符串表示非法组合。
     """
+    flute_type = normalize_flute_type(flute_type)
     if not flute_type or not layer_count:
         return None
     if layer_count == 3 and flute_type not in VALID_FLUTE_FOR_3LAYER:

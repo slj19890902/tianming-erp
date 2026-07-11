@@ -609,6 +609,86 @@ def test_delivery_list_returns_customer_and_line_details(
     assert row["return_receipt_status"] is None
 
 
+def test_route_suggestions_group_deliverable_customers_and_build_safe_map_legs(
+    delivery_api_app,
+) -> None:
+    from app.models.company_config import CompanyConfig
+    from app.models.customer import Customer
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        session.add(
+            CompanyConfig(
+                id=1,
+                company_name="天明包装",
+                address="苏州市相城区渭塘镇测试路1号",
+            )
+        )
+        other = session.get(Customer, 2)
+        other.address = "昆山市玉山镇测试路2号"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/deliveries/route-suggestions")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["planning_mode"] == "regional_grouping_with_segment_navigation"
+    assert body["customer_count"] == 2
+    assert "不是实时路况最优解" in body["disclaimer"]
+    groups = {row["area"]: row for row in body["groups"]}
+    assert set(groups) == {"吴中区", "昆山市"}
+    assert groups["吴中区"]["pending_item_count"] == 2
+    assert groups["昆山市"]["pending_quantity"] == 100
+    first_leg = groups["吴中区"]["customers"][0]
+    assert first_leg["navigation_from"] == "苏州市相城区渭塘镇测试路1号"
+    assert first_leg["navigation_url"].startswith(
+        "https://api.map.baidu.com/direction?"
+    )
+    assert "mode=driving" in first_leg["navigation_url"]
+    assert "src=webapp.tianming.erp" in first_leg["navigation_url"]
+
+
+def test_route_suggestions_static_path_precedes_delivery_id_route() -> None:
+    from app.api.deliveries import router
+
+    paths = [getattr(route, "path", "") for route in router.routes]
+    assert paths.index("/route-suggestions") < paths.index("/{delivery_id}")
+
+
+def test_route_suggestions_mark_same_address_customers_as_one_stop(
+    delivery_api_app,
+) -> None:
+    from app.models.company_config import CompanyConfig
+    from app.models.customer import Customer
+
+    app, session_factory = delivery_api_app
+    same_address = "苏州市工业园区测试路 8 号"
+    with session_factory() as session:
+        session.add(
+            CompanyConfig(
+                id=1,
+                company_name="天明包装",
+                address="苏州市相城区渭塘镇测试路1号",
+            )
+        )
+        session.get(Customer, 1).address = same_address
+        session.get(Customer, 2).address = "苏州市工业园区测试路8号"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get("/api/deliveries/route-suggestions")
+
+    assert response.status_code == 200, response.text
+    customers = response.json()["groups"][0]["customers"]
+    assert customers[0]["navigation_url"]
+    assert customers[1]["same_as_previous_address"] is True
+    assert customers[1]["navigation_url"] is None
+    assert customers[1]["navigation_note"] == "与上一站同地址，可同站处理"
+
+
 def test_delivery_list_prioritizes_latest_operation(delivery_api_app) -> None:
     app, _ = delivery_api_app
     first_payload = {

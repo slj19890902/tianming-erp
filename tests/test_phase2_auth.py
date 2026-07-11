@@ -316,6 +316,62 @@ def test_modular_app_customer_alias_requires_authentication(
     assert response.status_code == 401
 
 
+def test_create_app_can_reinitialize_after_middleware_has_started() -> None:
+    from app.main import create_app
+
+    first = create_app()
+    with TestClient(first) as client:
+        assert client.get("/dashboard").status_code == 200
+
+    second = create_app()
+    with TestClient(second) as client:
+        assert client.get("/requisition").status_code == 200
+
+    cors_layers = [
+        middleware
+        for middleware in second.user_middleware
+        if middleware.cls.__name__ == "CORSMiddleware"
+    ]
+    assert len(cors_layers) == 1
+
+
+def test_pytest_subprocess_inherits_isolated_runtime_paths() -> None:
+    import json
+    import os
+    import subprocess
+    import sys
+
+    names = (
+        "ERP_DATABASE_PATH",
+        "ERP_BACKUP_DIR",
+        "ERP_SECRET_KEY_FILE",
+        "ERP_ENVIRONMENT",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-c",
+            "import json,os; print(json.dumps({k: os.environ.get(k) for k in "
+            + repr(names)
+            + "}))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=os.environ.copy(),
+    )
+    inherited = json.loads(result.stdout)
+    assert inherited == {name: os.environ[name] for name in names}
+    checkout_database = (
+        Path(__file__).resolve().parents[1] / "data" / "carton_erp.sqlite3"
+    ).resolve()
+    assert Path(inherited["ERP_DATABASE_PATH"]).resolve() != checkout_database
+    assert inherited["ERP_ENVIRONMENT"] == "test"
+
+
 def test_frontend_uses_real_auth_api_and_has_no_default_password_fallback() -> None:
     source = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
         encoding="utf-8"

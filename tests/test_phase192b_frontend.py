@@ -33,8 +33,12 @@ class TestMaterialDictionaryUI:
     def test_weight_structure_prefers_paper_composition(self):
         assert "const paper = (row.paper_composition || \"\").trim();" in HTML
 
-    def test_displayed_materials_no_flute_filter(self):
-        assert "材质字典不再按楞型拆分/过滤" in HTML
+    def test_displayed_materials_have_no_flute_dimension(self):
+        material_table = HTML.split("<!-- 材质列表：", 1)[1].split(
+            "</table>", 1
+        )[0]
+        assert "<th>楞型" not in material_table
+        assert "row.flute_type" not in material_table
 
     def test_supplier_price_adjust_button(self):
         assert "@click=\"openPriceAdjust()\"" in HTML
@@ -52,7 +56,7 @@ class TestMaterialDropdownSupplierLayerOnly:
 
 class TestProductFormFieldOrder:
     def test_field_order_supplier_layer_flute_code(self):
-        i_supplier = HTML.index("材质选择顺序：材质供应商 → 层数 → 楞型 → 材质代码")
+        i_supplier = HTML.index('<div class="product-form-row product-material-row">')
         block = HTML[i_supplier : i_supplier + 4000]
         p_supplier = block.index(">材质供应商<")
         p_layer = block.index(">层数<")

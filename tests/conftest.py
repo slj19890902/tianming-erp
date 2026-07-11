@@ -1,0 +1,144 @@
+"""Shared safety defaults for the test suite.
+
+The suite contains legacy tests, subprocesses, and module-level database
+engines. Establish disposable paths before collection, reject every checkout
+database as a test target, and fingerprint this checkout for accidental writes.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_TEST_ROOT: Path | None = None
+_PROTECTED_BEFORE: dict[Path, tuple[bool, int | None, int | None, str | None]] = {}
+
+
+def _primary_worktree_root() -> Path:
+    """Resolve the main worktree without invoking Git or mutating either tree."""
+    dot_git = PROJECT_ROOT / ".git"
+    if dot_git.is_dir():
+        return PROJECT_ROOT
+    if not dot_git.is_file():
+        return PROJECT_ROOT
+    marker = "gitdir:"
+    content = dot_git.read_text(encoding="utf-8").strip()
+    if not content.lower().startswith(marker):
+        return PROJECT_ROOT
+    git_dir = Path(content[len(marker) :].strip())
+    if not git_dir.is_absolute():
+        git_dir = (PROJECT_ROOT / git_dir).resolve()
+    if git_dir.parent.name.lower() == "worktrees":
+        return git_dir.parent.parent.parent.resolve()
+    return git_dir.parent.resolve()
+
+
+PROTECTED_DATABASES = tuple(
+    dict.fromkeys(
+        path.resolve()
+        for path in (
+            PROJECT_ROOT / "data" / "carton_erp.sqlite3",
+            _primary_worktree_root() / "data" / "carton_erp.sqlite3",
+        )
+    )
+)
+# The main-worktree database may be served by a live process and can change for
+# reasons unrelated to pytest. Reject it as ERP_DATABASE_PATH, but fingerprint
+# only this integration checkout so an external write cannot be misattributed.
+FINGERPRINT_DATABASES = (
+    (PROJECT_ROOT / "data" / "carton_erp.sqlite3").resolve(),
+)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fingerprint(
+    path: Path,
+) -> tuple[bool, int | None, int | None, str | None]:
+    if not path.is_file():
+        return False, None, None, None
+    stat = path.stat()
+    return True, stat.st_size, stat.st_mtime_ns, _sha256(path)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Point implicit application globals at disposable locations before collection."""
+    global _TEST_ROOT
+    del config
+
+    if os.getenv("ERP_TEST_ALLOW_PRODUCTION_DATABASE") == "1":
+        raise pytest.UsageError(
+            "Production database tests are not permitted in the shared baseline."
+        )
+
+    configured_database = os.getenv("ERP_DATABASE_PATH")
+    if configured_database:
+        database_path = Path(configured_database).expanduser().resolve()
+        if database_path in PROTECTED_DATABASES:
+            raise pytest.UsageError(
+                "ERP_DATABASE_PATH points at a protected checkout database; "
+                "use a disposable test database instead."
+            )
+    else:
+        database_path = None
+
+    _TEST_ROOT = Path(tempfile.mkdtemp(prefix="tm-erp-pytest-"))
+    os.environ["ERP_DATABASE_PATH"] = str(
+        database_path or (_TEST_ROOT / "carton_erp.sqlite3")
+    )
+    os.environ["ERP_BACKUP_DIR"] = str(_TEST_ROOT / "backups")
+    os.environ["ERP_SECRET_KEY_FILE"] = str(_TEST_ROOT / "session_secret.key")
+    os.environ["ERP_SECRET_KEY"] = "pytest-isolated-only"
+    os.environ["ERP_ENVIRONMENT"] = "test"
+
+    _PROTECTED_BEFORE.clear()
+    _PROTECTED_BEFORE.update(
+        {path: _fingerprint(path) for path in FINGERPRINT_DATABASES}
+    )
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail the run if pytest creates or mutates a protected checkout DB."""
+    del exitstatus
+    changed: list[Path] = []
+    for path, before in _PROTECTED_BEFORE.items():
+        if _fingerprint(path) != before:
+            changed.append(path)
+    if changed:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        for path in changed:
+            print(f"\nERROR: pytest changed a protected database: {path}")
+
+    if _TEST_ROOT is not None:
+        shutil.rmtree(_TEST_ROOT, ignore_errors=True)
+
+
+@pytest.fixture
+def isolated_database_path(tmp_path: Path) -> Path:
+    """Return a per-test SQLite path for tests that need a real file."""
+    return tmp_path / "erp-test.sqlite3"
+
+
+@pytest.fixture
+def isolated_engine(isolated_database_path: Path):
+    """Create and dispose a SQLite engine bound to the per-test file."""
+    from app.core.database import create_sqlite_engine
+
+    engine = create_sqlite_engine(isolated_database_path)
+    try:
+        yield engine
+    finally:
+        engine.dispose()

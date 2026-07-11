@@ -11,11 +11,13 @@ from app.models.user import User  # noqa: E402,F401
 from app.models.audit import OperationLog  # noqa: E402,F401
 from app.models.customer import Customer  # noqa: E402,F401
 from app.models.material import Material  # noqa: E402,F401
+from app.models.mold_tool import MoldTool  # noqa: E402,F401
 from app.models.product import Product  # noqa: E402,F401
 from app.models.product_drawing import ProductDrawing  # noqa: E402,F401
 from app.models.historical_requisition import (  # noqa: E402,F401
     HistoricalRequisitionMap,
 )
+from app.models.historical_purchase import HistoricalPurchaseEntry  # noqa: E402,F401
 from app.models.migration import MigrationEntityMap  # noqa: E402,F401
 from app.models.order import Order, OrderDailySequence, OrderItem  # noqa: E402,F401
 from app.models.requisition import (  # noqa: E402,F401
@@ -52,6 +54,11 @@ from app.models.supplier_requisition_order import (  # noqa: E402,F401
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.models.stock_replenishment import (  # noqa: E402,F401
+    InventoryStockPolicy,
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
 from app.models.finance import (  # noqa: E402,F401
     Invoice,
     ReturnReceipt,
@@ -74,10 +81,14 @@ from app.models.quotation import (  # noqa: E402,F401
     QuotationOrder,
 )
 from app.models.warehouse_inventory import (  # noqa: E402,F401
+    DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
     InventoryReservation,
+    OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
+    SemiFinishedMatchRule,
+    SemiFinishedMatchRuleProduct,
     WarehouseLocation,
 )

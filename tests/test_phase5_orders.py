@@ -520,6 +520,50 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
         assert product.remark == "订单编辑同步"
 
 
+def test_order_item_sync_rejects_invalid_common_box_flute_without_partial_save(
+    order_api_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    base_payload = {
+        "quantity": 200,
+        "unit_price": "3.60",
+        "product_code": "SME-001",
+        "product_name": "五层加强纸箱",
+        "material": "K=A-BC",
+        "specification": "520×350×300mm",
+        "layer_count": 3,
+        "sync_product": True,
+    }
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = client.post("/api/orders", json=_payload())
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+
+        rejected = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**base_payload, "quantity": 199, "flute_type": "AB"},
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert "三层瓦楞只能是 A / B / E" in rejected.json()["detail"]
+
+        accepted = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**base_payload, "flute_type": "A"},
+        )
+        assert accepted.status_code == 200, accepted.text
+
+    with session_factory() as session:
+        item = session.get(OrderItem, item_id)
+        product = session.get(Product, 1)
+        assert item.quantity == 200
+        assert (item.layer_count, item.flute_type) == (3, "A")
+        assert (product.layer_count, product.flute_type) == (3, "A")
+
+
 def test_order_models_use_new_tables_and_leave_legacy_name_free() -> None:
     from app.models.order import Order, OrderItem
 

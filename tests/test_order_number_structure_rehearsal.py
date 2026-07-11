@@ -5,6 +5,12 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
+from app.core.database import create_sqlite_engine
+from app.models import Base
+from app.models.customer import Customer
+from app.models.product import Product
 from scripts.migration.order_number_structure_rehearsal import (
     connect_rw,
     create_order_with_items,
@@ -17,8 +23,60 @@ from scripts.migration.order_number_structure_rehearsal import (
 )
 
 
+def _create_seed_source(path: Path) -> None:
+    engine = create_sqlite_engine(path)
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as db:
+            customer_a = Customer(
+                customer_number=91001,
+                customer_code="REHEARSAL-A",
+                name="Rehearsal Customer A",
+                payment_term_days=0,
+                credit_limit=0,
+            )
+            customer_b = Customer(
+                customer_number=91002,
+                customer_code="REHEARSAL-B",
+                name="Rehearsal Customer B",
+                payment_term_days=0,
+                credit_limit=0,
+            )
+            db.add_all([customer_a, customer_b])
+            db.flush()
+            db.add_all(
+                [
+                    Product(
+                        customer_id=customer_a.id,
+                        product_code="REHEARSAL-A1",
+                        customer_material_code="REHEARSAL-A1",
+                        product_name="Rehearsal Product A1",
+                        box_category="normal",
+                    ),
+                    Product(
+                        customer_id=customer_a.id,
+                        product_code="REHEARSAL-A2",
+                        customer_material_code="REHEARSAL-A2",
+                        product_name="Rehearsal Product A2",
+                        box_category="normal",
+                    ),
+                    Product(
+                        customer_id=customer_b.id,
+                        product_code="REHEARSAL-B1",
+                        customer_material_code="REHEARSAL-B1",
+                        product_name="Rehearsal Product B1",
+                        box_category="normal",
+                    ),
+                ]
+            )
+            db.commit()
+    finally:
+        engine.dispose()
+
+
 def _copy_main_db(tmp_path: Path) -> sqlite3.Connection:
-    source = Path("data/carton_erp.sqlite3").resolve()
+    source = tmp_path / "rehearsal-source.sqlite3"
+    _create_seed_source(source)
     target = tmp_path / "rehearsal.sqlite3"
     create_rehearsal_copy(source, target)
     return connect_rw(target)
@@ -224,17 +282,34 @@ def test_grouping_rules_and_search_rules_hold_on_rehearsal_copy(tmp_path: Path) 
     conn = _copy_main_db(tmp_path)
     ensure_rehearsal_schema(conn)
     customer_rows = conn.execute(
-        "SELECT id, name FROM customers ORDER BY id LIMIT 2"
+        """
+        SELECT c.id, c.name
+        FROM customers AS c
+        WHERE EXISTS (
+            SELECT 1
+            FROM products AS p
+            WHERE p.customer_id = c.id AND p.deleted_at IS NULL
+        )
+        ORDER BY c.id
+        LIMIT 2
+        """
     ).fetchall()
     assert len(customer_rows) == 2
     customer_a, customer_b = int(customer_rows[0]["id"]), int(customer_rows[1]["id"])
-    product_rows = conn.execute(
-        "SELECT id, customer_id, product_code, product_name FROM products WHERE deleted_at IS NULL ORDER BY customer_id, id LIMIT 4"
-    ).fetchall()
     product_map: dict[int, list[sqlite3.Row]] = {}
-    for row in product_rows:
-        product_map.setdefault(int(row["customer_id"]), []).append(row)
-    assert customer_a in product_map and customer_b in product_map
+    for customer_id in (customer_a, customer_b):
+        row = conn.execute(
+            """
+            SELECT id, customer_id, product_code, product_name
+            FROM products
+            WHERE customer_id = ? AND deleted_at IS NULL
+            ORDER BY id
+            LIMIT 1
+            """,
+            (customer_id,),
+        ).fetchone()
+        assert row is not None
+        product_map[customer_id] = [row]
 
     order_a1 = create_order_with_items(
         conn,

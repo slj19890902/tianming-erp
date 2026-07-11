@@ -5,29 +5,53 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import RoleChecker, get_db
 from app.models.user import User
+from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.mold_tool import MoldTool
 from app.models.product import Product
 from app.models.order import Order, OrderItem
 from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
     InventoryReservation,
+    OrderItemSemiRequirement,
+    SemiFinishedInventoryDetail,
     WarehouseLocation,
+)
+from app.services.semi_finished_inventory import (
+    SemiFinishedCandidate,
+    SemiFinishedLotVersion,
+    active_semi_requirement_credited_quantity,
+    browse_semi_finished_inventory,
+    browse_semi_finished_inventory_for_product,
+    confirm_semi_finished_match,
+    consume_semi_finished_reservation,
+    release_semi_finished_reservation,
+    replace_semi_finished_lot_product_assignments,
+    reserve_semi_finished_inventory,
+    reverse_semi_finished_consumption,
+    save_order_item_semi_requirement,
+    semi_finished_lot_assigned_product_ids,
+    semi_finished_candidates_for_product,
+    semi_finished_inventory_candidates,
 )
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     finished_inventory_candidates,
+    finished_inventory_candidates_for_product,
     inventory_age_warning,
     manual_finished_in,
     manual_semi_finished_in,
     mutate_lot,
+    normalize_material_code,
     release_finished_reservation,
     reserve_finished_inventory,
 )
@@ -45,6 +69,7 @@ VALID_SOURCE_TYPES = {
     "purchase_surplus",
     "stocktake",
     "transfer",
+    "replenishment",
 }
 
 
@@ -65,6 +90,18 @@ class LocationPayload(BaseModel):
         if value not in {"finished", "semi_finished", "shared"}:
             raise ValueError("库位类型必须是成品、半成品或共用")
         return value
+
+
+class MoldToolPayload(BaseModel):
+    mold_code: str = Field(min_length=1, max_length=100)
+    mold_name: str = Field(min_length=1, max_length=200)
+    rack_location: str = Field(min_length=1, max_length=250)
+    remarks: str | None = None
+
+    @field_validator("mold_code", "mold_name", "rack_location")
+    @classmethod
+    def strip_mold_fields(cls, value: str) -> str:
+        return value.strip()
 
 
 class FinishedManualInPayload(BaseModel):
@@ -96,6 +133,9 @@ class SemiFinishedManualInPayload(BaseModel):
     board_length_mm: int = Field(gt=0)
     board_width_mm: int = Field(gt=0)
     sheet_type: str
+    component_type: str = "whole"
+    pieces_per_box: int = Field(default=1, gt=0)
+    stock_yield_per_sheet: int = Field(default=1, gt=0)
     supplier_name: str | None = None
     customer_id: int | None = None
     crease_type: str | None = None
@@ -171,8 +211,90 @@ class ReleaseReservationPayload(BaseModel):
         return reason
 
 
+class SemiRequirementPayload(BaseModel):
+    component_type: str
+    board_length_mm: int = Field(gt=0)
+    board_width_mm: int = Field(gt=0)
+    material_code: str = Field(min_length=1, max_length=100)
+    material_id: int | None = None
+    flute_type: str = Field(min_length=1, max_length=20)
+    pieces_per_box: int = Field(gt=0)
+    stock_yield_per_sheet: int = Field(gt=0)
+    required_piece_quantity: int | None = Field(default=None, gt=0)
+
+
+class SemiProductCandidatePayload(BaseModel):
+    customer_id: int
+    board_length_mm: int = Field(gt=0)
+    board_width_mm: int = Field(gt=0)
+    material_code: str = Field(min_length=1, max_length=100)
+    flute_type: str = Field(min_length=1, max_length=20)
+    component_type: str
+    pieces_per_box: int = Field(gt=0)
+    stock_yield_per_sheet: int = Field(gt=0)
+
+
+class SemiMatchConfirmPayload(BaseModel):
+    inventory_lot_id: int
+    override: bool = False
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+
+
+class SemiLotVersionPayload(BaseModel):
+    lot_id: int
+    expected_version: int = Field(gt=0)
+
+
+class SemiReservationPayload(BaseModel):
+    requested_requirement_quantity: int = Field(gt=0)
+    lots: list[SemiLotVersionPayload] = Field(min_length=1)
+    confirmed: bool
+    override: bool = False
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+    idempotency_key: str = Field(min_length=1, max_length=80)
+
+
+class SemiReleasePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    stock_quantity: int | None = Field(default=None, gt=0)
+    release_reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+
+
+class SemiProductAssignmentsPayload(BaseModel):
+    product_ids: list[int] = Field(default_factory=list, max_length=500)
+
+    @field_validator("product_ids")
+    @classmethod
+    def valid_product_ids(cls, values: list[int]) -> list[int]:
+        if any(int(value) <= 0 for value in values):
+            raise ValueError("成品款号ID必须是正整数")
+        return list(dict.fromkeys(int(value) for value in values))
+
+
+class SemiConsumePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    stock_quantity: int = Field(gt=0)
+    delivery_item_id: int | None = None
+    idempotency_key: str = Field(min_length=1, max_length=100)
+
+
+class SemiReverseConsumePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    stock_quantity: int = Field(gt=0)
+    allocation_id: int | None = None
+    idempotency_key: str = Field(min_length=1, max_length=100)
+
+
 def _handle(error: WarehouseInventoryError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _handle_integrity(error: IntegrityError) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail="库存或学习规则已被其他请求修改，请刷新后重试",
+    ) from error
 
 
 def _location_dict(row: WarehouseLocation) -> dict:
@@ -219,11 +341,16 @@ def _lot_dict(row: InventoryLot) -> dict:
             "supplier_name": item.supplier_name,
             "owner_customer_id": item.owner_customer_id,
             "owner_customer_name": item.owner_customer_name_snapshot,
+            "material_id": item.material_id,
             "material_code": item.material_code_snapshot,
+            "normalized_material_code": item.normalized_material_code,
             "layer_count": item.layer_count,
             "flute_type": item.flute_type,
             "board_length_mm": item.board_length_mm,
             "board_width_mm": item.board_width_mm,
+            "component_type": item.component_type,
+            "pieces_per_box": item.pieces_per_box,
+            "stock_yield_per_sheet": item.stock_yield_per_sheet,
             "sheet_type": item.sheet_type,
             "crease_type": item.crease_type,
             "crease_left_mm": item.crease_left_mm,
@@ -309,11 +436,72 @@ def _reservation_dict(
         "product_name": item.snapshot_product_name if item else None,
         "reserved_stock_quantity": row.reserved_stock_quantity,
         "credited_requirement_quantity": row.credited_requirement_quantity,
+        "consumed_stock_quantity": row.consumed_stock_quantity,
+        "released_stock_quantity": row.released_stock_quantity,
+        "consumed_requirement_quantity": row.consumed_requirement_quantity,
+        "released_requirement_quantity": row.released_requirement_quantity,
+        "remaining_reserved_stock_quantity": (
+            row.reserved_stock_quantity
+            - row.consumed_stock_quantity
+            - row.released_stock_quantity
+        ),
+        "semi_requirement_id": row.semi_requirement_id,
+        "match_rule_id": row.match_rule_id,
+        "reservation_group_key": row.reservation_group_key,
         "status": row.status,
         "warning_codes": warning_codes,
         "reserved_at": row.reserved_at,
         "released_at": row.released_at,
         "release_reason": row.release_reason,
+    }
+
+
+def _semi_requirement_dict(row: OrderItemSemiRequirement) -> dict:
+    return {
+        "id": row.id,
+        "order_item_id": row.order_item_id,
+        "customer_id": row.customer_id,
+        "component_type": row.component_type,
+        "board_length_mm": row.board_length_mm,
+        "board_width_mm": row.board_width_mm,
+        "material_code": row.material_code_snapshot,
+        "normalized_material_code": row.normalized_material_code,
+        "flute_type": row.flute_type,
+        "pieces_per_box": row.pieces_per_box,
+        "stock_yield_per_sheet": row.stock_yield_per_sheet,
+        "required_piece_quantity": row.required_piece_quantity,
+    }
+
+
+def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
+    lot = row.lot
+    detail = lot.semi_finished_detail
+    return {
+        "lot_id": lot.id,
+        "lot_number": lot.lot_number,
+        "version": lot.version,
+        "source": row.source,
+        "match_rule_id": row.match_rule_id,
+        "available_stock_quantity": row.available_stock_quantity,
+        "deductible_requirement_quantity": row.deductible_requirement_quantity,
+        "warehouse_location": {
+            "id": lot.location.id,
+            "location_code": lot.location.location_code,
+            "location_name": lot.location.location_name,
+        },
+        "customer_id": detail.owner_customer_id,
+        "customer_name": detail.owner_customer_name_snapshot,
+        "board_length_mm": detail.board_length_mm,
+        "board_width_mm": detail.board_width_mm,
+        "material_code": detail.material_code_snapshot,
+        "normalized_material_code": detail.normalized_material_code,
+        "flute_type": detail.flute_type,
+        "component_type": detail.component_type,
+        "pieces_per_box": detail.pieces_per_box,
+        "stock_yield_per_sheet": detail.stock_yield_per_sheet,
+        "signature_differences": list(row.signature_differences),
+        "warning_codes": list(row.warning_codes),
+        "warning_messages": list(row.warning_messages),
     }
 
 
@@ -450,6 +638,520 @@ def release_reservation(
         _handle(error)
 
 
+@router.get("/finished/products/{product_id}/candidates")
+def finished_product_candidates(
+    product_id: int,
+    customer_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        rows = finished_inventory_candidates_for_product(
+            db,
+            customer_id=customer_id,
+            product_id=product_id,
+        )
+        return {
+            "customer_id": customer_id,
+            "product_id": product_id,
+            "items": [
+                {
+                    "lot_id": lot.id,
+                    "lot_number": lot.lot_number,
+                    "version": lot.version,
+                    "is_general": lot.finished_detail.is_general,
+                    "quantity_available": lot.quantity_available,
+                    "warehouse_location": {
+                        "id": lot.location.id,
+                        "location_code": lot.location.location_code,
+                        "location_name": lot.location.location_name,
+                    },
+                    "warning_codes": (
+                        ["GENERAL_FINISHED_STOCK"]
+                        if lot.finished_detail.is_general
+                        else []
+                    ),
+                    "warning_messages": (
+                        ["通用成品库存，必须人工确认后才能预占。"]
+                        if lot.finished_detail.is_general
+                        else []
+                    ),
+                }
+                for lot in rows
+            ],
+        }
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.put("/semi-finished/order-items/{order_item_id}/requirements")
+def upsert_semi_requirement(
+    order_item_id: int,
+    payload: SemiRequirementPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    try:
+        row = save_order_item_semi_requirement(
+            db,
+            order_item_id=order_item_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return _semi_requirement_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/semi-finished/products/{product_id}/candidates")
+def semi_product_candidates(
+    product_id: int,
+    payload: SemiProductCandidatePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        rows = semi_finished_candidates_for_product(
+            db,
+            product_id=product_id,
+            **payload.model_dump(),
+        )
+        return {
+            "product_id": product_id,
+            "items": [_semi_candidate_dict(row) for row in rows],
+        }
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/semi-finished/products/{product_id}/inventory")
+def semi_product_inventory_browser(
+    product_id: int,
+    payload: SemiProductCandidatePayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        rows = browse_semi_finished_inventory_for_product(
+            db,
+            product_id=product_id,
+            **payload.model_dump(),
+        )
+        return {
+            "product_id": product_id,
+            "items": [_semi_candidate_dict(row) for row in rows],
+        }
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.get("/semi-finished/requirements/{requirement_id}/candidates")
+def semi_requirement_candidates(
+    requirement_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        requirement = db.get(OrderItemSemiRequirement, requirement_id)
+        if requirement is None:
+            raise WarehouseInventoryError("半成品需求不存在", 404)
+        credited = active_semi_requirement_credited_quantity(db, requirement.id)
+        rows = semi_finished_inventory_candidates(db, requirement.id)
+        return {
+            "requirement": _semi_requirement_dict(requirement),
+            "credited_requirement_quantity": credited,
+            "remaining_requirement_quantity": max(
+                requirement.required_piece_quantity - credited, 0
+            ),
+            "items": [_semi_candidate_dict(row) for row in rows],
+        }
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.get("/semi-finished/requirements/{requirement_id}/inventory")
+def semi_requirement_inventory_browser(
+    requirement_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    try:
+        rows = browse_semi_finished_inventory(db, requirement_id)
+        return {"items": [_semi_candidate_dict(row) for row in rows]}
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/semi-finished/requirements/{requirement_id}/confirm-match")
+def confirm_semi_requirement_match(
+    requirement_id: int,
+    payload: SemiMatchConfirmPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    try:
+        result = confirm_semi_finished_match(
+            db,
+            requirement_id=requirement_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return {
+            "rule_id": result.rule.id,
+            "product_id": result.mapping.product_id,
+            "source": "learned",
+            "signature_differences": list(result.signature_differences),
+            "warning_codes": list(result.warning_codes),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/semi-finished/requirements/{requirement_id}/reserve")
+def reserve_semi_requirement(
+    requirement_id: int,
+    payload: SemiReservationPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    try:
+        result = reserve_semi_finished_inventory(
+            db,
+            requirement_id=requirement_id,
+            requested_requirement_quantity=payload.requested_requirement_quantity,
+            lots=[SemiFinishedLotVersion(**row.model_dump()) for row in payload.lots],
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+            confirmed=payload.confirmed,
+            override=payload.override,
+            warning_acknowledged_codes=payload.warning_acknowledged_codes,
+        )
+        db.commit()
+        return {
+            "requested_requirement_quantity": result.requested_requirement_quantity,
+            "allocated_requirement_quantity": result.allocated_requirement_quantity,
+            "unallocated_requirement_quantity": result.unallocated_requirement_quantity,
+            "reservations": [
+                _reservation_dict(row, db) for row in result.reservations
+            ],
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.get("/semi-finished/requirements/{requirement_id}/reservations")
+def list_semi_requirement_reservations(
+    requirement_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_view_reservations),
+) -> dict:
+    rows = db.scalars(
+        select(InventoryReservation)
+        .where(
+            InventoryReservation.semi_requirement_id == requirement_id,
+            InventoryReservation.reservation_type == "semi_order",
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    return {"items": [_reservation_dict(row, db) for row in rows]}
+
+
+@router.post("/semi-finished/reservations/{reservation_id}/release")
+def release_semi_reservation(
+    reservation_id: int,
+    payload: SemiReleasePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    try:
+        result = release_semi_finished_reservation(
+            db,
+            reservation_id=reservation_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return _reservation_dict(result.reservation, db)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/semi-finished/reservations/{reservation_id}/consume")
+def consume_semi_reservation(
+    reservation_id: int,
+    payload: SemiConsumePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        result = consume_semi_finished_reservation(
+            db,
+            reservation_id=reservation_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        response = _reservation_dict(result.reservation, db)
+        response["delivery_inventory_allocation_id"] = (
+            result.allocation.id if result.allocation else None
+        )
+        return response
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/semi-finished/reservations/{reservation_id}/reverse-consume")
+def reverse_semi_reservation_consumption(
+    reservation_id: int,
+    payload: SemiReverseConsumePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        result = reverse_semi_finished_consumption(
+            db,
+            reservation_id=reservation_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return _reservation_dict(result.reservation, db)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+def _semi_product_dimensions(
+    product: Product,
+    component_type: str,
+) -> tuple[int | None, int | None]:
+    if component_type == "base":
+        return product.base_report_length_mm, product.base_report_width_mm
+    return product.report_length_mm, product.report_width_mm
+
+
+def _semi_product_material_code(product: Product) -> str:
+    return (
+        product.default_material_code
+        or (product.material.code if product.material is not None else None)
+        or product.legacy_material_text
+        or ""
+    ).strip()
+
+
+def _semi_lot_assignment_response(
+    db: Session,
+    *,
+    lot_id: int,
+    keyword: str | None,
+    limit: int,
+) -> dict:
+    lot = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
+    if lot is None or lot.inventory_type != "semi_finished":
+        raise WarehouseInventoryError("半成品库存批次不存在", 404)
+    detail = lot.semi_finished_detail
+    if detail is None:
+        raise WarehouseInventoryError("半成品库存批次缺少明细", 409)
+    if detail.owner_customer_id is None:
+        raise WarehouseInventoryError("请先为半成品库存指定归属客户", 409)
+    assigned_ids = set(semi_finished_lot_assigned_product_ids(db, lot.id))
+    query = (
+        select(Product)
+        .options(selectinload(Product.material))
+        .where(
+            Product.customer_id == detail.owner_customer_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+    )
+    text = (keyword or "").strip()
+    if text:
+        pattern = f"%{text}%"
+        query = query.where(
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                Product.product_name.like(pattern),
+                Product.die_cut_path.like(pattern),
+            )
+        )
+    else:
+        report_length_column = (
+            Product.base_report_length_mm
+            if detail.component_type == "base"
+            else Product.report_length_mm
+        )
+        report_width_column = (
+            Product.base_report_width_mm
+            if detail.component_type == "base"
+            else Product.report_width_mm
+        )
+        query = query.where(
+            or_(
+                Product.id.in_(assigned_ids),
+                and_(
+                    report_length_column == detail.board_length_mm,
+                    report_width_column == detail.board_width_mm,
+                    func.upper(func.trim(Product.flute_type)) == detail.flute_type,
+                ),
+            )
+        )
+    products = db.scalars(
+        query.order_by(Product.product_code, Product.id).limit(limit)
+    ).all()
+    items = []
+    for product in products:
+        report_length, report_width = _semi_product_dimensions(
+            product, detail.component_type
+        )
+        material_code = _semi_product_material_code(product)
+        recommended = all(
+            (
+                report_length == detail.board_length_mm,
+                report_width == detail.board_width_mm,
+                normalize_material_code(material_code)
+                == detail.normalized_material_code,
+                (product.flute_type or "").strip().upper() == detail.flute_type,
+            )
+        )
+        items.append(
+            {
+                "id": product.id,
+                "product_code": product.product_code,
+                "customer_material_code": product.customer_material_code,
+                "product_name": product.product_name,
+                "specification": " × ".join(
+                    str(round(value))
+                    for value in (product.length_mm, product.width_mm, product.height_mm)
+                    if value is not None
+                ),
+                "report_length_mm": report_length,
+                "report_width_mm": report_width,
+                "material_code": material_code or None,
+                "flute_type": product.flute_type,
+                "template_location": (
+                    product.mold_tool.rack_location
+                    if product.mold_tool is not None
+                    else product.die_cut_path
+                ),
+                "mold_code": (
+                    product.mold_tool.mold_code
+                    if product.mold_tool is not None
+                    else None
+                ),
+                "assigned": product.id in assigned_ids,
+                "recommended": recommended,
+            }
+        )
+    items.sort(
+        key=lambda row: (
+            not row["assigned"],
+            not row["recommended"],
+            row["product_code"],
+        )
+    )
+    return {
+        "lot_id": lot.id,
+        "lot_number": lot.lot_number,
+        "customer_id": detail.owner_customer_id,
+        "customer_name": detail.owner_customer_name_snapshot,
+        "material_code": detail.material_code_snapshot,
+        "flute_type": detail.flute_type,
+        "board_length_mm": detail.board_length_mm,
+        "board_width_mm": detail.board_width_mm,
+        "component_type": detail.component_type,
+        "assigned_product_ids": sorted(assigned_ids),
+        "items": items,
+        "mapping_scope": "同一客户、同一半成品规格的新旧批次共用此分配记忆",
+    }
+
+
+@router.get("/lots/{lot_id}/product-assignments")
+def get_semi_lot_product_assignments(
+    lot_id: int,
+    q: str | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    try:
+        return _semi_lot_assignment_response(
+            db, lot_id=lot_id, keyword=q, limit=limit
+        )
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.put("/lots/{lot_id}/product-assignments")
+def update_semi_lot_product_assignments(
+    lot_id: int,
+    payload: SemiProductAssignmentsPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        rule, products = replace_semi_finished_lot_product_assignments(
+            db,
+            inventory_lot_id=lot_id,
+            product_ids=payload.product_ids,
+            operator_id=user.id,
+        )
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                username=user.username,
+                role=user.role,
+                action="UPDATE",
+                resource=f"warehouse/semi-lot/{lot_id}/product-assignments",
+                entity_type="semi_finished_match_rule",
+                entity_id=rule.id if rule is not None else None,
+                description="更新半成品库存适用成品款号",
+                details=json.dumps(
+                    {
+                        "lot_id": lot_id,
+                        "product_ids": [row.id for row in products],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.commit()
+        return _semi_lot_assignment_response(
+            db, lot_id=lot_id, keyword=None, limit=500
+        )
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
 @router.get("/locations")
 def list_locations(
     include_inactive: bool = False,
@@ -504,6 +1206,226 @@ def reference_products(
                 ),
             }
             for row in rows
+        ]
+    }
+
+
+def _mold_tool_dict(row: MoldTool) -> dict:
+    products = sorted(
+        (
+            product
+            for product in row.products
+            if product.deleted_at is None and product.is_active
+        ),
+        key=lambda product: (product.customer.name if product.customer else "", product.product_code, product.id),
+    )
+    return {
+        "id": row.id,
+        "mold_code": row.mold_code,
+        "mold_name": row.mold_name,
+        "rack_location": row.rack_location,
+        "remarks": row.remarks,
+        "is_active": row.is_active,
+        "product_count": len(products),
+        "products": [
+            {
+                "id": product.id,
+                "customer_id": product.customer_id,
+                "customer_name": product.customer.name if product.customer else None,
+                "product_code": product.product_code,
+                "product_name": product.product_name,
+                "specification": " × ".join(
+                    str(round(value))
+                    for value in (product.length_mm, product.width_mm, product.height_mm)
+                    if value is not None
+                ),
+            }
+            for product in products
+        ],
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+@router.get("/molds")
+def list_mold_tools(
+    q: str | None = None,
+    include_inactive: bool = False,
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    query = select(MoldTool).options(
+        selectinload(MoldTool.products).selectinload(Product.customer)
+    )
+    if not include_inactive:
+        query = query.where(MoldTool.is_active.is_(True))
+    keyword = (q or "").strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        linked_molds = (
+            select(Product.mold_tool_id)
+            .join(Customer, Customer.id == Product.customer_id)
+            .where(
+                Product.mold_tool_id.is_not(None),
+                Product.deleted_at.is_(None),
+                or_(
+                    Product.product_code.like(pattern),
+                    Product.customer_material_code.like(pattern),
+                    Product.product_name.like(pattern),
+                    Customer.name.like(pattern),
+                ),
+            )
+        )
+        query = query.where(
+            or_(
+                MoldTool.mold_code.like(pattern),
+                MoldTool.mold_name.like(pattern),
+                MoldTool.rack_location.like(pattern),
+                MoldTool.remarks.like(pattern),
+                MoldTool.id.in_(linked_molds),
+            )
+        )
+    rows = db.scalars(
+        query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id).limit(limit)
+    ).unique().all()
+    return {"items": [_mold_tool_dict(row) for row in rows]}
+
+
+@router.post("/molds", status_code=201)
+def create_mold_tool(
+    payload: MoldToolPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = MoldTool(**payload.model_dump(), created_by=user.id, updated_by=user.id)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模具编号已存在") from error
+    db.refresh(row)
+    return _mold_tool_dict(row)
+
+
+@router.put("/molds/{mold_id}")
+def update_mold_tool(
+    mold_id: int,
+    payload: MoldToolPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(MoldTool, mold_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    row.updated_by = user.id
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模具编号已存在") from error
+    db.refresh(row)
+    return _mold_tool_dict(row)
+
+
+@router.put("/molds/{mold_id}/enable")
+def enable_mold_tool(
+    mold_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(MoldTool, mold_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    row.is_active = True
+    row.updated_by = user.id
+    db.commit()
+    return _mold_tool_dict(row)
+
+
+@router.put("/molds/{mold_id}/disable")
+def disable_mold_tool(
+    mold_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(MoldTool, mold_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    row.is_active = False
+    row.updated_by = user.id
+    db.commit()
+    return _mold_tool_dict(row)
+
+
+@router.get("/references/template-locations")
+def search_template_locations(
+    q: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    keyword = (q or "").strip()
+    if not keyword:
+        return {"items": [], "message": "请输入存货编码、产品名称或模板位置"}
+    pattern = f"%{keyword}%"
+    rows = db.execute(
+        select(Product, Customer, MoldTool)
+        .join(Customer, Customer.id == Product.customer_id)
+        .outerjoin(MoldTool, MoldTool.id == Product.mold_tool_id)
+        .where(
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            or_(
+                MoldTool.id.is_not(None),
+                and_(
+                    Product.die_cut_path.is_not(None),
+                    func.trim(Product.die_cut_path) != "",
+                ),
+            ),
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                Product.product_name.like(pattern),
+                Product.die_cut_path.like(pattern),
+                MoldTool.mold_code.like(pattern),
+                MoldTool.mold_name.like(pattern),
+                MoldTool.rack_location.like(pattern),
+                Customer.name.like(pattern),
+            ),
+        )
+        .order_by(Customer.name, Product.product_code, Product.id)
+        .limit(limit)
+    ).all()
+    return {
+        "items": [
+            {
+                "product_id": product.id,
+                "customer_id": customer.id,
+                "customer_name": customer.name,
+                "product_code": product.product_code,
+                "customer_material_code": product.customer_material_code,
+                "product_name": product.product_name,
+                "mold_tool_id": mold_tool.id if mold_tool else None,
+                "mold_code": mold_tool.mold_code if mold_tool else None,
+                "mold_name": mold_tool.mold_name if mold_tool else None,
+                "specification": " × ".join(
+                    str(round(value))
+                    for value in (
+                        product.length_mm,
+                        product.width_mm,
+                        product.height_mm,
+                    )
+                    if value is not None
+                ),
+                "template_location": (
+                    mold_tool.rack_location if mold_tool else product.die_cut_path
+                ),
+            }
+            for product, customer, mold_tool in rows
         ]
     }
 
@@ -592,7 +1514,37 @@ def list_lots(
     if location_id:
         query = query.where(InventoryLot.warehouse_location_id == location_id)
     if keyword:
-        query = query.where(InventoryLot.lot_number.contains(keyword.strip()))
+        text = keyword.strip()
+        pattern = f"%{text}%"
+        location_ids = select(WarehouseLocation.id).where(
+            or_(
+                WarehouseLocation.location_code.like(pattern),
+                WarehouseLocation.location_name.like(pattern),
+            )
+        )
+        finished_lot_ids = select(FinishedGoodsInventoryDetail.inventory_lot_id).where(
+            or_(
+                FinishedGoodsInventoryDetail.inventory_code_snapshot.like(pattern),
+                FinishedGoodsInventoryDetail.product_name_snapshot.like(pattern),
+                FinishedGoodsInventoryDetail.owner_customer_name_snapshot.like(pattern),
+            )
+        )
+        semi_lot_ids = select(SemiFinishedInventoryDetail.inventory_lot_id).where(
+            or_(
+                SemiFinishedInventoryDetail.material_code_snapshot.like(pattern),
+                SemiFinishedInventoryDetail.owner_customer_name_snapshot.like(pattern),
+                SemiFinishedInventoryDetail.supplier_name.like(pattern),
+                SemiFinishedInventoryDetail.cutting_note.like(pattern),
+            )
+        )
+        query = query.where(
+            or_(
+                InventoryLot.lot_number.like(pattern),
+                InventoryLot.warehouse_location_id.in_(location_ids),
+                InventoryLot.id.in_(finished_lot_ids),
+                InventoryLot.id.in_(semi_lot_ids),
+            )
+        )
     if stale_level:
         days = {"attention": 365, "handling": 548, "cleanup": 730}.get(stale_level)
         if days:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from decimal import Decimal
 from fastapi import (
@@ -21,9 +22,14 @@ from app.api.deps import RoleChecker, get_db
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
 from app.models.material import Material
+from app.models.mold_tool import MoldTool
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
 from app.models.user import User
+from app.services.flute_mapping import (
+    normalize_flute_type,
+    validate_flute_consistency,
+)
 from app.services.product_drawings import (
     DrawingValidationError,
     remove_drawing_files,
@@ -66,12 +72,84 @@ def _box_style_uses_tongue(box_style: str | None) -> bool:
     )
 
 
+def _production_process_uses_mold(value: str | None) -> bool:
+    return "模切" in {
+        item.strip()
+        for item in re.split(r"[,，、]", str(value or ""))
+        if item.strip()
+    }
+
+
+def _normalize_product_mold_binding(payload: ProductPayload) -> None:
+    if _production_process_uses_mold(payload.production_process):
+        if payload.mold_tool_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="生产工艺包含模切，必须选择已登记的生产模具及货架位置",
+            )
+        return
+    payload.mold_tool_id = None
+
+
+def _crease_width_error(
+    *,
+    label: str,
+    crease_type: str | None,
+    report_width_mm: int | None,
+    left_mm: int | None,
+    middle_mm: int | None,
+    right_mm: int | None,
+) -> str | None:
+    """Return a write-time error without breaking reads of legacy records."""
+    if crease_type != "压线":
+        return None
+    segments = (left_mm, middle_mm, right_mm)
+    if any(value is None for value in segments):
+        return f"{label}必须完整填写三段尺寸"
+    if left_mm < 0 or middle_mm <= 0 or right_mm < 0:
+        return f"{label}尺寸必须是有效毫米数"
+    if report_width_mm is None or report_width_mm <= 0:
+        return f"{label}对应报料宽必须大于 0"
+    total = left_mm + middle_mm + right_mm
+    if total != report_width_mm:
+        return (
+            f"{label}三段合计 {total}mm 必须等于报料宽 "
+            f"{report_width_mm}mm"
+        )
+    return None
+
+
+def _validate_product_crease_widths(payload: ProductPayload) -> None:
+    errors = [
+        _crease_width_error(
+            label="压线",
+            crease_type=payload.crease_type,
+            report_width_mm=payload.report_width_mm,
+            left_mm=payload.crease_left_mm,
+            middle_mm=payload.crease_middle_mm,
+            right_mm=payload.crease_right_mm,
+        ),
+        _crease_width_error(
+            label="底压线",
+            crease_type=payload.base_crease_type,
+            report_width_mm=payload.base_report_width_mm,
+            left_mm=payload.base_crease_left_mm,
+            middle_mm=payload.base_crease_middle_mm,
+            right_mm=payload.base_crease_right_mm,
+        ),
+    ]
+    error = next((item for item in errors if item), None)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+
 class ProductPayload(BaseModel):
     customer_id: int
     product_code: str = Field(min_length=1, max_length=150)
     customer_material_code: str = Field(min_length=1, max_length=150)
     product_name: str = Field(min_length=1, max_length=250)
     material_id: int | None = None
+    mold_tool_id: int | None = None
     legacy_material_text: str | None = None
     length_mm: int | None = Field(default=None, gt=0)
     width_mm: int | None = Field(default=None, gt=0)
@@ -116,7 +194,7 @@ class ProductPayload(BaseModel):
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合（3层只能 A/B/E，5层只能 AB/BE）。"""
-        from app.services.flute_mapping import validate_flute_consistency
+        self.flute_type = normalize_flute_type(self.flute_type)
         err = validate_flute_consistency(self.flute_type, self.layer_count)
         if err:
             raise ValueError(err)
@@ -233,6 +311,16 @@ def _response(product: Product, user: User) -> dict:
         data["material_supplier_name"] = None
         data["material_weight"] = None
         data["material_flute_type"] = None
+    if product.mold_tool is not None:
+        data["mold_tool"] = {
+            "id": product.mold_tool.id,
+            "mold_code": product.mold_tool.mold_code,
+            "mold_name": product.mold_tool.mold_name,
+            "rack_location": product.mold_tool.rack_location,
+            "is_active": product.mold_tool.is_active,
+        }
+    else:
+        data["mold_tool"] = None
     if product.deleted_at is not None:
         expires_at = product.deleted_at + timedelta(days=30)
         data["deleted_expires_at"] = expires_at
@@ -251,11 +339,18 @@ def _validate_references(
     *,
     customer_id: int,
     material_id: int | None,
+    mold_tool_id: int | None,
 ) -> None:
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     if material_id is not None and db.get(Material, material_id) is None:
         raise HTTPException(status_code=400, detail="材质不存在")
+    if mold_tool_id is not None:
+        mold_tool = db.get(MoldTool, mold_tool_id)
+        if mold_tool is None:
+            raise HTTPException(status_code=400, detail="模具不存在")
+        if not mold_tool.is_active:
+            raise HTTPException(status_code=400, detail="所选模具已停用")
 
 
 @router.get("")
@@ -548,11 +643,14 @@ def create_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    _normalize_product_mold_binding(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
         material_id=payload.material_id,
+        mold_tool_id=payload.mold_tool_id,
     )
+    _validate_product_crease_widths(payload)
     data = payload.model_dump()
     data.update(
         product_code=clean_code(payload.product_code),
@@ -588,11 +686,14 @@ def update_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    _normalize_product_mold_binding(payload)
     _validate_references(
         db,
         customer_id=payload.customer_id,
         material_id=payload.material_id,
+        mold_tool_id=payload.mold_tool_id,
     )
+    _validate_product_crease_widths(payload)
     product = _product_or_404(db, product_id)
     before = _product_payload_snapshot(product)
     for key, value in payload.model_dump().items():
@@ -733,12 +834,97 @@ def sync_product_fields(
         "base_crease_type", "base_crease_left_mm", "base_crease_middle_mm",
         "base_crease_right_mm", "base_report_notes",
         "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content",
+        "mold_tool_id",
     }
     product = _product_or_404(db, product_id)
+    prospective_layer = payload.fields.get("layer_count", product.layer_count)
+    prospective_flute = normalize_flute_type(
+        payload.fields.get("flute_type", product.flute_type)
+    )
+    if "layer_count" in payload.fields or "flute_type" in payload.fields:
+        flute_error = validate_flute_consistency(
+            prospective_flute, prospective_layer
+        )
+        if flute_error:
+            raise HTTPException(status_code=400, detail=flute_error)
+    if "production_process" in payload.fields or "mold_tool_id" in payload.fields:
+        prospective_process = payload.fields.get(
+            "production_process", product.production_process
+        )
+        prospective_mold_id = payload.fields.get(
+            "mold_tool_id", product.mold_tool_id
+        )
+        if _production_process_uses_mold(prospective_process):
+            if prospective_mold_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="生产工艺包含模切，必须选择已登记的生产模具及货架位置",
+                )
+            mold_tool = db.get(MoldTool, prospective_mold_id)
+            if mold_tool is None:
+                raise HTTPException(status_code=400, detail="模具不存在")
+            if not mold_tool.is_active:
+                raise HTTPException(status_code=400, detail="所选模具已停用")
+        else:
+            payload.fields["mold_tool_id"] = None
+    main_crease_fields = {
+        "report_width_mm",
+        "crease_type",
+        "crease_left_mm",
+        "crease_middle_mm",
+        "crease_right_mm",
+    }
+    if main_crease_fields.intersection(payload.fields):
+        error = _crease_width_error(
+            label="压线",
+            crease_type=payload.fields.get("crease_type", product.crease_type),
+            report_width_mm=payload.fields.get(
+                "report_width_mm", product.report_width_mm
+            ),
+            left_mm=payload.fields.get("crease_left_mm", product.crease_left_mm),
+            middle_mm=payload.fields.get(
+                "crease_middle_mm", product.crease_middle_mm
+            ),
+            right_mm=payload.fields.get(
+                "crease_right_mm", product.crease_right_mm
+            ),
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+    base_crease_fields = {
+        "base_report_width_mm",
+        "base_crease_type",
+        "base_crease_left_mm",
+        "base_crease_middle_mm",
+        "base_crease_right_mm",
+    }
+    if base_crease_fields.intersection(payload.fields):
+        error = _crease_width_error(
+            label="底压线",
+            crease_type=payload.fields.get(
+                "base_crease_type", product.base_crease_type
+            ),
+            report_width_mm=payload.fields.get(
+                "base_report_width_mm", product.base_report_width_mm
+            ),
+            left_mm=payload.fields.get(
+                "base_crease_left_mm", product.base_crease_left_mm
+            ),
+            middle_mm=payload.fields.get(
+                "base_crease_middle_mm", product.base_crease_middle_mm
+            ),
+            right_mm=payload.fields.get(
+                "base_crease_right_mm", product.base_crease_right_mm
+            ),
+        )
+        if error:
+            raise HTTPException(status_code=400, detail=error)
     updated = []
     for k, v in payload.fields.items():
         if k not in ALLOWED:
             continue
+        if k == "flute_type":
+            v = prospective_flute
         setattr(product, k, v)
         updated.append(k)
     if not updated:

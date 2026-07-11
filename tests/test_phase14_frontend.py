@@ -128,7 +128,7 @@ def test_requisition_modal_has_frontend_dimension_validation_and_friendly_error_
 def test_requisition_submitted_list_offers_incoming_entry_and_delivery_page_explains_received_requirement() -> None:
     assert "/incoming.html" in INDEX
     assert "去入库" in INDEX
-    assert "只有已入库的订单明细才能生成送货单" in INDEX
+    assert "只有已入库，或已被成品库存全额预占" in INDEX
 
 
 def test_order_pages_use_display_material_instead_of_raw_snapshot_material() -> None:
@@ -168,7 +168,7 @@ def test_new_order_form_has_dedicated_code_width_classes() -> None:
 def test_requisition_page_keeps_pending_and_submitted_views() -> None:
     assert "待报料 {{ requisitionPending.length }}" in INDEX
     assert "已报料/已入库 {{ requisitionItems.length }}" in INDEX
-    assert '@click="openRequisition"' in INDEX
+    assert '@click="openSupplierRequisitionDraft()"' in INDEX
 
 
 def test_finance_settlement_no_longer_prompts_for_account() -> None:
@@ -190,7 +190,7 @@ def test_delivery_and_statement_controls_show_undo_and_edit_cancel_actions() -> 
 def test_board_dimensions_render_as_integer_mm_in_daily_pages() -> None:
     assert "formatBoardDimension" in INDEX
     assert "formatBoardSpec" in INDEX
-    assert "formatBoardSpec(row.cardboard_len, row.cardboard_width)" in INDEX
+    assert "formatBoardSpec(row.cardboard_len,row.cardboard_width)" in INDEX
     assert "mm" in INDEX
     assert "formatBoardSpec(item.cardboard_len, item.cardboard_width)" in INCOMING
 

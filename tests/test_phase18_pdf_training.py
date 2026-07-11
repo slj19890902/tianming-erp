@@ -18,6 +18,7 @@ import pytest
 PYTHON = sys.executable
 BASE_URL = "http://127.0.0.1:8001"
 ENCODING = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+pytestmark = pytest.mark.usefixtures("isolated_subprocess_database")
 
 
 # ---------------------------------------------------------------------------

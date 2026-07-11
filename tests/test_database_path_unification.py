@@ -101,15 +101,40 @@ def test_phase1_compatibility_backend_no_longer_defaults_to_test_database(
     import importlib
     import phase1_postgres.database as compatibility_database
 
-    monkeypatch.delenv("ERP_DATABASE_PATH", raising=False)
-    compatibility_database = importlib.reload(compatibility_database)
+    with monkeypatch.context() as isolated_environment:
+        isolated_environment.delenv("ERP_DATABASE_PATH", raising=False)
+        compatibility_database = importlib.reload(compatibility_database)
 
-    assert compatibility_database.DATABASE_PATH == FORMAL_DATABASE
-    assert "tm_phase3_dev.sqlite3" not in compatibility_database.DATABASE_URL
+        assert compatibility_database.DATABASE_PATH == FORMAL_DATABASE
+        assert "tm_phase3_dev.sqlite3" not in compatibility_database.DATABASE_URL
+
+    # The environment is restored by this point. Reload the module as well so
+    # later tests cannot inherit an engine that still points at the checkout DB.
+    compatibility_database.engine.dispose()
+    importlib.reload(compatibility_database)
 
 
-def test_health_reports_current_formal_database_path(monkeypatch) -> None:
-    monkeypatch.setenv("ERP_DATABASE_PATH", str(FORMAL_DATABASE))
+def test_health_reports_current_configured_database_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "health.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("CREATE TABLE sales_orders (id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE sales_order_items (id INTEGER PRIMARY KEY)"
+        )
+        connection.executemany(
+            "INSERT INTO sales_orders (id) VALUES (?)",
+            [(1,), (2,)],
+        )
+        connection.executemany(
+            "INSERT INTO sales_order_items (id) VALUES (?)",
+            [(1,), (2,), (3,)],
+        )
+        connection.commit()
+
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
     from app.main import create_app
 
     application = create_app()
@@ -122,20 +147,10 @@ def test_health_reports_current_formal_database_path(monkeypatch) -> None:
     payload = json.loads(response.body)
 
     assert response.status_code == 200
-    assert Path(payload["database"]).resolve() == FORMAL_DATABASE
+    assert Path(payload["database"]).resolve() == database_path.resolve()
     assert payload["orders_table"] == "sales_orders"
-    with sqlite3.connect(
-        f"file:{FORMAL_DATABASE.as_posix()}?mode=ro",
-        uri=True,
-    ) as connection:
-        expected_orders = connection.execute(
-            "SELECT COUNT(*) FROM sales_orders"
-        ).fetchone()[0]
-        expected_items = connection.execute(
-            "SELECT COUNT(*) FROM sales_order_items"
-        ).fetchone()[0]
-    assert payload["orders_count"] == expected_orders
-    assert payload["order_items_count"] == expected_items
+    assert payload["orders_count"] == 2
+    assert payload["order_items_count"] == 3
 
 
 def test_start_script_uses_complete_backend_entrypoint() -> None:

@@ -142,3 +142,63 @@ def isolated_engine(isolated_database_path: Path):
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def reject_checkout_database_writes(request: pytest.FixtureRequest):
+    """Identify the exact test that creates or mutates a checkout database."""
+    before = {path: _fingerprint(path) for path in FINGERPRINT_DATABASES}
+    yield
+    changed = [
+        path
+        for path, fingerprint in before.items()
+        if _fingerprint(path) != fingerprint
+    ]
+    if changed:
+        rendered = ", ".join(str(path) for path in changed)
+        pytest.fail(
+            f"{request.node.nodeid} changed a protected checkout database: "
+            f"{rendered}"
+        )
+
+
+@pytest.fixture(scope="module")
+def isolated_subprocess_database(tmp_path_factory: pytest.TempPathFactory):
+    """Give legacy subprocess API tests a migrated-shape disposable database."""
+    from sqlalchemy.orm import Session
+
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.user import User
+
+    database_path = (
+        tmp_path_factory.mktemp("subprocess-database") / "carton_erp.sqlite3"
+    )
+    previous_database_path = os.environ.get("ERP_DATABASE_PATH")
+    os.environ["ERP_DATABASE_PATH"] = str(database_path)
+
+    engine = create_sqlite_engine(database_path)
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(
+            User(
+                username="pytest-subprocess-admin",
+                password_hash=hash_password("PytestOnly123!"),
+                role="admin",
+                real_name="测试管理员",
+                display_name="测试管理员",
+                is_active=True,
+                must_change_password=False,
+            )
+        )
+        session.commit()
+
+    try:
+        yield database_path
+    finally:
+        engine.dispose()
+        if previous_database_path is None:
+            os.environ.pop("ERP_DATABASE_PATH", None)
+        else:
+            os.environ["ERP_DATABASE_PATH"] = previous_database_path

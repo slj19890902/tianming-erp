@@ -24,6 +24,7 @@ import pytest
 
 PYTHON = sys.executable
 ENCODING = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+pytestmark = pytest.mark.usefixtures("isolated_subprocess_database")
 
 
 def _run(cmd: str) -> subprocess.CompletedProcess:

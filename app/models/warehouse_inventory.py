@@ -22,6 +22,7 @@ from app.models import Base
 
 if TYPE_CHECKING:
     from app.models.customer import Customer
+    from app.models.material import Material
     from app.models.product import Product
 
 
@@ -63,7 +64,7 @@ class InventoryLot(Base):
             name="ck_inventory_lots_status",
         ),
         CheckConstraint(
-            "source_type IN ('manual','production_surplus','purchase_surplus','stocktake','transfer')",
+            "source_type IN ('manual','production_surplus','purchase_surplus','stocktake','transfer','replenishment')",
             name="ck_inventory_lots_source_type",
         ),
         CheckConstraint("quantity_available >= 0", name="ck_inventory_lots_available"),
@@ -175,6 +176,18 @@ class SemiFinishedInventoryDetail(Base):
             "sheet_type IN ('raw_board','net_sheet','creased_sheet')",
             name="ck_semi_inventory_sheet_type",
         ),
+        CheckConstraint(
+            "component_type IN ('whole','cover','base')",
+            name="ck_semi_inventory_component",
+        ),
+        CheckConstraint(
+            "pieces_per_box > 0",
+            name="ck_semi_inventory_pieces_per_box",
+        ),
+        CheckConstraint(
+            "stock_yield_per_sheet > 0",
+            name="ck_semi_inventory_stock_yield",
+        ),
         Index(
             "ix_semi_inventory_flute_size",
             "flute_type",
@@ -184,6 +197,18 @@ class SemiFinishedInventoryDetail(Base):
         Index("ix_semi_inventory_sheet_flute", "sheet_type", "flute_type"),
         Index("ix_semi_inventory_owner", "owner_customer_id"),
         Index("ix_semi_inventory_material", "material_code_snapshot"),
+        Index("ix_semi_inventory_material_id", "material_id"),
+        Index(
+            "ix_semi_inventory_shared_signature",
+            "owner_customer_id",
+            "board_length_mm",
+            "board_width_mm",
+            "normalized_material_code",
+            "flute_type",
+            "component_type",
+            "pieces_per_box",
+            "stock_yield_per_sheet",
+        ),
     )
 
     inventory_lot_id: Mapped[int] = mapped_column(
@@ -193,14 +218,25 @@ class SemiFinishedInventoryDetail(Base):
     owner_customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
     )
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL"), nullable=True
+    )
     owner_customer_name_snapshot: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
     material_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
     layer_count: Mapped[int] = mapped_column(Integer, nullable=False)
     flute_type: Mapped[str] = mapped_column(String(20), nullable=False)
     board_length_mm: Mapped[int] = mapped_column(Integer, nullable=False)
     board_width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    component_type: Mapped[str] = mapped_column(
+        String(20), default="whole", nullable=False
+    )
+    pieces_per_box: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    stock_yield_per_sheet: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False
+    )
     sheet_type: Mapped[str] = mapped_column(String(30), nullable=False)
     crease_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     crease_left_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -210,25 +246,198 @@ class SemiFinishedInventoryDetail(Base):
 
     lot: Mapped["InventoryLot"] = relationship(back_populates="semi_finished_detail")
     customer: Mapped["Customer | None"] = relationship()
+    material: Mapped["Material | None"] = relationship()
+
+
+class OrderItemSemiRequirement(Base):
+    __tablename__ = "order_item_semi_requirements"
+    __table_args__ = (
+        CheckConstraint(
+            "component_type IN ('whole','cover','base')",
+            name="ck_order_item_semi_requirements_component",
+        ),
+        CheckConstraint(
+            "board_length_mm > 0 AND board_width_mm > 0",
+            name="ck_order_item_semi_requirements_dimensions",
+        ),
+        CheckConstraint(
+            "pieces_per_box > 0 AND stock_yield_per_sheet > 0",
+            name="ck_order_item_semi_requirements_conversion",
+        ),
+        CheckConstraint(
+            "required_piece_quantity > 0",
+            name="ck_order_item_semi_requirements_quantity",
+        ),
+        UniqueConstraint(
+            "order_item_id",
+            "component_type",
+            name="uq_order_item_semi_requirements_item_component",
+        ),
+        Index(
+            "ix_order_item_semi_requirements_signature",
+            "customer_id",
+            "board_length_mm",
+            "board_width_mm",
+            "normalized_material_code",
+            "flute_type",
+            "component_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="CASCADE"), nullable=False
+    )
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    component_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    board_length_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    board_width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    material_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    flute_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    pieces_per_box: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_yield_per_sheet: Mapped[int] = mapped_column(Integer, nullable=False)
+    required_piece_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+
+class SemiFinishedMatchRule(Base):
+    __tablename__ = "semi_finished_match_rules"
+    __table_args__ = (
+        CheckConstraint(
+            "component_type IN ('whole','cover','base')",
+            name="ck_semi_finished_match_rules_component",
+        ),
+        CheckConstraint(
+            "board_length_mm > 0 AND board_width_mm > 0",
+            name="ck_semi_finished_match_rules_dimensions",
+        ),
+        CheckConstraint(
+            "pieces_per_box > 0 AND stock_yield_per_sheet > 0",
+            name="ck_semi_finished_match_rules_conversion",
+        ),
+        UniqueConstraint(
+            "customer_id",
+            "board_length_mm",
+            "board_width_mm",
+            "normalized_material_code",
+            "flute_type",
+            "component_type",
+            "pieces_per_box",
+            "stock_yield_per_sheet",
+            name="uq_semi_finished_match_rules_signature",
+        ),
+        Index(
+            "ix_semi_finished_match_rules_active_component",
+            "active",
+            "component_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    board_length_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    board_width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    flute_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    component_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    pieces_per_box: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_yield_per_sheet: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+
+class SemiFinishedMatchRuleProduct(Base):
+    __tablename__ = "semi_finished_match_rule_products"
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_id",
+            "product_id",
+            name="uq_semi_finished_match_rule_products_rule_product",
+        ),
+        Index(
+            "ix_semi_finished_match_rule_products_product",
+            "product_id",
+            "rule_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    rule_id: Mapped[int] = mapped_column(
+        ForeignKey("semi_finished_match_rules.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    )
+    confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class InventoryReservation(Base):
     __tablename__ = "inventory_reservations"
     __table_args__ = (
         CheckConstraint(
-            "reservation_type IN ('finished_order','semi_requisition')",
+            "reservation_type IN ('finished_order','semi_requisition','semi_order')",
             name="ck_inventory_reservations_type",
         ),
         CheckConstraint(
-            "status IN ('active','released','consumed','cancelled')",
+            "status IN ('active','partial','released','consumed','cancelled')",
             name="ck_inventory_reservations_status",
         ),
         CheckConstraint(
             "reserved_stock_quantity > 0",
             name="ck_inventory_reservations_quantity",
         ),
+        CheckConstraint(
+            "consumed_stock_quantity >= 0 AND released_stock_quantity >= 0 "
+            "AND consumed_stock_quantity + released_stock_quantity "
+            "<= reserved_stock_quantity",
+            name="ck_inventory_reservations_cumulative_quantities",
+        ),
+        CheckConstraint(
+            "consumed_requirement_quantity >= 0 "
+            "AND released_requirement_quantity >= 0 "
+            "AND (credited_requirement_quantity IS NULL OR "
+            "consumed_requirement_quantity + released_requirement_quantity "
+            "<= credited_requirement_quantity)",
+            name="ck_inventory_reservations_cumulative_requirement_quantities",
+        ),
         UniqueConstraint("reservation_number", name="uq_inventory_reservations_number"),
         UniqueConstraint("idempotency_key", name="uq_inventory_reservations_idempotency"),
+        UniqueConstraint(
+            "reservation_group_key",
+            "inventory_lot_id",
+            name="uq_inventory_reservations_group_lot",
+        ),
         Index("ix_inventory_reservations_lot_status", "inventory_lot_id", "status"),
         Index(
             "ix_inventory_reservations_order_item",
@@ -237,6 +446,13 @@ class InventoryReservation(Base):
             "status",
         ),
         Index("ix_inventory_reservations_requisition", "requisition_item_id"),
+        Index(
+            "ix_inventory_reservations_semi_requirement",
+            "semi_requirement_id",
+            "status",
+        ),
+        Index("ix_inventory_reservations_match_rule", "match_rule_id"),
+        Index("ix_inventory_reservations_group", "reservation_group_key"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -254,9 +470,29 @@ class InventoryReservation(Base):
     requisition_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("material_requisition_items.id", ondelete="SET NULL"), nullable=True
     )
+    semi_requirement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("order_item_semi_requirements.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    match_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("semi_finished_match_rules.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     reserved_stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     credited_requirement_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     yield_factor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consumed_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    released_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    consumed_requirement_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    released_requirement_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     warning_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
     warning_acknowledged_by: Mapped[int | None] = mapped_column(
@@ -275,6 +511,10 @@ class InventoryReservation(Base):
     )
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     release_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reservation_group_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reservation_group_requested_quantity: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
@@ -289,7 +529,7 @@ class InventoryMovement(Base):
     __table_args__ = (
         CheckConstraint(
             "movement_type IN ('manual_in','adjust','freeze','unfreeze','damage','scrap',"
-            "'transfer_to_general','reserve','release_reserve','consume')",
+            "'transfer_to_general','reserve','release_reserve','consume','reverse_consume')",
             name="ck_inventory_movements_type",
         ),
         CheckConstraint("quantity >= 0", name="ck_inventory_movements_quantity"),
@@ -353,3 +593,68 @@ class InventoryMovement(Base):
     )
 
     lot: Mapped["InventoryLot"] = relationship(back_populates="movements")
+
+
+class DeliveryInventoryAllocation(Base):
+    __tablename__ = "delivery_inventory_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            "consumed_stock_quantity > 0 AND credited_requirement_quantity > 0",
+            name="ck_delivery_inventory_allocations_quantities",
+        ),
+        CheckConstraint(
+            "reversed_stock_quantity >= 0 "
+            "AND reversed_stock_quantity <= consumed_stock_quantity "
+            "AND reversed_requirement_quantity >= 0 "
+            "AND reversed_requirement_quantity <= credited_requirement_quantity",
+            name="ck_delivery_inventory_allocations_reversed",
+        ),
+        CheckConstraint(
+            "status IN ('active','partial','reversed')",
+            name="ck_delivery_inventory_allocations_status",
+        ),
+        UniqueConstraint(
+            "consume_movement_id",
+            name="uq_delivery_inventory_allocations_consume_movement",
+        ),
+        Index(
+            "ix_delivery_inventory_allocations_delivery_item",
+            "delivery_item_id",
+            "status",
+        ),
+        Index(
+            "ix_delivery_inventory_allocations_reservation",
+            "reservation_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    delivery_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_delivery_items.id", ondelete="RESTRICT"), nullable=False
+    )
+    reservation_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_reservations.id", ondelete="RESTRICT"), nullable=False
+    )
+    consume_movement_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=False
+    )
+    consumed_stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    credited_requirement_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reversed_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    reversed_requirement_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reversed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

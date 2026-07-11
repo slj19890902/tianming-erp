@@ -24,6 +24,7 @@ from app.models import Base
 if TYPE_CHECKING:
     from app.models.customer import Customer
     from app.models.material import Material
+    from app.models.mold_tool import MoldTool
     from app.models.product_drawing import ProductDrawing
 
 
@@ -46,6 +47,7 @@ class Product(Base):
         ),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
+        Index("ix_products_mold_tool_id", "mold_tool_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -58,6 +60,10 @@ class Product(Base):
     product_name: Mapped[str] = mapped_column(String(250), nullable=False)
     material_id: Mapped[int | None] = mapped_column(
         ForeignKey("materials.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    mold_tool_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="SET NULL"),
         nullable=True,
     )
     legacy_material_text: Mapped[str | None] = mapped_column(String(250), nullable=True)
@@ -167,6 +173,7 @@ class Product(Base):
 
     customer: Mapped["Customer"] = relationship(back_populates="products")
     material: Mapped["Material | None"] = relationship(back_populates="products")
+    mold_tool: Mapped["MoldTool | None"] = relationship(back_populates="products")
     drawings: Mapped[list["ProductDrawing"]] = relationship(
         back_populates="product",
         order_by=(

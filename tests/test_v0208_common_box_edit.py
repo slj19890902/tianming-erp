@@ -1,9 +1,10 @@
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.api.products import ProductPayload
+from app.api.products import ProductPayload, _validate_product_crease_widths
 
 
 INDEX = Path(__file__).resolve().parents[1] / "static" / "index.html"
@@ -26,6 +27,15 @@ def test_common_box_edit_uses_five_compact_business_rows() -> None:
     )
     positions = [source.index(marker) for marker in markers]
     assert positions == sorted(positions)
+
+
+def test_common_box_size_grid_reserves_report_and_crease_areas() -> None:
+    source = _source()
+    assert "grid-template-columns: repeat(14, minmax(0, 1fr))" in source
+    assert 'class="field product-report-field"' in source
+    assert 'class="field product-crease-type-field"' in source
+    assert 'class="field product-crease-field"' in source
+    assert ".product-report-field { grid-column: span 4" in source
 
 
 def test_common_box_dimensions_are_integer_inputs_but_price_keeps_decimals() -> None:
@@ -95,6 +105,44 @@ def test_common_box_api_rejects_fractional_mm_and_accepts_splice_fields() -> Non
 
     with pytest.raises(ValidationError):
         ProductPayload(**required, length_mm=880.5)
+
+
+def test_common_box_write_guard_requires_crease_total_to_equal_report_width() -> None:
+    required = {
+        "customer_id": 1,
+        "product_code": "CREASE-001",
+        "customer_material_code": "CREASE-001",
+        "product_name": "压线校验箱",
+        "box_category": "normal",
+    }
+    valid = ProductPayload(
+        **required,
+        crease_type="压线",
+        crease_left_mm=335,
+        crease_middle_mm=110,
+        crease_right_mm=335,
+        report_width_mm=780,
+    )
+    _validate_product_crease_widths(valid)
+
+    invalid = valid.model_copy(update={"report_width_mm": 785})
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_product_crease_widths(invalid)
+    assert exc_info.value.status_code == 400
+    assert "三段合计 780mm 必须等于报料宽 785mm" in exc_info.value.detail
+
+    invalid_base = ProductPayload(
+        **{**required, "product_code": "CREASE-A3", "customer_material_code": "CREASE-A3"},
+        box_style="A3 天地盖",
+        base_crease_type="压线",
+        base_crease_left_mm=50,
+        base_crease_middle_mm=200,
+        base_crease_right_mm=50,
+        base_report_width_mm=305,
+    )
+    with pytest.raises(HTTPException) as base_exc:
+        _validate_product_crease_widths(invalid_base)
+    assert "底压线三段合计 300mm 必须等于报料宽 305mm" in base_exc.value.detail
 
 
 def test_common_box_processes_remove_double_and_print_type_controls_drawings() -> None:
@@ -167,12 +215,26 @@ def test_common_box_a1_board_and_crease_recommendations_use_splice_and_flap() ->
     assert "W + H + 5" not in source
     assert "board_width: this.normalizeMmInteger(W + H)" in source
     assert "form.report_width_mm = left + middle + right;" in source
-    assert "const expectedWidth = sum;" in source
+    assert "if (sum !== width)" in source
     assert "Math.round(W / 2)" in source
     assert "A1/0201 双拼推荐" in source
     assert "A1/0201 单拼推荐" in source
     assert "(L + W + 8) * 2" not in source
     assert "W + H + 4" not in source
+
+
+def test_common_box_all_crease_inputs_sync_width_and_block_manual_mismatch() -> None:
+    source = _source()
+    sync_start = source.index("syncProductReportWidthFromCrease() {")
+    sync_end = source.index("syncProductBaseReportWidthFromCrease()", sync_start)
+    sync_block = source[sync_start:sync_end]
+
+    assert 'form.crease_type !== "压线"' in sync_block
+    assert "isA1BoxStyle" not in sync_block
+    assert "form.report_width_mm = left + middle + right" in sync_block
+    assert "form.base_report_width_mm = left + middle + right" in source
+    assert '"底压线", form.base_crease_type, form.base_report_width_mm' in source
+    assert "报料宽必须等于压线三段总和" in source
 
 
 def test_common_box_recommendation_is_automatic_but_preserves_manual_values() -> None:

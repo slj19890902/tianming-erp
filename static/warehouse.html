@@ -32,6 +32,7 @@
       <button class="btn" data-tab="semi_finished">半成品仓</button>
       <button class="btn" data-tab="movements">库存流水</button>
       <button class="btn admin-only" data-tab="locations">库位管理</button>
+      <button class="btn" data-tab="molds">模具位置</button>
     </div>
     <div id="pageError" class="panel hidden" style="border-color:#fecaca;color:#991b1b"></div>
 
@@ -42,7 +43,7 @@
           <select id="statusFilter" style="width:140px"><option value="">全部状态</option><option value="active">正常</option><option value="frozen">冻结</option><option value="closed">关闭</option></select>
           <select id="locationFilter" style="width:180px"><option value="">全部库位</option></select>
           <select id="staleFilter" style="width:180px"><option value="">全部库龄</option><option value="attention">超过1年</option><option value="handling">超过18个月</option><option value="cleanup">超过2年</option></select>
-          <input id="keywordFilter" style="width:220px" placeholder="输入库存批次号">
+          <input id="keywordFilter" style="width:260px" placeholder="批次 / 库位 / 存货编码 / 产品">
           <button id="refreshLots" class="btn">查询</button>
         </div>
         <div id="lotSummary" class="summary"></div>
@@ -95,6 +96,12 @@
         <div style="display:flex;justify-content:space-between;align-items:center"><h2 id="reservationTitle">成品库存预占记录</h2><button class="btn" onclick="$('reservationPanel').classList.add('hidden')">关闭</button></div>
         <table><thead><tr><th>预占时间</th><th>订单</th><th>客户/产品</th><th>预占数量</th><th>状态</th><th>释放时间/原因</th></tr></thead><tbody id="reservationBody"></tbody></table>
       </div>
+      <div id="assignmentPanel" class="panel hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2 id="assignmentTitle">分配适用成品款号</h2><div id="assignmentScope" class="muted"></div></div><button class="btn" onclick="$('assignmentPanel').classList.add('hidden')">关闭</button></div>
+        <div class="toolbar" style="margin:12px 0"><input id="assignmentKeyword" style="width:320px" placeholder="搜索存货编码 / 产品名称 / 规格 / 模具位置"><button class="btn" type="button" onclick="searchAssignmentProducts()">搜索</button><span id="assignmentCount" class="muted"></span></div>
+        <div class="table-wrap"><table><thead><tr><th>选择</th><th>存货编码 / 产品</th><th>成品规格</th><th>报料规格</th><th>材质 / 楞型</th><th>模具 / 货架位置</th><th>匹配建议</th></tr></thead><tbody id="assignmentBody"></tbody></table></div>
+        <div class="actions admin-only" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" type="button" onclick="saveProductAssignments()">保存款号分配</button></div>
+      </div>
     </section>
 
     <section id="movementSection" class="hidden">
@@ -118,6 +125,25 @@
         </div>
       </form>
       <div class="panel table-wrap"><table><thead><tr><th>编码</th><th>名称</th><th>类型</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody id="locationBody"></tbody></table></div>
+    </section>
+
+    <section id="moldSection" class="hidden">
+      <form id="moldForm" class="panel admin-only">
+        <h2>新增 / 编辑生产模具</h2><input id="moldId" type="hidden">
+        <p class="muted">每套实体模具登记一个编号和固定货架位置；随后在“常用箱与材质”里绑定，可供多个常用箱共用。</p>
+        <div class="grid">
+          <div class="field"><label>模具编号</label><input id="moldCode" required placeholder="例如：MJ-A1-001"></div>
+          <div class="field"><label>模具名称</label><input id="moldName" required placeholder="例如：天华 21301010 开槽模"></div>
+          <div class="field"><label>固定货架位置</label><input id="moldRackLocation" required placeholder="例如：二楼模具架 B-12"></div>
+          <div class="field"><label>备注</label><input id="moldRemarks" placeholder="适用范围或现场说明"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存模具</button></div>
+        </div>
+      </form>
+      <div class="panel">
+        <h2>模具与位置查询</h2>
+        <div class="toolbar"><input id="moldKeyword" style="width:420px" placeholder="模具编号 / 货架位置 / 客户 / 存货编码 / 产品"><button id="refreshMolds" class="btn primary" type="button">查询</button></div>
+      </div>
+      <div class="panel table-wrap"><table><thead><tr><th>模具编号 / 名称</th><th>固定货架位置</th><th>已绑定常用箱</th><th>状态</th><th class="admin-only">操作</th></tr></thead><tbody id="moldBody"></tbody></table><div id="moldEmpty" class="empty hidden">暂无模具，请先新增模具档案。</div></div>
     </section>
   </main>
   <div id="message" class="message hidden"></div>
@@ -162,7 +188,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,tab:"finished",locations:[],customers:[],lots:[]};
+    const state={user:null,tab:"finished",locations:[],customers:[],lots:[],molds:[],assignment:{lotId:null,items:[],selected:new Set()}};
     const $=id=>document.getElementById(id);
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
     function apiErrorMessage(body,status,url){
@@ -178,6 +204,7 @@
     function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
     function today(){return new Date().toISOString().slice(0,10)}
     function options(select,items,placeholder){select.innerHTML=`<option value="">${placeholder}</option>`+items.map(x=>`<option value="${x.id}">${x.label}</option>`).join("")}
+    function h(value){return String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char])}
     function showPageError(message){
       $("pageError").textContent=message;
       $("pageError").classList.remove("hidden");
@@ -212,16 +239,19 @@
     function bind(){
       document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
       $("refreshLots").onclick=loadLots;$("refreshMovements").onclick=loadMovements;
+      $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};
+      $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
       $("openInForm").onclick=()=>{(state.tab==="finished"?$("finishedForm"):$("semiForm")).classList.toggle("hidden")};
       $("fgCustomer").onchange=loadProducts;$("siLayer").onchange=updateFlutes;updateFlutes();
-      $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;
+      $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;$("moldForm").onsubmit=saveMold;
     }
     function switchTab(tab){
       state.tab=tab;document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x.dataset.tab===tab));
       $("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab));
       $("movementSection").classList.toggle("hidden",tab!=="movements");$("locationSection").classList.toggle("hidden",tab!=="locations");
+      $("moldSection").classList.toggle("hidden",tab!=="molds");
       $("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
-      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="movements")loadMovements();else loadLocations(true);
+      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else loadLocations(true);
     }
     async function loadLocations(includeInactive=false){
       const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;
@@ -276,7 +306,43 @@
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
       const normal=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button><button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
       const general=state.user.role==="admin"&&row.inventory_type==="finished"&&!row.detail.is_general&&row.status==="active"?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
-      return freeze+normal+general;
+      const assignment=state.user.role==="admin"&&row.inventory_type==="semi_finished"?`<button class="btn primary" onclick="openProductAssignments(${row.id})">分配成品款号</button>`:"";
+      return assignment+freeze+normal+general;
+    }
+    async function openProductAssignments(lotId){
+      try{
+        const data=await api(`/api/warehouse/lots/${lotId}/product-assignments?limit=500`);
+        state.assignment={lotId,items:data.items||[],selected:new Set(data.assigned_product_ids||[])};
+        $("assignmentTitle").textContent=`${data.lot_number} 分配适用成品款号`;
+        $("assignmentScope").textContent=`${data.customer_name||"未指定客户"}｜${data.material_code||"-"} / ${data.flute_type||"-"}｜${data.board_length_mm} × ${data.board_width_mm} mm。${data.mapping_scope}`;
+        $("assignmentKeyword").value="";
+        renderAssignmentProducts();
+        $("assignmentPanel").classList.remove("hidden");
+        $("assignmentPanel").scrollIntoView({behavior:"smooth",block:"start"});
+      }catch(err){toast(err.message,true)}
+    }
+    async function searchAssignmentProducts(){
+      if(!state.assignment.lotId)return;
+      try{
+        const keyword=$("assignmentKeyword").value.trim();
+        const suffix=keyword?`&q=${encodeURIComponent(keyword)}`:"";
+        const data=await api(`/api/warehouse/lots/${state.assignment.lotId}/product-assignments?limit=500${suffix}`);
+        state.assignment.items=data.items||[];
+        renderAssignmentProducts();
+      }catch(err){toast(err.message,true)}
+    }
+    function renderAssignmentProducts(){
+      const rows=state.assignment.items;
+      $("assignmentBody").innerHTML=rows.map(row=>`<tr><td><input type="checkbox" ${state.assignment.selected.has(row.id)?"checked":""} ${state.user.role==="admin"?"":"disabled"} onchange="toggleProductAssignment(${row.id},this.checked)"></td><td><b>${h(row.product_code)}</b><br>${h(row.product_name)}</td><td>${h(row.specification||"-")}</td><td>${h(row.report_length_mm||"-")} × ${h(row.report_width_mm||"-")} mm</td><td>${h(row.material_code||"-")} / ${h(row.flute_type||"-")}</td><td>${h(row.template_location||"未登记")}</td><td>${row.recommended?'<span class="tag">规格推荐</span>':'<span class="muted">人工选择</span>'}${state.assignment.selected.has(row.id)?'<br><span class="tag warn">已分配</span>':''}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">没有匹配的成品款号</td></tr>`;
+      $("assignmentCount").textContent=`当前显示 ${rows.length} 款，已分配 ${state.assignment.selected.size} 款`;
+    }
+    function toggleProductAssignment(productId,checked){if(checked)state.assignment.selected.add(productId);else state.assignment.selected.delete(productId);renderAssignmentProducts()}
+    async function saveProductAssignments(){
+      if(!state.assignment.lotId)return;
+      try{
+        const data=await api(`/api/warehouse/lots/${state.assignment.lotId}/product-assignments`,{method:"PUT",body:JSON.stringify({product_ids:[...state.assignment.selected]})});
+        state.assignment.items=data.items||[];state.assignment.selected=new Set(data.assigned_product_ids||[]);renderAssignmentProducts();toast(`已保存 ${state.assignment.selected.size} 个适用成品款号`)
+      }catch(err){toast(err.message,true)}
     }
     async function operate(id,operation,version){
       let body={expected_version:version,idempotency_key:createIdempotencyKey()},label=operation;
@@ -290,6 +356,33 @@
       const data=await api("/api/warehouse/movements?"+p);
       $("movementBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库存流水</td></tr>`;
     }
+    async function loadMolds(){
+      try{
+        const keyword=$("moldKeyword").value.trim();
+        const data=await api(`/api/warehouse/molds?include_inactive=${state.user.role==="admin"}&limit=500${keyword?`&q=${encodeURIComponent(keyword)}`:""}`);
+        state.molds=data.items||[];
+        renderMolds();
+      }catch(err){toast(err.message,true)}
+    }
+    function renderMolds(){
+      $("moldBody").innerHTML=state.molds.map(row=>{
+        const linked=(row.products||[]).map(product=>`<span class="tag" title="${h(product.customer_name||"")}">${h(product.product_code)} · ${h(product.product_name)}</span>`).join(" ")||'<span class="muted">尚未绑定常用箱</span>';
+        const actions=state.user.role==="admin"?`<td><button class="btn" onclick="editMold(${row.id})">编辑</button><button class="btn ${row.is_active?"danger":""}" onclick="toggleMold(${row.id},${row.is_active})">${row.is_active?"停用":"启用"}</button></td>`:"";
+        return `<tr><td><b>${h(row.mold_code)}</b><br>${h(row.mold_name)}</td><td><b>${h(row.rack_location)}</b><br><span class="muted">${h(row.remarks||"")}</span></td><td style="white-space:normal;min-width:320px">${linked}</td><td>${row.is_active?"启用":"停用"}</td>${actions}</tr>`;
+      }).join("");
+      $("moldEmpty").classList.toggle("hidden",state.molds.length>0);
+    }
+    function editMold(id){
+      const row=state.molds.find(value=>value.id===id);if(!row)return;
+      $("moldId").value=row.id;$("moldCode").value=row.mold_code;$("moldName").value=row.mold_name;$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";
+      $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
+    }
+    async function saveMold(event){
+      event.preventDefault();
+      const id=$("moldId").value,payload={mold_code:$("moldCode").value,mold_name:$("moldName").value,rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value||null};
+      try{await api(`/api/warehouse/molds${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("模具档案已保存");event.target.reset();$("moldId").value="";await loadMolds()}catch(err){toast(err.message,true)}
+    }
+    async function toggleMold(id,active){try{await api(`/api/warehouse/molds/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadMolds()}catch(err){toast(err.message,true)}}
     function renderLocations(){
       $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${x.location_code}</td><td>${x.location_name}</td><td>${labels[x.warehouse_type]}</td><td>${x.is_active?"启用":"停用"}</td><td>${x.remarks||"-"}</td><td><button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button></td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无库位</td></tr>`
     }

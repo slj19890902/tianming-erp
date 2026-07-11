@@ -1,0 +1,277 @@
+import os
+import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
+
+
+def test_shared_inventory_order_payload_uses_idempotent_client_lines() -> None:
+    assert "client_line_id: item.client_line_id || createIdempotencyKey()" in INDEX
+    assert "reservation_plan: this.buildReservationPlan(item)" in INDEX
+    assert "idempotency_key:crypto.randomUUID()" not in INDEX
+
+
+def test_quantity_input_debounces_inventory_candidate_refresh() -> None:
+    assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
+    assert '@input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
+    assert "scheduleOrderLineInventoryRefresh(line, customerId)" in INDEX
+    assert "line._inventory_refresh_timer = setTimeout" in INDEX
+
+
+def test_pending_requisition_explains_semi_deduction_and_purchase_shortage() -> None:
+    assert "小片需求 / 库存 / 采购" in INDEX
+    assert "半成品抵扣：{{ row.semi_finished_reserved_piece_qty || 0 }} 片" in INDEX
+    assert "剩余：{{ row.remaining_required_piece_qty || 0 }} 片" in INDEX
+    assert "采购：{{ row.requisition_qty || 0 }} 张" in INDEX
+
+
+def test_supplier_draft_rechecks_late_semi_inventory_before_purchase() -> None:
+    assert "发现可抵扣半成品" in INDEX
+    assert "条可抵扣半成品库存" in INDEX
+    assert "确认抵扣并重算采购" in INDEX
+    assert "本次不用库存" in INDEX
+    assert "/api/requisition/semi-inventory/reserve-from-pending" in INDEX
+    assert "this.supplierRequisitionSelections = selections;" in INDEX
+    assert "refreshSupplierRequisitionDraftAfterSemiReservation" in INDEX
+    assert "发现可抵扣半成品库存，请先确认抵扣或选择本次不用库存" in INDEX
+    assert "我已核对换算差异，同意本次匹配并记忆" in INDEX
+    assert "按上次人工匹配推荐" in INDEX
+    assert "首次人工匹配" in INDEX
+    assert "candidate.lot_number" in INDEX
+    assert "inventoryLocation(candidate)" in INDEX
+    assert "supplierDraftSemiInventoryOptions()" in INDEX
+    assert "[...recommended, ...review]" in INDEX
+    assert ".slice(0, 1)" not in INDEX[INDEX.index("draftSemiInventoryCandidates(option)"):INDEX.index("draftSemiInventoryNeedsOverride(option)")]
+
+
+def test_supplier_draft_keeps_recommended_and_review_lots_visible() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for supplier draft candidate test"
+    script = next(
+        script
+        for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    )
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const method = sandbox.definition.methods.draftSemiInventoryCandidates;
+const option = {{
+  recommended_candidates:[{{lot_id:1,lot_number:"SI-RECOMMENDED"}}],
+  review_candidates:[{{lot_id:2,lot_number:"SI-20260710-40CB3801AD"}},{{lot_id:1,lot_number:"DUPLICATE"}}],
+}};
+const result = method(option).map(row => row.lot_number);
+if (JSON.stringify(result) !== JSON.stringify(["SI-RECOMMENDED","SI-20260710-40CB3801AD"])) throw new Error(JSON.stringify(result));
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_warehouse_exposes_multi_product_assignment_and_mold_location() -> None:
+    assert "分配成品款号" in WAREHOUSE
+    assert "/product-assignments?limit=500" in WAREHOUSE
+    assert "保存款号分配" in WAREHOUSE
+    assert "模具 / 货架位置" in WAREHOUSE
+    assert "同一半成品规格的新旧批次共用此分配记忆" not in WAREHOUSE
+    assert "data.mapping_scope" in WAREHOUSE
+    assert "模具与位置查询" in WAREHOUSE
+    assert "/api/warehouse/molds" in WAREHOUSE
+    assert "保存模具" in WAREHOUSE
+    assert "productForm.mold_tool_id" in INDEX
+    assert "mold_tool_id: f.mold_tool_id" in INDEX
+
+
+def test_finished_then_semi_requirement_and_yield_allocation_are_explicit() -> None:
+    assert "Math.max(Number(line.quantity || 0) - finishedQty, 0)" in INDEX
+    assert "* this.inventoryCandidatePayload(line, component).pieces_per_box" in INDEX
+    assert "Math.max(available - usedStock, 0) * yieldFactor" in INDEX
+    assert "Math.ceil(allocated / yieldFactor)" in INDEX
+    assert "usedStock + stock" in INDEX
+
+
+def test_shared_lot_is_reallocated_in_line_order_with_yield() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for frontend allocation test"
+    script = next(script for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL) if script.strip())
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const method = sandbox.definition.methods.reallocateDraftInventorySequentially;
+function candidate(lotId, stock, yieldFactor=1, finished=false, source="signature", differences=[]) {{ return {{ lot_id:lotId, version:1, source, match_rule_id:source === "learned" ? 42 : null, signature_differences:differences, available_stock_quantity:stock, quantity_available:finished ? stock : undefined, stock_yield_per_sheet:yieldFactor }}; }}
+function part(candidates=[]) {{ return {{ candidates, manual_candidates:[], selected:candidates[0] || null, selected_candidates:candidates, allocations:[], skipped:false, unavailable_reason:"" }}; }}
+function line(quantity, semiCandidates=[], finishedCandidates=[]) {{ return {{ quantity, _inventory:{{ api_error:false, stale:false, finished:part(finishedCandidates), semi:{{ whole:part(semiCandidates), cover:part(), base:part() }} }} }}; }}
+const methods = sandbox.definition.methods;
+const context = {{ inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride }};
+const shared = [line(50,[candidate(7,100)]), line(30,[candidate(7,100)]), line(30,[candidate(7,100)])];
+method.call(context, shared);
+const yielded = [line(1,[candidate(8,2,3)]), line(5,[candidate(8,2,3)])];
+method.call(context, yielded);
+const multi = [line(7,[candidate(9,3,1,false,"learned",["材质不同"]),candidate(10,4)])];
+method.call(context, multi);
+const plan = methods.buildReservationPlan.call(context, multi[0]);
+const manual = [line(2,[candidate(12,2,1,false,"manual",["尺寸不同"])])];
+method.call(context, manual);
+const manualPlan = methods.buildReservationPlan.call(context, manual[0]);
+const finished = [line(4,[],[candidate(11,5,1,true)]), line(4,[],[candidate(11,5,1,true)])];
+method.call(context, finished);
+const decisionContext = {{ inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true, componentLabel:methods.componentLabel }};
+const apiError = line(1); apiError._inventory.api_error = true; apiError._inventory.error = "库存候选加载失败：网络错误";
+const incomplete = line(1); incomplete._inventory.semi.whole.unavailable_reason = "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品";
+const apiBlocked = methods.inventoryDecisionRequired.call(decisionContext, apiError);
+const incompleteBlocked = methods.inventoryDecisionRequired.call(decisionContext, incomplete);
+incomplete._inventory.semi.whole.skipped = true;
+const incompleteSkipped = methods.inventoryDecisionRequired.call(decisionContext, incomplete);
+const result = {{
+  shared:shared.map(row => row._inventory.semi.whole.allocations.reduce((sum,a) => sum+a.requested_qty,0)),
+  yielded:yielded.map(row => row._inventory.semi.whole.allocations.reduce((sum,a) => sum+a.requested_qty,0)),
+  yieldedStock:yielded.reduce((sum,row) => sum+row._inventory.semi.whole.allocations.reduce((n,a) => n+a.stock_quantity,0),0),
+  multiPlan:plan.semi.map(entry => entry.requested_qty),
+  multiWarnings:plan.semi.map(entry => [entry.override,entry.warning_acknowledged_codes]),
+  manualWarning:[manualPlan.semi[0].override,manualPlan.semi[0].warning_acknowledged_codes],
+  finished:finished.map(row => row._inventory.finished.allocations.reduce((sum,a) => sum+a.requested_qty,0)),
+  gates:[!!apiBlocked,!!incompleteBlocked,incompleteSkipped],
+}};
+const expected = {{shared:[50,30,20],yielded:[1,3],yieldedStock:2,multiPlan:[3,4],multiWarnings:[[true,["SEMI_SIGNATURE_OVERRIDE"]],[false,[]]],manualWarning:[true,["SEMI_SIGNATURE_OVERRIDE"]],finished:[4,1],gates:[true,true,""]}};
+if (JSON.stringify(result) !== JSON.stringify(expected)) throw new Error(JSON.stringify(result));
+let removeReallocations = 0;
+const removeContext = {{orderForm:{{items:[{{}},{{}}]}},modal:null,reallocateAllDraftInventory() {{ removeReallocations += 1; }}}};
+methods.removeOrderItem.call(removeContext,0);
+if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) throw new Error("removing a line did not reallocate inventory");
+(async () => {{
+  const requests = [];
+  sandbox.axios.get = async (url) => {{ requests.push(url); return url.includes("/api/master/products/") ? {{data:{{id:99,report_length_mm:10,report_width_mm:20,material_code:"C4C",flute_type:"B",pieces_per_box:1}}}} : {{data:{{items:[]}}}}; }};
+  sandbox.axios.post = async (url) => {{ requests.push(url); return {{data:{{items:[]}}}}; }};
+  const fallbackLine = {{matched_product_id:99,quantity:2}};
+  const loadContext = {{
+    inventoryCustomerForLine:() => 5, newOrderInventoryState:methods.newOrderInventoryState,
+    inventoryComponents:() => ["whole"], inventoryCandidatePayload:() => ({{board_length_mm:10,board_width_mm:20,material_code:"C4C",flute_type:"B"}}),
+    inventoryPayloadUnavailableReason:methods.inventoryPayloadUnavailableReason, componentLabel:methods.componentLabel,
+    errorMessage:error => error.message, reallocateAllDraftInventory() {{}},
+  }};
+  await methods.loadOrderLineInventory.call(loadContext, fallbackLine);
+  if (fallbackLine._inventory.context.customer_id !== 5 || requests.length !== 3) throw new Error("PDF default customer was not used");
+
+  const confirmedState = multi[0]._inventory;
+  confirmedState.context = {{product_id:99,customer_id:5,quantity:7}};
+  let reloads = 0;
+  const draft = {{matched_customer_id:5,items:[{{matched_product_id:99,quantity:7,unit_price:"1",product_name:"PDF产品",_inventory:confirmedState,_inventory_product:{{id:99}},client_line_id:"pdf-line"}}]}};
+  const pdfContext = {{
+    orderImportDrafts:[draft], orderForm:{{items:[]}}, newOrderInventoryState:methods.newOrderInventoryState,
+    inventoryStateMatchesLine:methods.inventoryStateMatchesLine, searchOrderProducts:async () => {{}},
+    loadOrderLineInventory:async () => {{ reloads += 1; }}, reallocateAllDraftInventory() {{}}, refreshOrderNumberPreview:async () => {{}},
+  }};
+  await methods.applyPdfDraftToOrderForm.call(pdfContext, draft);
+  const preservedPlan = methods.buildReservationPlan.call(context, pdfContext.orderForm.items[0]);
+  if (reloads || JSON.stringify(preservedPlan.semi.map(entry => entry.requested_qty)) !== JSON.stringify([3,4])) throw new Error("PDF confirmed plan was not preserved");
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }});
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_pdf_customer_fallback_and_confirmed_state_preservation_are_explicit() -> None:
+    assert INDEX.count("customerId = Number(customerId || this.inventoryCustomerForLine(line));") == 2
+    select_start = INDEX.index("async selectImportProduct(item)")
+    select_end = INDEX.index("pdfItemMaterialText(item)", select_start)
+    assert "this.refreshOrderLineInventory(item);" in INDEX[select_start:select_end]
+    apply_start = INDEX.index("async applyPdfDraftToOrderForm")
+    apply_end = INDEX.index("async saveConfirmedImportDrafts", apply_start)
+    source = INDEX[apply_start:apply_end]
+    assert "!this.inventoryStateMatchesLine(this.orderForm.items[index], this.orderForm.customer_id)" in source
+
+
+def test_api_failures_block_but_incomplete_signature_can_be_skipped() -> None:
+    assert "state.api_error = failures.length > 0" in INDEX
+    assert "if (state.api_error) return state.error" in INDEX
+    assert "inventoryPayloadUnavailableReason(payload)" in INDEX
+    assert "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品" in INDEX
+    assert "if (reason) state.semi[component].unavailable_reason = reason" in INDEX
+    assert "if (part.unavailable_reason && !part.skipped)" in INDEX
+
+
+def test_multi_lot_plans_and_zero_allocations_use_allocation_records() -> None:
+    assert "state.finished.allocations.map" in INDEX
+    assert "state.semi[component].allocations.map" in INDEX
+    assert "推荐批次已无可分配库存" in INDEX
+    assert "确认系统推荐" in INDEX
+    assert "实际计划" in INDEX
+
+
+def test_semi_plan_warnings_and_line_removal_reallocation_are_explicit() -> None:
+    assert 'warning_acknowledged_codes:override ? ["SEMI_SIGNATURE_OVERRIDE"] : []' in INDEX
+    assert 'candidate?.source === "learned"' in INDEX
+    assert "差异警告" in INDEX
+    start = INDEX.index("removeOrderItem(index)")
+    end = INDEX.index("async searchOrderProducts", start)
+    assert "this.orderForm.items.splice(index,1);" in INDEX[start:end]
+    assert "this.reallocateAllDraftInventory();" in INDEX[start:end]
+
+
+def test_a3_components_and_unconfirmed_candidate_block_are_explicit() -> None:
+    assert '["cover", "base"]' in INDEX
+    assert "存在成品库存候选，请确认抵扣或选择本次不用库存。" in INDEX
+    assert "存在半成品${this.componentLabel(component)}候选，请确认抵扣或选择本次不用库存。" in INDEX
+    assert "confirmed:true" in INDEX
+
+
+def test_pdf_direct_save_carries_the_same_reservation_plan() -> None:
+    start = INDEX.index("async saveConfirmedImportDrafts()")
+    end = INDEX.index("openOrderEditor(group)", start)
+    source = INDEX[start:end]
+    assert "inventoryDecisionRequired(item)" in source
+    assert "client_line_id: item.client_line_id || createIdempotencyKey()" in source
+    assert "reservation_plan: this.buildReservationPlan(item)" in source
+
+
+def test_delivery_inventory_sources_are_screen_only() -> None:
+    assert "inventory_sources" in INDEX
+    print_method = re.search(r"printDelivery\(row\) \{(?P<body>[^}]*)\}", INDEX)
+    assert print_method is not None
+    assert "inventory_sources" not in print_method.group("body")
+
+
+def test_inline_script_passes_node_check(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for frontend syntax validation"
+    scripts = [
+        script for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    ]
+    assert len(scripts) == 1
+    target = tmp_path / "index-inline.js"
+    target.write_text(scripts[0], encoding="utf-8")
+    result = subprocess.run(
+        [node, "--check", str(target)],
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        env=os.environ.copy(),
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

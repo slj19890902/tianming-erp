@@ -40,7 +40,7 @@ def test_inventory_actions_share_compatible_idempotency_key_helper() -> None:
     assert _helper_source(INDEX_HTML) == _helper_source(WAREHOUSE_HTML)
     assert "idempotency_key:crypto.randomUUID()" not in INDEX_HTML
     assert "idempotency_key:crypto.randomUUID()" not in WAREHOUSE_HTML
-    assert INDEX_HTML.count("idempotency_key:createIdempotencyKey()") == 2
+    assert INDEX_HTML.count("idempotency_key:createIdempotencyKey()") == 3
     assert WAREHOUSE_HTML.count("idempotency_key:createIdempotencyKey()") == 3
 
 

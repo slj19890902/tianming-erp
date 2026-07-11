@@ -148,5 +148,7 @@ def test_tianhua_frontends_show_matching_context():
     )
     for text in ("预送货日期", "候选数", "匹配说明", "candidate_count"):
         assert text in desktop
-    assert "订单：" in mobile
-    assert "预送货日期：" in mobile
+    assert "订单：" not in mobile
+    assert "预送货日期：" not in mobile
+    assert "specification" in mobile
+    assert "finished_inventory_sources" in mobile

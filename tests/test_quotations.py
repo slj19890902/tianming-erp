@@ -200,8 +200,23 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             f"/api/quotations/{quotation_id}/print"
         )
         assert printed.status_code == 200
-        assert printed.json()["items"][0]["product_name"] == "A1 测试纸箱"
-        for row in printed.json()["items"]:
+        print_payload = printed.json()
+        first_printed_item = print_payload["items"][0]
+        assert first_printed_item["product_name"] == "A1 测试纸箱"
+        assert first_printed_item["temporary_code"] == "TEMP-001"
+        assert "total_amount" not in print_payload
+        expected_customer_fields = {
+            "sequence",
+            "temporary_code",
+            "product_name",
+            "specification",
+            "material",
+            "quantity",
+            "unit_price",
+            "remarks",
+        }
+        for row in print_payload["items"]:
+            assert set(row) == expected_customer_fields
             assert "estimated_unit_cost" not in row
             assert "margin_rate" not in row
             assert "suggested_unit_price" not in row
@@ -371,6 +386,14 @@ def test_quotation_print_page_calls_api():
     assert "estimated_unit_cost" not in html
     assert "margin_rate" not in html
     assert "suggested_unit_price" not in html
+    assert "<th>临时编码</th>" in html
+    assert "row.temporary_code" in html
+    assert "<th>箱型</th>" not in html
+    assert "<th>金额</th>" not in html
+    assert "合计金额" not in html
+    assert "row.box_type" not in html
+    assert "row.amount" not in html
+    assert "data.total_amount" not in html
 
     index_html = (
         Path(__file__).resolve().parents[1]

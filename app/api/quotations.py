@@ -662,12 +662,6 @@ def quotation_print(
     company = db.get(CompanyConfig, 1)
     items = []
     for index, item in enumerate(quotation.items, start=1):
-        quantity = item.quantity
-        amount = (
-            (item.final_unit_price * quantity).quantize(MONEY)
-            if quantity
-            else None
-        )
         specification = "×".join(
             str(int(value)) if value == int(value) else str(value)
             for value in (item.length_mm, item.width_mm, item.height_mm)
@@ -679,13 +673,12 @@ def quotation_print(
         items.append(
             {
                 "sequence": index,
+                "temporary_code": item.temporary_code,
                 "product_name": item.product_name,
-                "box_type": item.box_type,
                 "specification": specification,
                 "material": material,
-                "quantity": quantity,
+                "quantity": item.quantity,
                 "unit_price": item.final_unit_price,
-                "amount": amount,
                 "remarks": item.remarks,
             }
         )
@@ -694,7 +687,6 @@ def quotation_print(
         "quotation_date": quotation.quotation_date,
         "customer_name": quotation.customer_name,
         "status": quotation.status,
-        "total_amount": quotation.total_amount,
         "remarks": quotation.remarks,
         "items": items,
         "sender": {

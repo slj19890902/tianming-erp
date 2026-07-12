@@ -10,7 +10,7 @@
     .title{text-align:center}.title h1{margin:0;font-size:23px}.title h2{margin:5px 0 0;font-size:21px;letter-spacing:6px}
     .meta{display:flex;justify-content:space-between;align-items:flex-end;margin:14px 0 10px;line-height:1.8}
     .meta-right{text-align:right}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:7px 6px;text-align:center}th{background:#f3f4f6}.left{text-align:left}
-    .total{text-align:right;font-size:16px;font-weight:700;margin-top:10px}.remarks{margin-top:12px;white-space:pre-wrap}.footer{text-align:right;margin-top:20px;font-size:12px;line-height:1.8;color:#444}
+    .remarks{margin-top:12px;white-space:pre-wrap}.footer{text-align:right;margin-top:20px;font-size:12px;line-height:1.8;color:#444}
     .actions{text-align:center;margin:15px}button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700}
     @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions{display:none}@page{size:A4 landscape;margin:10mm}}
   </style>
@@ -21,10 +21,9 @@
     <div class="title"><h1 id="company"></h1><h2>报价单</h2></div>
     <div class="meta"><div><strong id="customer"></strong></div><div class="meta-right"><div id="number"></div><div id="date"></div></div></div>
     <table>
-      <thead><tr><th>序号</th><th>产品名称</th><th>箱型</th><th>规格(mm)</th><th>材质</th><th>数量</th><th>单价</th><th>金额</th><th>备注</th></tr></thead>
+      <thead><tr><th>序号</th><th>临时编码</th><th>产品名称</th><th>规格(mm)</th><th>材质</th><th>数量</th><th>单价</th><th>备注</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div id="total" class="total"></div>
     <div id="remarks" class="remarks"></div>
     <div id="footer" class="footer"></div>
   </main>
@@ -40,8 +39,7 @@
       customer.textContent=`客户：${data.customer_name}`;
       number.textContent=`报价单号：${data.quotation_no}`;
       date.textContent=`报价日期：${data.quotation_date}`;
-      rows.innerHTML=data.items.map(row=>`<tr><td>${row.sequence}</td><td class="left">${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.box_type)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.quantity??"-")}</td><td>${money(row.unit_price)}</td><td>${money(row.amount)}</td><td class="left">${escapeHtml(row.remarks||"")}</td></tr>`).join("");
-      total.textContent=`合计金额：￥ ${money(data.total_amount)}`;
+      rows.innerHTML=data.items.map(row=>`<tr><td>${row.sequence}</td><td>${escapeHtml(row.temporary_code||"")}</td><td class="left">${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.quantity??"-")}</td><td>${money(row.unit_price)}</td><td class="left">${escapeHtml(row.remarks||"")}</td></tr>`).join("");
       remarks.textContent=data.remarks?`备注：${data.remarks}`:"";
       const parts=[];
       if(data.sender?.address)parts.push(`地址：${escapeHtml(data.sender.address)}`);

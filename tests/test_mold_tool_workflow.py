@@ -163,6 +163,80 @@ def test_workshop_can_query_but_cannot_modify_mold(mold_app) -> None:
         assert denied.status_code == 403
 
 
+def test_workshop_can_open_structured_location_label_and_qr(
+    mold_app, monkeypatch
+) -> None:
+    app, factory = mold_app
+    from app.api import warehouse
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+
+    monkeypatch.setattr(warehouse, "_lan_ip", lambda: "192.168.3.80")
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="MJ-MOBILE-001",
+            mold_name="手机查找测试模",
+            rack_location="3F-M-R02-L2-D03-P08",
+        )
+        db.add(mold)
+        db.flush()
+        db.add(
+            Product(
+                customer_id=1,
+                product_code="MOBILE-P001",
+                customer_material_code="MOBILE-M001",
+                product_name="手机查找测试产品",
+                box_category="die_cut",
+                production_process="模切",
+                report_length_mm=1200,
+                report_width_mm=800,
+                report_notes="长边顺瓦楞方向",
+                mold_tool_id=mold.id,
+            )
+        )
+        db.commit()
+        mold_id = mold.id
+
+    with TestClient(app, base_url="http://testserver:18045") as client:
+        _login(client, "workshop")
+        listed = client.get("/api/warehouse/molds", params={"q": "MOBILE-P001"})
+        assert listed.status_code == 200, listed.text
+        row = listed.json()["items"][0]
+        assert row["location_guide"]["kind"] == "flat"
+        assert "三楼模具区" in row["location_guide"]["prompt"]
+        assert "第2号货架" in row["location_guide"]["prompt"]
+        assert row["products"][0]["report_specification"] == "1200 × 800"
+        assert row["products"][0]["direction_note"] == "长边顺瓦楞方向"
+
+        label = client.get(f"/api/warehouse/molds/{mold_id}/label")
+        assert label.status_code == 200, label.text
+        data = label.json()
+        assert data["lookup_url"] == (
+            "http://192.168.3.80:18045/mobile/mold-lookup?mold=MJ-MOBILE-001"
+        )
+        assert data["qr_data_url"].startswith("data:image/png;base64,")
+        assert data["products"][0]["product_code"] == "MOBILE-P001"
+
+
+@pytest.mark.parametrize(
+    ("location", "kind", "expected"),
+    [
+        ("3F-M-R02-L2-D03-P08", "flat", "第3排，从左到右第8块"),
+        ("3F-M-R01-L1-V-P12", "vertical", "底层（第1层）竖放区，从左到右第12块"),
+        ("二楼模具架 B-12", "manual", "请前往“二楼模具架 B-12”查找"),
+    ],
+)
+def test_mold_location_prompt_is_immediately_readable(
+    location: str, kind: str, expected: str
+) -> None:
+    from app.services.mold_location import describe_mold_location
+
+    result = describe_mold_location(location)
+    assert result["kind"] == kind
+    assert expected in result["prompt"]
+    assert "核对模具编号和存货编码" in result["prompt"]
+
+
 def test_order_response_exposes_current_mold_location_to_workshop(mold_app) -> None:
     app, factory = mold_app
     from app.models.mold_tool import MoldTool
@@ -244,6 +318,29 @@ def test_mold_frontend_connects_location_common_box_and_order_display() -> None:
     assert "productMoldError" in index
     assert "moldLocationText(item)" in index
     assert "模具：{{ moldLocationText(item) }}" in index
+
+
+def test_mobile_mold_lookup_and_print_label_are_local_and_auth_guarded() -> None:
+    root = Path(__file__).resolve().parents[1]
+    mobile = (root / "static" / "mobile_mold_lookup.html").read_text(
+        encoding="utf-8"
+    )
+    label = (root / "static" / "mold-label.html").read_text(encoding="utf-8")
+    main = (root / "app" / "main.py").read_text(encoding="utf-8")
+    warehouse = (root / "static" / "warehouse.html").read_text(encoding="utf-8")
+
+    assert "/mobile/mold-lookup" in main
+    assert "/mold-label.html" in main
+    assert "/api/auth/me" in mobile
+    assert "/api/warehouse/molds?q=" in mobile
+    assert "location_guide?.prompt" in mobile
+    assert "大模具请按现场要求两人搬运" in mobile
+    assert "/api/warehouse/molds/${id}/label" in label
+    assert "window.print()" in label
+    assert "3F-M-R02-L2-D03-P08" in warehouse
+    assert "打印标签" in warehouse
+    assert "<script src=" not in mobile
+    assert "<script src=" not in label
 
 
 def test_mold_is_required_only_for_die_cut_products(mold_app) -> None:

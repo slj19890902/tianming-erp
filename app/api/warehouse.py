@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime, timedelta
+from io import BytesIO
 import json
+import socket
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import qrcode
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -55,6 +60,7 @@ from app.services.warehouse_inventory import (
     release_finished_reservation,
     reserve_finished_inventory,
 )
+from app.services.mold_location import describe_mold_location
 
 
 router = APIRouter()
@@ -1224,6 +1230,7 @@ def _mold_tool_dict(row: MoldTool) -> dict:
         "mold_code": row.mold_code,
         "mold_name": row.mold_name,
         "rack_location": row.rack_location,
+        "location_guide": describe_mold_location(row.rack_location),
         "remarks": row.remarks,
         "is_active": row.is_active,
         "product_count": len(products),
@@ -1234,11 +1241,19 @@ def _mold_tool_dict(row: MoldTool) -> dict:
                 "customer_name": product.customer.name if product.customer else None,
                 "product_code": product.product_code,
                 "product_name": product.product_name,
+                "customer_material_code": product.customer_material_code,
                 "specification": " × ".join(
                     str(round(value))
                     for value in (product.length_mm, product.width_mm, product.height_mm)
                     if value is not None
                 ),
+                "report_specification": " × ".join(
+                    str(round(value))
+                    for value in (product.report_length_mm, product.report_width_mm)
+                    if value is not None
+                ),
+                "production_process": product.production_process,
+                "direction_note": product.report_notes,
             }
             for product in products
         ],
@@ -1290,6 +1305,49 @@ def list_mold_tools(
         query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id).limit(limit)
     ).unique().all()
     return {"items": [_mold_tool_dict(row) for row in rows]}
+
+
+def _lan_ip() -> str:
+    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        connection.connect(("8.8.8.8", 80))
+        return connection.getsockname()[0]
+    except OSError:
+        return socket.gethostbyname(socket.gethostname())
+    finally:
+        connection.close()
+
+
+@router.get("/molds/{mold_id}/label")
+def get_mold_label(
+    mold_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    row = db.scalar(
+        select(MoldTool)
+        .options(selectinload(MoldTool.products).selectinload(Product.customer))
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    port = request.url.port or 8000
+    lookup_url = (
+        f"http://{_lan_ip()}:{port}/mobile/mold-lookup"
+        f"?mold={quote(row.mold_code, safe='')}"
+    )
+    image = qrcode.make(lookup_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        **_mold_tool_dict(row),
+        "lookup_url": lookup_url,
+        "qr_data_url": (
+            "data:image/png;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii")
+        ),
+    }
 
 
 @router.post("/molds", status_code=201)

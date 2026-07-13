@@ -8,6 +8,10 @@ class Base(DeclarativeBase):
 
 
 from app.models.user import User  # noqa: E402,F401
+from app.models.access_control import (  # noqa: E402,F401
+    UserCustomerScope,
+    UserPermissionOverride,
+)
 from app.models.audit import OperationLog  # noqa: E402,F401
 from app.models.customer import Customer  # noqa: E402,F401
 from app.models.material import Material  # noqa: E402,F401

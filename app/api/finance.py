@@ -16,7 +16,14 @@ from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_permission,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -36,12 +43,78 @@ from app.services.history_orders import build_display_registry, display_order_nu
 
 
 router = APIRouter()
-finance_only = RoleChecker(["admin", "finance"])
+can_read = PermissionChecker("finance.view")
+can_operate = PermissionChecker("finance.execute")
 MONEY = Decimal("0.00")
+STATEMENT_COST_FIELDS = frozenset(
+    {"total_gross_profit", "unit_cost_snapshot", "gross_profit_amount"}
+)
 
 _CITY_PREFIXES = ("苏州", "昆山", "常熟", "太仓", "上海", "无锡", "南京", "杭州", "深圳", "广州")
 _COMPANY_SUFFIXES = ("股份有限公司", "有限责任公司", "科技有限公司", "有限公司")
 _ILLEGAL_CHARS = r'/\:*?"<>|'
+
+
+def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+def _redact_statement_costs(payload: dict, user: User) -> dict:
+    if has_permission(user, "cost.view"):
+        return payload
+    redacted = {
+        key: value
+        for key, value in payload.items()
+        if key not in STATEMENT_COST_FIELDS
+    }
+    if "items" in redacted:
+        redacted["items"] = [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in STATEMENT_COST_FIELDS
+            }
+            for item in redacted["items"]
+        ]
+    return redacted
+
+
+def _statement_for_user(
+    db: Session,
+    statement_id: int,
+    user: User,
+) -> Statement:
+    statement = db.get(Statement, statement_id)
+    if statement is None:
+        raise HTTPException(status_code=404, detail="对账单不存在")
+    require_customer_access(statement.customer_id, user, db)
+    return statement
+
+
+def _delivery_for_user(
+    db: Session,
+    delivery_id: int,
+    user: User,
+) -> Delivery:
+    delivery = db.get(Delivery, delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="送货单不存在")
+    require_customer_access(delivery.customer_id, user, db)
+    return delivery
+
+
+def _return_receipt_for_user(
+    db: Session,
+    receipt_id: int,
+    user: User,
+) -> ReturnReceipt:
+    receipt = db.get(ReturnReceipt, receipt_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="回单不存在")
+    _delivery_for_user(db, receipt.delivery_id, user)
+    return receipt
 
 
 def _customer_abbr(name: str) -> str:
@@ -188,7 +261,7 @@ def list_statements(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> dict:
     query = (
         select(Statement, Customer.name.label("customer_name"))
@@ -196,7 +269,12 @@ def list_statements(
         .order_by(Statement.statement_month.desc(), Statement.id.desc())
     )
     if customer_id is not None:
+        require_customer_access(customer_id, user, db)
         query = query.where(Statement.customer_id == customer_id)
+    else:
+        visible_customer_ids = _visible_customer_ids(user, db)
+        if visible_customer_ids is not None:
+            query = query.where(Statement.customer_id.in_(visible_customer_ids))
     if statement_month:
         query = query.where(Statement.statement_month == statement_month)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -208,19 +286,22 @@ def list_statements(
         "page": page,
         "page_size": page_size,
         "items": [
-            {
-                "id": statement.id,
-                "statement_number": statement.statement_number,
-                "customer_id": statement.customer_id,
-                "customer_name": customer_name,
-                "statement_month": statement.statement_month,
-                "total_receivable": statement.total_receivable,
-                "total_gross_profit": statement.total_gross_profit,
-                "invoiced_amount": statement.invoiced_amount,
-                "settled_amount": statement.settled_amount,
-                "status": statement.status,
-                "created_at": statement.created_at,
-            }
+            _redact_statement_costs(
+                {
+                    "id": statement.id,
+                    "statement_number": statement.statement_number,
+                    "customer_id": statement.customer_id,
+                    "customer_name": customer_name,
+                    "statement_month": statement.statement_month,
+                    "total_receivable": statement.total_receivable,
+                    "total_gross_profit": statement.total_gross_profit,
+                    "invoiced_amount": statement.invoiced_amount,
+                    "settled_amount": statement.settled_amount,
+                    "status": statement.status,
+                    "created_at": statement.created_at,
+                },
+                user,
+            )
             for statement, customer_name in rows
         ],
     }
@@ -230,7 +311,7 @@ def list_statements(
 def list_statement_customers(
     statement_month: str | None = None,
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> dict:
     query = (
         select(
@@ -255,6 +336,9 @@ def list_statement_customers(
             func.strftime("%Y-%m", ReturnReceipt.actual_received_date)
             == statement_month
         )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(Customer.id.in_(visible_customer_ids))
     rows = db.execute(
         query.group_by(Customer.id, Customer.name).order_by(Customer.name)
     ).all()
@@ -270,7 +354,11 @@ def list_statement_customers(
     }
 
 
-def _statement_detail_response(db: Session, statement_id: int) -> dict:
+def _statement_detail_response(
+    db: Session,
+    statement_id: int,
+    user: User,
+) -> dict:
     row = db.execute(
         select(Statement, Customer.name.label("customer_name"))
         .join(Customer, Customer.id == Statement.customer_id)
@@ -279,6 +367,7 @@ def _statement_detail_response(db: Session, statement_id: int) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer_name = row
+    require_customer_access(statement.customer_id, user, db)
     items = db.execute(
         select(
             StatementItem.id.label("statement_item_id"),
@@ -330,37 +419,40 @@ def _statement_detail_response(db: Session, statement_id: int) -> dict:
             SettlementRecord.account,
         ).where(SettlementRecord.statement_id == statement.id)
     ).all()
-    return {
-        "id": statement.id,
-        "statement_number": statement.statement_number,
-        "customer_id": statement.customer_id,
-        "customer_name": customer_name,
-        "statement_month": statement.statement_month,
-        "total_receivable": statement.total_receivable,
-        "total_gross_profit": statement.total_gross_profit,
-        "invoiced_amount": statement.invoiced_amount,
-        "settled_amount": statement.settled_amount,
-        "status": statement.status,
-        "status_label": "已结清" if statement.status == "settled" else "未结清",
-        "item_count": len(items),
-        "invoice_count": len(invoices),
-        "settlement_count": len(settlements),
-        "items": [
-            {
-                **dict(item._mapping),
-            }
-            for item in items
-        ],
-        "invoices": [dict(row._mapping) for row in invoices],
-        "settlements": [dict(row._mapping) for row in settlements],
-    }
+    return _redact_statement_costs(
+        {
+            "id": statement.id,
+            "statement_number": statement.statement_number,
+            "customer_id": statement.customer_id,
+            "customer_name": customer_name,
+            "statement_month": statement.statement_month,
+            "total_receivable": statement.total_receivable,
+            "total_gross_profit": statement.total_gross_profit,
+            "invoiced_amount": statement.invoiced_amount,
+            "settled_amount": statement.settled_amount,
+            "status": statement.status,
+            "status_label": "已结清" if statement.status == "settled" else "未结清",
+            "item_count": len(items),
+            "invoice_count": len(invoices),
+            "settlement_count": len(settlements),
+            "items": [
+                {
+                    **dict(item._mapping),
+                }
+                for item in items
+            ],
+            "invoices": [dict(row._mapping) for row in invoices],
+            "settlements": [dict(row._mapping) for row in settlements],
+        },
+        user,
+    )
 
 
 @router.get("/statements/{statement_id}/export")
 def export_statement_excel(
     statement_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> StreamingResponse:
     row = db.execute(
         select(Statement, Customer)
@@ -370,6 +462,7 @@ def export_statement_excel(
     if row is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer = row
+    require_customer_access(statement.customer_id, user, db)
     lines = db.execute(
         select(
             Delivery.delivery_date,
@@ -524,7 +617,7 @@ def list_invoices(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> dict:
     query = (
         select(
@@ -537,7 +630,14 @@ def list_invoices(
         .order_by(Invoice.invoice_date.desc(), Invoice.id.desc())
     )
     if statement_id is not None:
+        statement = db.get(Statement, statement_id)
+        if statement is not None:
+            require_customer_access(statement.customer_id, user, db)
         query = query.where(Invoice.statement_id == statement_id)
+    else:
+        visible_customer_ids = _visible_customer_ids(user, db)
+        if visible_customer_ids is not None:
+            query = query.where(Statement.customer_id.in_(visible_customer_ids))
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = db.execute(
         query.offset((page - 1) * page_size).limit(page_size)
@@ -635,10 +735,9 @@ def _receipt_response(db: Session, receipt_id: int) -> dict:
 def get_return_receipt(
     receipt_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> dict:
-    if db.get(ReturnReceipt, receipt_id) is None:
-        raise HTTPException(status_code=404, detail="回单不存在")
+    _return_receipt_for_user(db, receipt_id, user)
     return _receipt_response(db, receipt_id)
 
 
@@ -646,8 +745,9 @@ def get_return_receipt(
 def create_return_receipt(
     payload: ReturnReceiptCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
+    _delivery_for_user(db, payload.delivery_id, user)
     try:
         # 与取消发货竞争时，先对同一送货单执行条件写并取得写锁。
         # 第二个事务等待后会重新判断状态，不能同时确认回单和取消发货。
@@ -760,11 +860,9 @@ def update_return_receipt(
     receipt_id: int,
     payload: ReturnReceiptUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
-    receipt = db.get(ReturnReceipt, receipt_id)
-    if receipt is None:
-        raise HTTPException(status_code=404, detail="回单不存在")
+    receipt = _return_receipt_for_user(db, receipt_id, user)
     receipt_items = db.scalars(
         select(ReturnReceiptItem)
         .where(ReturnReceiptItem.return_receipt_id == receipt.id)
@@ -875,8 +973,9 @@ def _pending_statement_query(customer_id: int):
 def pending_statements(
     customer_id: int = Query(gt=0),
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> dict:
+    require_customer_access(customer_id, user, db)
     registry = build_display_registry(db)
     order_ids = {
         row[0]
@@ -918,8 +1017,9 @@ def pending_statements(
 def create_statement(
     payload: StatementCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
+    require_customer_access(payload.customer_id, user, db)
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     try:
@@ -1019,15 +1119,18 @@ def create_statement(
             description="生成客户月结对账单",
         )
         db.commit()
-        return {
-            "id": statement.id,
-            "statement_number": statement.statement_number,
-            "customer_id": statement.customer_id,
-            "statement_month": statement.statement_month,
-            "total_receivable": statement.total_receivable,
-            "total_gross_profit": statement.total_gross_profit,
-            "status": statement.status,
-        }
+        return _redact_statement_costs(
+            {
+                "id": statement.id,
+                "statement_number": statement.statement_number,
+                "customer_id": statement.customer_id,
+                "statement_month": statement.statement_month,
+                "total_receivable": statement.total_receivable,
+                "total_gross_profit": statement.total_gross_profit,
+                "status": statement.status,
+            },
+            user,
+        )
     except HTTPException:
         db.rollback()
         raise
@@ -1043,8 +1146,9 @@ def create_statement(
 def create_invoice(
     payload: InvoiceCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
+    _statement_for_user(db, payload.statement_id, user)
     try:
         updated = db.execute(
             text(
@@ -1119,8 +1223,9 @@ def settle_statement(
     statement_id: int,
     payload: SettlementCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
+    _statement_for_user(db, statement_id, user)
     try:
         updated = db.execute(
             text(
@@ -1198,11 +1303,9 @@ def settle_statement(
 def cancel_return_receipt(
     receipt_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
-    receipt = db.get(ReturnReceipt, receipt_id)
-    if receipt is None:
-        raise HTTPException(status_code=404, detail="回单不存在")
+    receipt = _return_receipt_for_user(db, receipt_id, user)
     receipt_item_ids = list(
         db.scalars(
             select(ReturnReceiptItem.id).where(
@@ -1239,9 +1342,9 @@ def cancel_return_receipt(
 def get_statement(
     statement_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(finance_only),
+    user: User = Depends(can_read),
 ) -> dict:
-    return _statement_detail_response(db, statement_id)
+    return _statement_detail_response(db, statement_id, user)
 
 
 @router.put("/statements/{statement_id}")
@@ -1249,12 +1352,10 @@ def update_statement(
     statement_id: int,
     payload: StatementUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
     try:
-        statement = db.get(Statement, statement_id)
-        if statement is None:
-            raise HTTPException(status_code=404, detail="对账单不存在")
+        statement = _statement_for_user(db, statement_id, user)
         if db.scalar(
             select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
         ) is not None:
@@ -1273,7 +1374,7 @@ def update_statement(
             )
         old_month = statement.statement_month
         if payload.statement_month == old_month:
-            return _statement_detail_response(db, statement.id)
+            return _statement_detail_response(db, statement.id, user)
         receipt_months = {
             row[0]
             for row in db.execute(
@@ -1294,7 +1395,7 @@ def update_statement(
                 status_code=409,
                 detail="对账月份必须与该对账单明细的回单月份一致。",
             )
-        before = _statement_detail_response(db, statement.id)
+        before = _statement_detail_response(db, statement.id, user)
         statement.statement_month = payload.statement_month
         statement.statement_number = _next_statement_number(db, payload.statement_month)
         _audit(
@@ -1307,7 +1408,7 @@ def update_statement(
             description="修改月结对账单基础信息",
         )
         db.commit()
-        return _statement_detail_response(db, statement.id)
+        return _statement_detail_response(db, statement.id, user)
     except HTTPException:
         db.rollback()
         raise
@@ -1320,12 +1421,10 @@ def update_statement(
 def cancel_statement(
     statement_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(finance_only),
+    user: User = Depends(can_operate),
 ) -> dict:
     try:
-        statement = db.get(Statement, statement_id)
-        if statement is None:
-            raise HTTPException(status_code=404, detail="对账单不存在")
+        statement = _statement_for_user(db, statement_id, user)
         if db.scalar(
             select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
         ) is not None:
@@ -1342,7 +1441,7 @@ def cancel_statement(
                 status_code=409,
                 detail="该对账单已有收款记录，请先撤销收款后再取消对账单。",
             )
-        before = _statement_detail_response(db, statement.id)
+        before = _statement_detail_response(db, statement.id, user)
         db.execute(delete(StatementItem).where(StatementItem.statement_id == statement.id))
         db.execute(delete(Statement).where(Statement.id == statement.id))
         _audit(

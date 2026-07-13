@@ -25,6 +25,7 @@ def requisition_app(tmp_path: Path):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
+    from app.models.access_control import UserPermissionOverride
     from app.models.customer import Customer
     from app.models.order import Order, OrderItem
     from app.models.product import Product
@@ -54,6 +55,21 @@ def requisition_app(tmp_path: Path):
         )
         session.add_all([*users, customer])
         session.flush()
+        sales = next(user for user in users if user.role == "sales")
+        session.add_all(
+            [
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="requisition.view",
+                    is_allowed=True,
+                ),
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="requisition.execute",
+                    is_allowed=True,
+                ),
+            ]
+        )
         product = Product(
             customer_id=customer.id,
             product_code="21301028",

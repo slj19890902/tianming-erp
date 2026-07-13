@@ -63,7 +63,7 @@
     <section id="inventorySection">
       <div class="panel">
         <div class="toolbar">
-          <button id="openInForm" class="btn primary">手工入库</button>
+          <button id="openInForm" class="btn primary operate-only">手工入库</button>
           <select id="statusFilter" style="width:140px"><option value="">全部状态</option><option value="active">正常</option><option value="frozen">冻结</option><option value="closed">关闭</option></select>
           <select id="locationFilter" style="width:180px"><option value="">全部库位</option></select>
           <select id="staleFilter" style="width:180px"><option value="">全部库龄</option><option value="attention">超过1年</option><option value="handling">超过18个月</option><option value="cleanup">超过2年</option></select>
@@ -73,7 +73,7 @@
         <div id="lotSummary" class="summary"></div>
       </div>
 
-      <form id="finishedForm" class="panel hidden">
+      <form id="finishedForm" class="panel hidden operate-only">
         <h2>手工成品入库</h2>
         <div class="grid">
           <div class="field"><label>客户</label><select id="fgCustomer" required></select></div>
@@ -87,7 +87,7 @@
         </div>
       </form>
 
-      <form id="semiForm" class="panel hidden">
+      <form id="semiForm" class="panel hidden operate-only">
         <h2>手工半成品入库</h2>
         <p class="muted">按实际物理张/片记录。未分切大张按实际长宽和张数入库；本阶段不做一开几换算，也不旋转尺寸匹配。</p>
         <div class="grid">
@@ -212,8 +212,10 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,tab:"finished",locations:[],customers:[],lots:[],molds:[],insights:null,assignment:{lotId:null,items:[],selected:new Set()}};
+    const state={user:null,permissions:[],tab:"finished",locations:[],customers:[],lots:[],molds:[],insights:null,assignment:{lotId:null,items:[],selected:new Set()}};
     const $=id=>document.getElementById(id);
+    const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
+    const canOperate=()=>hasPermission("warehouse.execute");
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
     function apiErrorMessage(body,status,url){
       if(typeof body.detail==="string"&&body.detail.trim())return body.detail;
@@ -239,17 +241,19 @@
       try{
         const authResponse=await api("/api/auth/me");
         state.user=authResponse.user;
+        state.permissions=authResponse.permissions||[];
       }catch(error){
         if(error.status===401){location.href="/?next=%2Fwarehouse.html";return}
         showPageError(`登录状态检查失败：${error.message}`);
         return;
       }
-      if(!state.user||!["admin","workshop"].includes(state.user.role)){
+      if(!state.user||!hasPermission("warehouse.view")){
         showPageError("当前账号没有仓库库存管理权限，请联系管理员。");
         return;
       }
       $("userName").textContent=state.user.real_name||state.user.username;
       if(state.user.role!=="admin")document.querySelectorAll(".admin-only").forEach(x=>x.classList.add("hidden"));
+      if(!canOperate())document.querySelectorAll(".operate-only").forEach(x=>x.classList.add("hidden"));
       $("fgDate").value=$("siDate").value=today();
       bind();
       try{
@@ -356,6 +360,7 @@
       }catch(err){toast(err.message,true)}
     }
     function actionButtons(row){
+      if(!canOperate())return "";
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
       const normal=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button><button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
       const general=state.user.role==="admin"&&row.inventory_type==="finished"&&!row.detail.is_general&&row.status==="active"?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";

@@ -18,7 +18,14 @@ from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_permission,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
 from app.models.material import Material
@@ -45,9 +52,11 @@ from app.services.report_crease import crease_width_error
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "sales", "workshop"])
-can_write = RoleChecker(["admin"])
-admin_only = RoleChecker(["admin"])
+can_read = PermissionChecker("products.view")
+can_create = PermissionChecker("products.create")
+can_write = PermissionChecker("products.edit")
+can_deactivate = PermissionChecker("products.deactivate")
+admin_only = PermissionChecker("products.delete")
 PRODUCT_DELETE_CONFLICT_DETAIL = (
     "该纸箱已在历史订单、报料或库存中使用，为了保证历史账目完整，"
     "系统禁止直接删除。请使用【停用】功能。"
@@ -312,6 +321,9 @@ PRICE_FIELDS = {
     "board_price",
     "suggested_price",
 }
+_COST_SENSITIVE_PRODUCT_FIELDS = frozenset(
+    {"cost_unit_price", "board_price", "suggested_price"}
+)
 
 
 def _product_payload_snapshot(product: Product) -> dict:
@@ -325,6 +337,21 @@ def _product_payload_snapshot(product: Product) -> dict:
         field_name: getattr(product, field_name, None)
         for field_name in ProductPayload.model_fields
     }
+
+
+def _product_write_data(payload: ProductPayload, user: User) -> dict:
+    """Return the subset of product fields this user may persist.
+
+    Sales staff may continue to create and edit ordinary product fields, but
+    cost-sensitive values supplied by a client are never persisted without the
+    cost.view permission.  On updates their stored values are consequently
+    retained; on creates they keep the model defaults.
+    """
+    data = payload.model_dump()
+    if not has_permission(user, "cost.view"):
+        for field in _COST_SENSITIVE_PRODUCT_FIELDS:
+            data.pop(field, None)
+    return data
 
 
 def _product_or_404(db: Session, product_id: int) -> Product:
@@ -378,6 +405,9 @@ def _response(product: Product, user: User) -> dict:
             0,
             (expires_at - datetime.now()).total_seconds() / 86400,
         )
+    if not has_permission(user, "cost.view"):
+        for field in {"cost_unit_price", "board_price", "suggested_price"}:
+            data.pop(field, None)
     if user.role == "workshop":
         for field in PRICE_FIELDS:
             data.pop(field, None)
@@ -423,7 +453,11 @@ def list_products(
         .where(Product.deleted_at.is_(None))
         .order_by(Product.customer_id, Product.product_code)
     )
+    scoped_ids = customer_scope_ids(user, db)
+    if not has_unrestricted_customer_access(user, db):
+        query = query.where(Product.customer_id.in_(scoped_ids))
     if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
         query = query.where(Product.customer_id == customer_id)
     if not include_inactive:
         query = query.where(Product.is_active.is_(True))
@@ -582,7 +616,9 @@ def get_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    return _response(_product_or_404(db, product_id), user)
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    return _response(product, user)
 
 
 async def _create_drawing_version(
@@ -592,6 +628,7 @@ async def _create_drawing_version(
     user: User,
 ) -> ProductDrawing:
     product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
     content = await file.read()
     try:
         saved = save_product_drawing_files(
@@ -666,6 +703,8 @@ def delete_product_drawing(
     drawing = db.get(ProductDrawing, drawing_id)
     if drawing is None:
         raise HTTPException(status_code=404, detail="图纸版本不存在")
+    product = _product_or_404(db, drawing.product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
     image_path = drawing.image_path
     thumbnail_path = drawing.thumbnail_path
     audit_master_change(
@@ -691,8 +730,9 @@ def delete_product_drawing(
 def create_product(
     payload: ProductPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(can_write),
+    user: User = Depends(can_create),
 ) -> dict:
+    require_customer_access(payload.customer_id, current_user=user, db=db)
     _normalize_product_mold_binding(payload)
     _validate_references(
         db,
@@ -701,7 +741,7 @@ def create_product(
         mold_tool_id=payload.mold_tool_id,
     )
     _validate_product_crease_widths(payload)
-    data = payload.model_dump()
+    data = _product_write_data(payload, user)
     data.update(
         product_code=clean_code(payload.product_code),
         customer_material_code=clean_code(payload.customer_material_code),
@@ -719,7 +759,7 @@ def create_product(
             action="CREATE",
             resource="Product",
             resource_id=product.id,
-            details=payload.model_dump(),
+            details=data,
         )
         db.commit()
     except IntegrityError as error:
@@ -736,6 +776,9 @@ def update_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    require_customer_access(payload.customer_id, current_user=user, db=db)
     _normalize_product_mold_binding(payload)
     _validate_references(
         db,
@@ -743,10 +786,10 @@ def update_product(
         material_id=payload.material_id,
         mold_tool_id=payload.mold_tool_id,
     )
-    product = _product_or_404(db, product_id)
     _validate_changed_product_crease_widths(payload, product)
     before = _product_payload_snapshot(product)
-    for key, value in payload.model_dump().items():
+    write_data = _product_write_data(payload, user)
+    for key, value in write_data.items():
         setattr(product, key, value)
     product.product_code = clean_code(payload.product_code)
     product.customer_material_code = clean_code(payload.customer_material_code)
@@ -760,7 +803,7 @@ def update_product(
             action="UPDATE",
             resource="Product",
             resource_id=product.id,
-            details={"before": before, "after": payload.model_dump()},
+            details={"before": before, "after": _product_payload_snapshot(product)},
         )
         db.commit()
     except IntegrityError as error:
@@ -775,9 +818,10 @@ def update_product_status(
     product_id: int,
     payload: ProductStatusPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(can_write),
+    user: User = Depends(can_deactivate),
 ) -> dict:
     product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
     if product.deleted_at is not None:
         raise HTTPException(status_code=400, detail="请先从垃圾站恢复该纸箱")
     before = product.is_active
@@ -802,6 +846,7 @@ def restore_product(
     user: User = Depends(admin_only),
 ) -> dict:
     product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
     if product.deleted_at is None:
         raise HTTPException(status_code=400, detail="该纸箱不在垃圾站中")
     if product.purged_at is not None:
@@ -827,6 +872,7 @@ def purge_product(
     user: User = Depends(admin_only),
 ) -> Response | dict:
     product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
     if product.deleted_at is None:
         raise HTTPException(status_code=400, detail="请先将该纸箱移入垃圾站")
     details = {
@@ -887,6 +933,10 @@ def sync_product_fields(
         "mold_tool_id",
     }
     product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    if not has_permission(user, "cost.view"):
+        for field in _COST_SENSITIVE_PRODUCT_FIELDS:
+            payload.fields.pop(field, None)
     prospective_layer = payload.fields.get("layer_count", product.layer_count)
     prospective_flute = normalize_flute_type(
         payload.fields.get("flute_type", product.flute_type)
@@ -999,6 +1049,7 @@ def delete_product(
     user: User = Depends(admin_only),
 ) -> dict:
     product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
     if product.deleted_at is not None:
         raise HTTPException(status_code=400, detail="该纸箱已在垃圾站中")
     move_to_trash(product, user)

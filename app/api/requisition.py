@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import PermissionChecker, get_db
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -73,9 +73,8 @@ from app.services.semi_finished_inventory import (
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "sales"])
-can_operate = RoleChecker(["admin", "sales"])
-admin_only = RoleChecker(["admin"])
+can_read = PermissionChecker("requisition.view")
+can_operate = PermissionChecker("requisition.execute")
 CUTTING_MODE_FACTORS = {
     "一开一": 1,
     "一开二": 2,
@@ -2972,7 +2971,7 @@ def cancel_requisition(
     item_id: int,
     payload: CancelPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    user: User = Depends(can_operate),
 ) -> dict:
     item = _item_or_404(db, item_id)
     if item.material_status == "received":
@@ -4577,7 +4576,7 @@ def reserve_semi_inventory_from_pending(
 def preview_supplier_orders_from_pending_selection(
     payload: PendingSupplierOrderCreatePayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
+    _user: User = Depends(can_read),
 ) -> dict:
     return _pending_selection_preview_groups(db, payload)
 

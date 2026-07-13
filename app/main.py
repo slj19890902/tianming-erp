@@ -172,10 +172,16 @@ def create_app() -> FastAPI:
             include_in_schema=False,
         )
 
+    # ``legacy.app`` is a shared application instance.  Its API routes do not
+    # participate in the authenticated router layer, so rebuild the complete
+    # API boundary below instead of removing individual legacy paths.
     application.router.routes[:] = [
         route
         for route in application.router.routes
-        if route.path not in {"/api/orders", "/api/health", "/api/customers"}
+        if not (
+            getattr(route, "path", "") == "/api"
+            or getattr(route, "path", "").startswith("/api/")
+        )
     ]
 
     if not any(route.path == "/api/auth/login" for route in application.routes):

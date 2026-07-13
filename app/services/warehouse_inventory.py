@@ -25,6 +25,11 @@ from app.models.warehouse_inventory import (
     SemiFinishedInventoryDetail,
     WarehouseLocation,
 )
+from app.services.inventory_cost_snapshot import (
+    apply_cost_snapshot,
+    estimate_finished_product_cost,
+    estimate_semi_finished_cost,
+)
 
 
 class WarehouseInventoryError(ValueError):
@@ -205,6 +210,16 @@ def manual_finished_in(
         last_movement_at=now,
         remarks=remarks,
         created_by=operator_id,
+    )
+    apply_cost_snapshot(
+        lot,
+        estimate_finished_product_cost(
+            db,
+            product=product,
+            material_code=material_code,
+            flute_type=product.flute_type,
+        ),
+        captured_at=now,
     )
     db.add(lot)
     db.flush()
@@ -946,6 +961,20 @@ def manual_semi_finished_in(
         last_movement_at=now,
         remarks=remarks,
         created_by=operator_id,
+    )
+    apply_cost_snapshot(
+        lot,
+        estimate_semi_finished_cost(
+            db,
+            material_id=material.id if material else None,
+            material_code=material_code,
+            supplier_name=supplier_name,
+            layer_count=layer_count,
+            flute_type=flute,
+            board_length_mm=board_length_mm,
+            board_width_mm=board_width_mm,
+        ),
+        captured_at=now,
     )
     db.add(lot)
     db.flush()

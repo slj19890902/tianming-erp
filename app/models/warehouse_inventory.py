@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -11,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -99,6 +101,20 @@ class InventoryLot(Base):
     last_movement_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estimated_unit_cost_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 4), nullable=True
+    )
+    estimated_square_price_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
+    )
+    estimated_cost_area_m2_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 6), nullable=True
+    )
+    cost_snapshot_source: Mapped[str | None] = mapped_column(
+        String(80), nullable=True
+    )
+    cost_snapshot_detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

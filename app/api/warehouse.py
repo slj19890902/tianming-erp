@@ -55,6 +55,7 @@ from app.services.warehouse_inventory import (
     release_finished_reservation,
     reserve_finished_inventory,
 )
+from app.services.inventory_insights import build_inventory_insights
 
 
 router = APIRouter()
@@ -1559,6 +1560,15 @@ def list_lots(
         .limit(page_size)
     ).all()
     return {"items": [_lot_dict(row) for row in rows], "total": total}
+
+
+@router.get("/insights")
+def get_inventory_insights(
+    as_of: date | None = None,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    return build_inventory_insights(db, as_of=as_of)
 
 
 @router.get("/lots/{lot_id}")

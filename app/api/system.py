@@ -11,7 +11,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import PermissionChecker, RoleChecker, get_db
 from app.core.config import load_settings, normalize_path
 from app.core.database import (
     backup_to_nas,
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 admin_only = RoleChecker(["admin"])
+can_backup = PermissionChecker("system.backup")
 
 # 始终保留最新 N 个备份，不允许删除
 BACKUP_KEEP_COUNT = 5
@@ -182,7 +183,7 @@ def _is_live_db(path: Path, database_path: Path) -> bool:
 
 @router.get("/backups")
 def list_backups(
-    _user: User = Depends(admin_only),
+    _user: User = Depends(can_backup),
 ) -> dict:
     current = load_settings()
     backup_dir = current.backup_dir
@@ -239,7 +240,7 @@ def list_backups(
 
 @router.post("/backups", status_code=status.HTTP_201_CREATED)
 def create_backup(
-    _user: User = Depends(admin_only),
+    _user: User = Depends(can_backup),
 ) -> dict:
     try:
         result = backup_to_nas()
@@ -261,7 +262,7 @@ def create_backup(
 
 @router.get("/backups/cleanup-preview")
 def cleanup_preview(
-    _user: User = Depends(admin_only),
+    _user: User = Depends(can_backup),
 ) -> dict:
     """预览哪些备份会被清理（不执行删除）。"""
     current = load_settings()
@@ -302,7 +303,7 @@ def cleanup_preview(
 def cleanup_backups(
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    user: User = Depends(can_backup),
 ) -> dict:
     """一键清理旧备份，保留最新 BACKUP_KEEP_COUNT 个。"""
     current = load_settings()
@@ -366,7 +367,7 @@ def delete_backup(
     filename: str,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    user: User = Depends(can_backup),
 ) -> dict:
     """删除单个备份文件（禁止删除受保护的最新 BACKUP_KEEP_COUNT 个）。"""
     current = load_settings()

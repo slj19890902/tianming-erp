@@ -252,7 +252,7 @@ def test_create_combined_delivery_then_partial_dispatch_once(
 
     app, session_factory = delivery_api_app
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         created = client.post("/api/deliveries", json=_create_payload())
         delivery_id = created.json()["id"]
         dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
@@ -284,7 +284,7 @@ def test_over_delivery_is_rejected_before_dispatch(
         ],
     }
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         created = client.post("/api/deliveries", json=payload)
 
     assert created.status_code == 400, created.text
@@ -341,7 +341,7 @@ def test_telescoping_lid_delivery_capacity_uses_min_received_components(
         session.commit()
 
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         listed = client.get(
             "/api/deliveries/pending-items/search",
             params={"customer_id": 1, "list_all": "1"},
@@ -426,7 +426,7 @@ def test_telescoping_lid_delivery_search_uses_components_when_parent_status_stal
         session.commit()
 
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         listed = client.get(
             "/api/deliveries/pending-items/search",
             params={"customer_id": 1, "list_all": "1"},
@@ -489,7 +489,7 @@ def test_force_close_requires_reason_hides_item_and_is_audited(
 
     app, session_factory = delivery_api_app
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         invalid = client.put(
             "/api/orders/items/1/force_close",
             json={"reason": " "},
@@ -583,7 +583,7 @@ def test_mixed_customer_delivery_is_rejected_without_draft(
     payload = _create_payload()
     payload["items"][1]["order_item_id"] = 5
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         response = client.post("/api/deliveries", json=payload)
 
     assert response.status_code == 400
@@ -629,7 +629,7 @@ def test_route_suggestions_group_deliverable_customers_and_build_safe_map_legs(
         session.commit()
 
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         response = client.get("/api/deliveries/route-suggestions")
 
     assert response.status_code == 200, response.text
@@ -678,7 +678,7 @@ def test_route_suggestions_mark_same_address_customers_as_one_stop(
         session.commit()
 
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         response = client.get("/api/deliveries/route-suggestions")
 
     assert response.status_code == 200, response.text
@@ -702,7 +702,7 @@ def test_delivery_list_prioritizes_latest_operation(delivery_api_app) -> None:
         "items": [{"order_item_id": 2, "delivered_quantity": 10}],
     }
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         first = client.post("/api/deliveries", json=first_payload)
         second = client.post("/api/deliveries", json=second_payload)
         assert first.status_code == 201, first.text

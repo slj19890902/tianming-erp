@@ -9,7 +9,13 @@ from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
 from app.models.order import Order
@@ -17,9 +23,11 @@ from app.models.user import User
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "sales", "finance"])
-can_write = RoleChecker(["admin"])
-admin_only = RoleChecker(["admin"])
+can_read = PermissionChecker("customers.view")
+can_create = PermissionChecker("customers.create")
+can_write = PermissionChecker("customers.edit")
+can_deactivate = PermissionChecker("customers.deactivate")
+can_delete = PermissionChecker("customers.delete")
 
 
 class CustomerPayload(BaseModel):
@@ -65,9 +73,12 @@ def list_customers(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     query = select(Customer).order_by(Customer.customer_number, Customer.id)
+    scoped_ids = customer_scope_ids(user, db)
+    if not has_unrestricted_customer_access(user, db):
+        query = query.where(Customer.id.in_(scoped_ids))
     if not include_inactive:
         query = query.where(Customer.is_active.is_(True))
     if keyword.strip():
@@ -97,8 +108,9 @@ def list_customers(
 def get_customer(
     customer_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> CustomerResponse:
+    require_customer_access(customer_id, current_user=user, db=db)
     return CustomerResponse.model_validate(_customer_or_404(db, customer_id))
 
 
@@ -106,7 +118,7 @@ def get_customer(
 def create_customer(
     payload: CustomerPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(can_write),
+    user: User = Depends(can_create),
 ) -> CustomerResponse:
     data = payload.model_dump()
     data.update(
@@ -141,6 +153,7 @@ def update_customer(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> CustomerResponse:
+    require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
     before = CustomerResponse.model_validate(customer).model_dump()
     for key, value in payload.model_dump().items():
@@ -170,8 +183,9 @@ def update_customer_status(
     customer_id: int,
     payload: CustomerStatusPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    user: User = Depends(can_deactivate),
 ) -> CustomerResponse:
+    require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
     if not payload.is_active:
         open_order = db.scalar(
@@ -215,8 +229,9 @@ def update_customer_status(
 def delete_customer(
     customer_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    user: User = Depends(can_delete),
 ) -> Response:
+    require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
     open_order = db.scalar(
         select(Order.id)

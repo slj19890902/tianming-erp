@@ -5,13 +5,13 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.deps import RoleChecker
+from app.api.deps import PermissionChecker
 from app.models.user import User
 from app.services.pricing import PricingError, calculate_price
 
 
 router = APIRouter()
-can_calculate = RoleChecker(["admin", "sales", "finance"])
+can_calculate = PermissionChecker("cost.view")
 
 
 class PricingRequest(BaseModel):

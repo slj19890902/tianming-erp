@@ -9,7 +9,14 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    RoleChecker,
+    customer_scope_ids,
+    get_db,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -59,11 +66,13 @@ from app.services.inventory_insights import build_inventory_insights
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "workshop"])
-can_operate = RoleChecker(["admin", "workshop"])
+# Configuration/master-data operations have no N028 permission equivalent and
+# intentionally retain their legacy admin-only boundary.
 admin_only = RoleChecker(["admin"])
-can_reserve = RoleChecker(["admin", "sales"])
-can_view_reservations = RoleChecker(["admin", "sales", "workshop"])
+can_read = PermissionChecker("warehouse.view")
+can_operate = PermissionChecker("warehouse.execute")
+can_reserve = PermissionChecker("warehouse.reserve")
+can_view_reservations = PermissionChecker("warehouse.view")
 VALID_SOURCE_TYPES = {
     "manual",
     "production_surplus",
@@ -298,6 +307,59 @@ def _handle_integrity(error: IntegrityError) -> None:
     ) from error
 
 
+def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+def _require_order_item_customer_access(
+    db: Session,
+    order_item_id: int,
+    user: User,
+) -> None:
+    customer_id = db.scalar(
+        select(Order.customer_id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .where(OrderItem.id == order_item_id)
+    )
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+
+
+def _require_requirement_customer_access(
+    db: Session,
+    requirement_id: int,
+    user: User,
+) -> None:
+    requirement = db.get(OrderItemSemiRequirement, requirement_id)
+    if requirement is not None:
+        require_customer_access(requirement.customer_id, user, db)
+
+
+def _require_reservation_customer_access(
+    db: Session,
+    reservation_id: int,
+    user: User,
+) -> None:
+    reservation = db.get(InventoryReservation, reservation_id)
+    if reservation is None:
+        return
+    customer_id = None
+    if reservation.order_id is not None:
+        customer_id = db.scalar(
+            select(Order.customer_id).where(Order.id == reservation.order_id)
+        )
+    elif reservation.semi_requirement_id is not None:
+        customer_id = db.scalar(
+            select(OrderItemSemiRequirement.customer_id).where(
+                OrderItemSemiRequirement.id == reservation.semi_requirement_id
+            )
+        )
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+
+
 def _location_dict(row: WarehouseLocation) -> dict:
     return {
         "id": row.id,
@@ -315,6 +377,47 @@ def _lot_query():
         selectinload(InventoryLot.finished_detail),
         selectinload(InventoryLot.semi_finished_detail),
     )
+
+
+def _visible_lot_condition(visible_customer_ids: set[int]):
+    finished_lot_ids = select(
+        FinishedGoodsInventoryDetail.inventory_lot_id
+    ).where(
+        or_(
+            FinishedGoodsInventoryDetail.owner_customer_id.is_(None),
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(visible_customer_ids),
+        )
+    )
+    semi_finished_lot_ids = select(
+        SemiFinishedInventoryDetail.inventory_lot_id
+    ).where(
+        or_(
+            SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+            SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids),
+        )
+    )
+    return or_(
+        InventoryLot.id.in_(finished_lot_ids),
+        InventoryLot.id.in_(semi_finished_lot_ids),
+    )
+
+
+def _require_lot_customer_access(
+    db: Session,
+    lot_id: int,
+    user: User,
+) -> InventoryLot | None:
+    lot = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
+    if lot is None:
+        return None
+    customer_id = None
+    if lot.finished_detail is not None:
+        customer_id = lot.finished_detail.owner_customer_id
+    elif lot.semi_finished_detail is not None:
+        customer_id = lot.semi_finished_detail.owner_customer_id
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    return lot
 
 
 def _lot_dict(row: InventoryLot) -> dict:
@@ -510,8 +613,9 @@ def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
 def finished_candidates(
     order_item_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    _require_order_item_customer_access(db, order_item_id, user)
     try:
         item = db.get(OrderItem, order_item_id)
         if item is None:
@@ -579,6 +683,7 @@ def create_finished_reservation(
     db: Session = Depends(get_db),
     user: User = Depends(can_reserve),
 ) -> dict:
+    _require_order_item_customer_access(db, payload.order_item_id, user)
     try:
         row = reserve_finished_inventory(
             db,
@@ -598,12 +703,13 @@ def list_reservations(
     inventory_lot_id: int | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
     query = select(InventoryReservation).where(
         InventoryReservation.reservation_type == "finished_order"
     )
     if order_item_id:
+        _require_order_item_customer_access(db, order_item_id, user)
         query = query.where(InventoryReservation.order_item_id == order_item_id)
     if inventory_lot_id:
         query = query.where(
@@ -611,6 +717,11 @@ def list_reservations(
         )
     if status_filter:
         query = query.where(InventoryReservation.status == status_filter)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.join(
+            Order, Order.id == InventoryReservation.order_id
+        ).where(Order.customer_id.in_(visible_customer_ids))
     rows = db.scalars(
         query.order_by(InventoryReservation.id.desc()).limit(500)
     ).all()
@@ -624,6 +735,7 @@ def release_reservation(
     db: Session = Depends(get_db),
     user: User = Depends(can_reserve),
 ) -> dict:
+    _require_reservation_customer_access(db, reservation_id, user)
     try:
         row = release_finished_reservation(
             db,
@@ -644,8 +756,9 @@ def finished_product_candidates(
     product_id: int,
     customer_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    require_customer_access(customer_id, user, db)
     try:
         rows = finished_inventory_candidates_for_product(
             db,
@@ -692,6 +805,7 @@ def upsert_semi_requirement(
     db: Session = Depends(get_db),
     user: User = Depends(can_reserve),
 ) -> dict:
+    _require_order_item_customer_access(db, order_item_id, user)
     try:
         row = save_order_item_semi_requirement(
             db,
@@ -714,8 +828,9 @@ def semi_product_candidates(
     product_id: int,
     payload: SemiProductCandidatePayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    require_customer_access(payload.customer_id, user, db)
     try:
         rows = semi_finished_candidates_for_product(
             db,
@@ -735,8 +850,9 @@ def semi_product_inventory_browser(
     product_id: int,
     payload: SemiProductCandidatePayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    require_customer_access(payload.customer_id, user, db)
     try:
         rows = browse_semi_finished_inventory_for_product(
             db,
@@ -755,8 +871,9 @@ def semi_product_inventory_browser(
 def semi_requirement_candidates(
     requirement_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    _require_requirement_customer_access(db, requirement_id, user)
     try:
         requirement = db.get(OrderItemSemiRequirement, requirement_id)
         if requirement is None:
@@ -779,8 +896,9 @@ def semi_requirement_candidates(
 def semi_requirement_inventory_browser(
     requirement_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    _require_requirement_customer_access(db, requirement_id, user)
     try:
         rows = browse_semi_finished_inventory(db, requirement_id)
         return {"items": [_semi_candidate_dict(row) for row in rows]}
@@ -795,6 +913,7 @@ def confirm_semi_requirement_match(
     db: Session = Depends(get_db),
     user: User = Depends(can_reserve),
 ) -> dict:
+    _require_requirement_customer_access(db, requirement_id, user)
     try:
         result = confirm_semi_finished_match(
             db,
@@ -825,6 +944,7 @@ def reserve_semi_requirement(
     db: Session = Depends(get_db),
     user: User = Depends(can_reserve),
 ) -> dict:
+    _require_requirement_customer_access(db, requirement_id, user)
     try:
         result = reserve_semi_finished_inventory(
             db,
@@ -858,8 +978,9 @@ def reserve_semi_requirement(
 def list_semi_requirement_reservations(
     requirement_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_view_reservations),
+    user: User = Depends(can_view_reservations),
 ) -> dict:
+    _require_requirement_customer_access(db, requirement_id, user)
     rows = db.scalars(
         select(InventoryReservation)
         .where(
@@ -878,6 +999,7 @@ def release_semi_reservation(
     db: Session = Depends(get_db),
     user: User = Depends(can_reserve),
 ) -> dict:
+    _require_reservation_customer_access(db, reservation_id, user)
     try:
         result = release_semi_finished_reservation(
             db,
@@ -902,6 +1024,7 @@ def consume_semi_reservation(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _require_reservation_customer_access(db, reservation_id, user)
     try:
         result = consume_semi_finished_reservation(
             db,
@@ -930,6 +1053,7 @@ def reverse_semi_reservation_consumption(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _require_reservation_customer_access(db, reservation_id, user)
     try:
         result = reverse_semi_finished_consumption(
             db,
@@ -1098,8 +1222,9 @@ def get_semi_lot_product_assignments(
     q: str | None = None,
     limit: int = Query(default=200, ge=1, le=500),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
     try:
         return _semi_lot_assignment_response(
             db, lot_id=lot_id, keyword=q, limit=limit
@@ -1169,12 +1294,14 @@ def list_locations(
 @router.get("/references/customers")
 def reference_customers(
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    query = select(Customer).where(Customer.is_active.is_(True))
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(Customer.id.in_(visible_customer_ids))
     rows = db.scalars(
-        select(Customer)
-        .where(Customer.is_active.is_(True))
-        .order_by(Customer.customer_number, Customer.id)
+        query.order_by(Customer.customer_number, Customer.id)
     ).all()
     return {"items": [{"id": row.id, "name": row.name} for row in rows]}
 
@@ -1183,8 +1310,9 @@ def reference_customers(
 def reference_products(
     customer_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    require_customer_access(customer_id, user, db)
     rows = db.scalars(
         select(Product)
         .where(
@@ -1505,9 +1633,12 @@ def list_lots(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     query = _lot_query()
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(_visible_lot_condition(visible_customer_ids))
     if inventory_type:
         query = query.where(InventoryLot.inventory_type == inventory_type)
     if status:
@@ -1566,8 +1697,13 @@ def list_lots(
 def get_inventory_insights(
     as_of: date | None = None,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    if not has_unrestricted_customer_access(user, db):
+        raise HTTPException(
+            status_code=403,
+            detail="库存洞察暂不支持按客户范围安全聚合",
+        )
     return build_inventory_insights(db, as_of=as_of)
 
 
@@ -1575,8 +1711,9 @@ def get_inventory_insights(
 def get_lot(
     lot_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
     row = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
     if row is None:
         raise HTTPException(status_code=404, detail="库存批次不存在")
@@ -1590,12 +1727,23 @@ def get_lot(
             .order_by(InventoryMovement.id.desc())
         ).all()
     ]
+    reservation_query = select(InventoryReservation).where(
+        InventoryReservation.inventory_lot_id == lot_id
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        reservation_query = reservation_query.outerjoin(
+            Order, Order.id == InventoryReservation.order_id
+        ).where(
+            or_(
+                InventoryReservation.order_id.is_(None),
+                Order.customer_id.in_(visible_customer_ids),
+            )
+        )
     result["reservations"] = [
         _reservation_dict(item, db)
         for item in db.scalars(
-            select(InventoryReservation)
-            .where(InventoryReservation.inventory_lot_id == lot_id)
-            .order_by(InventoryReservation.id.desc())
+            reservation_query.order_by(InventoryReservation.id.desc())
         ).all()
     ]
     return result
@@ -1611,11 +1759,14 @@ def list_movements(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     query = select(InventoryMovement).join(InventoryLot).options(
         selectinload(InventoryMovement.lot)
     )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(_visible_lot_condition(visible_customer_ids))
     if lot_number:
         query = query.where(InventoryLot.lot_number.contains(lot_number.strip()))
     if inventory_type:
@@ -1641,6 +1792,7 @@ def finished_manual_in(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    require_customer_access(payload.customer_id, user, db)
     try:
         row = manual_finished_in(db, operator_id=user.id, **payload.model_dump())
         db.commit()
@@ -1656,6 +1808,8 @@ def semi_finished_manual_in(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    if payload.customer_id is not None:
+        require_customer_access(payload.customer_id, user, db)
     try:
         row = manual_semi_finished_in(db, operator_id=user.id, **payload.model_dump())
         db.commit()
@@ -1673,6 +1827,7 @@ def _operate(
     payload: VersionPayload,
     quantity: int = 0,
 ) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
     try:
         row = mutate_lot(
             db,

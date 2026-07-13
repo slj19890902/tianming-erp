@@ -97,7 +97,7 @@ def order_api_app(tmp_path: Path):
     return app, session_factory
 
 
-def _login(client: TestClient, role: str = "sales") -> None:
+def _login(client: TestClient, role: str = "admin") -> None:
     response = client.post(
         "/api/auth/login",
         json={"username": role, "password": "RolePass123!"},
@@ -465,7 +465,9 @@ def test_order_list_and_detail_expose_display_material_without_rewriting_snapsho
     assert detail_item["display_material"] == "A113B"
 
 
-def test_sales_can_edit_and_delete_one_order_item(order_api_app) -> None:
+def test_sales_can_edit_but_only_authorized_user_can_delete_order_item(
+    order_api_app,
+) -> None:
     app, _ = order_api_app
     with TestClient(app) as client:
         _login(client, "sales")
@@ -484,12 +486,16 @@ def test_sales_can_edit_and_delete_one_order_item(order_api_app) -> None:
                 "specification": "525脳350脳300mm",
             },
         )
+        denied = client.delete(f"/api/orders/items/{second_id}")
+        client.post("/api/auth/logout")
+        _login(client, "admin")
         deleted = client.delete(f"/api/orders/items/{second_id}")
         listed = client.get("/api/orders")
 
     assert edited.status_code == 200, edited.text
     assert edited.json()["snapshot_product_code"] == "SME-001-A"
     assert edited.json()["quantity"] == 210
+    assert denied.status_code == 403
     assert deleted.status_code == 204
     refreshed = listed.json()["items"][0]
     assert len(refreshed["items"]) == 1
@@ -1962,3 +1968,91 @@ def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> Non
     assert legacy_id not in business_ids
     # the legacy RUIDA order only shows under the explicit history view
     assert legacy_id in history_ids
+
+
+def test_n028_sales_order_scope_blocks_other_customer_and_filters_list(
+    order_api_app,
+) -> None:
+    from app.models.access_control import UserCustomerScope
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.models.user import User
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        first_customer = session.query(Customer).order_by(Customer.id).first()
+        second_customer = Customer(
+            customer_number=2,
+            customer_code="OTHER",
+            name="Other Customer",
+        )
+        session.add(second_customer)
+        session.flush()
+        second_product = Product(
+            customer_id=second_customer.id,
+            product_code="OTHER-001",
+            customer_material_code="OTHER-001",
+            product_name="Other carton",
+            box_category="normal",
+        )
+        session.add(second_product)
+        session.flush()
+        sales = session.query(User).filter(User.username == "sales").one()
+        sales.customer_access_mode = "selected"
+        session.add(
+            UserCustomerScope(user_id=sales.id, customer_id=first_customer.id)
+        )
+        session.commit()
+        second_customer_id = second_customer.id
+        second_product_id = second_product.id
+
+    other_payload = {
+        "customer_id": second_customer_id,
+        "customer_po": "OTHER-PO",
+        "order_date": "2026-06-13",
+        "items": [
+            {"product_id": second_product_id, "quantity": 10, "unit_price": "2.00"}
+        ],
+    }
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.post("/api/orders", json=_payload())
+        second = client.post("/api/orders", json=other_payload)
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+        client.post("/api/auth/logout")
+
+        _login(client, "sales")
+        listing = client.get("/api/orders")
+        forbidden_detail = client.get(f"/api/orders/{second.json()['id']}")
+        forbidden_create = client.post("/api/orders", json=other_payload)
+
+    assert listing.status_code == 200
+    assert [row["id"] for row in listing.json()["items"]] == [first.json()["id"]]
+    assert forbidden_detail.status_code == 403
+    assert forbidden_create.status_code == 403
+
+
+def test_n028_sales_order_response_omits_internal_cost_fields(order_api_app) -> None:
+    app, _session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=_payload())
+        assert created.status_code == 201, created.text
+        admin_item = created.json()["items"][0]
+        assert "unit_estimated_cost" in admin_item
+        client.post("/api/auth/logout")
+
+        _login(client, "sales")
+        detail = client.get(f"/api/orders/{created.json()['id']}")
+
+    assert detail.status_code == 200
+    sales_item = detail.json()["items"][0]
+    assert {
+        "estimated_cost",
+        "cost_status",
+        "unit_estimated_cost",
+        "unit_estimated_gross_profit",
+        "total_estimated_cost",
+        "total_estimated_gross_profit",
+    }.isdisjoint(sales_item)

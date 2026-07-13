@@ -123,7 +123,7 @@ def test_finance_is_read_only_and_cannot_open_product_master(master_data_app: Fa
     assert denied.json()["detail"] == "权限不足"
 
 
-def test_sales_is_query_and_order_oriented_but_cannot_edit_customer_master(
+def test_sales_can_edit_assigned_customer_but_cannot_create_customer(
     master_data_app: FastAPI,
 ) -> None:
     with TestClient(master_data_app) as client:
@@ -152,7 +152,63 @@ def test_sales_is_query_and_order_oriented_but_cannot_edit_customer_master(
         )
 
     assert created.status_code == 403
-    assert updated.status_code == 403
+    assert updated.status_code == 200
+
+
+def test_n028_sales_scope_filters_customers_and_products_and_hides_cost(
+    master_data_app: FastAPI,
+) -> None:
+    from app.models.access_control import UserCustomerScope
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.models.user import User
+
+    factory = master_data_app.state.session_factory
+    with factory() as session:
+        first_customer = session.get(Customer, 1)
+        second_customer = Customer(
+            customer_number=2,
+            customer_code="OTHER",
+            name="Other Customer",
+        )
+        session.add(second_customer)
+        session.flush()
+        session.add(
+            Product(
+                customer_id=second_customer.id,
+                product_code="OTHER-001",
+                customer_material_code="OTHER-001",
+                product_name="Other carton",
+                box_category="normal",
+                sale_unit_price=4,
+                cost_unit_price=3,
+                suggested_price=5,
+            )
+        )
+        sales = session.query(User).filter(User.username == "sales").one()
+        sales.customer_access_mode = "selected"
+        session.add(
+            UserCustomerScope(user_id=sales.id, customer_id=first_customer.id)
+        )
+        session.commit()
+        second_customer_id = second_customer.id
+
+    with TestClient(master_data_app) as client:
+        _login(client, "sales")
+        customers = client.get("/api/master/customers")
+        products = client.get("/api/master/products")
+        forbidden_customer = client.get(
+            f"/api/master/customers/{second_customer_id}"
+        )
+
+    assert customers.status_code == 200
+    assert [item["id"] for item in customers.json()["items"]] == [1]
+    assert products.status_code == 200
+    assert [item["product_code"] for item in products.json()["items"]] == ["TH001"]
+    product = products.json()["items"][0]
+    assert "cost_unit_price" not in product
+    assert "suggested_price" not in product
+    assert forbidden_customer.status_code == 403
 
 
 def test_workshop_product_response_hides_prices(master_data_app: FastAPI) -> None:

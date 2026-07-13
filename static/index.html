@@ -126,6 +126,51 @@
 
       /* App shell */
       .app-shell { min-height: 100vh; display: grid; grid-template-rows: 60px 1fr; }
+      .role-boss { font-size: 16px; grid-template-rows: 72px 1fr; }
+      .role-boss .topbar { padding: 0 28px; }
+      .role-boss .brand { font-size: 19px; }
+      .role-boss .layout { grid-template-columns: 284px 1fr; }
+      .role-boss .sidebar { padding: 20px 12px; }
+      .role-boss .menu-title { font-size: 13px; padding: 8px 14px 10px; }
+      .role-boss .menu-item { min-height: 48px; padding: 12px 14px; font-size: 17px; line-height: 1.45; }
+      .role-boss .main { padding: 32px 36px 52px; }
+      .role-boss .page-head { margin-bottom: 24px; }
+      .role-boss .page-head h2 { font-size: 28px; }
+      .role-boss .page-head p, .role-boss .page-subtitle { font-size: 16px; }
+      .role-boss .btn { min-height: 44px; padding: 8px 18px; font-size: 16px; }
+      .role-boss .btn.small { min-height: 38px; padding: 6px 14px; font-size: 15px; }
+      .role-boss .input, .role-boss .select, .role-boss .textarea { min-height: 46px; padding: 9px 14px; font-size: 16px; }
+      .role-boss th, .role-boss td { min-height: 54px; padding: 15px 18px; line-height: 1.7; }
+      .role-boss .status { padding: 5px 12px; font-size: 14px; }
+      @media (max-width: 1280px) {
+        body:has(.role-boss) { min-width: 0; }
+        .role-boss .topbar { padding: 0 18px; }
+        .role-boss .layout { grid-template-columns: 220px minmax(0, 1fr); }
+        .role-boss .sidebar { padding: 16px 8px; }
+        .role-boss .main { padding: 24px 24px 40px; }
+        .role-boss .table-wrap { max-width: 100%; overflow-x: auto; }
+      }
+      @media (max-width: 900px) {
+        body:has(.role-boss) { width: 100%; max-width: 100vw; min-width: 0; }
+        .role-boss,
+        .role-boss .layout,
+        .role-boss .topbar,
+        .role-boss .sidebar,
+        .role-boss .main {
+          width: 100%;
+          max-width: 100vw;
+          min-width: 0;
+          box-sizing: border-box;
+        }
+        .role-boss .topbar { height: auto; min-height: 72px; padding: 12px 16px; flex-wrap: wrap; gap: 10px 16px; }
+        .role-boss .top-actions { flex: 1 1 100%; width: 100%; max-width: 100%; min-width: 0; justify-content: flex-start; flex-wrap: wrap; }
+        .role-boss .layout { display: flex; flex-direction: column; }
+        .role-boss .sidebar { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--line); overflow-y: auto; }
+        .role-boss .main { padding: 20px 16px 32px; overflow-x: hidden; }
+        .role-boss .page-head { align-items: flex-start; flex-wrap: wrap; gap: 10px 16px; }
+        .role-boss .toolbar, .role-boss .filterbar, .role-boss .toolbar-group { flex-wrap: wrap; }
+        .role-boss .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
+      }
 
       /* Header / topbar */
       .topbar {
@@ -617,6 +662,9 @@
       .stat-chip { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
       .sensitive-price { font-variant-numeric: tabular-nums; }
       .role-workshop .sensitive-price { display: none !important; }
+      .cost-sensitive { font-variant-numeric: tabular-nums; }
+      .role-no-costs .cost-sensitive { display: none !important; }
+      .role-boss .role-sensitive-cost { font-variant-numeric: tabular-nums; }
 
       /* Search-select dropdown */
       .search-select { position: relative; min-width: 220px; }
@@ -751,7 +799,7 @@
         </form>
       </div>
 
-      <div v-else :class="['app-shell', `role-${user.role}`]">
+      <div v-else :class="['app-shell', `role-${user.role}`, {'role-boss': user.role === 'boss', 'role-no-costs': !canViewCosts}]">
         <header class="topbar">
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
@@ -782,7 +830,7 @@
                   <div class="card-label">{{ card.title }}</div>
                   <div class="dashboard-card-value">
                     <span class="dashboard-card-count">{{ card.count || 0 }}</span>
-                    <span v-if="card.amount !== undefined" class="dashboard-card-amount">{{ isWorkshop ? " / 无权限" : ` / ￥ ${money(card.amount)}` }}</span>
+                    <span v-if="card.amount !== undefined" class="dashboard-card-amount">{{ canViewCosts ? ` / ￥ ${money(card.amount)}` : " / 无权限" }}</span>
                   </div>
                   <div class="card-hint">{{ card.description }}</div>
                   <div class="dashboard-card-actions">
@@ -824,28 +872,28 @@
               </div>
               <div class="section-grid">
                 <div class="panel"><div class="section-title">快捷入口</div><div class="section-body toolbar-group">
-                  <button v-if="canSales" class="btn primary" @click="openOrder">新建订单</button>
-                  <button class="btn" @click="go('orders')">订单管理</button>
-                  <button class="btn" @click="go('deliveries')">送货管理</button>
+                  <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
+                  <button v-if="hasPermission('orders.view')" class="btn" @click="go('orders')">订单管理</button>
+                  <button v-if="hasPermission('deliveries.view')" class="btn" @click="go('deliveries')">送货管理</button>
                   <button v-if="canFinance" class="btn" @click="go('finance')">月结对账</button>
-                  <button v-if="isWorkshop || canAdmin" class="btn" @click="go('incoming')">仓库来料入库</button>
-                  <a v-if="isWorkshop || canAdmin" class="btn" href="/warehouse.html">仓库库存管理</a>
-                  <button v-if="isWorkshop || canAdmin" class="btn" @click="openMobileEntry">手机扫码入口</button>
+                  <button v-if="hasPermission('incoming.view')" class="btn" @click="go('incoming')">仓库来料入库</button>
+                  <a v-if="hasPermission('warehouse.view')" class="btn" href="/warehouse.html">仓库库存管理</a>
+                  <button v-if="hasPermission('incoming.execute')" class="btn" @click="openMobileEntry">手机扫码入口</button>
                 </div></div>
                 <div class="panel"><div class="section-title">最近业务摘要</div><div class="section-body">
                   <div>今天新增订单：{{ kpi.today_orders || 0 }}</div>
                   <div>今天发货单：{{ kpi.today_deliveries || 0 }}</div>
                   <div>今天回单：{{ kpi.today_receipts || 0 }}</div>
-                  <div>本月累计营收：¥ {{ money(kpi.monthly_revenue) }}</div>
-                  <div v-if="!isWorkshop">本月毛利：¥ {{ money(kpi.monthly_gross_profit) }}</div>
-                  <div v-if="!isWorkshop">待收账款：¥ {{ money(kpi.outstanding_receivables) }}</div>
+                  <div v-if="hasPermission('finance.view')">本月累计营收：¥ {{ money(kpi.monthly_revenue) }}</div>
+                  <div v-if="canViewCosts">本月毛利：¥ {{ money(kpi.monthly_gross_profit) }}</div>
+                  <div v-if="hasPermission('finance.view')">待收账款：¥ {{ money(kpi.outstanding_receivables) }}</div>
                 </div></div>
               </div>
             </template>
             <template v-else-if="activePage === 'customers'">
               <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
               <div class="toolbar">
-                <div class="toolbar-group"><button v-if="canAdmin" class="btn primary" @click="openCustomer()">新增客户</button></div>
+                <div class="toolbar-group"><button v-if="canCreateCustomers" class="btn primary" @click="openCustomer()">新增客户</button></div>
                 <div class="toolbar-group"><label><input type="checkbox" v-model="filters.showInactive" @change="pages.customers=1;loadCustomers()" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @keyup.enter="pages.customers=1; loadCustomers()" /><button class="btn" @click="pages.customers=1; loadCustomers()">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
@@ -853,7 +901,7 @@
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button v-if="canSales" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button class="btn small" @click="openCustomer(row)">{{ canAdmin ? "查看/编辑" : "查看" }}</button><button v-if="user.role==='admin'" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
@@ -864,7 +912,7 @@
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button class="btn" @click="go('customers')">返回客户管理</button>
-                  <button class="btn primary" @click="newQuotationDraft">新建报价</button>
+                  <button v-if="canEditQuotations" class="btn primary" @click="newQuotationDraft">新建报价</button>
                 </div>
                 <div class="toolbar-group">
                   <button class="btn" :disabled="loading || !quotationEditable || !quotationDraft.items.length" @click="saveQuotationDraft">保存草稿</button>
@@ -879,7 +927,7 @@
                 </div>
                 <div class="table-wrap">
                   <table class="quotation-edit-table">
-                    <thead><tr><th>产品名称</th><th>临时编码</th><th>箱型</th><th>长</th><th>宽</th><th>高</th><th>材质</th><th>楞型</th><th>数量</th><th>预估成本</th><th>毛利率%</th><th>建议单价</th><th>最终单价</th><th>备注</th><th>操作</th></tr></thead>
+                    <thead><tr><th>产品名称</th><th>临时编码</th><th>箱型</th><th>长</th><th>宽</th><th>高</th><th>材质</th><th>楞型</th><th>数量</th><th class="cost-sensitive">预估成本</th><th class="cost-sensitive">毛利率%</th><th class="cost-sensitive">建议单价</th><th>最终单价</th><th>备注</th><th>操作</th></tr></thead>
                     <tbody><tr v-for="(line,index) in quotationDraft.items" :key="line._key || line.id || index">
                       <td><input class="input compact-input" v-model.trim="line.product_name" placeholder="产品名称" :disabled="!quotationEditable" /></td>
                       <td><input class="input compact-input" v-model.trim="line.temporary_code" placeholder="仅供参考" :disabled="!quotationEditable" /></td>
@@ -890,9 +938,9 @@
                       <td style="min-width:190px"><search-select v-model="line.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="搜索材质" :disabled="!quotationEditable" @change="onQuotationMaterialSelected(line)"></search-select><div class="muted" style="font-size:11px">{{ line.material_supplier || '-' }}｜{{ line.material_code || '-' }}</div></td>
                       <td><select class="select" v-model="line.flute_type" :disabled="!quotationEditable" @change="refreshQuotationLine(line)"><option value="">-</option><option v-for="opt in ['A','B','E','AB','BE']" :key="opt" :value="opt">{{ opt }}</option></select></td>
                       <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="!quotationEditable" /></td>
-                      <td><strong>{{ line.estimated_unit_cost == null ? '待计算' : money(line.estimated_unit_cost) }}</strong></td>
-                      <td><input class="input quotation-number-input" type="number" min="0" max="99" step="0.1" v-model.number="line.margin_rate" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
-                      <td><strong>{{ line.suggested_unit_price == null ? '待计算' : money(line.suggested_unit_price) }}</strong><div class="muted" style="font-size:11px">{{ line._message || '' }}</div></td>
+                      <td class="cost-sensitive"><strong>{{ line.estimated_unit_cost == null ? '待计算' : money(line.estimated_unit_cost) }}</strong></td>
+                      <td class="cost-sensitive"><input class="input quotation-number-input" type="number" min="0" max="99" step="0.1" v-model.number="line.margin_rate" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td class="cost-sensitive"><strong>{{ line.suggested_unit_price == null ? '待计算' : money(line.suggested_unit_price) }}</strong><div class="muted" style="font-size:11px">{{ line._message || '' }}</div></td>
                       <td><input class="input quotation-price-input" type="number" min="0" step="0.0001" v-model.number="line.final_unit_price" :disabled="!quotationEditable" @input="line._final_manual=true" /></td>
                       <td><input class="input compact-input" v-model.trim="line.remarks" :disabled="!quotationEditable" /></td>
                       <td><button class="btn small danger" :disabled="!quotationEditable || quotationDraft.items.length===1" @click="removeQuotationLine(index)">删除</button></td>
@@ -916,8 +964,8 @@
                 <div class="toolbar-group">
                   <button :class="['btn', {primary: productTab === 'products'}]" @click="productTab='products'">产品资料</button>
                   <button :class="['btn', {primary: productTab === 'materials'}]" @click="productTab='materials'">材质字典</button>
-                  <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
-                  <button v-if="user.role==='admin' && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
+                  <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
+                  <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
                   <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @keyup.enter="pages.products=1; loadProducts()" />
@@ -953,7 +1001,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canAdmin ? "编辑" : "查看" }}</button><button v-if="canAdmin" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -983,7 +1031,7 @@
                     <input class="input" style="width:150px" v-model.trim="materialWeightFilter" placeholder="输入总克重" />
                   </div>
                   <div class="toolbar-group">
-                    <button class="btn" @click="openCompare()">比价</button>
+                    <button v-if="canViewCosts" class="btn" @click="openCompare()">比价</button>
                     <button v-if="canAdmin" class="btn" @click="togglePaperCodePanel">材质规则维护</button>
                     <button v-if="canAdmin" class="btn success" @click="toggleMaterialComposer">新增/组合材质</button>
                   </div>
@@ -1044,15 +1092,15 @@
                 </div>
                 <div v-if="!displayedMaterials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
                 <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示；新增"克重结构"列 -->
-                <table v-else><thead><tr><th>供应商</th><th>层数</th><th>材质代码</th><th>克重结构</th><th v-if="!isWorkshop" class="sensitive-price">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
+                <table v-else><thead><tr><th>供应商</th><th>层数</th><th>材质代码</th><th>克重结构</th><th v-if="canViewCosts" class="cost-sensitive">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in displayedMaterials" :key="row.id">
                   <td>{{ row.supplier_name || "-" }}</td>
                   <td>{{ row.layer_count ? row.layer_count+'层' : "-" }}</td>
                   <td :title="row.code">{{ materialBaseCode(row) }}</td>
                   <td>{{ materialWeightStructure(row) }}</td>
-                  <td v-if="!isWorkshop" class="sensitive-price">{{ money(row.quote_price) }}</td>
+                  <td v-if="canViewCosts" class="cost-sensitive">{{ money(row.quote_price) }}</td>
                   <td>{{ row.quote_date || "-" }}</td>
-                  <td class="toolbar-group"><button class="btn small" @click="openPriceHistory(row)">价格历史</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
+                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
                 </tr></tbody></table>
               </data-panel>
 
@@ -1229,8 +1277,8 @@
                       <div class="page-subtitle">按客户 + 客户单号分组展示，展开后查看系统单号和明细系统单号</div>
                     </div>
                     <div class="toolbar-group">
-                      <button v-if="canSales" class="btn primary" @click="openOrder">新建订单</button>
-                      <button v-if="canSales" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                      <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
+                      <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
                       <button class="btn" @click="loadOrders()">刷新</button>
                     </div>
                   </div>
@@ -1313,7 +1361,7 @@
                         <td class="cell-actions">
                           <div class="toolbar-group">
                             <button class="btn small" @click="openOrderDetail(group.orders[0])">查看</button>
-                            <button v-if="canSales" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
+                            <button v-if="canEditOrders" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
                           </div>
                         </td>
                       </tr>
@@ -1331,7 +1379,7 @@
                                   <th class="cell-right">已送 / 未送</th>
                                   <th v-if="!isWorkshop" class="sensitive-price cell-right">单价</th>
                                   <th v-if="!isWorkshop" class="sensitive-price cell-right">金额</th>
-                                  <th v-if="!isWorkshop" class="sensitive-price cell-right">总预估成本 / 毛利</th>
+                                  <th v-if="!isWorkshop" class="cost-sensitive cell-right">总预估成本 / 毛利</th>
                                   <th>状态</th>
                                   <th>完成日期</th>
                                   <th>操作</th>
@@ -1348,7 +1396,7 @@
                                     <td class="cell-right"><strong>已送 {{ item.delivered_quantity || 0 }}</strong><div class="muted" style="font-size:11px">未送 {{ item.remaining_quantity ?? Math.max(Number(item.quantity || 0) - Number(item.delivered_quantity || 0), 0) }}</div></td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
-                                    <td v-if="!isWorkshop" class="sensitive-price cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
+                                    <td v-if="!isWorkshop" class="cost-sensitive cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
                                     <td>
                                       <div v-if="row.is_history_order" class="status blue">历史归档</div>
                                       <status-tag v-else :value="itemDeliveryStatusKey(item)"></status-tag>
@@ -1356,7 +1404,7 @@
                                     <td>{{ item.completion_date || "-" }}</td>
                                     <td class="toolbar-group">
                                       <button class="btn small" @click="openOrderDetail(row)">详情</button>
-                                      <button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button>
+                                      <button v-if="canEditOrders" class="btn small" @click="openOrderItem(row,item)">编辑</button>
                                       <a v-if="item.drawing_file || item.product_drawing_file"
                                          href="#"
                                          class="btn small"
@@ -1380,7 +1428,7 @@
             <template v-else-if="activePage === 'orders_legacy'">
               <page-head title="订单管理" desc="标准一主多明细订单，提交时由后端强事务处理。"></page-head>
               <div class="toolbar">
-                <div><button v-if="canSales" class="btn primary" @click="openOrder">新建订单</button></div>
+                <div><button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button></div>
                 <div class="toolbar-group">
                   <select class="select" v-model="filters.orderView" style="min-width:150px">
                     <option value="plain">普通列表</option>
@@ -1397,7 +1445,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>明细系统单号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th v-if="!isWorkshop" class="sensitive-price">总预估成本</th><th v-if="!isWorkshop" class="sensitive-price">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td class="sys-num" style="font-size:11px">{{ item.item_order_number || "-" }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="!isWorkshop" class="sensitive-price"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td v-if="!isWorkshop" class="sensitive-price"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>明细系统单号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td class="sys-num" style="font-size:11px">{{ item.item_order_number || "-" }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -1463,26 +1511,26 @@
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="incomingTab='history'; loadIncomingHistory()">历史入库</button>
                 </div>
                 <div class="toolbar-group">
-                  <button v-if="incomingTab==='pending'" class="btn success" :disabled="!incomingSelectedCount()" @click="batchReceiveIncoming">批量确认入库（{{ incomingSelectedCount() }}）</button>
+                  <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="!incomingSelectedCount()" @click="batchReceiveIncoming">批量确认入库（{{ incomingSelectedCount() }}）</button>
                   <button class="btn" @click="loadIncoming()">刷新</button>
                 </div>
               </div>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length">
                 <table>
-                  <thead><tr><th v-if="incomingTab==='pending'"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>报料日期</th><th>PDF图纸</th><th>操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>报料日期</th><th>PDF图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.item_id">
-                    <td v-if="incomingTab==='pending'"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
+                    <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
                     <td>{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
-                    <td><input v-if="incomingTab==='pending'" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
+                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
-                    <td><button v-if="incomingTab==='pending'" class="btn small success" @click="receiveIncoming(row)">确认入库</button><button v-else class="btn small danger" @click="revertIncoming(row)">撤回</button></td>
+                    <td v-if="hasPermission('incoming.execute')"><button v-if="incomingTab==='pending'" class="btn small success" @click="receiveIncoming(row)">确认入库</button><button v-else class="btn small danger" @click="revertIncoming(row)">撤回</button></td>
                   </tr></tbody>
                 </table>
               </data-panel>
               <div v-else>
-                <div class="status orange" style="display:block;margin:8px 0">历史入库：显示全部已入库记录。仅管理员可执行撤销入库（订单已发货则禁止撤销）。</div>
+                <div class="status orange" style="display:block;margin:8px 0">历史入库：显示全部已入库记录。拥有“来料入库操作”权限才可撤销（订单已发货则禁止撤销）。</div>
                 <data-panel :empty="!incomingHistory.length">
                   <table>
                     <thead><tr><th>入库时间</th><th>订单号</th><th>客户</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>操作</th></tr></thead>
@@ -1495,7 +1543,7 @@
                       <td>{{ row.material_display || "-" }}</td>
                       <td><strong>{{ row.incoming_quantity }}</strong></td>
                       <td>
-                        <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销入库</button>
+                        <button v-if="hasPermission('incoming.execute')" class="btn small danger" @click="revertIncoming(row)">撤销入库</button>
                         <span v-else class="muted">-</span>
                       </td>
                     </tr></tbody>
@@ -1516,11 +1564,11 @@
 
             <template v-else-if="activePage === 'finance'">
               <page-head title="对账、开票与收款" desc="对账金额按客户实际签收数量计算。"></page-head>
-              <div class="toolbar"><div><button class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
+              <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
               <div class="panel">
                 <div class="section-title">对账单</div>
                 <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button class="btn small" @click="openStatementEdit(row)">编辑</button><button class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button class="btn small" @click="registerInvoice(row)">登记开票</button><button class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                 <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
               </div>
               <div class="panel" style="margin-top:10px">
@@ -1528,6 +1576,66 @@
                 <div class="table-wrap"><table><thead><tr><th>发票号码</th><th>对账单号</th><th>客户</th><th>开票日期</th><th class="sensitive-price">开票金额</th></tr></thead>
                 <tbody><tr v-for="row in invoices" :key="row.id"><td>{{ row.invoice_number }}</td><td>{{ row.statement_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.invoice_date }}</td><td class="sensitive-price">¥ {{ money(row.invoice_amount) }}</td></tr></tbody></table><div v-if="!invoices.length" class="empty">暂无开票记录</div></div>
                 <pager :page="pages.invoices" :total="invoicesTotal" :page-size="pageSize" @change="pages.invoices=$event; loadFinance()"></pager>
+              </div>
+            </template>
+
+            <template v-else-if="activePage === 'permissions'">
+              <page-head title="用户权限管理" desc="选择用户，勾选功能权限并分配可见客户范围；一次保存同时生效，避免出现半套权限。"></page-head>
+              <div class="panel" style="padding:16px 18px">
+                <div class="toolbar-group" style="margin-bottom:14px">
+                  <label style="font-weight:700">用户</label>
+                  <select class="select" style="width:280px" v-model.number="selectedPermissionUserId" @change="loadPermissionProfile(selectedPermissionUserId)">
+                    <option :value="null">请选择用户</option>
+                    <option v-for="row in permissionUsers" :key="row.id" :value="row.id">{{ row.real_name || row.username }}（{{ row.username }} / {{ roleLabel(row.role) }}）</option>
+                  </select>
+                  <button class="btn" @click="loadPermissionUsers">刷新用户</button>
+                  <button class="btn primary" @click="openCreateUserModal">新增用户</button>
+                </div>
+                <div v-if="permissionLoading" class="empty">正在加载权限配置…</div>
+                <div v-else-if="!permissionProfile" class="empty">请选择用户后配置权限。</div>
+                <template v-else>
+                  <div class="section-title">功能权限</div>
+                  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:12px 0 18px">
+                    <div v-for="group in permissionGroups" :key="group.key" class="panel" style="padding:10px;margin:0">
+                      <strong>{{ group.label }}</strong>
+                      <label v-for="item in group.items" :key="item.code" style="display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-top:1px solid var(--line);font-size:14px">
+                        <input type="checkbox" :checked="!!permissionDraft.permissions[item.code]" :disabled="item.locked" @change="permissionDraft.permissions[item.code] = $event.target.checked" />
+                        <span><strong>{{ item.name }}</strong><span class="muted" style="display:block;font-size:12px">{{ item.code }} · 默认{{ permissionDefaultAllowed(item) ? '允许' : '禁止' }}</span></span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="section-title">客户范围</div>
+                  <div v-if="permissionProfile.customer_scope_locked" class="status blue" style="display:block;margin:12px 0">管理员与老板角色固定可访问全部客户。</div>
+                  <div v-if="!permissionProfile.customer_scope_locked" class="toolbar-group" style="padding:12px 0">
+                    <label><input type="radio" value="all" v-model="permissionDraft.customer_access_mode" /> 全部客户</label>
+                    <label><input type="radio" value="selected" v-model="permissionDraft.customer_access_mode" /> 指定客户</label>
+                  </div>
+                  <div v-if="!permissionProfile.customer_scope_locked && permissionDraft.customer_access_mode === 'selected' && !permissionDraft.customer_ids.length" class="status orange" style="display:block;margin:0 0 10px">当前未选择客户；保存后该账号将看不到任何客户业务数据。</div>
+                  <div v-if="!permissionProfile.customer_scope_locked && permissionDraft.customer_access_mode === 'selected'" class="toolbar-group" style="align-items:flex-start;max-height:280px;overflow:auto;padding:10px 0">
+                    <label v-for="customer in activeCustomerOptions" :key="customer.id" style="display:flex;align-items:center;gap:7px;min-width:240px;padding:6px 10px;border:1px solid var(--line);border-radius:8px">
+                      <input type="checkbox" :checked="permissionDraft.customer_ids.includes(customer.id)" @change="togglePermissionCustomer(customer.id, $event.target.checked)" />
+                      <span>{{ customer.customer_number || customer.id }} · {{ customer.name }}</span>
+                    </label>
+                  </div>
+                  <div class="toolbar-group" style="justify-content:flex-end;margin-top:18px">
+                    <button class="btn primary" @click="savePermissionAccess" :disabled="permissionLoading">保存权限与客户范围</button>
+                  </div>
+                </template>
+              </div>
+              <div v-if="showCreateUserModal" class="modal-mask" @click.self="showCreateUserModal=false">
+                <div class="modal" style="max-width:620px">
+                  <div class="modal-head"><strong>新增用户</strong><button class="btn small" @click="showCreateUserModal=false">关闭</button></div>
+                  <div class="modal-body">
+                    <div class="form-grid">
+                      <div class="field"><label>用户名 *</label><input class="input" v-model.trim="createUserForm.username" autocomplete="off" /></div>
+                      <div class="field"><label>姓名 *</label><input class="input" v-model.trim="createUserForm.real_name" /></div>
+                      <div class="field"><label>显示名称</label><input class="input" v-model.trim="createUserForm.display_name" /></div>
+                      <div class="field"><label>角色 *</label><select class="select" v-model="createUserForm.role"><option v-for="item in userRoleOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                      <div class="field"><label>初始密码 *</label><input class="input" type="password" v-model="createUserForm.password" autocomplete="new-password" /></div>
+                    </div>
+                    <div class="toolbar-group" style="justify-content:flex-end;margin-top:14px"><button class="btn" @click="showCreateUserModal=false">取消</button><button class="btn primary" @click="createPermissionUser">创建用户</button></div>
+                  </div>
+                </div>
               </div>
             </template>
 
@@ -2358,8 +2466,8 @@
                     <!-- 副行：成本/毛利 + 生产说明 -->
                     <tr class="order-item-sub-row">
                       <td colspan="3" style="padding:2px 6px 6px;font-size:12px" v-if="!isWorkshop">
-                        <span class="sensitive-price" style="margin-right:10px">预估成本：{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</span>
-                        <span class="sensitive-price">预估毛利：{{ estimatedGrossProfit(item) }}</span>
+                        <span class="cost-sensitive" style="margin-right:10px">预估成本：{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</span>
+                        <span class="cost-sensitive">预估毛利：{{ estimatedGrossProfit(item) }}</span>
                       </td>
                       <td colspan="3" v-else></td>
                       <td colspan="5" style="padding:2px 6px 6px">
@@ -2487,8 +2595,8 @@
                   <!-- 副行：成本/毛利 + 生产说明 -->
                   <tr class="order-item-sub-row">
                     <td colspan="2" style="padding:2px 6px 6px;font-size:12px" v-if="!isWorkshop">
-                      <span class="sensitive-price" style="margin-right:12px">预估成本：{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</span>
-                      <span class="sensitive-price">预估毛利：{{ estimatedGrossProfit(item) }}</span>
+                      <span class="cost-sensitive" style="margin-right:12px">预估成本：{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</span>
+                      <span class="cost-sensitive">预估毛利：{{ estimatedGrossProfit(item) }}</span>
                     </td>
                     <td colspan="2" v-else></td>
                     <td colspan="5" style="padding:2px 6px 6px">
@@ -2521,17 +2629,17 @@
                 <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderEditForm.delivery_date" /></div>
                 <div class="field wide"><label>备注</label><input class="input" v-model.trim="orderEditForm.remark" /></div>
               </div>
-              <div v-if="canSales" class="danger-zone">
+              <div v-if="canStatusOrders || canDeleteOrders || canRollbackOrders" class="danger-zone">
                 <div class="danger-zone-head" @click="showOrderEditDanger=!showOrderEditDanger">
                   <strong>⚠ 更多操作 / 危险操作</strong>
                   <button type="button" class="btn small">{{ showOrderEditDanger ? '收起' : '展开' }}</button>
                 </div>
                 <div v-if="showOrderEditDanger" style="margin-top:10px">
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-                    <button v-if="canAdmin" class="btn small danger" @click="dangerRollbackOrderGroup()">撤回到未报料</button>
-                    <button class="btn small" @click="dangerChangeOrderGroupStatus('closed')">已结档</button>
-                    <button class="btn small danger" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
-                    <button class="btn small danger" @click="dangerDeleteOrderGroup()">删除此订单组</button>
+                    <button v-if="canRollbackOrders" class="btn small danger" @click="dangerRollbackOrderGroup()">撤回到未报料</button>
+                    <button v-if="canStatusOrders" class="btn small" @click="dangerChangeOrderGroupStatus('closed')">已结档</button>
+                    <button v-if="canStatusOrders" class="btn small danger" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
+                    <button v-if="canDeleteOrders" class="btn small danger" @click="dangerDeleteOrderGroup()">删除此订单组</button>
                   </div>
                   <div class="muted" style="font-size:11px;margin-top:6px">以上操作不可逆，均会要求填写原因或二次确认。撤回会删除关联送货/对账/开票/收款记录。</div>
                 </div>
@@ -2601,7 +2709,7 @@
                 <div class="field"><label>报料备注 / 常用箱备注</label><input class="input" v-model.trim="orderItemForm.snapshot_report_notes" placeholder="供应商直发、特殊要求等" /></div>
                 <div class="field"><label>常用箱备注</label><input class="input" v-model.trim="orderItemForm.product_remark" /></div>
               </div>
-              <div v-if="!isWorkshop" class="order-item-cost-row sensitive-price">
+              <div v-if="canViewCosts" class="order-item-cost-row cost-sensitive">
                 <div class="cost-metric"><label>单个预估成本</label><strong>{{ orderItemForm.cost_status === "calculated" ? `¥ ${money(orderItemForm.estimated_cost)}` : "待计算" }}</strong></div>
                 <div class="cost-metric primary"><label>总预估成本</label><strong>{{ orderItemForm.cost_status === "calculated" ? `¥ ${money(orderItemTotalCost(orderItemForm))}` : "待计算" }}</strong></div>
                 <div class="cost-metric"><label>单个预估毛利</label><strong>{{ estimatedGrossProfit(orderItemForm) }}</strong></div>
@@ -2635,7 +2743,7 @@
                 </table>
               </div>
               <div :class="['status',orderItemForm.product_id?'blue':'orange']">{{ orderItemForm.product_id ? "保存后将同步更新该常用箱资料。" : "当前明细未关联常用箱，本次只保存订单明细。" }}</div>
-              <div v-if="canSales" class="danger-zone">
+              <div v-if="canDeleteOrders" class="danger-zone">
                 <div class="danger-zone-head" @click="showOrderItemDanger=!showOrderItemDanger">
                   <strong>⚠ 危险操作</strong>
                   <button type="button" class="btn small">{{ showOrderItemDanger ? '收起' : '展开' }}</button>
@@ -2654,7 +2762,7 @@
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
                 <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
                 <div class="field"><label>状态</label><div v-if="orderDetail.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
-                <div v-if="!isWorkshop" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
+              <div v-if="canViewCosts" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
               <div class="section-title">只读订单详情</div>
@@ -3412,9 +3520,15 @@
       const roleMenus = {
         admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "warehouse", "deliveries", "finance", "system"],
         finance: ["dashboard", "customers", "orders", "finance"],
-        sales: ["dashboard", "customers", "orders", "requisition", "deliveries"],
+        sales: ["dashboard", "customers", "products", "orders"],
         workshop: ["dashboard", "orders", "incoming", "warehouse", "deliveries"],
+        boss: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "warehouse", "deliveries", "finance"],
         delivery_picker: []
+      };
+      const menuPermissions = {
+        dashboard: "dashboard.view", customers: "customers.view", products: "products.view", orders: "orders.view",
+        requisition: "requisition.view", incoming: "incoming.view", warehouse: "warehouse.view",
+        deliveries: "deliveries.view", finance: "finance.view", system: "system.backup", permissions: "users.manage",
       };
       const blankCustomer = () => ({
         id: null, customer_number: 1, customer_code: "", name: "",
@@ -3529,6 +3643,14 @@
             deliveries: [], pendingDeliveryItems: [], statements: [], invoices: [], moldTools: [],
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
+            permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
+            permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
+            createUserForm: { username:"", real_name:"", display_name:"", role:"sales", temporary_password:"", confirm_password:"" },
+            showCreateUserModal: false,
+            userRoleOptions: [
+              {value:"sales",label:"业务"}, {value:"finance",label:"财务"}, {value:"boss",label:"老板"},
+              {value:"workshop",label:"车间/仓库"}, {value:"delivery_picker",label:"送货拿货员"}, {value:"admin",label:"管理员"},
+            ],
             companyConfig: {}, companyForm: {}, showCompanyModal: false,
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
@@ -3761,6 +3883,22 @@
           },
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
+          canManagePermissions() { return this.user?.role === "admin"; },
+          canViewCosts() { return this.hasPermission("cost.view"); },
+          canCreateCustomers() { return this.hasPermission("customers.create"); },
+          canEditCustomers() { return this.hasPermission("customers.edit"); },
+          canDeactivateCustomers() { return this.hasPermission("customers.deactivate"); },
+          canCreateProducts() { return this.hasPermission("products.create"); },
+          canEditProducts() { return this.hasPermission("products.edit"); },
+          canDeactivateProducts() { return this.hasPermission("products.deactivate"); },
+          canDeleteProducts() { return this.hasPermission("products.delete"); },
+          canViewQuotations() { return this.hasPermission("quotations.view"); },
+          canEditQuotations() { return this.hasPermission("quotations.edit"); },
+          canCreateOrders() { return this.hasPermission("orders.create"); },
+          canEditOrders() { return this.hasPermission("orders.edit"); },
+          canStatusOrders() { return this.hasPermission("orders.status"); },
+          canDeleteOrders() { return this.hasPermission("orders.delete"); },
+          canRollbackOrders() { return this.hasPermission("orders.rollback"); },
           productFluteLayerError() {
             const ft = this.productForm.flute_type;
             const lc = this.productForm.layer_count;
@@ -3771,7 +3909,7 @@
             if (lc === 5 && single.includes(ft)) return `当前楞型与层数不匹配：${ft} 是三层单楞，五层只能选 AB/BE`;
             return null;
           },
-          canSales() { return ["admin", "sales"].includes(this.user?.role); },
+          canSales() { return this.canEditOrders; },
           quotationDraftTotal() {
             return (this.quotationDraft.items || []).reduce(
               (sum, line) => sum + Number(line.quantity || 0) * Number(line.final_unit_price || 0),
@@ -3779,7 +3917,7 @@
             );
           },
           quotationEditable() {
-            return !this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status);
+            return this.canEditQuotations && (!this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status));
           },
           confirmableImportDraftCount() {
             return this.orderImportDrafts.filter(draft => this.canConfirmImportDraft(draft)).length;
@@ -3800,9 +3938,18 @@
               && this.materialComposerPriceSource
             );
           },
-          canFinance() { return ["admin", "finance"].includes(this.user?.role); },
-          canDelivery() { return ["admin", "sales"].includes(this.user?.role); },
-          canRequisition() { return ["admin", "sales"].includes(this.user?.role); },
+          canFinance() { return this.hasPermission("finance.execute"); },
+          canDelivery() { return this.hasPermission("deliveries.execute"); },
+          canRequisition() { return this.hasPermission("requisition.execute"); },
+          permissionGroups() {
+            const groups = {};
+            for (const item of this.permissionCatalog || []) {
+              const module = item.module || "other";
+              if (!groups[module]) groups[module] = { key: module, label: item.module_name || item.module_label || module, items: [] };
+              groups[module].items.push(item);
+            }
+            return Object.values(groups);
+          },
           isForcedPassword() { return this.modal?.type === "password" && this.modal.force; },
           productCreaseMismatch() {
             if (!this.modal || this.modal.type !== "product") return "";
@@ -3853,8 +4000,12 @@
           },
           canSaveModal() {
             if (!this.modal) return false;
-            if (["customer","product","material"].includes(this.modal.type)) return this.canAdmin;
-            if (["order","orderEdit","orderItem","quotationConvert"].includes(this.modal.type)) return this.canSales;
+            if (this.modal.type === "customer") return this.customerForm.id ? this.canEditCustomers : this.canCreateCustomers;
+            if (this.modal.type === "product") return this.productForm.id ? this.canEditProducts : this.canCreateProducts;
+            if (this.modal.type === "material") return this.canAdmin;
+            if (this.modal.type === "order") return this.canCreateOrders;
+            if (["orderEdit","orderItem"].includes(this.modal.type)) return this.canEditOrders;
+            if (this.modal.type === "quotationConvert") return this.canEditQuotations && this.canCreateProducts;
             if (this.modal.type === "requisitionMaterial") return this.canRequisition;
             if (this.modal.type === "delivery") return this.canDelivery;
             if (this.modal.type === "statement") return this.canFinance;
@@ -3881,8 +4032,15 @@
               { key: "products", label: "常用箱与材质" },
               { key: "system", label: "系统备份" }
             ];
+            if (this.canManagePermissions) items.push({ key: "permissions", label: "用户权限管理" });
             const allowed = roleMenus[this.user?.role] || [];
-            return items.filter(item => allowed.includes(item.key));
+            return items.filter(item => (
+                item.key === "permissions"
+                  ? this.canManagePermissions
+                  : allowed.includes(item.key) || (!!this.pagePermission(item.key) && this.pageAllowed(item.key))
+              ))
+              .filter(item => item.key !== "system" || this.user?.role !== "boss")
+              .filter(item => item.key === "permissions" || this.pageAllowed(item.key));
           },
           deliveryCustomers() {
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
@@ -4049,7 +4207,24 @@
           });
         },
         methods: {
-          roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",workshop:"车间",delivery_picker:"送货拿货员"})[role] || role; },
+          hasPermission(code) {
+            if (this.user?.role === "admin") return true;
+            const permissions = this.user?.permissions;
+            if (Array.isArray(permissions)) return permissions.includes(code);
+            const legacy = {
+              finance: ["customers.view","products.view","orders.view","cost.view"],
+              sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"],
+              workshop: ["customers.view","products.view","orders.view"],
+              boss: ["customers.view","customers.create","customers.edit","products.view","products.create","products.edit","orders.view","orders.create","orders.edit","orders.status","orders.rollback","requisition.view","requisition.execute","cost.view"],
+            };
+            return (legacy[this.user?.role] || []).includes(code);
+          },
+          pagePermission(page) {
+            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
+          },
+          pageAllowed(page) { const permission = this.pagePermission(page); return !permission || this.hasPermission(permission); },
+          firstAllowedPage() { return this.menus[0]?.key || "dashboard"; },
+          roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",boss:"老板",workshop:"车间",delivery_picker:"送货拿货员"})[role] || role; },
           navIcon(key) {
             const icons = {
               dashboard: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
@@ -4767,8 +4942,10 @@
           initialPageFromLocation() {
             const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","deliveries","finance","system"]);
             const queryPage = new URLSearchParams(window.location.search).get("page") || "";
+            if (queryPage === "permissions") return "permissions";
             if (pages.has(queryPage)) return queryPage;
             const pathPage = window.location.pathname.replace(/^\/+|\/+$/g, "");
+            if (pathPage === "permissions") return "permissions";
             return pages.has(pathPage) ? pathPage : "dashboard";
           },
           redirectAfterLogin() {
@@ -4780,12 +4957,13 @@
           async checkSession() {
             try {
               const { data } = await axios.get("/api/auth/me");
-              this.user = data.user;
+              this.user = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               if (this.redirectAfterLogin()) return;
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
+              if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
               await this.loadBase();
-              await this.loadPage(initialPage);
+              await this.loadPage(this.activePage);
               if (this.user.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
@@ -4798,13 +4976,14 @@
               if (this.loginForm.remember_me) localStorage.setItem("erp_username", this.loginForm.username);
               else localStorage.removeItem("erp_username");
               const { data } = await axios.get("/api/auth/me");
-              this.user = data.user;
+              this.user = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               const currentPassword = this.loginForm.password;
               this.loginForm.password = "";
               if (this.redirectAfterLogin()) return;
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
-              await this.loadBase(); await this.loadPage(initialPage);
+              if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
+              await this.loadBase(); await this.loadPage(this.activePage);
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
             finally { this.loading = false; }
@@ -4815,11 +4994,18 @@
             this.user = null;
           },
           async loadBase() {
-            const tasks = [this.loadProducts(), this.loadMaterials(), this.loadOrders(), this.loadDeliveries()];
-            if (!this.isWorkshop) tasks.unshift(this.loadCustomers(), this.loadCustomerOptions());
+            const tasks = [];
+            if (this.hasPermission("products.view")) tasks.push(this.loadProducts(), this.loadMaterials());
+            if (this.hasPermission("orders.view")) tasks.push(this.loadOrders());
+            if (this.hasPermission("deliveries.view")) tasks.push(this.loadDeliveries());
+            if (this.hasPermission("customers.view")) tasks.push(this.loadCustomers(), this.loadCustomerOptions());
             await Promise.all(tasks);
           },
           async go(page) {
+            if (!this.pageAllowed(page)) {
+              this.showToast("当前账号没有访问该功能的权限", true);
+              return;
+            }
             if (page === "warehouse") {
               window.location.href = "/warehouse.html";
               return;
@@ -4840,6 +5026,7 @@
               if (page === "deliveries") await this.loadDeliveries();
               if (page === "finance") await this.loadFinance();
               if (page === "system") await this.loadSystem();
+              if (page === "permissions") await this.loadPermissionUsers();
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
@@ -4864,7 +5051,7 @@
             }
           },
           async loadCustomers() {
-            if (this.isWorkshop) return;
+            if (!this.hasPermission("customers.view")) return;
             const { data } = await axios.get("/api/master/customers", { params: {
               keyword: this.filters.customerKeyword, include_inactive:this.filters.showInactive,
               page: this.pages.customers, page_size: this.pageSize
@@ -4872,7 +5059,7 @@
             this.customers = data.items; this.customersTotal = data.total;
           },
           async loadCustomerOptions() {
-            if (this.isWorkshop) return;
+            if (!this.hasPermission("customers.view")) return;
             this.customerOptions = (await axios.get("/api/master/customers", { params:{ page_size:200, include_inactive:true } })).data.items;
           },
           async loadProducts() {
@@ -5307,6 +5494,7 @@
             } catch(e) { this.stockPolicyWarnings = []; }
           },
           async openStockReplenishment() {
+            if (!this.canRequisition) return;
             this.stockReplenishmentForm = { source_type:"manual_history", supplier_name:"", customer_id:null, remark:"", stock_now:true, items:[] };
             this.stockHistorySearch = { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0, source_workbook:null, source_sheet:null };
             this.stockReplenishmentProducts = [];
@@ -5704,6 +5892,112 @@
               protected_count: data.protected_count || 0,
               deletable_count: data.deletable_count || 0,
             };
+          },
+          permissionCatalogSeed() {
+            const rows = [
+              ["customers", "客户查看", "customers.view"], ["customers", "客户新增", "customers.create"], ["customers", "客户编辑", "customers.edit"], ["customers", "客户停用", "customers.deactivate"], ["customers", "客户删除", "customers.delete"],
+              ["products", "产品查看", "products.view"], ["products", "产品新增", "products.create"], ["products", "产品编辑", "products.edit"], ["products", "产品停用", "products.deactivate"], ["products", "产品删除", "products.delete"],
+              ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
+              ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
+              ["dashboard", "首页仪表盘查看", "dashboard.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
+              ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"],
+              ["deliveries", "送货查看", "deliveries.view"], ["deliveries", "送货操作", "deliveries.execute"], ["finance", "财务查看", "finance.view"], ["finance", "财务操作", "finance.execute"],
+            ];
+            return rows.map(([module, name, code]) => ({ module, name, code }));
+          },
+          permissionDefaultAllowed(item, roleOverride = null) {
+            if (typeof item.default_allowed === "boolean") return item.default_allowed;
+            const role = roleOverride || this.permissionProfile?.role || this.permissionUsers.find(row => row.id === this.selectedPermissionUserId)?.role;
+            if (role === "admin") return true;
+            const defaults = {
+              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage"].includes(code)),
+              sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"],
+              finance: ["customers.view","quotations.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
+              workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","deliveries.view"],
+              delivery_picker: ["orders.view"],
+            };
+            return (defaults[role] || []).includes(item.code);
+          },
+          async loadPermissionUsers() {
+            this.permissionLoading = true;
+            try {
+              const { data } = await axios.get("/api/auth/users");
+              this.permissionUsers = data.items || [];
+              this.permissionCatalog = this.permissionCatalogSeed();
+              if (this.selectedPermissionUserId && this.permissionUsers.some(row => row.id === this.selectedPermissionUserId)) {
+                await this.loadPermissionProfile(this.selectedPermissionUserId);
+              }
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.permissionLoading = false; }
+          },
+          async loadPermissionProfile(userId) {
+            if (!userId) { this.permissionProfile = null; return; }
+            this.permissionLoading = true;
+            try {
+              const [overridesResponse, scopeResponse] = await Promise.all([
+                axios.get(`/api/auth/users/${encodeURIComponent(userId)}/permission-overrides`),
+                axios.get(`/api/auth/users/${encodeURIComponent(userId)}/customer-scopes`),
+              ]);
+              const selected = this.permissionUsers.find(row => row.id === Number(userId)) || {};
+              const raw = overridesResponse.data || {};
+              const overrides = Object.fromEntries((raw.overrides || []).map(item => [item.permission_code || item.code, item.is_allowed ?? item.allowed]));
+              const catalog = (raw.permissions || this.permissionCatalog || this.permissionCatalogSeed()).map(item => ({
+                ...item,
+                name: item.name || item.permission_name || item.code,
+                module: item.module || "other",
+                default_allowed: typeof item.default_allowed === "boolean" ? item.default_allowed : this.permissionDefaultAllowed({...item, code:item.code}, selected.role),
+                allowed: Object.prototype.hasOwnProperty.call(overrides, item.code) ? !!overrides[item.code] : (item.allowed ?? this.permissionDefaultAllowed({...item, code:item.code}, selected.role)),
+              }));
+              this.permissionCatalog = catalog.map(item => ({module:item.module, name:item.name, code:item.code, locked:!!item.locked}));
+              const customerIds = scopeResponse.data?.customer_scope || [];
+              const customerScopeLocked = selected.role === "admin" || selected.role === "boss";
+              const customerAccessMode = customerScopeLocked ? "all" : (scopeResponse.data?.customer_access_mode || "all");
+              this.permissionProfile = { user_id:Number(userId), username:selected.username, real_name:selected.real_name, role:selected.role, permissions:catalog, customer_ids:customerIds, customer_scope_locked:customerScopeLocked, unrestricted_customer_access:customerAccessMode === "all" };
+              this.permissionDraft = { permissions:Object.fromEntries(catalog.map(item => [item.code, !!item.allowed])), customer_access_mode:customerAccessMode, customer_ids:[...(scopeResponse.data?.customer_scope || [])].map(Number) };
+            } catch (error) { this.permissionProfile = null; this.showToast(this.errorMessage(error), true); }
+            finally { this.permissionLoading = false; }
+          },
+          permissionOverridePayload() {
+            const overrides = {};
+            for (const item of this.permissionProfile?.permissions || []) overrides[item.code] = !!this.permissionDraft.permissions[item.code];
+            return overrides;
+          },
+          togglePermissionCustomer(customerId, checked) {
+            const ids = new Set(this.permissionDraft.customer_ids || []);
+            if (checked) ids.add(Number(customerId)); else ids.delete(Number(customerId));
+            this.permissionDraft.customer_ids = [...ids].sort((a,b) => a - b);
+          },
+          async savePermissionAccess() {
+            if (!this.permissionProfile) return;
+            this.permissionLoading = true;
+            try {
+              const userId = this.permissionProfile.user_id;
+              await axios.put(`/api/auth/users/${encodeURIComponent(userId)}/access`, {
+                overrides:this.permissionOverridePayload(),
+                mode:this.permissionDraft.customer_access_mode,
+                customer_ids:this.permissionDraft.customer_ids,
+              });
+              await this.loadPermissionProfile(userId);
+              this.showToast("权限与客户范围已保存");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.permissionLoading = false; }
+          },
+          openCreateUserModal() {
+            this.createUserForm = { username:"", real_name:"", display_name:"", role:"sales", password:"" };
+            this.showCreateUserModal = true;
+          },
+          async createPermissionUser() {
+            const form = this.createUserForm;
+            if (!form.username || !form.real_name || !form.password) { this.showToast("请填写用户名、姓名和初始密码", true); return; }
+            try {
+              const { data } = await axios.post("/api/auth/users", { username:form.username, password:form.password, role:form.role, real_name:form.real_name, display_name:form.display_name || null, is_active:true, must_change_password:true });
+              this.showCreateUserModal = false;
+              await this.loadPermissionUsers();
+              const created = data.user || data;
+              this.selectedPermissionUserId = created.id;
+              await this.loadPermissionProfile(created.id);
+              this.showToast("用户已创建");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async loadSystem() {
             const [backups, users, version, company] = await Promise.all([
@@ -6421,10 +6715,12 @@
           },
           // ===== 报料合并建议 =====
           openMergeSuggestions() {
+            if (!this.canRequisition) return;
             this.mergeSuggestionsDeduction = {};
             this.modal = { type: 'mergeSuggestions', title: `报料合并建议 (${this.mergeSuggestions.length} 组)` };
           },
           openRequisitionMaterialChange(row) {
+            if (!this.canRequisition) return;
             this.requisitionMaterialForm = {
               item_id: row.item_id,
               customer_name: row.customer_name || "",
@@ -7895,6 +8191,7 @@
             };
           },
           async updateMergeGroup(row) {
+            if (!this.canRequisition) return;
             if (!row?.merge_group_id) return;
             try {
               await axios.put(`/api/requisition/merge-groups/${row.merge_group_id}`, this.mergeGroupPayload(row));
@@ -7979,6 +8276,7 @@
             return data;
           },
           async openSupplierRequisitionDraft(rows = null) {
+            if (!this.canRequisition) return;
             const selectedRows = Array.isArray(rows) ? rows.filter(row => this.isPendingRowSelectable(row)) : this.selectedPendingRows();
             if (!selectedRows.length) { this.showToast("请先勾选待报料明细", true); return; }
             const selections = selectedRows.map(row => this.pendingSupplierSelectionPayload(row)).filter(item => item.type === "merge_group" ? !!item.merge_group_id : !!item.order_item_id);
@@ -7995,6 +8293,7 @@
             }
           },
           async openRequisition() {
+            if (!this.canRequisition) return;
             const rows = this.selectedPendingRows();
             if (!rows.length) { this.showToast("请先勾选待报料明细", true); return; }
             await this.openSupplierRequisitionDraft(rows);
@@ -8848,7 +9147,7 @@
                   current_password:this.passwordForm.current_password,
                   new_password:this.passwordForm.new_password
                 });
-                this.user = data.user;
+                this.user = {...data.user, permissions:data.permissions || this.user?.permissions || [], customer_scope:data.customer_scope || this.user?.customer_scope || [], unrestricted_customer_access:data.unrestricted_customer_access ?? this.user?.unrestricted_customer_access};
                 this.modal.force = false;
                 if (this.redirectAfterLogin()) return;
               }

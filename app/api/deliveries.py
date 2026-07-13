@@ -11,7 +11,13 @@ from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -42,8 +48,8 @@ from app.services.warehouse_inventory import (
 
 router = APIRouter()
 order_actions_router = APIRouter()
-can_read = RoleChecker(["admin", "finance", "sales", "workshop"])
-can_operate = RoleChecker(["admin", "sales"])
+can_read = PermissionChecker("deliveries.view")
+can_operate = PermissionChecker("deliveries.execute")
 
 
 def _utc_now() -> datetime:
@@ -231,6 +237,7 @@ def _next_delivery_number(db: Session, delivery_date: date) -> str:
 def _pending_query(
     *,
     customer_id: int | None = None,
+    customer_ids: set[int] | None = None,
     inventory_keyword: str | None = None,
     customer_po_keyword: str | None = None,
     product_name_keyword: str | None = None,
@@ -348,6 +355,8 @@ def _pending_query(
     )
     if customer_id is not None:
         query = query.where(Order.customer_id == customer_id)
+    if customer_ids is not None:
+        query = query.where(Order.customer_id.in_(customer_ids))
     inventory_keyword = (inventory_keyword or "").strip()
     customer_po_keyword = (customer_po_keyword or "").strip()
     product_name_keyword = (product_name_keyword or "").strip()
@@ -442,6 +451,36 @@ def _delivery_or_404(db: Session, delivery_id: int) -> Delivery:
     if delivery is None:
         raise HTTPException(status_code=404, detail="送货单不存在")
     return delivery
+
+
+def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+def _delivery_for_user(
+    db: Session,
+    delivery_id: int,
+    user: User,
+) -> Delivery:
+    delivery = _delivery_or_404(db, delivery_id)
+    require_customer_access(delivery.customer_id, user, db)
+    return delivery
+
+
+def _require_order_item_customer_access(
+    db: Session,
+    order_item_id: int,
+    user: User,
+) -> None:
+    customer_id = db.scalar(
+        select(Order.customer_id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .where(OrderItem.id == order_item_id)
+    )
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
 
 
 def _inventory_sources_for_order_item(
@@ -828,9 +867,13 @@ def _collect_delivery_lines(
 @router.get("/route-suggestions")
 def delivery_route_suggestions(
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
-    raw_rows = list(db.execute(_pending_query()))
+    raw_rows = list(
+        db.execute(
+            _pending_query(customer_ids=_visible_customer_ids(user, db))
+        )
+    )
     customer_ids = {
         int(row._mapping["customer_id"])
         for row in raw_rows
@@ -961,11 +1004,13 @@ def delivery_route_suggestions(
 @router.get("/pending_items")
 def pending_delivery_items(
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     registry = build_display_registry(db)
     items = []
-    for row in db.execute(_pending_query()):
+    for row in db.execute(
+        _pending_query(customer_ids=_visible_customer_ids(user, db))
+    ):
         order = db.get(Order, row._mapping["order_id"])
         order_item = db.get(OrderItem, row._mapping["order_item_id"])
         remaining_quantity = (
@@ -1003,6 +1048,7 @@ def search_pending_delivery_items(
     db: Session = Depends(get_db),
     _user: User = Depends(can_operate),
 ) -> dict:
+    require_customer_access(customer_id, _user, db)
     inventory_keyword = inventory_code.strip()
     general_keyword = q.strip()
     customer_po_keyword = customer_po.strip()
@@ -1090,7 +1136,7 @@ def list_deliveries(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     query = select(Delivery.id).order_by(
         func.coalesce(
@@ -1101,7 +1147,12 @@ def list_deliveries(
         Delivery.id.desc(),
     )
     if customer_id is not None:
+        require_customer_access(customer_id, user, db)
         query = query.where(Delivery.customer_id == customer_id)
+    else:
+        visible_customer_ids = _visible_customer_ids(user, db)
+        if visible_customer_ids is not None:
+            query = query.where(Delivery.customer_id.in_(visible_customer_ids))
     if status_filter:
         query = query.where(Delivery.status == status_filter)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -1125,6 +1176,7 @@ def create_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    require_customer_access(payload.customer_id, user, db)
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     delivery_date = payload.delivery_date or date.today()
@@ -1189,6 +1241,7 @@ def dispatch_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
     try:
         claimed = db.execute(
@@ -1303,6 +1356,7 @@ def update_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _delivery_for_user(db, delivery_id, user)
     try:
         # 先以条件写取得 SQLite 写锁。这样编辑与发货并发时，
         # 只有先取得 pending 状态的一方继续，避免按过期状态替换明细。
@@ -1382,6 +1436,7 @@ def delete_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _delivery_for_user(db, delivery_id, user)
     try:
         # 与确认发货竞争时先锁定 pending 状态，防止发货累计数量后
         # 送货单又被按旧状态删除。
@@ -1435,6 +1490,7 @@ def cancel_delivery(
 ) -> dict:
     from app.models.finance import ReturnReceipt, ReturnReceiptItem, StatementItem
 
+    _delivery_for_user(db, delivery_id, user)
     cancelled_at = _utc_now()
     try:
         # 先原子抢占 dispatched -> pending 并取得写锁，再检查回单/对账。
@@ -1574,6 +1630,7 @@ def mark_delivery_printed(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _delivery_for_user(db, delivery_id, user)
     printed_at = _utc_now()
     try:
         updated = db.execute(
@@ -1623,6 +1680,7 @@ def force_close_order_item(
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
+    _require_order_item_customer_access(db, item.id, user)
     if item.delivered_quantity >= item.quantity:
         raise HTTPException(status_code=409, detail="订单明细已全部发货")
     try:
@@ -1669,8 +1727,9 @@ def force_close_order_item(
 def get_delivery(
     delivery_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    _delivery_for_user(db, delivery_id, user)
     return _delivery_response(db, delivery_id)
 
 
@@ -1678,9 +1737,9 @@ def get_delivery(
 def get_delivery_print_data(
     delivery_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
-    delivery = _delivery_or_404(db, delivery_id)
+    delivery = _delivery_for_user(db, delivery_id, user)
     customer = db.get(Customer, delivery.customer_id)
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     rows = db.execute(

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import PermissionChecker, RoleChecker, get_db, has_permission
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.material import Material
 from app.models.material_price_history import (
@@ -29,7 +29,8 @@ from app.services.pricing import PricingError, calculate_price
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "sales", "workshop"])
+can_read = PermissionChecker("products.view")
+can_cost = PermissionChecker("cost.view")
 can_write = RoleChecker(["admin"])
 admin_only = RoleChecker(["admin"])
 
@@ -240,6 +241,9 @@ def _material_or_404(db: Session, material_id: int) -> Material:
 
 def _response(material: Material, user: User) -> dict:
     data = MaterialResponse.model_validate(material).model_dump()
+    if not has_permission(user, "cost.view"):
+        for field in ("quote_price", "rule_base_price", "price_source"):
+            data.pop(field, None)
     if user.role == "workshop":
         return {key: data[key] for key in WORKSHOP_FIELDS}
     return data
@@ -383,7 +387,7 @@ def apply_price_adjustment(
 @router.get("/price-adjustments")
 def list_price_adjustment_batches(
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(can_cost),
 ) -> dict:
     rows = list(
         db.scalars(
@@ -413,7 +417,7 @@ def list_price_adjustment_batches(
 def board_cost_reference(
     payload: BoardCostRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(can_cost),
 ) -> dict:
     """纸板成本参考 = 展开面积 × 材质平方报价（复用 pricing.calculate_price）。
 
@@ -477,7 +481,7 @@ def _rule_dict(r: SupplierFlutePriceRule) -> dict:
 def list_flute_price_rules(
     include_inactive: bool = Query(True),
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(can_cost),
 ) -> dict:
     stmt = select(SupplierFlutePriceRule)
     if not include_inactive:
@@ -553,7 +557,7 @@ def disable_flute_price_rule(
 def effective_material_price(
     payload: EffectivePriceRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(can_cost),
 ) -> dict:
     """统一最终材料平方价：基础价 + 楞型加价。常用箱/订单/比价/成本共用。"""
     material = None
@@ -575,7 +579,7 @@ def effective_material_price(
 def compare_materials_endpoint(
     payload: CompareRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(can_cost),
 ) -> dict:
     """同克重多供应商比价：含楞型加价后的最终可比价。
 
@@ -1020,7 +1024,7 @@ def get_material(
 def get_material_price_history(
     material_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(can_cost),
 ) -> dict:
     material = _material_or_404(db, material_id)
     rows = list(

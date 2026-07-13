@@ -114,7 +114,7 @@ def test_history_requisition_pending_is_hidden_and_listed_as_archive(tmp_path: P
     app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app) as client:
-        _login(client, "sales")
+        _login(client, "admin")
         pending = client.get("/api/requisition/pending")
         archived = client.get(
             "/api/requisition/items",

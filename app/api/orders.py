@@ -13,7 +13,14 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_permission,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
@@ -96,9 +103,14 @@ from app.services.semi_finished_inventory import (
 
 
 router = APIRouter()
-can_create = RoleChecker(["admin", "sales"])
-can_read = RoleChecker(["admin", "finance", "sales", "workshop"])
-admin_only = RoleChecker(["admin"])
+can_create = PermissionChecker("orders.create")
+can_read = PermissionChecker("orders.view")
+can_edit = PermissionChecker("orders.edit")
+can_status = PermissionChecker("orders.status")
+can_delete = PermissionChecker("orders.delete")
+can_rollback = PermissionChecker("orders.rollback")
+can_view_cost = PermissionChecker("cost.view")
+_PRODUCT_DRAWING_SAVE_OPTIONS = frozenset({"save_to_product", "overwrite_product"})
 MONEY_QUANTUM = Decimal("0.00")
 ORDER_STATUSES = {
     "pending_confirmation",
@@ -120,6 +132,11 @@ FINAL_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled", 
 
 
 _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
+
+
+def _require_product_drawing_edit(user: User) -> None:
+    if not has_permission(user, "products.edit"):
+        raise HTTPException(status_code=403, detail="权限不足")
 
 # Terminal / archived statuses that should NOT appear in the day-to-day
 # "business" (日常订单) view. Active orders — including freshly saved PDF
@@ -195,7 +212,9 @@ class OrderItemCreate(BaseModel):
     layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
     flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
     temp_drawing_file: str | None = None   # 新建订单前临时上传的图纸路径
-    drawing_save_option: str | None = None  # "order_only"|"save_to_product"|"overwrite_product"
+    drawing_save_option: Literal[
+        "order_only", "save_to_product", "overwrite_product"
+    ] | None = None
 
     @field_validator("product_id", "material_id", mode="before")
     @classmethod
@@ -828,9 +847,10 @@ def _order_response(
         production_required_quantity = max(
             item.quantity - finished_reserved_quantity, 0
         )
+        may_view_cost = has_permission(user, "cost.view")
         cost_reference = (
             calculate_draft_cost(db, item.product_id, item.material_id)
-            if db is not None and user.role != "workshop"
+            if db is not None and may_view_cost
             else {}
         )
         item_data = {
@@ -915,7 +935,7 @@ def _order_response(
                 "supplier_delivery_time": item.supplier_delivery_time,
                 **cost_reference,
         }
-        if item_data.get("estimated_cost") is not None:
+        if may_view_cost and item_data.get("estimated_cost") is not None:
             unit_cost = Decimal(item_data["estimated_cost"])
             item_data.update(
                 _order_item_cost_totals(
@@ -925,7 +945,7 @@ def _order_response(
                     unit_cost,
                 )
             )
-        else:
+        elif may_view_cost:
             item_data.update(
                 {
                     "unit_estimated_cost": None,
@@ -934,6 +954,10 @@ def _order_response(
                     "total_estimated_cost": None,
                     "total_estimated_gross_profit": None,
                 }
+            )
+        else:
+            item_data["sale_amount"] = str(
+                Decimal(str(item.subtotal)).quantize(MONEY_QUANTUM)
             )
         data["items"].append(item_data)
     if user.role == "workshop":
@@ -982,7 +1006,13 @@ def list_orders(
     )
     joined_items = False
 
+    scoped_customer_ids = customer_scope_ids(user, db)
+    is_customer_scope_restricted = not has_unrestricted_customer_access(user, db)
+    if is_customer_scope_restricted:
+        ids_query = ids_query.where(Order.customer_id.in_(scoped_customer_ids))
+
     if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
         ids_query = ids_query.where(Order.customer_id == customer_id)
 
     if customer_name and customer_name.strip():
@@ -1136,8 +1166,7 @@ def list_orders(
         db,
         [item.id for order in orders for item in order.items],
     )
-    unfinished_total = db.scalar(
-        select(func.count(Order.id)).where(
+    unfinished_query = select(func.count(Order.id)).where(
             ~history_condition,
             Order.status.in_(
                 (
@@ -1154,7 +1183,11 @@ def list_orders(
                 & (OrderItem.requisition_status != "已结算")
             ),
         )
-    ) or 0
+    if is_customer_scope_restricted:
+        unfinished_query = unfinished_query.where(
+            Order.customer_id.in_(scoped_customer_ids)
+        )
+    unfinished_total = db.scalar(unfinished_query) or 0
     return {
         "total": total,
         "unfinished_total": unfinished_total,
@@ -1348,6 +1381,7 @@ def rematch_order_draft(
     db: Session = Depends(get_db),
     _user: User = Depends(can_create),
 ) -> dict:
+    require_customer_access(payload.customer_id, current_user=_user, db=db)
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     return match_import_draft(db, payload.draft, customer_id=payload.customer_id)
@@ -1357,9 +1391,15 @@ def rematch_order_draft(
 def preview_order_cost(
     payload: CostPreviewRequest,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_create),
+    _user: User = Depends(can_view_cost),
 ) -> dict:
     """纸板成本预估；若传 flute_type 则计入楞型加价（v0.19.2-B）。"""
+    product_for_scope = db.get(Product, payload.product_id)
+    if product_for_scope is None:
+        raise HTTPException(status_code=404, detail="常用箱不存在")
+    require_customer_access(
+        product_for_scope.customer_id, current_user=_user, db=db
+    )
     try:
         result = calculate_draft_cost(db, payload.product_id, payload.material_id)
     except ValueError as error:
@@ -1427,13 +1467,19 @@ async def upload_order_item_drawing(
     file: UploadFile = File(...),
     save_to_product: bool = False,
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_edit),
 ) -> dict:
     """上传订单明细图纸。默认只写 order_item；save_to_product=true 时同步写入 product_drawings（需用户确认）。"""
     import os, uuid
+    if save_to_product:
+        _require_product_drawing_edit(user)
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     content = await file.read()
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
     fname = f"{uuid.uuid4().hex}.{ext}"
@@ -1697,13 +1743,14 @@ def update_order_status(
     order_id: int,
     payload: OrderStatusRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_status),
 ) -> dict:
     order = db.scalar(
         select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     target = payload.status.strip()
     remark = payload.remark.strip()
     if target not in ORDER_STATUSES:
@@ -1755,7 +1802,7 @@ def delete_order(
     order_id: int,
     confirm: bool = Query(default=False),
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_delete),
 ) -> Response:
     if not confirm:
         raise HTTPException(status_code=400, detail="删除订单需要二次确认")
@@ -1764,6 +1811,7 @@ def delete_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     _delete_orders_in_transaction(db, orders=[order], user=user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1772,7 +1820,7 @@ def delete_order(
 def delete_order_group(
     payload: OrderGroupDeleteRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_delete),
 ) -> dict:
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="删除订单组需要二次确认")
@@ -1785,6 +1833,8 @@ def delete_order_group(
     ).all()
     if len(orders) != len(order_ids):
         raise HTTPException(status_code=404, detail="订单组中有订单不存在，请刷新后重试")
+    for order in orders:
+        require_customer_access(order.customer_id, current_user=user, db=db)
     if len({_order_group_key(order) for order in orders}) != 1:
         raise HTTPException(status_code=400, detail="所选订单不属于同一订单组，请刷新后重试")
     _delete_orders_in_transaction(db, orders=orders, user=user)
@@ -1796,7 +1846,7 @@ def rollback_order_workflow(
     order_id: int,
     payload: WorkflowRollbackRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    user: User = Depends(can_rollback),
 ) -> dict:
     reason = payload.reason.strip()
     if not reason:
@@ -1806,6 +1856,7 @@ def rollback_order_workflow(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     if order.order_number.startswith("RUIDA-"):
         raise HTTPException(status_code=409, detail="历史订单禁止执行流程撤回")
     item_ids = [item.id for item in order.items]
@@ -1981,6 +2032,7 @@ def get_order_detail(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     customer = db.get(Customer, order.customer_id)
     return _order_response(
         order,
@@ -1996,7 +2048,7 @@ def update_order(
     order_id: int,
     payload: OrderUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_edit),
 ) -> dict:
     display_registry = build_display_registry(db)
     order = db.scalar(
@@ -2006,6 +2058,7 @@ def update_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
 
     order.customer_po = (payload.customer_po or "").strip() or None
     order.delivery_date = payload.delivery_date
@@ -2028,12 +2081,33 @@ def create_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ):
+    if payload.customer_id is not None:
+        require_customer_access(payload.customer_id, current_user=user, db=db)
     if payload.items is None:
         return _legacy_create(payload, user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    if (
+        any(
+            item.drawing_save_option in _PRODUCT_DRAWING_SAVE_OPTIONS
+            for item in payload.items
+        )
+        and not has_permission(user, "products.edit")
+    ):
+        _require_product_drawing_edit(user)
+    if (
+        any(
+            item.drawing_save_option == "overwrite_product"
+            for item in payload.items
+        )
+        and not has_permission(user, "products.delete")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="无常用箱图纸覆盖权限",
+        )
     if payload.import_integrity_status == "failed":
         errors = payload.import_integrity_errors or []
         message = (
@@ -2382,11 +2456,17 @@ def update_order_item(
     item_id: int,
     payload: OrderItemUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_edit),
 ) -> dict:
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
+    order_for_scope = db.get(Order, item.order_id)
+    if order_for_scope is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(
+        order_for_scope.customer_id, current_user=user, db=db
+    )
     if item.delivered_quantity > 0:
         raise HTTPException(status_code=409, detail="已发货明细禁止修改")
     if item.material_status == "received":
@@ -2759,7 +2839,7 @@ def update_order_item(
 def delete_order_item(
     item_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    user: User = Depends(can_delete),
 ) -> Response:
     item = db.get(OrderItem, item_id)
     if item is None:
@@ -2769,6 +2849,9 @@ def delete_order_item(
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
     order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     item_count = db.scalar(
         select(func.count()).select_from(OrderItem).where(
             OrderItem.order_id == order.id

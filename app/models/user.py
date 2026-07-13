@@ -8,15 +8,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 
-USER_ROLES = ("admin", "finance", "sales", "workshop", "delivery_picker")
+USER_ROLES = ("admin", "boss", "finance", "sales", "workshop", "delivery_picker")
 
 
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role IN ('admin', 'finance', 'sales', 'workshop', 'delivery_picker')",
+            "role IN ('admin', 'boss', 'finance', 'sales', 'workshop', 'delivery_picker')",
             name="ck_users_role_valid",
+        ),
+        CheckConstraint(
+            "customer_access_mode IN ('all', 'selected')",
+            name="ck_users_customer_access_mode_valid",
         ),
     )
 
@@ -32,6 +36,12 @@ class User(Base):
         default=True,
         nullable=False,
     )
+    customer_access_mode: Mapped[str] = mapped_column(
+        String(20),
+        default="all",
+        server_default="all",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),
@@ -44,5 +54,17 @@ class User(Base):
     )
     operation_logs: Mapped[list["OperationLog"]] = relationship(
         back_populates="user",
+        passive_deletes=True,
+    )
+    permission_overrides: Mapped[list["UserPermissionOverride"]] = relationship(
+        back_populates="user",
+        foreign_keys="UserPermissionOverride.user_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    customer_scopes: Mapped[list["UserCustomerScope"]] = relationship(
+        back_populates="user",
+        foreign_keys="UserCustomerScope.user_id",
+        cascade="all, delete-orphan",
         passive_deletes=True,
     )

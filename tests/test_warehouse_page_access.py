@@ -64,9 +64,11 @@ def test_homepage_has_role_menu_and_direct_link_to_warehouse_page() -> None:
     assert '"incoming", "warehouse", "deliveries"' in INDEX_HTML
 
 
-def test_warehouse_page_reads_nested_auth_user_and_allows_admin() -> None:
+def test_warehouse_page_reads_nested_auth_user_and_uses_n028_permissions() -> None:
     assert "state.user=authResponse.user;" in WAREHOUSE_HTML
-    assert '["admin","workshop"].includes(state.user.role)' in WAREHOUSE_HTML
+    assert "state.permissions=authResponse.permissions||[];" in WAREHOUSE_HTML
+    assert 'hasPermission("warehouse.view")' in WAREHOUSE_HTML
+    assert 'hasPermission("warehouse.execute")' in WAREHOUSE_HTML
     assert 'state.user=await api("/api/auth/me")' not in WAREHOUSE_HTML
     assert 'if(!["admin","workshop"].includes(state.user.role)){location.href="/"' not in WAREHOUSE_HTML
     assert "当前账号没有仓库库存管理权限，请联系管理员。" in WAREHOUSE_HTML

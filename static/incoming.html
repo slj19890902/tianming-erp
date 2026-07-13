@@ -104,13 +104,15 @@
       pending: [],
       received: [],
       user: null,
+      permissions: [],
       revertingItemId: null,
       busyItemId: null,
       expandedIds: new Set(),
     };
 
     const $ = (id) => document.getElementById(id);
-    const canOperate = () => ["admin", "workshop"].includes(state.user?.role);
+    const hasPermission = (code) => state.user?.role === "admin" || state.permissions.includes(code);
+    const canOperate = () => hasPermission("incoming.execute");
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -177,6 +179,12 @@
       try {
         const data = await api("/api/auth/me");
         state.user = data.user;
+        state.permissions = data.permissions || [];
+        if (!hasPermission("incoming.view")) {
+          $("authNotice").textContent = "当前账号没有来料入库查看权限，请联系管理员。";
+          $("authNotice").hidden = false;
+          return false;
+        }
         $("userLabel").textContent = `${data.user.real_name} · ${data.user.role}`;
         $("authNotice").hidden = true;
         return true;
@@ -277,7 +285,7 @@
         ? `<button data-drawing="${item.item_id}" class="min-h-12 w-full rounded-lg bg-indigo-700 px-2 text-sm font-bold text-white active:bg-indigo-800">打开图纸</button>`
         : `<button disabled class="min-h-12 w-full rounded-lg bg-slate-300 px-2 text-sm font-bold text-slate-500">无图纸</button>`;
 
-      const quantityBlock = isPending
+      const quantityBlock = isPending && canOperate()
         ? `<input data-quantity="${item.item_id}" class="mt-1 w-full rounded-lg border-2 border-slate-300 bg-white p-2 text-xl font-black" type="number" min="1" step="1" value="${escapeHtml(item.incoming_quantity)}">`
         : `<p class="mt-1 text-xl font-black">${escapeHtml(item.incoming_quantity)}</p>`;
 

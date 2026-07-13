@@ -12,6 +12,7 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
+    from app.models.access_control import UserPermissionOverride
     from app.models.customer import Customer
     from app.models.material import Material
     from app.models.product import Product
@@ -58,6 +59,20 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
         )
         db.add(material)
         db.flush()
+        db.add_all(
+            [
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="cost.view",
+                    is_allowed=True,
+                ),
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="products.create",
+                    is_allowed=True,
+                ),
+            ]
+        )
         historical_products = [
             Product(
                 customer_id=customer.id,

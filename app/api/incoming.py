@@ -12,7 +12,13 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
@@ -24,8 +30,8 @@ from app.services.history_orders import build_display_registry, display_order_nu
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "workshop"])
-can_operate = RoleChecker(["admin", "workshop"])
+can_read = PermissionChecker("incoming.view")
+can_operate = PermissionChecker("incoming.execute")
 
 
 def _utc_now() -> datetime:
@@ -122,7 +128,58 @@ def _component_receive_times(
     return times
 
 
-def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
+def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+def _require_order_item_customer_access(
+    db: Session,
+    *,
+    order_item_id: int,
+    user: User,
+) -> None:
+    customer_id = db.scalar(
+        select(Order.customer_id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .where(OrderItem.id == order_item_id)
+    )
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+
+
+def _preflight_item_customer_access(
+    db: Session,
+    *,
+    item_id: int | str,
+    user: User,
+) -> None:
+    if _is_component_key(item_id):
+        order_item_id = db.scalar(
+            select(RequisitionItem.order_item_id).where(
+                RequisitionItem.id == _component_id(item_id)
+            )
+        )
+    else:
+        try:
+            order_item_id = int(item_id)
+        except (TypeError, ValueError):
+            return
+    if order_item_id is not None:
+        _require_order_item_customer_access(
+            db,
+            order_item_id=order_item_id,
+            user=user,
+        )
+
+
+def _rows(
+    db: Session,
+    *,
+    user: User,
+    received_since: datetime | None = None,
+) -> list[dict]:
     receiver = aliased(User)
     query = (
         select(
@@ -173,6 +230,9 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
         .join(Customer, Customer.id == Order.customer_id)
         .outerjoin(receiver, receiver.id == OrderItem.material_received_by)
     )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(Order.customer_id.in_(visible_customer_ids))
     if received_since is None:
         query = query.where(
             OrderItem.material_status == "pending",
@@ -222,6 +282,10 @@ def _rows(db: Session, *, received_since: datetime | None = None) -> list[dict]:
             .where(RequisitionItem.status == "已入库")
             .order_by(RequisitionItem.id.desc())
         )
+        if visible_customer_ids is not None:
+            component_query = component_query.where(
+                Order.customer_id.in_(visible_customer_ids)
+            )
         for req, item, order, product, customer, received_by_name in db.execute(
             component_query
         ):
@@ -502,6 +566,11 @@ def _receive_requisition_component(
     if row is None:
         raise HTTPException(status_code=404, detail="报料明细不存在")
     requisition_item, order_item = row
+    _require_order_item_customer_access(
+        db,
+        order_item_id=order_item.id,
+        user=user,
+    )
     if requisition_item.status != "有效":
         raise HTTPException(status_code=409, detail="该报料明细当前不可入库")
     if order_item.material_status != "pending" or order_item.requisition_status not in {
@@ -591,6 +660,11 @@ def _receive_material(
     current = db.get(OrderItem, _component_id(item_id))
     if current is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
+    _require_order_item_customer_access(
+        db,
+        order_item_id=current.id,
+        user=user,
+    )
     final_quantity = (
         received_quantity
         if received_quantity is not None
@@ -689,28 +763,34 @@ def _receive_material(
 @router.get("/pending")
 def pending_items(
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
-    return {"items": _rows(db)}
+    return {"items": _rows(db, user=user)}
 
 
 @router.get("/received")
 def recently_received_items(
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
-    return {"items": _rows(db, received_since=_utc_now() - timedelta(hours=24))}
+    return {
+        "items": _rows(
+            db,
+            user=user,
+            received_since=_utc_now() - timedelta(hours=24),
+        )
+    }
 
 
 @router.get("/history")
 def history_received_items(
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     """返回全部历史入库记录（不限时间）。"""
     # received_since=epoch_start 表示"从最早时间起"即不过滤
     epoch_start = datetime(2000, 1, 1)
-    return {"items": _rows(db, received_since=epoch_start)}
+    return {"items": _rows(db, user=user, received_since=epoch_start)}
 
 
 def _lan_ip() -> str:
@@ -770,6 +850,10 @@ def batch_receive_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    # Check all targets before the first write.  A cross-customer item must not
+    # turn a batch into a partial write that happens before the 403 response.
+    for line in payload.items:
+        _preflight_item_customer_access(db, item_id=line.item_id, user=user)
     seen: set[int | str] = set()
     results: list[dict] = []
     succeeded = 0
@@ -842,6 +926,11 @@ def _revert_requisition_component(
     if row is None:
         raise HTTPException(status_code=404, detail="报料明细不存在")
     requisition_item, order_item, order = row
+    _require_order_item_customer_access(
+        db,
+        order_item_id=order_item.id,
+        user=user,
+    )
     if order.status in {"partially_delivered", "delivered"}:
         raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
     if requisition_item.status != "已入库":
@@ -921,6 +1010,11 @@ def revert_item(
     if row is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
     item, order = row
+    _require_order_item_customer_access(
+        db,
+        order_item_id=item.id,
+        user=user,
+    )
     if order.status in {"partially_delivered", "delivered"}:
         raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
     if item.material_status != "received":

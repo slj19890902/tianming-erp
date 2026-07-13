@@ -8,7 +8,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    get_db,
+    has_permission,
+    require_customer_access,
+)
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.material import Material
@@ -22,10 +27,20 @@ from app.services.report_crease import crease_width_error
 
 
 router = APIRouter()
-can_read = RoleChecker(["admin", "sales", "finance"])
-can_operate = RoleChecker(["admin", "sales"])
+can_read = PermissionChecker("quotations.view")
+can_operate = PermissionChecker("quotations.edit")
+can_create_product = PermissionChecker("products.create")
 MONEY = Decimal("0.01")
 PRICE = Decimal("0.0001")
+INTERNAL_PRICING_FIELDS = frozenset(
+    {
+        "estimated_unit_cost",
+        "estimated_gross_profit",
+        "margin_rate",
+        "material_square_price",
+        "suggested_unit_price",
+    }
+)
 STATUS_LABELS = {
     "draft": "草稿",
     "quoted": "已报价",
@@ -368,36 +383,49 @@ def _replace_items(
     quotation.total_amount = total.quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
-def _item_dict(item: QuotationItem) -> dict:
+def _redact_internal_pricing(payload: dict, user: User) -> dict:
+    if has_permission(user, "cost.view"):
+        return payload
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in INTERNAL_PRICING_FIELDS
+    }
+
+
+def _item_dict(item: QuotationItem, user: User) -> dict:
     amount = (
         (item.final_unit_price * item.quantity).quantize(MONEY)
         if item.quantity
         else None
     )
-    return {
-        "id": item.id,
-        "product_name": item.product_name,
-        "temporary_code": item.temporary_code,
-        "box_type": item.box_type,
-        "length_mm": item.length_mm,
-        "width_mm": item.width_mm,
-        "height_mm": item.height_mm,
-        "material_id": item.material_id,
-        "material_supplier": item.material_supplier,
-        "material_code": item.material_code,
-        "flute_type": item.flute_type,
-        "quantity": item.quantity,
-        "estimated_unit_cost": item.estimated_unit_cost,
-        "margin_rate": item.margin_rate,
-        "suggested_unit_price": item.suggested_unit_price,
-        "final_unit_price": item.final_unit_price,
-        "amount": amount,
-        "remarks": item.remarks,
-        "converted_product_id": item.converted_product_id,
-    }
+    return _redact_internal_pricing(
+        {
+            "id": item.id,
+            "product_name": item.product_name,
+            "temporary_code": item.temporary_code,
+            "box_type": item.box_type,
+            "length_mm": item.length_mm,
+            "width_mm": item.width_mm,
+            "height_mm": item.height_mm,
+            "material_id": item.material_id,
+            "material_supplier": item.material_supplier,
+            "material_code": item.material_code,
+            "flute_type": item.flute_type,
+            "quantity": item.quantity,
+            "estimated_unit_cost": item.estimated_unit_cost,
+            "margin_rate": item.margin_rate,
+            "suggested_unit_price": item.suggested_unit_price,
+            "final_unit_price": item.final_unit_price,
+            "amount": amount,
+            "remarks": item.remarks,
+            "converted_product_id": item.converted_product_id,
+        },
+        user,
+    )
 
 
-def _quotation_dict(quotation: QuotationOrder) -> dict:
+def _quotation_dict(quotation: QuotationOrder, user: User) -> dict:
     return {
         "id": quotation.id,
         "quotation_no": quotation.quotation_no,
@@ -410,7 +438,7 @@ def _quotation_dict(quotation: QuotationOrder) -> dict:
         "remarks": quotation.remarks,
         "created_at": quotation.created_at,
         "updated_at": quotation.updated_at,
-        "items": [_item_dict(item) for item in quotation.items],
+        "items": [_item_dict(item, user) for item in quotation.items],
     }
 
 
@@ -429,9 +457,9 @@ def _quotation_or_404(db: Session, quotation_id: int) -> QuotationOrder:
 def preview_quotation_item(
     payload: QuotationPreviewPayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
-    return _preview(db, payload)
+    return _redact_internal_pricing(_preview(db, payload), user)
 
 
 @router.get("")
@@ -439,10 +467,11 @@ def list_quotations(
     customer_id: int | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     query = select(QuotationOrder).options(selectinload(QuotationOrder.items))
     if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
         query = query.where(QuotationOrder.customer_id == customer_id)
     if status_filter:
         query = query.where(QuotationOrder.status == status_filter)
@@ -452,7 +481,23 @@ def list_quotations(
             QuotationOrder.id.desc(),
         )
     ).all()
-    return {"items": [_quotation_dict(row) for row in quotations], "total": len(quotations)}
+    visible_quotations = []
+    for quotation in quotations:
+        try:
+            require_customer_access(
+                quotation.customer_id,
+                current_user=user,
+                db=db,
+            )
+        except HTTPException as error:
+            if error.status_code == status.HTTP_403_FORBIDDEN:
+                continue
+            raise
+        visible_quotations.append(quotation)
+    return {
+        "items": [_quotation_dict(row, user) for row in visible_quotations],
+        "total": len(visible_quotations),
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -463,6 +508,7 @@ def create_quotation(
     user: User = Depends(can_operate),
 ) -> dict:
     customer = db.get(Customer, customer_id)
+    require_customer_access(customer_id, current_user=user, db=db)
     if customer is None or not customer.is_active:
         raise HTTPException(status_code=404, detail="客户不存在或已停用")
     quotation = QuotationOrder(
@@ -478,16 +524,18 @@ def create_quotation(
     db.add(quotation)
     db.commit()
     db.refresh(quotation)
-    return _quotation_dict(_quotation_or_404(db, quotation.id))
+    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
 
 
 @router.get("/{quotation_id}")
 def get_quotation(
     quotation_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
-    return _quotation_dict(_quotation_or_404(db, quotation_id))
+    quotation = _quotation_or_404(db, quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
+    return _quotation_dict(quotation, user)
 
 
 @router.put("/{quotation_id}")
@@ -495,9 +543,10 @@ def update_quotation(
     quotation_id: int,
     payload: QuotationPayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
+    user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
     if quotation.status not in {"draft", "quoted"}:
         raise HTTPException(status_code=409, detail="客户已接受、已转常用箱或已作废报价不能修改")
     quotation.quotation_date = payload.quotation_date
@@ -505,53 +554,56 @@ def update_quotation(
     quotation.status = "draft"
     _replace_items(db, quotation, payload.items)
     db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id))
+    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
 
 
 @router.post("/{quotation_id}/generate")
 def generate_quotation(
     quotation_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
+    user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
     if quotation.status not in {"draft", "quoted"}:
         raise HTTPException(status_code=409, detail="当前报价状态不能重新生成")
     if not quotation.items:
         raise HTTPException(status_code=400, detail="报价单至少需要一条明细")
     quotation.status = "quoted"
     db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id))
+    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
 
 
 @router.post("/{quotation_id}/accept")
 def accept_quotation(
     quotation_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
+    user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
     if quotation.status != "quoted":
         raise HTTPException(status_code=409, detail="只有已报价状态可以标记客户接受")
     quotation.status = "accepted"
     db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id))
+    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
 
 
 @router.post("/{quotation_id}/void")
 def void_quotation(
     quotation_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
+    user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
     if quotation.status == "converted" or any(
         item.converted_product_id is not None for item in quotation.items
     ):
         raise HTTPException(status_code=409, detail="已有明细转入常用箱，报价不能作废")
     quotation.status = "voided"
     db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id))
+    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
 
 
 @router.post("/items/{item_id}/convert-to-product", status_code=status.HTTP_201_CREATED)
@@ -559,12 +611,14 @@ def convert_to_product(
     item_id: int,
     payload: ConvertPayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_operate),
+    user: User = Depends(can_operate),
+    _product_creator: User = Depends(can_create_product),
 ) -> dict:
     item = db.get(QuotationItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="报价明细不存在")
     quotation = _quotation_or_404(db, item.quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
     if quotation.status != "accepted":
         raise HTTPException(status_code=409, detail="请先将报价标记为客户接受")
     if item.converted_product_id is not None:
@@ -599,6 +653,15 @@ def convert_to_product(
     if item.final_unit_price is None:
         raise HTTPException(status_code=400, detail="报价明细缺少最终单价，不能转入常用箱")
     report_values = _quotation_report_values(item, payload)
+    cost_values = (
+        {
+            "cost_unit_price": item.estimated_unit_cost,
+            "board_price": material.quote_price,
+            "suggested_price": item.suggested_unit_price,
+        }
+        if has_permission(user, "cost.view")
+        else {}
+    )
     product = Product(
         customer_id=quotation.customer_id,
         product_code=product_code,
@@ -613,9 +676,7 @@ def convert_to_product(
         box_style=item.box_type,
         unit="只",
         sale_unit_price=item.final_unit_price,
-        cost_unit_price=item.estimated_unit_cost,
-        board_price=material.quote_price if material else None,
-        suggested_price=item.suggested_unit_price,
+        **cost_values,
         flute_type=flute_type,
         layer_count=material.layer_count,
         report_length_mm=report_values["report_length_mm"],
@@ -656,9 +717,10 @@ def convert_to_product(
 def quotation_print(
     quotation_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
+    require_customer_access(quotation.customer_id, current_user=user, db=db)
     company = db.get(CompanyConfig, 1)
     items = []
     for index, item in enumerate(quotation.items, start=1):

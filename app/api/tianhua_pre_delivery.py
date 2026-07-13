@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import PermissionChecker, get_db, require_customer_access
 from app.api.deliveries import _inventory_sources_for_order_item
 from app.core.security import create_tianhua_pick_token, decode_tianhua_pick_token
 from app.models.order import OrderItem
@@ -25,8 +25,8 @@ from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_
 
 router=APIRouter()
 mobile_router=APIRouter()
-can_read=RoleChecker(["admin","finance","sales","workshop"])
-can_operate=RoleChecker(["admin","sales"])
+can_read=PermissionChecker("deliveries.view")
+can_operate=PermissionChecker("deliveries.execute")
 
 
 class DraftLine(BaseModel):
@@ -54,6 +54,12 @@ def _batch(db,batch_id):
     return value
 
 
+def _batch_for_user(db:Session,batch_id:int,user:User) -> TianhuaPreDeliveryImportBatch:
+    batch=_batch(db,batch_id)
+    require_customer_access(batch.customer_id,user,db)
+    return batch
+
+
 @router.post("/tianhua-preimport/upload",status_code=status.HTTP_201_CREATED)
 async def upload(file:UploadFile=File(...),pre_delivery_date:date|None=Form(default=None),db:Session=Depends(get_db),user:User=Depends(can_operate)):
     filename=(file.filename or "").strip()
@@ -61,18 +67,28 @@ async def upload(file:UploadFile=File(...),pre_delivery_date:date|None=Form(defa
     content=await file.read(12*1024*1024+1)
     if not content: raise HTTPException(400,"上传图片为空")
     if len(content)>12*1024*1024: raise HTTPException(413,"图片不能超过 12MB")
-    try: return batch_dict(db,create_batch(db,content,filename,user.id,pre_delivery_date or date.today()+timedelta(days=1)))
+    try:
+        batch=create_batch(db,content,filename,user.id,pre_delivery_date or date.today()+timedelta(days=1))
+        try:
+            require_customer_access(batch.customer_id,user,db)
+        except HTTPException:
+            # create_batch commits internally; remove the just-created batch so
+            # a scoped account cannot persist an out-of-scope import.
+            db.delete(batch)
+            db.commit()
+            raise
+        return batch_dict(db,batch)
     except ValueError as e: db.rollback(); raise HTTPException(400,str(e)) from e
 
 
 @router.get("/tianhua-preimport/{batch_id}")
 def get_batch(batch_id:int,db:Session=Depends(get_db),_user:User=Depends(can_read)):
-    return batch_dict(db,_batch(db,batch_id))
+    return batch_dict(db,_batch_for_user(db,batch_id,_user))
 
 
 def _save(batch_id,payload,db,user,update):
     try:
-        draft=save_draft(db,_batch(db,batch_id),[x.model_dump() for x in payload.items],payload.remark,user.id,update)
+        draft=save_draft(db,_batch_for_user(db,batch_id,user),[x.model_dump() for x in payload.items],payload.remark,user.id,update)
         return draft_dict(db,draft)
     except RuntimeError as e: db.rollback(); raise HTTPException(409,str(e)) from e
     except ValueError as e: db.rollback(); raise HTTPException(400,str(e)) from e
@@ -181,7 +197,7 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
 
 @router.post("/tianhua-preimport/{batch_id}/mobile-token")
 def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),user:User=Depends(can_operate)):
-    batch=_batch(db,batch_id)
+    batch=_batch_for_user(db,batch_id,user)
     draft=db.scalar(select(TianhuaPreDeliveryDraft).where(TianhuaPreDeliveryDraft.batch_id==batch.id))
     if draft is None:
         raise HTTPException(status_code=409,detail="请先生成天华预送货草稿")

@@ -93,6 +93,7 @@ def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
         assert empty_text in WAREHOUSE_HTML
     assert "/api/warehouse/insights" in WAREHOUSE_HTML
     assert "成本待补" in WAREHOUSE_HTML
+    assert "当前材料估算" in WAREHOUSE_HTML
     assert "不自动改变业务数据" in WAREHOUSE_HTML
 
 

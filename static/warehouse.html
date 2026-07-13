@@ -292,6 +292,7 @@
         ["成品可用",summary.finished_available,"个"],
         ["半成品可用",summary.semi_finished_available,"张/片"],
         ["已预占",summary.total_reserved,""],
+        ["当前材料估算",summary.estimated_inventory_value==null?"成本待补":`¥${summary.estimated_inventory_value}`,""],
         ["实际现金占用",summary.actual_inventory_value==null?"成本待补":`¥${summary.actual_inventory_value}`,""]
       ];
       $("insightSummary").innerHTML=cards.map(row=>`<div class="metric-card"><span class="muted">${row[0]}</span><strong>${row[1]}</strong><span>${row[2]}</span></div>`).join("");

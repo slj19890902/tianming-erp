@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.warehouse_inventory import InventoryLot
+from app.services.inventory_cost_snapshot import (
+    estimate_from_snapshot,
+    estimate_inventory_lot_cost,
+)
 from app.services.semi_finished_inventory import (
     semi_finished_lot_assigned_product_ids,
 )
@@ -150,6 +154,7 @@ def build_inventory_insights(
         priority = 4
         detail: dict = {}
         estimated_unit_cost: Decimal | None = None
+        estimated_cost_status = "pending"
         demand_metrics = {"demand_30": 0, "demand_90": 0, "demand_180": 0, "open_demand": 0}
 
         if lot.finished_detail is not None:
@@ -161,10 +166,6 @@ def build_inventory_insights(
                 "inventory_code": row.inventory_code_snapshot,
                 "name": row.product_name_snapshot,
             }
-            if product is not None and product.cost_unit_price is not None:
-                candidate = Decimal(product.cost_unit_price)
-                if candidate > 0:
-                    estimated_unit_cost = candidate
             if demand_metrics["open_demand"] > 0:
                 reasons.append(
                     {
@@ -212,6 +213,23 @@ def build_inventory_insights(
                 )
                 priority = min(priority, 3)
 
+        cost_estimate = estimate_from_snapshot(lot)
+        if cost_estimate is not None:
+            estimated_unit_cost = cost_estimate.unit_cost
+            estimated_cost_status = "estimated_snapshot"
+        else:
+            cost_estimate = estimate_inventory_lot_cost(db, lot)
+            if cost_estimate is not None:
+                estimated_unit_cost = cost_estimate.unit_cost
+                estimated_cost_status = "estimated_current_material_quote"
+            elif lot.finished_detail is not None:
+                product = products.get(lot.finished_detail.product_id)
+                if product is not None and product.cost_unit_price is not None:
+                    candidate = Decimal(product.cost_unit_price)
+                    if candidate > 0:
+                        estimated_unit_cost = candidate
+                        estimated_cost_status = "estimated_product_cost"
+
         if days > 730:
             reasons.append({"code": "age_cleanup", "text": "超过 2 年未异动，列入清理候选。"})
             priority = min(priority, 0)
@@ -248,7 +266,7 @@ def build_inventory_insights(
                     "age_days": days,
                     "detail": detail,
                     "demand": demand_metrics,
-                    "cost_status": "estimated_product_cost" if estimated_unit_cost is not None else "pending",
+                    "cost_status": estimated_cost_status,
                     "estimated_unit_cost": _money(estimated_unit_cost),
                     "estimated_value": _money(
                         estimated_unit_cost * lot.quantity_available

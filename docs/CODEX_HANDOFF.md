@@ -1193,3 +1193,12 @@ legacy_ruida_* 原始层
 - 页面烟雾验收确认：3 个批次、成品可用 20、半成品可用 30、2 条行动项、实际现金占用“成本待补”，浏览器控制台无错误。
 - 页面明确提示“只统计已录入 ERP 的库存”“建议仅供人工判断”“不会修改库存、订单、预占或报料”；未出现“自动抵扣 / 自动少报 / 自动清理 / 自动报损 / 一键清理”操作。
 - 当前闸门：等待用户按 `docs/warehouse_reports/N027_PHASE_A_UAT_CHECKLIST_20260712.md` 人工验收；通过前不提交、不 push。
+- Phase A 已由用户验收通过，提交 `264aac3 feat: add read-only inventory insights dashboard` 已推送到 `origin/feature/inventory-insights-n027`；尚未合并主功能分支。
+- Phase B 独立 worktree：`D:\tm-worktrees\erp-inventory-cost-snapshot-n027`；分支：`feature/inventory-cost-snapshot-n027`，当前未提交、未 push。
+- Phase B 只新增“当前材料估算”快照：材料平方报价 × 报料面积，复用现有楞型加价；成品考虑每箱片数，A3 天地盖按盖与底面积相加。实际现金占用仍保持“成本待补”。
+- 新迁移 `ai36v7w8x9e26` 仅在安全副本完成 upgrade / downgrade / re-upgrade；每阶段完整性 `ok`、外键异常 0，正式库未迁移。最终副本为 `D:\tm-worktrees\uat-data\carton_erp_inventory_cost_snapshot_phase_b_safe_20260713_125615.sqlite3`。
+- 回填 dry-run 已改为 SQLite 真正只读连接；apply 需要 `COPY_ONLY + copy-root`，并拒绝正式库命名、目录越界、符号链接、多硬链接和已知 live database。
+- 成本匹配要求材质和供应商一致，不再把 A 供应商基础价与 B 供应商楞型加价混用；UAT 副本中的损坏合成供应商值在备份后仅针对该副本规范化。
+- 回填后当前材料估算 `¥127.84`（成品 `¥62.18`、半成品 `¥65.66`），可用批次成本覆盖 100%；重复 dry-run 候选 0。
+- Phase B 库存、材质报价相关回归 `151 passed`，专项门禁 `32 passed`；未知计价单位和 A3 底片尺寸不完整均保持“成本待补”。完整演练报告：`docs/warehouse_reports/N027_PHASE_B_COST_SNAPSHOT_REHEARSAL_20260713.md`。
+- Phase B 验收服务：`http://127.0.0.1:18043/`；用户于 2026-07-13 人工验收通过并批准分组提交。该批准不包含正式库迁移、回填或 push 主功能分支；验收清单：`docs/warehouse_reports/N027_PHASE_B_UAT_CHECKLIST_20260713.md`。

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
+  <title>模具位置查询 - 天明ERP</title>
+  <style>
+    :root{--blue:#2563eb;--line:#dbe3ef;--bg:#f3f6fb;--text:#172033;--muted:#64748b;--orange:#9a4d00}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 Arial,"Microsoft YaHei",sans-serif}
+    header{position:sticky;top:0;z-index:4;background:#fff;border-bottom:1px solid var(--line);padding:12px 14px}h1{font-size:20px;margin:0 0 8px}.search{display:flex;gap:8px}.search input{flex:1;min-width:0;border:1px solid #b8c5d8;border-radius:9px;padding:11px;font-size:16px}.search button{border:0;border-radius:9px;background:var(--blue);color:#fff;padding:0 18px;font-weight:700}
+    main{max-width:760px;margin:0 auto;padding:12px}.hint,.error,.empty{border-radius:10px;padding:12px;margin-bottom:10px}.hint{background:#eff6ff;color:#1e3a8a}.error{background:#fee2e2;color:#991b1b}.empty{background:#fff;color:var(--muted);text-align:center}
+    .card{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}.card-head{padding:12px 14px;border-bottom:1px solid var(--line)}.code{font-size:13px;color:var(--muted);font-weight:400}.name{font-size:20px;font-weight:800}.location{margin:12px 14px;border:2px solid #f2c66d;background:#fff7dc;border-radius:10px;padding:12px;color:#713f12}.location-code{font-size:22px;font-weight:900;color:var(--orange);letter-spacing:.5px}.prompt{font-weight:700;margin-top:5px}
+    .products{padding:0 14px 12px}.product{border-top:1px dashed var(--line);padding:10px 0}.product:first-child{border-top:0}.product-name{font-weight:800;font-size:17px}.product-code{font-size:13px;color:var(--muted)}.meta{font-size:14px;margin-top:3px}.direction{margin-top:5px;background:#fff3cd;color:#7c4a03;border-radius:6px;padding:6px 8px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px}.tag{font-size:12px;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.label-link{font-size:13px;color:var(--blue);text-decoration:none}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>模具位置查询</h1>
+    <div class="search"><input id="keyword" inputmode="search" placeholder="输入模具编号、存货编码、客户或产品名称"><button id="searchButton" type="button">查询</button></div>
+  </header>
+  <main>
+    <div class="hint">先看醒目的位置提示，再核对模具编号、存货编码和产品尺寸。大模具请按现场要求两人搬运。</div>
+    <div id="message"></div>
+    <div id="results"></div>
+  </main>
+  <script>
+    const $=id=>document.getElementById(id);
+    const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
+    function errorMessage(body,status){if(typeof body.detail==="string"&&body.detail)return body.detail;return `查询失败（HTTP ${status}）`}
+    async function api(url){const response=await fetch(url,{credentials:"same-origin"});let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(errorMessage(body,response.status));error.status=response.status;throw error}return body}
+    function loginNext(){const next=location.pathname+location.search;location.href=`/?next=${encodeURIComponent(next)}`}
+    function productHtml(row){
+      const report=row.report_specification?`报料尺寸 ${h(row.report_specification)} mm`:"";
+      const direction=row.direction_note?`<div class="direction">方向/报料提醒：${h(row.direction_note)}</div>`:"";
+      return `<div class="product"><div class="product-name">${h(row.product_name)}</div><div class="product-code">${h(row.customer_name||"-")}｜存货编码 ${h(row.product_code||"-")}</div><div class="meta">产品规格 ${h(row.specification||"未登记")} ${report?`｜${report}`:""}</div>${direction}</div>`
+    }
+    function render(items){
+      $("results").innerHTML=items.map(row=>`<article class="card"><div class="card-head"><div class="name">${h(row.mold_name)}</div><div class="toolbar"><span class="code">模具编号 ${h(row.mold_code)}</span><span class="tag">关联 ${row.product_count} 款</span></div></div><div class="location"><div class="location-code">${h(row.rack_location)}</div><div class="prompt">${h(row.location_guide?.prompt||"")}</div></div><div class="products">${(row.products||[]).map(productHtml).join("")||'<div class="empty">该模具尚未绑定常用箱，请先联系管理员维护。</div>'}<a class="label-link" href="/mold-label.html?mold_id=${row.id}" target="_blank">查看/打印模具标签</a></div></article>`).join("")||'<div class="empty">没有找到模具。请检查编号，或让管理员先维护模具与常用箱绑定。</div>';
+    }
+    async function search(){
+      const keyword=$("keyword").value.trim();if(!keyword){$("message").innerHTML='<div class="error">请输入模具编号、存货编码、客户或产品名称。</div>';return}
+      $("message").innerHTML="";
+      try{const data=await api(`/api/warehouse/molds?q=${encodeURIComponent(keyword)}&limit=50`);render(data.items||[])}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}
+    }
+    async function init(){
+      try{await api("/api/auth/me")}catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`;return}
+      const params=new URLSearchParams(location.search),preset=params.get("mold")||params.get("q")||"";$("keyword").value=preset;if(preset)await search()
+    }
+    $("searchButton").onclick=search;$("keyword").onkeydown=event=>{if(event.key==="Enter")search()};init();
+  </script>
+</body>
+</html>

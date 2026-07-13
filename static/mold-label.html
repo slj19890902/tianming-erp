@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>模具标签 - 天明ERP</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#eef2f7;color:#111827;font:14px/1.4 Arial,"Microsoft YaHei",sans-serif}.toolbar{padding:12px;text-align:center}.toolbar button{border:0;border-radius:8px;background:#2563eb;color:#fff;padding:9px 24px;font-weight:700}.label{width:140mm;min-height:90mm;margin:0 auto 18px;background:#fff;border:1px solid #111;padding:6mm;display:grid;grid-template-columns:1fr 36mm;gap:5mm}.title{font-size:26px;font-weight:900}.mold-code{font-size:18px;font-weight:800;margin-top:2mm}.location{border:2px solid #111;padding:3mm;margin:4mm 0}.location-code{font-size:26px;font-weight:900}.prompt{font-size:15px;font-weight:700}.products{font-size:12px}.product{border-top:1px solid #aaa;padding:1.5mm 0}.product:first-child{border-top:0}.qr{text-align:center}.qr img{width:34mm;height:34mm}.qr small{display:block;word-break:break-all;margin-top:2mm}.error{max-width:700px;margin:20px auto;background:#fee2e2;color:#991b1b;padding:15px;border-radius:8px}@page{size:A6 landscape;margin:4mm}@media print{body{background:#fff}.toolbar{display:none}.label{margin:0;width:100%;min-height:0;border:1px solid #000;page-break-inside:avoid}}
+  </style>
+</head>
+<body>
+  <div class="toolbar"><button type="button" onclick="window.print()">打印标签</button></div>
+  <div id="message"></div>
+  <article id="label" class="label" style="display:none">
+    <div>
+      <div class="title" id="moldName"></div>
+      <div class="mold-code" id="moldCode"></div>
+      <div class="location"><div class="location-code" id="rackLocation"></div><div class="prompt" id="positionPrompt"></div></div>
+      <div class="products" id="products"></div>
+    </div>
+    <div class="qr"><img id="qr" alt="模具查询二维码"><div>扫码查询模具</div><small id="lookupUrl"></small></div>
+  </article>
+  <script>
+    const $=id=>document.getElementById(id);const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
+    async function api(url){const response=await fetch(url,{credentials:"same-origin"});let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(typeof body.detail==="string"?body.detail:`请求失败（HTTP ${response.status}）`);error.status=response.status;throw error}return body}
+    function loginNext(){location.href=`/?next=${encodeURIComponent(location.pathname+location.search)}`}
+    async function init(){
+      const id=Number.parseInt(new URLSearchParams(location.search).get("mold_id"),10);if(!Number.isInteger(id)||id<=0){$("message").innerHTML='<div class="error">模具ID无效，请从模具列表重新打开。</div>';return}
+      try{
+        await api("/api/auth/me");const data=await api(`/api/warehouse/molds/${id}/label`);
+        $("moldName").textContent=data.mold_name;$("moldCode").textContent=`模具编号：${data.mold_code}`;$("rackLocation").textContent=data.rack_location;$("positionPrompt").textContent=data.location_guide.prompt;$("qr").src=data.qr_data_url;$("lookupUrl").textContent=data.lookup_url;
+        const shown=(data.products||[]).slice(0,8);$("products").innerHTML=shown.map(row=>`<div class="product"><b>${h(row.customer_name||"-")}｜${h(row.product_name)}</b><br>存货编码 ${h(row.product_code)}｜规格 ${h(row.specification||"未登记")}</div>`).join("")+(data.product_count>shown.length?`<div>另有 ${data.product_count-shown.length} 款，请扫码查看。</div>`:"");$("label").style.display="grid";
+      }catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}
+    }init();
+  </script>
+</body>
+</html>

@@ -1202,3 +1202,17 @@ legacy_ruida_* 原始层
 - 回填后当前材料估算 `¥127.84`（成品 `¥62.18`、半成品 `¥65.66`），可用批次成本覆盖 100%；重复 dry-run 候选 0。
 - Phase B 库存、材质报价相关回归 `151 passed`，专项门禁 `32 passed`；未知计价单位和 A3 底片尺寸不完整均保持“成本待补”。完整演练报告：`docs/warehouse_reports/N027_PHASE_B_COST_SNAPSHOT_REHEARSAL_20260713.md`。
 - Phase B 验收服务：`http://127.0.0.1:18043/`；用户于 2026-07-13 人工验收通过并批准分组提交。该批准不包含正式库迁移、回填或 push 主功能分支；验收清单：`docs/warehouse_reports/N027_PHASE_B_UAT_CHECKLIST_20260713.md`。
+
+## 42. N-022 模具手机查询与二维码标签（2026-07-12）
+
+- 独立 worktree：`D:\tm-worktrees\erp-mold-mobile-n022`；分支：`feature/mold-mobile-n022`。
+- 未新增数据库字段或 migration；复用现有 `mold_tools.rack_location` 和常用箱 `mold_tool_id` 绑定。
+- 新增手机只读页 `/mobile/mold-lookup`，可按模具编号、位置、客户、存货编码或产品名称查询。
+- 新增标签页 `/mold-label.html` 和 `GET /api/warehouse/molds/{mold_id}/label`，二维码指向局域网手机查询页。
+- 位置编码统一沿用盘点模板既定规则：平放 `3F-M-R02-L2-D03-P08`，重型竖放 `3F-M-R01-L1-V-P12`；旧自由文本仍可显示。
+- 手机页显示人眼路线、产品名称、存货编码、规格和纸板方向提醒；重型竖放自动提示两人搬运。
+- 自动回归共 `118 passed`；Python 编译和 `git diff --check` 通过。
+- 隔离副本升级至 `af33v7w8x9b23` 后 `integrity=ok`、外键异常 0；验收端口 `http://127.0.0.1:18041/`，正式库未迁移、未写入。
+- 浏览器已验证桌面模具列表、平放/竖放手机提示和标签二维码，控制台无错误。
+- 用户已按 `docs/warehouse_reports/N022_MOLD_MOBILE_UAT_20260712.md` 完成人工验收，确认 `3F-M` 唯一位置编码并批准分组提交子分支。
+- 三楼地图点位、模具移位扫码流水和现场照片仍属于后续 Phase C，本阶段不是无线实时定位。

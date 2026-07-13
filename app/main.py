@@ -159,6 +159,30 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/mold-lookup" for route in application.routes):
+        mobile_mold_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_mold_lookup.html"
+        )
+        application.add_api_route(
+            "/mobile/mold-lookup",
+            lambda: FileResponse(mobile_mold_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/mold-label.html" for route in application.routes):
+        mold_label_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mold-label.html"
+        )
+        application.add_api_route(
+            "/mold-label.html",
+            lambda: FileResponse(mold_label_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(route.path == "/warehouse.html" for route in application.routes):
         warehouse_path = (
             Path(__file__).resolve().parents[1]

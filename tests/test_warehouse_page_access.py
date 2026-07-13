@@ -167,7 +167,13 @@ def test_warehouse_filters_do_not_send_empty_integer_query_values() -> None:
 
 
 def test_existing_home_and_incoming_pages_remain_served() -> None:
-    home, incoming = request_pages("/", "/incoming.html")
+    home, incoming, mold_mobile, mold_label = request_pages(
+        "/", "/incoming.html", "/mobile/mold-lookup", "/mold-label.html"
+    )
     assert home["status"] == 200
     assert incoming["status"] == 200
     assert "/api/incoming/pending" in incoming["text"]
+    assert mold_mobile["status"] == 200
+    assert "模具位置查询 - 天明ERP" in mold_mobile["text"]
+    assert mold_label["status"] == 200
+    assert "模具标签 - 天明ERP" in mold_label["text"]

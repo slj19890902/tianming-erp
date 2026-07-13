@@ -18,7 +18,8 @@
     .table-wrap{overflow:auto}.tag{display:inline-block;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.tag.warn{background:#fff2cf;color:#92400e}.tag.red{background:#fee2e2;color:#991b1b}
     .muted{color:var(--muted)}.message{position:fixed;right:20px;bottom:20px;max-width:420px;background:#172033;color:#fff;border-radius:8px;padding:11px 16px;z-index:10}.hidden{display:none!important}
     .summary{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0}.summary strong{font-size:18px}.empty{text-align:center;color:var(--muted);padding:26px}
-    @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(130px,1fr))}header{padding:0 12px}.wrap{padding:0 8px}.desktop-note{display:none}}
+    .metric-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:10px}.metric-card{border:1px solid var(--line);border-radius:9px;padding:12px;background:#f8fafc}.metric-card strong{display:block;font-size:22px;margin-top:4px}.notice{border:1px solid #f4d38a;background:#fff8df;color:#713f12;border-radius:9px;padding:10px 12px}.notice.info{border-color:#bfdbfe;background:#eff6ff;color:#1e3a8a}.reason-list{white-space:normal;min-width:300px}.reason-list div+div{margin-top:4px}
+    @media(max-width:900px){.grid,.metric-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}header{padding:0 12px}.wrap{padding:0 8px}.desktop-note{display:none}}
   </style>
 </head>
 <body>
@@ -30,11 +31,34 @@
     <div class="tabs">
       <button class="btn active" data-tab="finished">成品仓</button>
       <button class="btn" data-tab="semi_finished">半成品仓</button>
+      <button class="btn" data-tab="insights">库存经营看板</button>
       <button class="btn" data-tab="movements">库存流水</button>
       <button class="btn admin-only" data-tab="locations">库位管理</button>
       <button class="btn" data-tab="molds">模具位置</button>
     </div>
     <div id="pageError" class="panel hidden" style="border-color:#fecaca;color:#991b1b"></div>
+
+    <section id="insightSection" class="hidden">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2>库存经营看板</h2><div class="muted">先看事实账、库龄和需求覆盖；建议只读，不自动改变业务数据。</div></div><button id="refreshInsights" class="btn primary" type="button">刷新看板</button></div>
+        <div id="insightScope" class="notice info" style="margin-top:12px"></div>
+        <div id="insightRecommendation" class="notice" style="margin-top:8px"></div>
+      </div>
+      <div id="insightSummary" class="metric-grid" style="margin-bottom:14px"></div>
+      <div class="panel">
+        <h2>数据可信度</h2>
+        <div id="insightQuality" class="summary"></div>
+        <div class="notice">实际库存金额：成本事实账尚未建立时统一显示“成本待补”，不得按 0 元计算。</div>
+      </div>
+      <div class="panel table-wrap">
+        <h2>库龄分布</h2>
+        <table><thead><tr><th>库龄</th><th>批次数</th><th>成品可用</th><th>半成品可用</th></tr></thead><tbody id="insightAgeBody"></tbody></table>
+      </div>
+      <div class="panel table-wrap">
+        <h2>人工行动队列</h2>
+        <table><thead><tr><th>优先级 / 批次</th><th>库存对象</th><th>库位</th><th>可用 / 库龄</th><th>未完成需求</th><th>成本口径</th><th>依据与建议</th></tr></thead><tbody id="insightActionBody"></tbody></table>
+      </div>
+    </section>
 
     <section id="inventorySection">
       <div class="panel">
@@ -188,7 +212,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,tab:"finished",locations:[],customers:[],lots:[],molds:[],assignment:{lotId:null,items:[],selected:new Set()}};
+    const state={user:null,tab:"finished",locations:[],customers:[],lots:[],molds:[],insights:null,assignment:{lotId:null,items:[],selected:new Set()}};
     const $=id=>document.getElementById(id);
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
     function apiErrorMessage(body,status,url){
@@ -239,6 +263,7 @@
     function bind(){
       document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
       $("refreshLots").onclick=loadLots;$("refreshMovements").onclick=loadMovements;
+      $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};
       $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
       $("openInForm").onclick=()=>{(state.tab==="finished"?$("finishedForm"):$("semiForm")).classList.toggle("hidden")};
@@ -248,10 +273,37 @@
     function switchTab(tab){
       state.tab=tab;document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x.dataset.tab===tab));
       $("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab));
+      $("insightSection").classList.toggle("hidden",tab!=="insights");
       $("movementSection").classList.toggle("hidden",tab!=="movements");$("locationSection").classList.toggle("hidden",tab!=="locations");
       $("moldSection").classList.toggle("hidden",tab!=="molds");
       $("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
-      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else loadLocations(true);
+      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else loadLocations(true);
+    }
+    async function loadInsights(){
+      try{state.insights=await api("/api/warehouse/insights");renderInsights()}catch(err){toast(`库存经营看板加载失败：${err.message}`,true)}
+    }
+    function renderInsights(){
+      const data=state.insights;if(!data)return;
+      const summary=data.summary,quality=data.data_quality;
+      $("insightScope").textContent=data.scope_notice;
+      $("insightRecommendation").textContent=data.recommendation_notice;
+      const cards=[
+        ["已录入批次",summary.recorded_lots,"批"],
+        ["成品可用",summary.finished_available,"个"],
+        ["半成品可用",summary.semi_finished_available,"张/片"],
+        ["已预占",summary.total_reserved,""],
+        ["实际现金占用",summary.actual_inventory_value==null?"成本待补":`¥${summary.actual_inventory_value}`,""]
+      ];
+      $("insightSummary").innerHTML=cards.map(row=>`<div class="metric-card"><span class="muted">${row[0]}</span><strong>${row[1]}</strong><span>${row[2]}</span></div>`).join("");
+      const costCoverage=quality.cost_coverage_percent==null?"暂无数据":`${quality.cost_coverage_percent}%`;
+      $("insightQuality").innerHTML=`<span>有可用量批次 <strong>${summary.available_lots}</strong></span><span>有效库位 <strong>${quality.active_location_lots}</strong></span><span>成本可估算 <strong>${quality.cost_ready_lots}</strong></span><span>成本待补 <strong>${quality.missing_cost_lots}</strong></span><span>成本覆盖 <strong>${costCoverage}</strong></span>`;
+      $("insightAgeBody").innerHTML=(data.age_buckets||[]).map(row=>`<tr><td><b>${h(row.label)}</b></td><td>${row.lots}</td><td>${row.finished_available} 个</td><td>${row.semi_finished_available} 张/片</td></tr>`).join("");
+      const priorityLabels=["立即处理","优先核对","重点关注","持续跟进","数据补全"];
+      $("insightActionBody").innerHTML=(data.action_items||[]).map(row=>{
+        const d=row.detail||{},cost=row.cost_status==="pending"?'<span class="tag warn">成本待补</span>':`估算 ¥${h(row.estimated_value)}`;
+        const reasons=(row.reasons||[]).map(reason=>`<div>${h(reason.text)}</div>`).join("");
+        return `<tr><td><span class="tag ${row.priority<=1?'red':row.priority<=2?'warn':''}">${priorityLabels[row.priority]||"数据补全"}</span><br><b>${h(row.lot_number)}</b></td><td>${h(d.customer_name||"未指定客户")}<br><b>${h(d.inventory_code||"-")}</b> · ${h(d.name||"-")}</td><td>${h(row.location_code||"未登记")}</td><td><b>${row.quantity_available}</b> ${labels[row.unit]||row.unit}<br>${row.age_days} 天</td><td>${row.demand?.open_demand||0}</td><td>${cost}</td><td class="reason-list">${reasons}</td></tr>`
+      }).join("")||`<tr><td colspan="7" class="empty">当前没有需要处理的已录入可用库存</td></tr>`;
     }
     async function loadLocations(includeInactive=false){
       const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;

@@ -84,13 +84,16 @@ def test_warehouse_page_unauthenticated_and_initialization_failures_are_explicit
 
 
 def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
-    for label in ("成品仓", "半成品仓", "库位管理", "库存流水"):
+    for label in ("成品仓", "半成品仓", "库存经营看板", "库位管理", "库存流水"):
         assert label in WAREHOUSE_HTML
     assert "<script src=" not in WAREHOUSE_HTML
     assert "<link rel=" not in WAREHOUSE_HTML
     assert 'href="/"' in WAREHOUSE_HTML
     for empty_text in ("暂无库存批次", "暂无库位", "暂无库存流水"):
         assert empty_text in WAREHOUSE_HTML
+    assert "/api/warehouse/insights" in WAREHOUSE_HTML
+    assert "成本待补" in WAREHOUSE_HTML
+    assert "不自动改变业务数据" in WAREHOUSE_HTML
 
 
 def test_warehouse_initialization_apis_return_empty_structures(tmp_path: Path) -> None:
@@ -138,6 +141,7 @@ def test_warehouse_initialization_apis_return_empty_structures(tmp_path: Path) -
             "/api/warehouse/movements",
             params={"page_size": 200},
         )
+        insights = client.get("/api/warehouse/insights")
 
     assert locations.status_code == 200
     assert locations.json() == {"items": []}
@@ -147,6 +151,9 @@ def test_warehouse_initialization_apis_return_empty_structures(tmp_path: Path) -
     assert movements.status_code == 200
     assert movements.json()["items"] == []
     assert movements.json()["total"] == 0
+    assert insights.status_code == 200
+    assert insights.json()["summary"]["recorded_lots"] == 0
+    assert insights.json()["summary"]["actual_inventory_value"] is None
 
 
 def test_warehouse_filters_do_not_send_empty_integer_query_values() -> None:

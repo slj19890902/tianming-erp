@@ -374,6 +374,7 @@ def test_order_list_supports_search_by_item_number_product_code_and_product_name
     order_api_app,
 ) -> None:
     from app.models.customer import Customer
+    from app.models.product import Product
 
     app, session_factory = order_api_app
     with session_factory() as session:
@@ -385,11 +386,23 @@ def test_order_list_supports_search_by_item_number_product_code_and_product_name
         created = client.post("/api/orders", json=_payload())
         assert created.status_code == 201, created.text
 
+        with session_factory() as session:
+            product = session.get(Product, 1)
+            assert product is not None
+            product.product_code = "CURRENT-BOX-001"
+            session.commit()
+
         by_item_number = client.get(
             "/api/orders",
             params={"keyword": "TM20260613001-002"},
         )
         by_product_code = client.get("/api/orders", params={"keyword": "SME-002"})
+        by_snapshot_product_code = client.get(
+            "/api/orders", params={"keyword": "SME-001"}
+        )
+        by_current_product_code = client.get(
+            "/api/orders", params={"keyword": "CURRENT-BOX-001"}
+        )
         by_product_name = client.get("/api/orders", params={"keyword": "物流周转箱"})
         by_customer_name = client.get(
             "/api/orders", params={"keyword": customer_name}
@@ -401,6 +414,8 @@ def test_order_list_supports_search_by_item_number_product_code_and_product_name
     assert by_item_number.json()["total"] == 1
     assert by_item_number.json()["items"][0]["order_number"] == "TM20260613001"
     assert by_product_code.json()["total"] == 1
+    assert by_snapshot_product_code.json()["total"] == 1
+    assert by_current_product_code.json()["total"] == 1
     assert by_product_name.json()["total"] == 1
     assert by_customer_name.json()["total"] == 1
     assert by_spec.json()["total"] == 1
@@ -1160,13 +1175,26 @@ def test_business_hides_fully_delivered_orders_and_finished_view_lists_them(
     with TestClient(app) as client:
         _login(client, "admin")
         business = client.get("/api/orders", params={"status": "business"})
+        business_keyword = client.get(
+            "/api/orders",
+            params={"status": "business", "keyword": "PO-CUSTOMER-001"},
+        )
+        unfiltered_keyword = client.get(
+            "/api/orders", params={"keyword": "PO-CUSTOMER-001"}
+        )
         finished = client.get(
-            "/api/orders", params={"status": "finished_delivery"}
+            "/api/orders",
+            params={"status": "finished_delivery", "keyword": "PO-CUSTOMER-001"},
         )
 
     assert business.status_code == 200
     assert business.json()["total"] == 0
     assert business.json()["unfinished_total"] == 0
+    assert business_keyword.status_code == 200
+    assert business_keyword.json()["total"] == 1
+    assert business_keyword.json()["items"][0]["id"] == created["id"]
+    assert unfiltered_keyword.status_code == 200
+    assert unfiltered_keyword.json()["total"] == 1
     assert finished.status_code == 200
     assert finished.json()["total"] == 1
     assert finished.json()["items"][0]["id"] == created["id"]
@@ -1185,8 +1213,14 @@ def test_business_hides_fully_delivered_orders_and_finished_view_lists_them(
         finished_after_dead = client.get(
             "/api/orders", params={"status": "finished_delivery"}
         )
+        business_dead_keyword = client.get(
+            "/api/orders",
+            params={"status": "business", "keyword": "PO-CUSTOMER-001"},
+        )
     assert finished_after_dead.status_code == 200
     assert finished_after_dead.json()["total"] == 0
+    assert business_dead_keyword.status_code == 200
+    assert business_dead_keyword.json()["total"] == 0
 
 
 def test_completed_status_with_undelivered_items_stays_discoverable(
@@ -1958,14 +1992,20 @@ def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> Non
             client, customer_po="PO-ACTIVE", order_date="2026-06-13"
         )
         business = client.get("/api/orders", params={"status": "business"})
+        business_keyword = client.get(
+            "/api/orders",
+            params={"status": "business", "keyword": "LEGACY-PO"},
+        )
         history = client.get("/api/orders", params={"status": "history"})
 
     # The response order_number is display-masked, so assert on stable ids.
     business_ids = [row["id"] for row in business.json()["items"]]
+    business_keyword_ids = [row["id"] for row in business_keyword.json()["items"]]
     history_ids = [row["id"] for row in history.json()["items"]]
     # active order is in business, legacy RUIDA order is NOT
     assert active["id"] in business_ids
     assert legacy_id not in business_ids
+    assert legacy_id not in business_keyword_ids
     # the legacy RUIDA order only shows under the explicit history view
     assert legacy_id in history_ids
 
@@ -2024,11 +2064,14 @@ def test_n028_sales_order_scope_blocks_other_customer_and_filters_list(
 
         _login(client, "sales")
         listing = client.get("/api/orders")
+        scoped_search = client.get("/api/orders", params={"keyword": "OTHER-PO"})
         forbidden_detail = client.get(f"/api/orders/{second.json()['id']}")
         forbidden_create = client.post("/api/orders", json=other_payload)
 
     assert listing.status_code == 200
     assert [row["id"] for row in listing.json()["items"]] == [first.json()["id"]]
+    assert scoped_search.status_code == 200
+    assert scoped_search.json()["total"] == 0
     assert forbidden_detail.status_code == 403
     assert forbidden_create.status_code == 403
 

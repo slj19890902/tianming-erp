@@ -57,6 +57,27 @@ def test_requisition_print_page_is_registered() -> None:
     )
 
 
+def test_requisition_spa_route_returns_index_page() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/requisition")
+
+    assert response.status_code == 200
+    assert "天明包装ERP" in response.text
+    assert "智能报料工作台" in response.text
+    assert "Not Found" not in response.text
+
+
+def test_desktop_spa_uses_path_to_open_requisition_page() -> None:
+    assert "initialPageFromLocation" in INDEX
+    assert '"requisition"' in INDEX
+    assert 'window.location.pathname.replace(/^\\/+|\\/+$/g, "")' in INDEX
+    assert "await this.loadPage(initialPage)" in INDEX
+
+
 def test_incoming_pending_cards_show_cardboard_requisition_size() -> None:
     assert "报料尺寸" in INCOMING
     assert "item.cardboard_len" in INCOMING

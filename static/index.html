@@ -4144,6 +4144,13 @@
             const target = new URLSearchParams(window.location.search).get("redirect") || "";
             return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
           },
+          initialPageFromLocation() {
+            const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","deliveries","finance","system"]);
+            const queryPage = new URLSearchParams(window.location.search).get("page") || "";
+            if (pages.has(queryPage)) return queryPage;
+            const pathPage = window.location.pathname.replace(/^\/+|\/+$/g, "");
+            return pages.has(pathPage) ? pathPage : "dashboard";
+          },
           redirectAfterLogin() {
             const target = this.loginRedirectPath();
             if (!target || this.user?.must_change_password) return false;
@@ -4155,9 +4162,10 @@
               const { data } = await axios.get("/api/auth/me");
               this.user = data.user;
               if (this.redirectAfterLogin()) return;
-              this.activePage = "dashboard";
+              const initialPage = this.initialPageFromLocation();
+              this.activePage = initialPage;
               await this.loadBase();
-              await this.loadPage("dashboard");
+              await this.loadPage(initialPage);
               if (this.user.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
@@ -4174,8 +4182,9 @@
               const currentPassword = this.loginForm.password;
               this.loginForm.password = "";
               if (this.redirectAfterLogin()) return;
-              this.activePage = "dashboard";
-              await this.loadBase(); await this.loadPage("dashboard");
+              const initialPage = this.initialPageFromLocation();
+              this.activePage = initialPage;
+              await this.loadBase(); await this.loadPage(initialPage);
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
             finally { this.loading = false; }

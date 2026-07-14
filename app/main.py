@@ -98,6 +98,28 @@ def create_app() -> FastAPI:
     application = legacy.app
     current = load_settings()
     application.router.lifespan_context = phase2_lifespan
+    index_path = Path(__file__).resolve().parents[1] / "static" / "index.html"
+    spa_page_paths = {
+        "/dashboard",
+        "/customers",
+        "/quotations",
+        "/products",
+        "/orders",
+        "/orders_legacy",
+        "/requisition",
+        "/incoming",
+        "/deliveries",
+        "/finance",
+        "/system",
+    }
+    for page_path in spa_page_paths:
+        if not any(route.path == page_path for route in application.routes):
+            application.add_api_route(
+                page_path,
+                lambda path=index_path: FileResponse(path),
+                methods=["GET"],
+                include_in_schema=False,
+            )
     if not any(
         route.path == "/requisition-print.html"
         for route in application.routes

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 @pytest.fixture()
 def incoming_api_app(tmp_path: Path):
     from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
     from app.api.deps import get_db
     from app.api.incoming import router as incoming_router
     from app.core.database import create_sqlite_engine
@@ -179,6 +180,7 @@ def incoming_api_app(tmp_path: Path):
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
     app.include_router(incoming_router, prefix="/api/incoming")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -234,6 +236,207 @@ def test_pending_incoming_prioritizes_latest_requisition_operation(
 
     assert response.status_code == 200
     assert [row["item_id"] for row in response.json()["items"]] == [1, 2]
+
+
+def test_pending_incoming_uses_current_confirmed_supplier_group_only(
+    incoming_api_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.requisition import Requisition, RequisitionItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        first = session.get(OrderItem, 1)
+        second = session.get(OrderItem, 2)
+        cancelled = session.get(OrderItem, 5)
+        first.supplier_order_number = "SRO-20260710-0003"
+        second.requisition_status = "已报料"
+        cancelled_order = session.get(Order, cancelled.order_id)
+        cancelled_order.status = "cancelled"
+        cancelled.material_status = "pending"
+        cancelled.requisition_status = "已报料"
+
+        old_group = Requisition(
+            requisition_number="MR-OLD",
+            requisition_date=date(2026, 7, 10),
+            status="supplier_requisition_created",
+        )
+        current_group = Requisition(
+            requisition_number="MR-CURRENT",
+            requisition_date=date(2026, 7, 10),
+            status="supplier_requisition_created",
+        )
+        legacy_group = Requisition(
+            requisition_number="MR-LEGACY",
+            requisition_date=date(2026, 7, 10),
+            status="已报料",
+        )
+        cancelled_group = Requisition(
+            requisition_number="MR-CANCELLED",
+            requisition_date=date(2026, 7, 10),
+            status="已报料",
+        )
+        session.add_all([old_group, current_group, legacy_group, cancelled_group])
+        session.flush()
+
+        def component(group: Requisition, order_item_id: int, name: str) -> RequisitionItem:
+            return RequisitionItem(
+                requisition_id=group.id,
+                order_item_id=order_item_id,
+                requisition_qty=1,
+                cardboard_len=Decimal("400"),
+                cardboard_width=Decimal("300"),
+                product_name_snapshot=name,
+                status="supplier_requisition_created",
+            )
+
+        old_cover = component(old_group, first.id, "Old box-盖")
+        old_base = component(old_group, first.id, "Old box-底")
+        current_cover = component(current_group, first.id, "Current box-盖")
+        current_base = component(current_group, first.id, "Current box-底")
+        legacy_item = RequisitionItem(
+            requisition_id=legacy_group.id,
+            order_item_id=second.id,
+            requisition_qty=50,
+            cardboard_len=Decimal("520"),
+            cardboard_width=Decimal("350"),
+            product_name_snapshot="Legacy effective row",
+            status="有效",
+        )
+        cancelled_item = RequisitionItem(
+            requisition_id=cancelled_group.id,
+            order_item_id=cancelled.id,
+            requisition_qty=25,
+            cardboard_len=Decimal("520"),
+            cardboard_width=Decimal("350"),
+            product_name_snapshot="Cancelled effective row",
+            status="有效",
+        )
+        session.add_all(
+            [
+                old_cover,
+                old_base,
+                current_cover,
+                current_base,
+                legacy_item,
+                cancelled_item,
+            ]
+        )
+        session.add_all(
+            [
+                SupplierRequisitionOrder(
+                    order_number="SRO-20260710-0001",
+                    status="voided",
+                ),
+                SupplierRequisitionOrder(
+                    order_number="SRO-20260710-0003",
+                    status="confirmed",
+                ),
+            ]
+        )
+        session.flush()
+        supplier_orders = session.scalars(
+            select(SupplierRequisitionOrder).order_by(SupplierRequisitionOrder.id)
+        ).all()
+        session.add_all(
+            [
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=supplier_orders[0].id,
+                    order_item_id=first.id,
+                    quantity=2,
+                    requisition_qty=2,
+                ),
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=supplier_orders[1].id,
+                    order_item_id=first.id,
+                    quantity=2,
+                    requisition_qty=2,
+                ),
+            ]
+        )
+        session.commit()
+        ids = {
+            "old_cover": old_cover.id,
+            "old_base": old_base.id,
+            "current_cover": current_cover.id,
+            "current_base": current_base.id,
+            "legacy_requisition_item": legacy_item.id,
+            "cancelled_order_item": cancelled.id,
+        }
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        pending = client.get("/api/incoming/pending")
+        overview = client.get("/api/dashboard/overview")
+        old_receive = client.put(f"/api/incoming/receive/r{ids['old_cover']}")
+        receive_cover = client.put(f"/api/incoming/receive/r{ids['current_cover']}")
+        pending_after_cover = client.get("/api/incoming/pending")
+        receive_base = client.put(f"/api/incoming/receive/r{ids['current_base']}")
+        pending_after_all = client.get("/api/incoming/pending")
+
+    assert pending.status_code == 200
+    assert {row["item_id"] for row in pending.json()["items"]} == {
+        f"r{ids['current_cover']}",
+        f"r{ids['current_base']}",
+        f"r{ids['legacy_requisition_item']}",
+    }
+    assert ids["cancelled_order_item"] not in {
+        row["order_item_id"] for row in pending.json()["items"]
+    }
+    assert overview.status_code == 200
+    pending_card = next(
+        card for card in overview.json()["cards"] if card["key"] == "pending_incoming"
+    )
+    assert pending_card["count"] == 3
+    assert old_receive.status_code == 409
+    assert receive_cover.status_code == 200, receive_cover.text
+    assert {row["item_id"] for row in pending_after_cover.json()["items"]} == {
+        f"r{ids['current_base']}",
+        f"r{ids['legacy_requisition_item']}",
+    }
+    assert receive_base.status_code == 200, receive_base.text
+    assert {row["item_id"] for row in pending_after_all.json()["items"]} == {
+        f"r{ids['legacy_requisition_item']}",
+    }
+
+    with session_factory() as session:
+        first = session.get(OrderItem, 1)
+        first.material_status = "pending"
+        first.requisition_status = "已报料"
+        first.material_received_at = None
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        pending_after_stale_reset = client.get("/api/incoming/pending")
+
+    assert {row["item_id"] for row in pending_after_stale_reset.json()["items"]} == {
+        f"r{ids['legacy_requisition_item']}",
+    }
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        receive_single = client.put(
+            f"/api/incoming/receive/r{ids['legacy_requisition_item']}"
+        )
+        received = client.get("/api/incoming/received")
+        revert_single = client.put(
+            f"/api/incoming/revert/r{ids['legacy_requisition_item']}",
+            json={"reason": "single requisition row regression"},
+        )
+        pending_after_revert = client.get("/api/incoming/pending")
+
+    assert receive_single.status_code == 200, receive_single.text
+    assert f"r{ids['legacy_requisition_item']}" in {
+        row["item_id"] for row in received.json()["items"]
+    }
+    assert revert_single.status_code == 200, revert_single.text
+    assert {row["item_id"] for row in pending_after_revert.json()["items"]} == {
+        f"r{ids['legacy_requisition_item']}",
+    }
 
 
 def test_incoming_api_hides_legacy_history_prefix_in_order_number(

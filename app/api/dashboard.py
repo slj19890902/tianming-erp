@@ -14,6 +14,7 @@ from app.api.deps import (
     has_permission,
     has_unrestricted_customer_access,
 )
+from app.api.incoming import _rows as incoming_rows
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.customer import Customer
 from app.models.finance import (
@@ -208,6 +209,7 @@ def dashboard_overview(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    raw_db = db
     today = date.today()
     month = today.strftime("%Y-%m")
     visible_customer_ids = (
@@ -235,19 +237,8 @@ def dashboard_overview(
             )
         )
     ) if can_view_requisition else 0
-    pending_incoming_items = _safe_int(
-        db.scalar(
-            select(func.count(OrderItem.id))
-            .select_from(OrderItem)
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
-                OrderItem.material_status == "pending",
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
-        )
-    ) if can_view_incoming else 0
+    pending_incoming_rows = incoming_rows(raw_db, user=user) if can_view_incoming else []
+    pending_incoming_items = len(pending_incoming_rows)
     pending_delivery_items = _safe_int(
         db.scalar(
             select(func.count(OrderItem.id))
@@ -405,35 +396,6 @@ def dashboard_overview(
             )
         ).mappings().all()
         if can_view_requisition
-        else []
-    )
-    pending_incoming_rows = (
-        db.execute(
-            select(
-            Customer.id.label("customer_id"),
-            Customer.name.label("customer_name"),
-            Order.order_number,
-            Order.delivery_date,
-            Order.created_at,
-            OrderItem.snapshot_product_code,
-            )
-            .select_from(OrderItem)
-            .join(Order, Order.id == OrderItem.order_id)
-            .join(Customer, Customer.id == Order.customer_id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
-                OrderItem.material_status == "pending",
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
-            .order_by(
-                Order.delivery_date.is_(None),
-                Order.delivery_date,
-                Order.created_at,
-                OrderItem.id,
-            )
-        ).mappings().all()
-        if can_view_incoming
         else []
     )
     pending_delivery_rows = (
@@ -598,7 +560,7 @@ def dashboard_overview(
                 "customer_name": row["customer_name"],
                 "count": 0,
                 "first_order_no": row["order_number"],
-                "first_item_no": row["snapshot_product_code"],
+                "first_item_no": row.get("product_code"),
                 "sort_date": row["delivery_date"] or row["created_at"],
                 "message": "",
                 "target": "incoming",

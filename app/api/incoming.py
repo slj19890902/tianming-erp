@@ -24,7 +24,11 @@ from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
 from app.models.product import Product
-from app.models.requisition import RequisitionItem
+from app.models.requisition import Requisition, RequisitionItem
+from app.models.supplier_requisition_order import (
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.user import User
 from app.services.history_orders import build_display_registry, display_order_number
 
@@ -174,6 +178,102 @@ def _preflight_item_customer_access(
         )
 
 
+def _confirmed_supplier_order_item_ids(
+    db: Session,
+    *,
+    order_item_ids: list[int],
+) -> set[int]:
+    if not order_item_ids:
+        return set()
+    return set(
+        db.scalars(
+            select(OrderItem.id)
+            .join(
+                SupplierRequisitionOrder,
+                (SupplierRequisitionOrder.order_number == OrderItem.supplier_order_number)
+                & (SupplierRequisitionOrder.status == "confirmed"),
+            )
+            .join(
+                SupplierRequisitionOrderItem,
+                (SupplierRequisitionOrderItem.supplier_order_id == SupplierRequisitionOrder.id)
+                & (SupplierRequisitionOrderItem.order_item_id == OrderItem.id),
+            )
+            .where(OrderItem.id.in_(order_item_ids))
+            .distinct()
+        ).all()
+    )
+
+
+def _active_requisition_components(
+    db: Session,
+    *,
+    order_item_ids: list[int],
+    include_received: bool = False,
+) -> list[RequisitionItem]:
+    """Return only the requisition lines that the incoming workflow may use.
+
+    Supplier-created requisition rows do not point directly at a supplier order.
+    The order item's current supplier-order number is therefore the authority for
+    selecting the latest matching requisition group.  Legacy effective rows keep
+    their original behavior for order items without such a current supplier order.
+    """
+    if not order_item_ids:
+        return []
+
+    supplier_order_item_ids = _confirmed_supplier_order_item_ids(
+        db,
+        order_item_ids=order_item_ids,
+    )
+    legacy_order_item_ids = set(order_item_ids) - supplier_order_item_ids
+    components: list[RequisitionItem] = []
+
+    legacy_statuses = ["有效"]
+    if include_received:
+        legacy_statuses.append("已入库")
+    if legacy_order_item_ids:
+        components.extend(
+            db.scalars(
+                select(RequisitionItem)
+                .where(
+                    RequisitionItem.order_item_id.in_(legacy_order_item_ids),
+                    RequisitionItem.status.in_(legacy_statuses),
+                )
+                .order_by(RequisitionItem.order_item_id, RequisitionItem.id)
+            ).all()
+        )
+
+    supplier_statuses = ["supplier_requisition_created"]
+    if include_received:
+        supplier_statuses.append("已入库")
+    if supplier_order_item_ids:
+        latest_groups = (
+            select(
+                RequisitionItem.order_item_id.label("order_item_id"),
+                func.max(RequisitionItem.requisition_id).label("requisition_id"),
+            )
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .where(
+                RequisitionItem.order_item_id.in_(supplier_order_item_ids),
+                Requisition.status == "supplier_requisition_created",
+            )
+            .group_by(RequisitionItem.order_item_id)
+            .subquery()
+        )
+        components.extend(
+            db.scalars(
+                select(RequisitionItem)
+                .join(
+                    latest_groups,
+                    (latest_groups.c.order_item_id == RequisitionItem.order_item_id)
+                    & (latest_groups.c.requisition_id == RequisitionItem.requisition_id),
+                )
+                .where(RequisitionItem.status.in_(supplier_statuses))
+                .order_by(RequisitionItem.order_item_id, RequisitionItem.id)
+            ).all()
+        )
+    return components
+
+
 def _rows(
     db: Session,
     *,
@@ -186,8 +286,10 @@ def _rows(
             OrderItem.id.label("item_id"),
             OrderItem.product_id,
             Order.id.label("order_id"),
+            Customer.id.label("customer_id"),
             Order.order_number,
             Order.customer_po,
+            Order.created_at,
             Customer.name.label("customer_name"),
             OrderItem.snapshot_product_name.label("product_name"),
             func.coalesce(
@@ -235,6 +337,7 @@ def _rows(
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     if received_since is None:
         query = query.where(
+            Order.status.notin_(["cancelled", "dead"]),
             OrderItem.material_status == "pending",
             OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
         ).order_by(
@@ -351,17 +454,31 @@ def _rows(
 
     component_requisition_items: dict[int, list[RequisitionItem]] = {}
     order_items_with_requisitions: set[int] = set()
-    component_status = "有效" if received_since is None else "已入库"
     order_item_ids = [row["item_id"] for row in base_rows if row.get("item_id")]
     if order_item_ids:
-        req_rows = db.scalars(
-            select(RequisitionItem)
-            .where(RequisitionItem.order_item_id.in_(order_item_ids))
-            .order_by(RequisitionItem.order_item_id, RequisitionItem.id)
-        ).all()
+        order_items_with_requisitions = set(
+            db.scalars(
+                select(RequisitionItem.order_item_id).where(
+                    RequisitionItem.order_item_id.in_(order_item_ids)
+                )
+            ).all()
+        )
+        if received_since is None:
+            req_rows = _active_requisition_components(
+                db,
+                order_item_ids=order_item_ids,
+            )
+        else:
+            req_rows = db.scalars(
+                select(RequisitionItem)
+                .where(
+                    RequisitionItem.order_item_id.in_(order_item_ids),
+                    RequisitionItem.status == "已入库",
+                )
+                .order_by(RequisitionItem.order_item_id, RequisitionItem.id)
+            ).all()
         for req in req_rows:
-            order_items_with_requisitions.add(req.order_item_id)
-            if req.status == component_status:
+            if received_since is None or req.status == "已入库":
                 component_requisition_items.setdefault(req.order_item_id, []).append(req)
 
     for data in base_rows:
@@ -374,9 +491,11 @@ def _rows(
                 component_data = dict(data)
                 component_data["order_item_id"] = data["item_id"]
                 component_data["requisition_item_id"] = req.id
-                component_data["item_id"] = (
-                    f"r{req.id}" if component else data["item_id"]
-                )
+                # Any row backed by a concrete requisition item must use its
+                # own route key.  Otherwise a normal single-piece row falls
+                # through to the order-item receive/revert path and leaves the
+                # selected supplier requisition row in the wrong status.
+                component_data["item_id"] = f"r{req.id}"
                 component_data["component_type"] = component or "single"
                 component_data["product_code"] = req.product_code_snapshot or data.get("product_code")
                 component_data["product_name"] = req.product_name_snapshot or data.get("product_name")
@@ -571,7 +690,14 @@ def _receive_requisition_component(
         order_item_id=order_item.id,
         user=user,
     )
-    if requisition_item.status != "有效":
+    active_component_ids = {
+        item.id
+        for item in _active_requisition_components(
+            db,
+            order_item_ids=[order_item.id],
+        )
+    }
+    if requisition_item.id not in active_component_ids:
         raise HTTPException(status_code=409, detail="该报料明细当前不可入库")
     if order_item.material_status != "pending" or order_item.requisition_status not in {
         "已报料",
@@ -591,19 +717,22 @@ def _receive_requisition_component(
     requisition_item.requisition_qty = final_quantity
     requisition_item.status = "已入库"
 
-    remaining_components = db.scalar(
-        select(func.count(RequisitionItem.id)).where(
-            RequisitionItem.order_item_id == order_item.id,
-            RequisitionItem.status == "有效",
+    remaining_components = len(
+        _active_requisition_components(
+            db,
+            order_item_ids=[order_item.id],
         )
-    ) or 0
+    )
     if remaining_components == 0:
-        total_received = db.scalar(
-            select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0)).where(
-                RequisitionItem.order_item_id == order_item.id,
-                RequisitionItem.status == "已入库",
+        total_received = sum(
+            int(item.requisition_qty or 0)
+            for item in _active_requisition_components(
+                db,
+                order_item_ids=[order_item.id],
+                include_received=True,
             )
-        ) or 0
+            if item.status == "已入库"
+        )
         order_item.material_status = "received"
         order_item.requisition_status = "已入库"
         order_item.material_received_at = received_at
@@ -936,6 +1065,23 @@ def _revert_requisition_component(
     if requisition_item.status != "已入库":
         raise HTTPException(status_code=409, detail="该报料明细当前不是已入库状态")
 
+    active_components = _active_requisition_components(
+        db,
+        order_item_ids=[order_item.id],
+        include_received=True,
+    )
+    if requisition_item.id not in {item.id for item in active_components}:
+        raise HTTPException(status_code=409, detail="该报料明细当前不可撤回")
+    restore_status = (
+        "supplier_requisition_created"
+        if order_item.id
+        in _confirmed_supplier_order_item_ids(
+            db,
+            order_item_ids=[order_item.id],
+        )
+        else "有效"
+    )
+
     previous_received_at = order_item.material_received_at
     previous_received_by = order_item.material_received_by
     try:
@@ -945,7 +1091,7 @@ def _revert_requisition_component(
                 RequisitionItem.id == requisition_item_id,
                 RequisitionItem.status == "已入库",
             )
-            .values(status="有效")
+            .values(status=restore_status)
         )
         if result.rowcount != 1:
             raise HTTPException(status_code=409, detail="状态已变化，请刷新后重试")

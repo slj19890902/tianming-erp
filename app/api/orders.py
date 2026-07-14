@@ -999,6 +999,7 @@ def list_orders(
     user: User = Depends(can_read),
 ) -> dict:
     display_registry = build_display_registry(db)
+    search_keyword = keyword.strip() if keyword and keyword.strip() else None
     ids_query = (
         select(Order.id)
         .join(Customer, Customer.id == Order.customer_id)
@@ -1033,11 +1034,16 @@ def list_orders(
         ~Order.items.any(OrderItem.delivered_quantity < OrderItem.quantity),
     )
     if status_filter == "business":
-        ids_query = ids_query.where(
+        business_conditions = [
             ~history_condition,
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
-            ~fully_delivered_condition,
-        )
+        ]
+        # A targeted business search must still find normally completed
+        # deliveries. Without a search term, keep the operational list focused
+        # on orders that still need attention.
+        if not search_keyword:
+            business_conditions.append(~fully_delivered_condition)
+        ids_query = ids_query.where(*business_conditions)
     elif status_filter == "history":
         ids_query = ids_query.where(history_condition)
     elif status_filter == "finished_delivery":
@@ -1067,16 +1073,21 @@ def list_orders(
     elif status_filter:
         ids_query = ids_query.where(Order.status == status_filter)
 
-    if keyword and keyword.strip():
-        trimmed = keyword.strip()
+    if search_keyword:
+        trimmed = search_keyword
         display_ids = filter_order_ids_for_display_search(db, trimmed, display_registry)
-        ids_query = ids_query.outerjoin(OrderItem, OrderItem.order_id == Order.id).where(
+        ids_query = ids_query.outerjoin(
+            OrderItem, OrderItem.order_id == Order.id
+        ).outerjoin(
+            Product, Product.id == OrderItem.product_id
+        ).where(
             or_(
                 Order.order_number.ilike(f"%{trimmed}%"),
                 Order.customer_po.ilike(f"%{trimmed}%"),
                 Customer.name.ilike(f"%{trimmed}%"),
                 OrderItem.item_order_number.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_product_code.ilike(f"%{trimmed}%"),
+                Product.product_code.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_product_name.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_spec.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_material.ilike(f"%{trimmed}%"),

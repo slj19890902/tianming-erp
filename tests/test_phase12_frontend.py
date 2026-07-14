@@ -170,6 +170,14 @@ def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
     assert '{ label: "已送完", value: "finished_delivery" }' in INDEX
     assert ':style="customerRowStyle(group.customer_id)"' in INDEX
 
+    delivery_search_start = INDEX.index("async searchDeliveryLine(line)")
+    delivery_search_end = INDEX.index(
+        "selectDeliveryCandidateById(line, orderItemId)", delivery_search_start
+    )
+    delivery_search_block = INDEX[delivery_search_start:delivery_search_end]
+    assert "q: keyword" in delivery_search_block
+    assert "inventory_code: keyword" not in delivery_search_block
+
     style_start = INDEX.index("customerRowStyle(customerId)")
     style_end = INDEX.index("showToast(message", style_start)
     customer_style_block = INDEX[style_start:style_end]
@@ -197,6 +205,38 @@ def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
     positions = [detail_block.index(field) for field in ordered_fields]
     assert positions == sorted(positions)
     assert "item.remaining_quantity" in detail_block
+
+
+def test_order_search_highlights_visible_text_without_html_injection() -> None:
+    assert ".order-search-highlight" in INDEX
+    assert "orderSearchHighlightParts(value)" in INDEX
+
+    highlight_start = INDEX.index("orderSearchHighlightParts(value)")
+    highlight_end = INDEX.index("toggleOrderSort(field)", highlight_start)
+    highlight_block = INDEX[highlight_start:highlight_end]
+    assert "text.toLowerCase()" in highlight_block
+    assert "keyword.toLowerCase()" in highlight_block
+    assert "text.slice(matchIndex, matchIndex + keyword.length)" in highlight_block
+    assert "innerHTML" not in highlight_block
+    assert "v-html" not in highlight_block
+
+    order_page_start = INDEX.index("activePage === 'orders'")
+    order_page_end = INDEX.index("activePage === 'orders_legacy'", order_page_start)
+    order_page_block = INDEX[order_page_start:order_page_end]
+    assert "orderSearchHighlightParts(group.customer_name || '-')" in order_page_block
+    assert "orderSearchHighlightParts(group.customer_po || '-')" in order_page_block
+    assert "orderSearchHighlightParts(item.item_order_number || '-')" in order_page_block
+    assert "orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" in order_page_block
+    assert "orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" in order_page_block
+    assert "orderSearchHighlightParts(item.snapshot_spec || '-')" in order_page_block
+    assert "{{ part.text }}" in order_page_block
+
+
+def test_delivery_batch_picker_tools_are_left_aligned() -> None:
+    assert ".delivery-batch-picker-toolbar," in INDEX
+    assert ".delivery-batch-picker-tools { justify-content: flex-start; }" in INDEX
+    assert 'class="toolbar delivery-batch-picker-toolbar"' in INDEX
+    assert 'class="toolbar-group delivery-batch-picker-tools"' in INDEX
 
 
 def test_incoming_mobile_login_return_and_cache_protection_are_present() -> None:

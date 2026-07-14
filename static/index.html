@@ -294,6 +294,9 @@
       .order-group-detail-card table th { position: static; background: #f0f0f5; }
       .sub-order-number { font-size: 11px; color: #b0b0bb; font-weight: 600; }
       .main-order-number { color: var(--muted); font-size: 11px; }
+      .order-search-highlight { background: #fef08a; border-radius: 2px; color: inherit; }
+      .delivery-batch-picker-toolbar,
+      .delivery-batch-picker-tools { justify-content: flex-start; }
 
       /* Compact order filter */
       .order-filter-compact { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -1343,11 +1346,11 @@
                       <tr class="order-group-row" :style="customerRowStyle(group.customer_id)">
                         <td class="col-customer-name">
                           <div class="order-group-summary">
-                            <strong>{{ group.customer_name || "-" }}</strong>
+                            <strong><span v-for="(part,index) in orderSearchHighlightParts(group.customer_name || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></strong>
                             <small v-if="group.orders.length > 1">按客户 + 客户单号合并显示</small>
                           </div>
                         </td>
-                        <td class="col-customer-po">{{ group.customer_po || "-" }}</td>
+                        <td class="col-customer-po"><span v-for="(part,index) in orderSearchHighlightParts(group.customer_po || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                         <td>{{ group.order_date || "-" }}</td>
                         <td>{{ group.latest_delivery_date || "-" }}</td>
                         <td>{{ group.child_count }}</td>
@@ -1388,11 +1391,11 @@
                               <tbody>
                                 <template v-for="row in group.orders" :key="row.id">
                                   <tr v-for="item in row.items" :key="item.id">
-                                    <td><span class="sub-order-number">{{ item.item_order_number || "-" }}</span></td>
-                                    <td>{{ plainProductText(item.snapshot_product_code) }}</td>
-                                    <td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
-                                    <td>{{ item.snapshot_spec || "-" }}</td>
-                                    <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px">{{ orderItemMaterialText(item) }}</td>
+                                    <td><span class="sub-order-number"><span v-for="(part,index) in orderSearchHighlightParts(item.item_order_number || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
+                                    <td><span v-for="(part,index) in orderSearchHighlightParts(item.snapshot_spec || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
+                                    <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td class="cell-right"><strong>已送 {{ item.delivered_quantity || 0 }}</strong><div class="muted" style="font-size:11px">未送 {{ item.remaining_quantity ?? Math.max(Number(item.quantity || 0) - Number(item.delivered_quantity || 0), 0) }}</div></td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
@@ -3030,9 +3033,9 @@
               <div v-if="!deliveryCustomers.length" class="status orange" style="margin-bottom:10px">当前没有可送货客户。只有已入库，或已被成品库存全额预占，且仍有未送数量的订单明细才能生成送货单。</div>
               <div v-else-if="!deliveryForm.customer_id" class="status orange" style="margin-bottom:10px">请先选择客户，再按存货编码查询待送货产品。</div>
               <div v-if="deliveryBatchPicker.visible" class="panel" style="margin-bottom:12px">
-                <div class="toolbar" style="margin-bottom:8px">
+                <div class="toolbar delivery-batch-picker-toolbar" style="margin-bottom:8px">
                   <div class="section-title" style="margin:0">批量选择待送货</div>
-                  <div class="toolbar-group">
+                  <div class="toolbar-group delivery-batch-picker-tools">
                     <input class="input" style="width:280px" v-model.trim="deliveryBatchPicker.keyword" placeholder="搜索存货编码 / 客户单号 / 产品名称" />
                     <button class="btn small" type="button" @click="loadDeliveryBatchItems">{{ deliveryBatchPicker.loading ? "查询中..." : "查询" }}</button>
                     <button class="btn small" type="button" @click="clearDeliveryBatchFilter">清空</button>
@@ -4587,6 +4590,26 @@
               item?.quantity,
               item?.delivered_quantity,
             );
+          },
+          orderSearchHighlightParts(value) {
+            const text = String(value ?? "-");
+            const keyword = String(this.filters.orderKeyword || "").trim();
+            if (!keyword) return [{ text, match: false }];
+
+            const normalizedText = text.toLowerCase();
+            const normalizedKeyword = keyword.toLowerCase();
+            const parts = [];
+            let cursor = 0;
+            let matchIndex = normalizedText.indexOf(normalizedKeyword, cursor);
+            while (matchIndex !== -1) {
+              if (matchIndex > cursor) parts.push({ text: text.slice(cursor, matchIndex), match: false });
+              parts.push({ text: text.slice(matchIndex, matchIndex + keyword.length), match: true });
+              cursor = matchIndex + keyword.length;
+              matchIndex = normalizedText.indexOf(normalizedKeyword, cursor);
+            }
+            if (cursor < text.length) parts.push({ text: text.slice(cursor), match: false });
+            // Vue text interpolation renders every part as escaped text; no HTML is constructed from search input or order data.
+            return parts.length ? parts : [{ text, match: false }];
           },
           toggleOrderSort(field) {
             const allowed = ["customer_name", "order_date", "delivery_date"];
@@ -8664,7 +8687,6 @@
                 params: {
                   customer_id: this.deliveryForm.customer_id,
                   q: keyword,
-                  inventory_code: keyword,
                   limit: 20,
                 },
               });

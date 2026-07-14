@@ -5,6 +5,7 @@ import json
 import socket
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from uuid import uuid4
 
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,6 +22,7 @@ from app.api.deps import (
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
 from app.models.product import Product
@@ -30,7 +32,17 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrderItem,
 )
 from app.models.user import User
+from app.models.warehouse_inventory import WarehouseLocation
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.incoming_receipts import (
+    IncomingReceiptError,
+    accept_short,
+    receipt_history,
+    receipt_item_dict,
+    receive_one,
+    revert_receipt_item,
+    source_summary_for_item,
+)
 
 
 router = APIRouter()
@@ -56,6 +68,10 @@ class RevertRequest(BaseModel):
 
 class ReceiveRequest(BaseModel):
     received_quantity: int | None = None
+    resolution_action: str | None = None
+    resolution_reason: str | None = None
+    surplus_location_id: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = Field(default=None, max_length=100)
 
     @field_validator("received_quantity")
     @classmethod
@@ -68,6 +84,10 @@ class ReceiveRequest(BaseModel):
 class BatchReceiveLine(BaseModel):
     item_id: int | str
     received_quantity: int
+    resolution_action: str | None = None
+    resolution_reason: str | None = None
+    surplus_location_id: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = Field(default=None, max_length=100)
 
     @field_validator("received_quantity")
     @classmethod
@@ -79,6 +99,11 @@ class BatchReceiveLine(BaseModel):
 
 class BatchReceiveRequest(BaseModel):
     items: list[BatchReceiveLine] = Field(min_length=1, max_length=200)
+    idempotency_key: str | None = Field(default=None, max_length=80)
+
+
+class AcceptShortRequest(BaseModel):
+    reason: str | None = None
 
 
 def _component_kind(name: str | None) -> str:
@@ -583,6 +608,28 @@ def _rows(
         row["product_drawing_path"] = product_drawing_path
         row["drawing_path"] = final_path
         row["drawing_is_pdf"] = bool(final_path and final_path.lower().endswith(".pdf"))
+        summary = source_summary_for_item(db, row["item_id"])
+        if summary is not None:
+            row.update(summary)
+            if received_since is None:
+                row["incoming_quantity"] = summary["remaining_quantity"]
+        else:
+            planned = int(row.get("requisition_qty") or row.get("quantity") or 0)
+            row.update(
+                {
+                    "planned_quantity": planned,
+                    "cumulative_received_quantity": 0,
+                    "remaining_quantity": planned,
+                    "variance_quantity": 0,
+                    "variance_type": None,
+                    "resolution_status": "not_required",
+                    "resolution_action": None,
+                    "pending_receipt_item_id": None,
+                    "latest_receipt_item_id": None,
+                    "latest_receipt_id": None,
+                    "surplus_inventory_lot_id": None,
+                }
+            )
     return rows
 
 
@@ -889,6 +936,196 @@ def _receive_material(
     return _item_response(db, current.id)
 
 
+def _receipt_fact_rows(
+    db: Session,
+    *,
+    user: User,
+    received_since: datetime | None,
+    include_reversed: bool = False,
+) -> list[dict]:
+    registry = build_display_registry(db)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    rows: list[dict] = []
+    for fact in receipt_history(
+        db,
+        received_since=received_since,
+        include_reversed=include_reversed,
+    ):
+        item = db.get(OrderItem, fact.order_item_id)
+        order = db.get(Order, fact.order_id)
+        if item is None or order is None:
+            continue
+        if (
+            visible_customer_ids is not None
+            and order.customer_id not in visible_customer_ids
+        ):
+            continue
+        product = db.get(Product, item.product_id)
+        customer = db.get(Customer, order.customer_id)
+        requisition_item = (
+            db.get(RequisitionItem, fact.requisition_item_id)
+            if fact.requisition_item_id
+            else None
+        )
+        component = _component_kind(
+            requisition_item.product_name_snapshot if requisition_item else None
+        )
+        product_code = (
+            requisition_item.product_code_snapshot if requisition_item else None
+        ) or item.snapshot_product_code or (product.product_code if product else None)
+        product_name = (
+            requisition_item.product_name_snapshot if requisition_item else None
+        ) or item.snapshot_product_name
+        material_code = (
+            requisition_item.material_snapshot if requisition_item else None
+        ) or item.snapshot_material or ""
+        display_number = display_order_number(order, registry)
+        drawing_path = (item.drawing_file or "").strip() or None
+        if drawing_path is None and product is not None:
+            drawing = db.scalar(
+                select(ProductDrawing)
+                .where(ProductDrawing.product_id == product.id)
+                .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
+            )
+            drawing_path = drawing.image_path if drawing else None
+        receiver = db.get(User, fact.receipt.received_by) if fact.receipt.received_by else None
+        row = {
+            "history_key": f"receipt-{fact.id}",
+            "item_id": f"r{fact.requisition_item_id}" if fact.requisition_item_id else fact.order_item_id,
+            "order_item_id": fact.order_item_id,
+            "requisition_item_id": fact.requisition_item_id,
+            "receipt_id": fact.receipt_id,
+            "receipt_item_id": fact.id,
+            "receipt_number": fact.receipt.receipt_number,
+            "receipt_status": fact.status,
+            "product_id": item.product_id,
+            "order_id": order.id,
+            "order_number": display_number,
+            "display_order_number": display_number,
+            "customer_po": order.customer_po,
+            "customer_name": customer.name if customer else "",
+            "product_name": product_name,
+            "product_code": product_code,
+            "specification": (
+                requisition_item.specification_snapshot if requisition_item else None
+            )
+            or item.snapshot_spec,
+            "material": material_code,
+            "material_code": material_code,
+            "flute_type": item.flute_type or (product.flute_type if product else None),
+            "material_display": (
+                f"{material_code} / {item.flute_type}" if material_code and item.flute_type else material_code
+            ),
+            "quantity": item.quantity,
+            "delivery_date": order.delivery_date,
+            "order_status": order.status,
+            "material_status": item.material_status,
+            "requisition_status": item.requisition_status,
+            "requisition_qty": fact.planned_quantity,
+            "incoming_quantity": fact.received_quantity,
+            "planned_quantity": fact.planned_quantity,
+            "received_quantity_this_time": fact.received_quantity,
+            "cumulative_received_quantity": fact.cumulative_received_quantity,
+            "remaining_quantity": max(
+                fact.planned_quantity - fact.cumulative_received_quantity, 0
+            ),
+            "variance_quantity": fact.variance_quantity,
+            "variance_type": fact.variance_type,
+            "resolution_status": fact.resolution_status,
+            "resolution_action": fact.resolution_action,
+            "resolution_reason": fact.resolution_reason,
+            "surplus_inventory_lot_id": fact.surplus_inventory_lot_id,
+            "requisition_date": item.requisition_date,
+            "requisition_spec": item.requisition_spec,
+            "cardboard_len": (
+                requisition_item.cardboard_len if requisition_item else item.cardboard_len
+            ),
+            "cardboard_width": (
+                requisition_item.cardboard_width if requisition_item else item.cardboard_width
+            ),
+            "snapshot_crease_type": item.snapshot_crease_type,
+            "snapshot_crease_left_mm": item.snapshot_crease_left_mm,
+            "snapshot_crease_middle_mm": item.snapshot_crease_middle_mm,
+            "snapshot_crease_right_mm": item.snapshot_crease_right_mm,
+            "snapshot_base_crease_type": item.snapshot_base_crease_type,
+            "snapshot_base_crease_left_mm": item.snapshot_base_crease_left_mm,
+            "snapshot_base_crease_middle_mm": item.snapshot_base_crease_middle_mm,
+            "snapshot_base_crease_right_mm": item.snapshot_base_crease_right_mm,
+            "snapshot_supplier_name": item.snapshot_supplier_name,
+            "requisition_remark": (
+                requisition_item.remark if requisition_item else item.requisition_remark
+            ),
+            "special_process": (
+                requisition_item.special_process if requisition_item else item.special_process
+            ),
+            "supplier_delivery_time": item.supplier_delivery_time,
+            "supplier_order_number": item.supplier_order_number,
+            "material_received_at": fact.receipt.received_at,
+            "material_received_by": fact.receipt.received_by,
+            "received_by_name": receiver.real_name if receiver else None,
+            "component_type": component or "single",
+            "drawing_path": drawing_path,
+            "drawing_is_pdf": bool(drawing_path and drawing_path.lower().endswith(".pdf")),
+        }
+        _apply_component_crease(row, component)
+        rows.append(row)
+    return rows
+
+
+def _received_rows(
+    db: Session,
+    *,
+    user: User,
+    received_since: datetime,
+    include_reversed: bool = False,
+) -> list[dict]:
+    facts = _receipt_fact_rows(
+        db,
+        user=user,
+        received_since=received_since,
+        include_reversed=include_reversed,
+    )
+    fact_keys = {str(row["item_id"]) for row in facts}
+    legacy = [
+        row for row in _rows(db, user=user, received_since=received_since)
+        if str(row["item_id"]) not in fact_keys
+    ]
+    combined = [*facts, *legacy]
+    combined.sort(
+        key=lambda row: row.get("material_received_at") or datetime.min,
+        reverse=True,
+    )
+    return combined
+
+
+
+@router.get("/surplus-locations")
+def surplus_inventory_locations(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_operate),
+) -> dict:
+    """Return only locations that can receive an incoming surplus transfer."""
+    rows = db.scalars(
+        select(WarehouseLocation)
+        .where(
+            WarehouseLocation.is_active.is_(True),
+            WarehouseLocation.warehouse_type.in_(("semi_finished", "shared")),
+        )
+        .order_by(WarehouseLocation.location_code, WarehouseLocation.id)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "location_code": row.location_code,
+                "location_name": row.location_name,
+                "warehouse_type": row.warehouse_type,
+            }
+            for row in rows
+        ]
+    }
+
+
 @router.get("/pending")
 def pending_items(
     db: Session = Depends(get_db),
@@ -903,7 +1140,7 @@ def recently_received_items(
     user: User = Depends(can_read),
 ) -> dict:
     return {
-        "items": _rows(
+        "items": _received_rows(
             db,
             user=user,
             received_since=_utc_now() - timedelta(hours=24),
@@ -919,7 +1156,14 @@ def history_received_items(
     """返回全部历史入库记录（不限时间）。"""
     # received_since=epoch_start 表示"从最早时间起"即不过滤
     epoch_start = datetime(2000, 1, 1)
-    return {"items": _rows(db, user=user, received_since=epoch_start)}
+    return {
+        "items": _received_rows(
+            db,
+            user=user,
+            received_since=epoch_start,
+            include_reversed=True,
+        )
+    }
 
 
 def _lan_ip() -> str:
@@ -947,6 +1191,49 @@ def mobile_entry(
     return {"url": url, "qr_data_url": f"data:image/png;base64,{encoded}"}
 
 
+def _new_receipt_response(db: Session, fact: IncomingReceiptItem) -> dict:
+    item_key: int | str = (
+        f"r{fact.requisition_item_id}"
+        if fact.requisition_item_id
+        else fact.order_item_id
+    )
+    response = (
+        _component_response(db, fact.requisition_item_id)
+        if fact.requisition_item_id
+        else _item_response(db, fact.order_item_id)
+    )
+    response.update(receipt_item_dict(fact))
+    summary = source_summary_for_item(db, item_key)
+    if summary is not None:
+        response.update(summary)
+        response["incoming_quantity"] = (
+            summary["remaining_quantity"]
+            if summary["resolution_action"] == "await_supplier"
+            and summary["remaining_quantity"] > 0
+            else fact.received_quantity
+        )
+    return response
+
+
+def _raise_receipt_error(error: IncomingReceiptError) -> None:
+    raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _preflight_receipt_item_customer_access(
+    db: Session,
+    *,
+    receipt_item_id: int,
+    user: User,
+) -> None:
+    fact = db.get(IncomingReceiptItem, receipt_item_id)
+    if fact is not None:
+        _require_order_item_customer_access(
+            db,
+            order_item_id=fact.order_item_id,
+            user=user,
+        )
+
+
 @router.put("/receive/{item_id}")
 def receive_item(
     item_id: str,
@@ -954,17 +1241,25 @@ def receive_item(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    _preflight_item_customer_access(db, item_id=item_id, user=user)
     try:
-        response = _receive_material(
+        fact = receive_one(
             db,
             user=user,
-            item_id=item_id,
+            item_key=item_id,
             received_quantity=(
                 payload.received_quantity if payload is not None else None
             ),
+            resolution_action=(payload.resolution_action if payload else None),
+            resolution_reason=(payload.resolution_reason if payload else None),
+            surplus_location_id=(payload.surplus_location_id if payload else None),
+            idempotency_key=(payload.idempotency_key if payload else None),
         )
         db.commit()
-        return response
+        return _new_receipt_response(db, fact)
+    except IncomingReceiptError as error:
+        db.rollback()
+        _raise_receipt_error(error)
     except HTTPException:
         db.rollback()
         raise
@@ -999,12 +1294,24 @@ def batch_receive_items(
         seen.add(line.item_id)
         try:
             with db.begin_nested():
-                response = _receive_material(
+                fact = receive_one(
                     db,
                     user=user,
-                    item_id=line.item_id,
+                    item_key=line.item_id,
                     received_quantity=line.received_quantity,
+                    resolution_action=line.resolution_action,
+                    resolution_reason=line.resolution_reason,
+                    surplus_location_id=line.surplus_location_id,
+                    idempotency_key=(
+                        line.idempotency_key
+                        or (
+                            f"{payload.idempotency_key}:{line.item_id}"
+                            if payload.idempotency_key
+                            else uuid4().hex
+                        )
+                    ),
                 )
+                response = _new_receipt_response(db, fact)
             results.append(
                 {
                     "item_id": line.item_id,
@@ -1014,12 +1321,14 @@ def batch_receive_items(
                 }
             )
             succeeded += 1
-        except HTTPException as error:
+        except (HTTPException, IncomingReceiptError) as error:
             results.append(
                 {
                     "item_id": line.item_id,
                     "success": False,
-                    "message": str(error.detail),
+                    "message": str(
+                        error.detail if isinstance(error, HTTPException) else error
+                    ),
                 }
             )
         except Exception:
@@ -1037,6 +1346,58 @@ def batch_receive_items(
         "failed": len(payload.items) - succeeded,
         "results": results,
     }
+
+
+@router.put("/receipt-items/{receipt_item_id}/accept-short")
+def accept_short_receipt_item(
+    receipt_item_id: int,
+    payload: AcceptShortRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    _preflight_receipt_item_customer_access(
+        db,
+        receipt_item_id=receipt_item_id,
+        user=user,
+    )
+    try:
+        fact = accept_short(
+            db,
+            user=user,
+            receipt_item_id=receipt_item_id,
+            reason=payload.reason,
+        )
+        db.commit()
+        return _new_receipt_response(db, fact)
+    except IncomingReceiptError as error:
+        db.rollback()
+        _raise_receipt_error(error)
+
+
+@router.put("/receipt-items/{receipt_item_id}/revert")
+def revert_new_receipt_item(
+    receipt_item_id: int,
+    payload: RevertRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    _preflight_receipt_item_customer_access(
+        db,
+        receipt_item_id=receipt_item_id,
+        user=user,
+    )
+    try:
+        fact = revert_receipt_item(
+            db,
+            user=user,
+            receipt_item_id=receipt_item_id,
+            reason=payload.reason,
+        )
+        db.commit()
+        return receipt_item_dict(fact)
+    except IncomingReceiptError as error:
+        db.rollback()
+        _raise_receipt_error(error)
 
 
 def _revert_requisition_component(

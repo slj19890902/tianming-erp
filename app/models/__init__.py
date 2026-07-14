@@ -96,3 +96,7 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     SemiFinishedMatchRuleProduct,
     WarehouseLocation,
 )
+from app.models.incoming_receipt import (  # noqa: E402,F401
+    IncomingReceipt,
+    IncomingReceiptItem,
+)

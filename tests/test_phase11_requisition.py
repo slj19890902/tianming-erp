@@ -1286,22 +1286,31 @@ def test_incoming_quantity_can_be_changed_when_receiving(requisition_app) -> Non
         _login(client, "sales")
         batch = client.post("/api/requisition/batches", json=_batch_payload())
         assert batch.status_code == 201, batch.text
+        with session_factory() as session:
+            original_order_qty = session.get(OrderItem, 1).requisition_qty
+            original_requisition_qty = session.query(RequisitionItem).filter_by(
+                order_item_id=1,
+                status="有效",
+            ).one().requisition_qty
         client.post("/api/auth/logout")
         _login(client, "workshop")
         received = client.put(
             "/api/incoming/receive/1",
-            json={"received_quantity": 92},
+            json={
+                "received_quantity": 92,
+                "resolution_action": "all_to_production",
+            },
         )
 
     assert received.status_code == 200, received.text
     assert received.json()["incoming_quantity"] == 92
     with session_factory() as session:
-        assert session.get(OrderItem, 1).requisition_qty == 92
+        assert session.get(OrderItem, 1).requisition_qty == original_order_qty
         requisition_item = session.query(RequisitionItem).filter_by(
             order_item_id=1,
             status="有效",
         ).one()
-        assert requisition_item.requisition_qty == 92
+        assert requisition_item.requisition_qty == original_requisition_qty
 
 
 def test_mobile_entry_returns_lan_url_and_qr_code(requisition_app) -> None:
@@ -1591,6 +1600,107 @@ def test_requisition_blocks_mismatched_unit_crease_but_not_purchase_width_factor
     assert "采购宽" not in rejected.json()["detail"]
 
 
+def _seed_n005_component_rows(session_factory, names: list[str]) -> list[int]:
+    from app.models.order import OrderItem
+    from app.models.requisition import Requisition, RequisitionItem
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        requisition = Requisition(
+            requisition_number="N005-COMPONENT-PARENT",
+            requisition_date=date(2026, 7, 14),
+            supplier_name="N005测试供应商",
+            status="已报料",
+        )
+        session.add(requisition)
+        session.flush()
+        rows = [
+            RequisitionItem(
+                requisition_id=requisition.id,
+                order_item_id=item.id,
+                requisition_qty=100,
+                cardboard_len=Decimal("400"),
+                cardboard_width=Decimal("300"),
+                special_process="无",
+                product_name_snapshot=name,
+                status="有效",
+            )
+            for name in names
+        ]
+        session.add_all(rows)
+        item.material_status = "pending"
+        item.requisition_status = "已报料"
+        item.requisition_qty = 100 * len(rows)
+        session.commit()
+        return [row.id for row in rows]
+
+
+def test_telescoping_parent_path_rejected_after_cover_received_for_single_and_batch(
+    requisition_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.requisition import RequisitionItem
+
+    app, session_factory = requisition_app
+    cover_id, base_id = _seed_n005_component_rows(
+        session_factory,
+        ["天地盖测试箱-盖", "天地盖测试箱-底"],
+    )
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        cover = client.put(f"/api/incoming/receive/r{cover_id}")
+        parent = client.put(
+            "/api/incoming/receive/1",
+            json={"received_quantity": 100},
+        )
+        batch = client.put(
+            "/api/incoming/batch-receive",
+            json={"items": [{"item_id": 1, "received_quantity": 100}]},
+        )
+
+    assert cover.status_code == 200, cover.text
+    assert parent.status_code == 409
+    assert "天地盖来料必须分别" in parent.json()["detail"]
+    assert batch.status_code == 200
+    assert batch.json()["succeeded"] == 0
+    assert "天地盖来料必须分别" in batch.json()["results"][0]["message"]
+    with session_factory() as session:
+        assert session.get(RequisitionItem, cover_id).status == "已入库"
+        assert session.get(RequisitionItem, base_id).status == "有效"
+        assert session.get(OrderItem, 1).material_status == "pending"
+        assert session.query(IncomingReceiptItem).count() == 1
+
+
+def test_telescoping_parent_path_rejected_for_single_side_anomaly(
+    requisition_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.requisition import RequisitionItem
+
+    app, session_factory = requisition_app
+    (cover_id,) = _seed_n005_component_rows(
+        session_factory,
+        ["天地盖异常数据-盖"],
+    )
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        parent = client.put("/api/incoming/receive/1")
+        batch = client.put(
+            "/api/incoming/batch-receive",
+            json={"items": [{"item_id": 1, "received_quantity": 100}]},
+        )
+
+    assert parent.status_code == 409
+    assert "天地盖来料必须分别" in parent.json()["detail"]
+    assert batch.status_code == 200
+    assert batch.json()["failed"] == 1
+    assert "天地盖来料必须分别" in batch.json()["results"][0]["message"]
+    with session_factory() as session:
+        assert session.get(RequisitionItem, cover_id).status == "有效"
+        assert session.query(IncomingReceiptItem).count() == 0
+
+
 def test_telescoping_lid_requisition_splits_cover_and_base_rows(
     requisition_app,
 ) -> None:
@@ -1643,12 +1753,18 @@ def test_telescoping_lid_requisition_splits_cover_and_base_rows(
         assert created.status_code == 201, created.text
         batch_id = created.json()["id"]
         printed = client.get(f"/api/requisition/batches/{batch_id}/print")
+        with session_factory() as session:
+            component_ids = [
+                row.id
+                for row in session.query(RequisitionItem)
+                .filter_by(order_item_id=1, status="有效")
+                .order_by(RequisitionItem.id)
+                .all()
+            ]
         client.post("/api/auth/logout")
         _login(client, "workshop")
-        received = client.put(
-            "/api/incoming/receive/1",
-            json={"received_quantity": 150},
-        )
+        received_cover = client.put(f"/api/incoming/receive/r{component_ids[0]}")
+        received_base = client.put(f"/api/incoming/receive/r{component_ids[1]}")
 
     assert printed.status_code == 200, printed.text
     print_rows = printed.json()["items"]
@@ -1660,18 +1776,20 @@ def test_telescoping_lid_requisition_splits_cover_and_base_rows(
     assert [row["crease_display"] for row in print_rows] == ["50+200+50", "50+175+50"]
     assert print_rows[0]["report_remark"] == "盖料备注"
     assert print_rows[1]["report_remark"] == "底料备注"
-    assert received.status_code == 200, received.text
-    assert received.json()["incoming_quantity"] == 150
+    assert received_cover.status_code == 200, received_cover.text
+    assert received_base.status_code == 200, received_base.text
+    assert received_cover.json()["incoming_quantity"] == 100
+    assert received_base.json()["incoming_quantity"] == 100
 
     with session_factory() as session:
         item = session.get(OrderItem, 1)
         rows = (
             session.query(RequisitionItem)
-            .filter_by(order_item_id=1, status="有效")
+            .filter_by(order_item_id=1, status="已入库")
             .order_by(RequisitionItem.id)
             .all()
         )
-        assert item.requisition_qty == 150
+        assert item.requisition_qty == 200
         assert item.requisition_spec == "盖:400×300；底:375×275"
         assert [row.product_name_snapshot for row in rows] == [
             "天地盖测试箱-盖",
@@ -1679,7 +1797,7 @@ def test_telescoping_lid_requisition_splits_cover_and_base_rows(
         ]
         assert [int(row.cardboard_len) for row in rows] == [400, 375]
         assert [int(row.cardboard_width) for row in rows] == [300, 275]
-        assert [row.requisition_qty for row in rows] == [100, 50]
+        assert [row.requisition_qty for row in rows] == [100, 100]
 
 
 def test_telescoping_lid_incoming_keeps_cover_and_base_as_separate_rows(

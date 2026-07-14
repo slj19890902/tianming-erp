@@ -1510,7 +1510,7 @@
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:incomingTab==='pending'}]" @click="incomingTab='pending'">待入库 {{ incomingPending.length }}</button>
-                  <button :class="['btn',{primary:incomingTab==='received'}]" @click="incomingTab='received'">今日已入库 {{ incomingReceived.length }}</button>
+                  <button :class="['btn',{primary:incomingTab==='received'}]" @click="incomingTab='received'">今日实收 {{ incomingReceived.length }}</button>
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="incomingTab='history'; loadIncomingHistory()">历史入库</button>
                 </div>
                 <div class="toolbar-group">
@@ -1520,15 +1520,17 @@
               </div>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length">
                 <table>
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>入库数量</th><th>报料日期</th><th>PDF图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
-                  <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.item_id">
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>纸板报料尺寸</th><th>客户名称</th><th>存货编码</th><th>产品名称</th><th>材质</th><th>计划 / 累计 / 剩余</th><th>本次实收</th><th>差异处理</th><th>报料日期</th><th>PDF图纸</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
+                  <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
                     <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
                     <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
                     <td>{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
+                    <td><div>计划 {{ row.planned_quantity ?? row.requisition_qty ?? row.quantity }}</div><div>累计 {{ row.cumulative_received_quantity || 0 }}</div><strong>剩余 {{ row.remaining_quantity ?? row.requisition_qty ?? row.quantity }}</strong></td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
+                    <td style="min-width:210px"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，等待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">请选择短收处理</option><option value="await_supplier">继续等待供应商补货</option><option value="accept_short">按当前累计数量结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">请选择超收处理</option><option value="all_to_production">全部投入当前生产</option><option value="transfer_to_semi_inventory">超出部分转半成品库存</option></select><span v-else class="status green">本次后累计等于计划</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">请选择半成品库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
-                    <td v-if="hasPermission('incoming.execute')"><button v-if="incomingTab==='pending'" class="btn small success" @click="receiveIncoming(row)">确认入库</button><button v-else class="btn small danger" @click="revertIncoming(row)">撤回</button></td>
+                    <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else class="btn small danger" @click="revertIncoming(row)">撤回</button></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -1560,7 +1562,7 @@
               <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
                 <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
+                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
               </data-panel>
               <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
@@ -3004,7 +3006,7 @@
             </div>
             <div v-else-if="modal.type === 'receipt'">
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
-              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异原因</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" :max="line.delivered_quantity" v-model.number="line.actual_received_quantity" /></td><td><input class="input" v-model.trim="line.difference_reason" :placeholder="Number(line.actual_received_quantity)!==Number(line.delivered_quantity) ? '差异时必填' : '无差异'" /></td></tr></tbody></table>
+              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'deliveryRoute'">
               <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
@@ -3047,7 +3049,7 @@
                 <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
                 <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" v-model="deliveryBatchPicker.selected[item.order_item_id]" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
-              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" :max="line.remaining_quantity || null" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
+              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超送 {{ Number(line.delivered_quantity)-Number(line.remaining_quantity) }}，请核对数量</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -3685,7 +3687,7 @@
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [],
             stockHistorySearch: { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0 },
             stockReplenishmentForm: { source_type:"manual_history", supplier_name:"", customer_id:null, remark:"", stock_now:true, items:[] },
-            incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [],
+            incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [], incomingLocations: [],
             productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
@@ -5806,16 +5808,44 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async loadIncoming() {
-            const [pending,received]=await Promise.all([
+            const [pending,received,locations]=await Promise.all([
               axios.get("/api/incoming/pending"),
-              axios.get("/api/incoming/received")
+              axios.get("/api/incoming/received"),
+              this.hasPermission("incoming.execute")
+                ? axios.get("/api/incoming/surplus-locations")
+                : Promise.resolve({data:{items:[]}})
             ]);
-            this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)}));
+            this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
             this.incomingReceived=(received.data.items || []).map(row=>({...row,incoming_quantity:Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)}));
+            this.incomingLocations=locations.data.items || [];
             const pendingIds = new Set(this.incomingPending.map(row => row.item_id));
             Object.keys(this.incomingSelected).forEach(itemId => {
               if (!pendingIds.has(Number(itemId))) delete this.incomingSelected[itemId];
             });
+          },
+          incomingProjectedVariance(row) {
+            return Number(row.cumulative_received_quantity || 0) + Number(row.incoming_quantity || 0) - Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0);
+          },
+          incomingSemiLocations() {
+            return (this.incomingLocations || []).filter(row => ["semi_finished", "shared"].includes(row.warehouse_type));
+          },
+          incomingVarianceLabel(row) {
+            const type=row?.variance_type;
+            const action=row?.resolution_action;
+            if (type === "matched") return "等量收货";
+            if (action === "await_supplier") return "短收，继续等待补货";
+            if (action === "accept_short") return "短收，已人工结单";
+            if (action === "all_to_production") return "超收，全部投入生产";
+            if (action === "transfer_to_semi_inventory") return "超收，余量已转半成品库存";
+            return type === "short" ? "短收待处理" : type === "over" ? "超收待处理" : "历史入库";
+          },
+          incomingPayload(row) {
+            const variance=this.incomingProjectedVariance(row);
+            const action=variance===0 ? null : (row.resolution_action || null);
+            if (variance<0 && !["await_supplier","accept_short"].includes(action)) throw new Error("短收时请选择继续等待补货或按当前数量结单");
+            if (variance>0 && !["all_to_production","transfer_to_semi_inventory"].includes(action)) throw new Error("超收时请选择全部投入生产或余量转半成品库存");
+            if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,idempotency_key:createIdempotencyKey()};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status);
@@ -5837,14 +5867,13 @@
                 this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
                 return;
               }
+              try { this.incomingPayload(row); } catch(error) { this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
             }
             if (!confirm(`确认将选中的 ${rows.length} 条来料记录入库？`)) return;
             try {
               const { data } = await axios.put("/api/incoming/batch-receive", {
-                items: rows.map(row => ({
-                  item_id: row.item_id,
-                  received_quantity: Number(row.incoming_quantity),
-                })),
+                idempotency_key:createIdempotencyKey(),
+                items: rows.map(row => this.incomingPayload(row)),
               });
               this.incomingSelected = {};
               await Promise.all([this.loadIncoming(), this.loadKpi()]);
@@ -5859,18 +5888,30 @@
           async receiveIncoming(row) {
             const quantity=Number(row.incoming_quantity);
             if (!Number.isInteger(quantity) || quantity <= 0) { this.showToast("入库数量必须是大于0的整数",true); return; }
+            let payload;
+            try { payload=this.incomingPayload(row); } catch(error) { this.showToast(error.message,true); return; }
             if (!confirm(`确认入库 ${quantity} 张纸板吗？`)) return;
             try {
-              await axios.put(`/api/incoming/receive/${row.item_id}`,{received_quantity:quantity});
+              const {data}=await axios.put(`/api/incoming/receive/${row.item_id}`,payload);
               await Promise.all([this.loadIncoming(),this.loadKpi()]);
-              this.showToast("来料入库成功");
+              this.showToast(data.material_status==="pending" ? `已记录实收，仍待补 ${data.remaining_quantity} 张` : "来料入库成功");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async acceptShortIncoming(row) {
+            if (!row.pending_receipt_item_id) return;
+            if (!confirm("确认供应商不再补货，并按当前累计实收数量完成收货？")) return;
+            try {
+              await axios.put(`/api/incoming/receipt-items/${row.pending_receipt_item_id}/accept-short`,{});
+              await Promise.all([this.loadIncoming(),this.loadKpi()]);
+              this.showToast("已按当前实收数量完成短收结单");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async revertIncoming(row) {
             const reason=prompt("请输入撤回原因：");
             if (!reason?.trim()) return;
             try {
-              await axios.put(`/api/incoming/revert/${row.item_id}`,{reason:reason.trim()});
+              const url=row.receipt_item_id ? `/api/incoming/receipt-items/${row.receipt_item_id}/revert` : `/api/incoming/revert/${row.item_id}`;
+              await axios.put(url,{reason:reason.trim()});
               if (this.incomingTab === 'history') {
                 await Promise.all([this.loadIncomingHistory(), this.loadKpi()]);
               } else {
@@ -8416,6 +8457,25 @@
             try { await axios.put(`/api/requisition/items/${row.item_id}/cancel`, {reason}); await this.loadRequisition(); this.showToast("已退回待报料池"); }
             catch (error) { this.showToast(this.errorMessage(error), true); }
           },
+          normalizeReceiptResolution(line) {
+            const actual = Number(line.actual_received_quantity);
+            const delivered = Number(line.delivered_quantity);
+            if (actual === delivered) line.resolution_action = "";
+            else if (actual < delivered && line.resolution_action === "accept_over") line.resolution_action = "";
+            else if (actual > delivered && ["continue_delivery", "accept_short"].includes(line.resolution_action)) line.resolution_action = "";
+          },
+          validateReceiptForm() {
+            for (let index = 0; index < (this.receiptForm.items || []).length; index += 1) {
+              const line = this.receiptForm.items[index];
+              const actual = Number(line.actual_received_quantity);
+              const delivered = Number(line.delivered_quantity);
+              if (!Number.isInteger(actual) || actual < 0) return "第" + (index + 1) + "行实际签收数必须是非负整数";
+              if (actual === delivered) continue;
+              if (actual < delivered && !["continue_delivery", "accept_short"].includes(line.resolution_action)) return "第" + (index + 1) + "行请选择继续待送或按实收结单";
+              if (actual > delivered && line.resolution_action !== "accept_over") return "第" + (index + 1) + "行请确认按实际超收数量入账";
+            }
+            return "";
+          },
           async openReceipt(row) {
             const delivery = (await axios.get(`/api/deliveries/${row.id}`)).data;
             let receipt = null;
@@ -8428,6 +8488,7 @@
                 delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
                 delivered_quantity:item.delivered_quantity,
                 actual_received_quantity:saved.get(item.id)?.actual_received_quantity ?? item.delivered_quantity,
+                resolution_action:saved.get(item.id)?.resolution_action || "",
                 difference_reason:saved.get(item.id)?.difference_reason || ""
               }))
             };
@@ -8608,7 +8669,6 @@
               const quantity = Number(line.delivered_quantity);
               const remaining = Number(line.remaining_quantity || 0);
               if (!Number.isInteger(quantity) || quantity <= 0) return `第${index + 1}行本次送货数量必须大于0`;
-              if (quantity > remaining) return `第${index + 1}行本次送货数量不能超过未送数量`;
             }
             return "";
           },
@@ -9123,6 +9183,10 @@
                 window.open(`/requisition-print.html?id=${data.id}`, "_blank");
               }
               if (this.modal.type === "receipt") {
+                const receiptError = this.validateReceiptForm();
+                if (receiptError) throw new Error(receiptError);
+                const overReceiptLines = this.receiptForm.items.filter(line => Number(line.actual_received_quantity) > Number(line.delivered_quantity));
+                if (overReceiptLines.length && !confirm("有 " + overReceiptLines.length + " 条实收数量超过发货数量，确认按实际超收数量入账吗？")) return;
                 const payload = {
                   actual_received_date:this.receiptForm.actual_received_date,
                   signed_by:this.receiptForm.signed_by,
@@ -9149,6 +9213,7 @@
                   ({ data } = await axios.put(`/api/deliveries/${this.deliveryForm.editingId}`, { delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
                 } else {
                   ({ data } = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
+                  this.pages.deliveries = 1;
                 }
                 await this.loadDeliveries();
               }

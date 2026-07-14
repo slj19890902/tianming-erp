@@ -103,6 +103,7 @@
       activeTab: "pending",
       pending: [],
       received: [],
+      locations: [],
       user: null,
       permissions: [],
       revertingItemId: null,
@@ -113,6 +114,17 @@
     const $ = (id) => document.getElementById(id);
     const hasPermission = (code) => state.user?.role === "admin" || state.permissions.includes(code);
     const canOperate = () => hasPermission("incoming.execute");
+
+    function createIdempotencyKey() {
+      const cryptoApi = globalThis.crypto;
+      if (cryptoApi && typeof cryptoApi.randomUUID === "function") return cryptoApi.randomUUID();
+      if (cryptoApi && typeof cryptoApi.getRandomValues === "function") {
+        const values = new Uint32Array(4);
+        cryptoApi.getRandomValues(values);
+        return Array.from(values, value => value.toString(16).padStart(8, "0")).join("");
+      }
+      return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -278,21 +290,35 @@
     // 备注、订单信息等移到点击卡片后的展开区域，减少默认高度、单屏可看更多张卡片。
     function renderCard(item) {
       const isPending = state.activeTab === "pending";
-      const disabled = state.busyItemId === item.item_id;
-      const expanded = state.expandedIds.has(item.item_id);
+      const key = String(item.history_key || item.item_id);
+      const disabled = state.busyItemId === key;
+      const expanded = state.expandedIds.has(key);
       const drawingAvailable = hasDrawing(item);
       const drawingButton = drawingAvailable
-        ? `<button data-drawing="${item.item_id}" class="min-h-12 w-full rounded-lg bg-indigo-700 px-2 text-sm font-bold text-white active:bg-indigo-800">打开图纸</button>`
+        ? `<button data-drawing="${key}" class="min-h-12 w-full rounded-lg bg-indigo-700 px-2 text-sm font-bold text-white active:bg-indigo-800">打开图纸</button>`
         : `<button disabled class="min-h-12 w-full rounded-lg bg-slate-300 px-2 text-sm font-bold text-slate-500">无图纸</button>`;
 
       const quantityBlock = isPending && canOperate()
-        ? `<input data-quantity="${item.item_id}" class="mt-1 w-full rounded-lg border-2 border-slate-300 bg-white p-2 text-xl font-black" type="number" min="1" step="1" value="${escapeHtml(item.incoming_quantity)}">`
+        ? `<input data-quantity="${key}" class="mt-1 w-full rounded-lg border-2 border-slate-300 bg-white p-2 text-xl font-black" type="number" min="1" step="1" value="${escapeHtml(item.incoming_quantity)}">`
         : `<p class="mt-1 text-xl font-black">${escapeHtml(item.incoming_quantity)}</p>`;
+
+      const planned = Number(item.planned_quantity ?? item.requisition_qty ?? item.quantity ?? 0);
+      const cumulative = Number(item.cumulative_received_quantity || 0);
+      const projected = cumulative + Number(item.incoming_quantity || 0) - planned;
+      const locations = state.locations
+        .filter(row => ["semi_finished", "shared"].includes(row.warehouse_type))
+        .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_code)}｜${escapeHtml(row.location_name)}</option>`)
+        .join("");
+      const decisionBlock = !isPending ? "" : projected < 0
+        ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后仍短收 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() ? "" : "disabled"}><option value="">请选择短收处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等待供应商补货</option><option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按当前累计数量结单</option></select></div>`
+        : projected > 0
+          ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后超收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() ? "" : "disabled"}><option value="">请选择超收处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部投入当前生产</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>超出部分转半成品库存</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() ? "" : "disabled"}><option value="">请选择半成品库位</option>${locations}</select>` : ""}</div>`
+          : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">本次后累计等于计划</div>`;
 
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
         : isPending
-          ? `<button data-receive="${item.item_id}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认入库</button>`
+          ? `<button data-receive="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.pending_receipt_item_id ? `<button data-accept-short="${key}" class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white">不再补货，短收结单</button>` : ""}`
           : "";
 
       const expandedSection = expanded ? `
@@ -309,16 +335,16 @@
                 <div class="col-span-2"><p class="text-slate-500">备注</p><p class="font-bold break-words">${escapeHtml(item.requisition_remark || "无")}</p></div>
               </div>
               ${!isPending && canOperate()
-                ? `<button data-revert="${item.item_id}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-red-700 px-4 text-base font-bold text-white disabled:bg-slate-400">撤回</button>`
+                ? `<button data-revert="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-red-700 px-4 text-base font-bold text-white disabled:bg-slate-400">撤回</button>`
                 : ""}
             </div>` : "";
 
       return `
-          <article data-detail="${item.item_id}" class="rounded-xl border-l-4 ${isPending ? "border-orange-500" : "border-green-600"} bg-white p-2 shadow-sm active:bg-slate-50">
+          <article data-detail="${key}" class="rounded-xl border-l-4 ${isPending ? "border-orange-500" : "border-green-600"} bg-white p-2 shadow-sm active:bg-slate-50">
             <div class="flex items-start justify-between gap-2">
               <div class="rounded-lg bg-blue-50 p-2"><p class="text-xs font-semibold text-blue-700">报料尺寸</p><p class="mt-0.5 text-lg font-black text-blue-950 break-words">${escapeHtml(formatBoardSpec(item.cardboard_len, item.cardboard_width))}</p><p class="mt-1 text-xs font-semibold text-blue-700">压线：<span class="text-blue-950">${escapeHtml(formatCreaseDisplay(item))}</span></p></div>
               <span class="shrink-0 rounded-full ${isPending ? "bg-orange-100 text-orange-800" : "bg-green-100 text-green-800"} px-2 py-1 text-xs font-bold">
-                ${isPending ? "待收料" : "已入库"}
+                ${isPending ? "待收料" : "已实收"}
               </span>
             </div>
             <div class="mt-1.5 grid grid-cols-3 gap-2">
@@ -326,6 +352,8 @@
               <div class="flex items-center">${drawingButton}</div>
             </div>
             <p class="mt-1.5 break-words text-xs text-slate-500">${escapeHtml(item.customer_name)} · ${escapeHtml(item.product_code || "未填写")} · ${escapeHtml(item.product_name)}</p>
+            <p class="mt-1 text-xs text-slate-600">计划 ${planned}｜累计 ${cumulative}｜剩余 ${Math.max(planned-cumulative,0)}</p>
+            ${decisionBlock}
             ${primaryAction ? `<div class="mt-1.5">${primaryAction}</div>` : ""}
             <p class="mt-1 text-center text-xs text-slate-400">${expanded ? "点击卡片收起" : "点击卡片查看更多详情"}</p>
             ${expandedSection}
@@ -365,12 +393,16 @@
       try {
         // v0.23.0 P0-2：每次加载都强制向服务器要最新数据（api() 已附带 no-store + 时间戳），
         // 不复用上一次页面渲染的旧状态。
-        const [pending, received] = await Promise.all([
+        const [pending, received, locations] = await Promise.all([
           api("/api/incoming/pending"),
           api("/api/incoming/received"),
+          canOperate()
+            ? api("/api/incoming/surplus-locations")
+            : Promise.resolve({items: []}),
         ]);
-        state.pending = pending.items;
+        state.pending = pending.items.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
         state.received = received.items;
+        state.locations = locations.items || [];
         state.expandedIds = new Set();
         render();
       } catch (error) {
@@ -387,7 +419,7 @@
     }
 
     function findItem(itemId) {
-      return [...state.pending, ...state.received].find((item) => item.item_id === itemId);
+      return [...state.pending, ...state.received].find((item) => String(item.history_key || item.item_id) === String(itemId));
     }
 
     function toggleExpand(itemId) {
@@ -427,15 +459,57 @@
         showToast("入库数量必须是大于0的整数", true);
         return;
       }
+      const planned = Number(item.planned_quantity ?? item.requisition_qty ?? item.quantity ?? 0);
+      const projectedVariance = Number(item.cumulative_received_quantity || 0) + quantity - planned;
+      const action = projectedVariance === 0 ? null : (item.resolution_action || null);
+      if (projectedVariance < 0 && !["await_supplier", "accept_short"].includes(action)) {
+        showToast("短收时请选择继续等待补货或按当前数量结单", true);
+        return;
+      }
+      if (projectedVariance > 0 && !["all_to_production", "transfer_to_semi_inventory"].includes(action)) {
+        showToast("超收时请选择全部投入生产或余量转半成品库存", true);
+        return;
+      }
+      if (action === "transfer_to_semi_inventory" && !Number(item.surplus_location_id)) {
+        showToast("余量转半成品库存时必须选择库位", true);
+        return;
+      }
       if (!window.confirm(`确认该批 ${quantity} 张纸板已经到厂并完成入库吗？`)) return;
-      state.busyItemId = itemId;
+      state.busyItemId = String(itemId);
       render();
       try {
-        await api(`/api/incoming/receive/${itemId}`, {
+        const result = await api(`/api/incoming/receive/${item.item_id}`, {
           method: "PUT",
-          body: JSON.stringify({ received_quantity: quantity }),
+          body: JSON.stringify({
+            received_quantity: quantity,
+            resolution_action: action,
+            resolution_reason: String(item.resolution_reason || "").trim() || null,
+            surplus_location_id: Number(item.surplus_location_id) || null,
+            idempotency_key: createIdempotencyKey(),
+          }),
         });
-        showToast("入库成功");
+        showToast(result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功");
+        await loadData();
+      } catch (error) {
+        showToast(toChineseMessage(error), true);
+      } finally {
+        state.busyItemId = null;
+        render();
+      }
+    }
+
+    async function acceptShortNow(itemId) {
+      const item = findItem(itemId);
+      if (!item?.pending_receipt_item_id) return;
+      if (!window.confirm("确认供应商不再补货，并按当前累计数量完成收货？")) return;
+      state.busyItemId = String(itemId);
+      render();
+      try {
+        await api(`/api/incoming/receipt-items/${item.pending_receipt_item_id}/accept-short`, {
+          method: "PUT",
+          body: JSON.stringify({}),
+        });
+        showToast("已按当前实收数量完成短收结单");
         await loadData();
       } catch (error) {
         showToast(toChineseMessage(error), true);
@@ -464,9 +538,10 @@
     });
 
     $("cardList").addEventListener("click", (event) => {
-      if (event.target.closest("[data-quantity]")) return;
+      if (event.target.closest("[data-quantity], [data-resolution], [data-resolution-reason], [data-surplus-location]")) return;
       const drawingButton = event.target.closest("[data-drawing]");
       const receiveButton = event.target.closest("[data-receive]");
+      const acceptShortButton = event.target.closest("[data-accept-short]");
       const revertButton = event.target.closest("[data-revert]");
       if (drawingButton) {
         event.stopPropagation();
@@ -476,6 +551,11 @@
       if (receiveButton) {
         event.stopPropagation();
         receive(receiveButton.dataset.receive);
+        return;
+      }
+      if (acceptShortButton) {
+        event.stopPropagation();
+        acceptShortNow(acceptShortButton.dataset.acceptShort);
         return;
       }
       if (revertButton) {
@@ -488,9 +568,35 @@
     });
     $("cardList").addEventListener("input", (event) => {
       const input = event.target.closest("[data-quantity]");
-      if (!input) return;
-      const item = findItem(input.dataset.quantity);
-      if (item) item.incoming_quantity = Number(input.value);
+      const reasonInput = event.target.closest("[data-resolution-reason]");
+      if (input) {
+        const item = findItem(input.dataset.quantity);
+        if (item) item.incoming_quantity = Number(input.value);
+      } else if (reasonInput) {
+        const item = findItem(reasonInput.dataset.resolutionReason);
+        if (item) item.resolution_reason = reasonInput.value;
+      }
+    });
+    $("cardList").addEventListener("change", (event) => {
+      const quantityInput = event.target.closest("[data-quantity]");
+      const actionSelect = event.target.closest("[data-resolution]");
+      const locationSelect = event.target.closest("[data-surplus-location]");
+      if (quantityInput) {
+        const item = findItem(quantityInput.dataset.quantity);
+        if (item) item.incoming_quantity = Number(quantityInput.value);
+        render();
+      } else if (actionSelect) {
+        const item = findItem(actionSelect.dataset.resolution);
+        if (item) {
+          item.resolution_action = actionSelect.value;
+          if (item.resolution_action !== "accept_short") item.resolution_reason = "";
+          if (item.resolution_action !== "transfer_to_semi_inventory") item.surplus_location_id = null;
+          render();
+        }
+      } else if (locationSelect) {
+        const item = findItem(locationSelect.dataset.surplusLocation);
+        if (item) item.surplus_location_id = Number(locationSelect.value) || null;
+      }
     });
 
     $("revertForm").addEventListener("submit", async (event) => {
@@ -505,7 +611,11 @@
       state.busyItemId = itemId;
       render();
       try {
-        await api(`/api/incoming/revert/${itemId}`, {
+        const item = findItem(itemId);
+        const url = item?.receipt_item_id
+          ? `/api/incoming/receipt-items/${item.receipt_item_id}/revert`
+          : `/api/incoming/revert/${item?.item_id ?? itemId}`;
+        await api(url, {
           method: "PUT",
           body: JSON.stringify({ reason }),
         });

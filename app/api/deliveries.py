@@ -77,22 +77,23 @@ def _received_telescoping_capacity(db: Session, order_item_id: int) -> int | Non
         select(
             RequisitionItem.product_name_snapshot,
             RequisitionItem.requisition_qty,
-        ).where(
-            RequisitionItem.order_item_id == order_item_id,
-            RequisitionItem.status == "已入库",
-        )
+            RequisitionItem.status,
+        ).where(RequisitionItem.order_item_id == order_item_id)
     ).all()
     base_qty = 0
     cover_qty = 0
-    for product_name, quantity in rows:
+    has_telescoping_component = False
+    for product_name, quantity, item_status in rows:
         component = _component_kind(product_name)
+        if component:
+            has_telescoping_component = True
+        if item_status != "已入库":
+            continue
         if component == "base":
             base_qty += int(quantity or 0)
         elif component == "cover":
             cover_qty += int(quantity or 0)
-    if base_qty or cover_qty:
-        if not base_qty or not cover_qty:
-            return 0
+    if has_telescoping_component:
         return min(base_qty, cover_qty)
     return None
 
@@ -101,7 +102,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     max_deliverable = int(order_item.quantity or 0)
     inventory_covered = inventory_fully_covers_order_item(db, order_item.id)
     component_capacity = _received_telescoping_capacity(db, order_item.id)
-    if not inventory_covered and component_capacity is not None:
+    if component_capacity is not None:
         max_deliverable = min(max_deliverable, component_capacity)
     elif order_item.material_status != "received" and not inventory_covered:
         return 0
@@ -822,6 +823,12 @@ def _collect_delivery_lines(
             )
         order_item, order = row
         remaining = _delivery_remaining_quantity(db, order_item)
+        component_capacity = _received_telescoping_capacity(db, order_item.id)
+        component_remaining = (
+            max(component_capacity - int(order_item.delivered_quantity or 0), 0)
+            if component_capacity is not None
+            else None
+        )
         if order.customer_id != customer_id:
             raise HTTPException(
                 status_code=400,
@@ -830,10 +837,16 @@ def _collect_delivery_lines(
         full_inventory_coverage = inventory_fully_covers_order_item(
             db, order_item.id
         )
-        if line.delivered_quantity > remaining:
+        if (
+            component_remaining is not None
+            and line.delivered_quantity > component_remaining
+        ):
             raise HTTPException(
                 status_code=400,
-                detail=f"第{index}条本次送货数量不能超过未送数量，当前未送数量为 {remaining}",
+                detail=(
+                    f"第{index}条天地盖盖/底成套可送数量不足，"
+                    f"当前物理可送数量为 {component_remaining}"
+                ),
             )
         if (
             (
@@ -842,7 +855,6 @@ def _collect_delivery_lines(
                 and _received_telescoping_capacity(db, order_item.id) is None
             )
             or order_item.is_force_closed
-            or remaining <= 0
         ):
             raise HTTPException(
                 status_code=400,
@@ -1138,12 +1150,10 @@ def list_deliveries(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    # New delivery drafts must stay at the top. Printing or dispatching an old
+    # delivery must not move it ahead of a delivery that was just created.
     query = select(Delivery.id).order_by(
-        func.coalesce(
-            Delivery.printed_at,
-            Delivery.dispatched_at,
-            Delivery.created_at,
-        ).desc(),
+        Delivery.created_at.desc(),
         Delivery.id.desc(),
     )
     if customer_id is not None:
@@ -1278,12 +1288,21 @@ def dispatch_delivery(
                     detail=f"订单明细{line.order_item_id}不存在",
                 )
             remaining = _delivery_remaining_quantity(db, order_item)
-            if line.delivered_quantity > remaining:
+            component_capacity = _received_telescoping_capacity(db, order_item.id)
+            component_remaining = (
+                max(component_capacity - int(order_item.delivered_quantity or 0), 0)
+                if component_capacity is not None
+                else None
+            )
+            if (
+                component_remaining is not None
+                and line.delivered_quantity > component_remaining
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        f"订单明细{line.order_item_id}可送数量不足，"
-                        f"当前可送数量为 {remaining}"
+                        f"订单明细{line.order_item_id}天地盖盖/底成套可送数量不足，"
+                        f"当前物理可送数量为 {component_remaining}"
                     ),
                 )
             order_id = order_item.order_id

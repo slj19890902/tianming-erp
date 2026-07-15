@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, field_validator
 from sqlalchemy import and_, delete, func, select, text, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -140,6 +140,7 @@ def _safe_filename(name: str) -> str:
 class ReturnReceiptLineCreate(BaseModel):
     delivery_item_id: int
     actual_received_quantity: int
+    resolution_action: str | None = None
     difference_reason: str | None = None
 
 
@@ -704,6 +705,153 @@ def _next_statement_number(db: Session, month: str) -> str:
     return f"ST-{month.replace('-', '')}-{sequence:03d}"
 
 
+def _validated_receipt_resolution(
+    delivery_item: DeliveryItem,
+    line: ReturnReceiptLineCreate,
+) -> tuple[str | None, str | None]:
+    actual = line.actual_received_quantity
+    delivered = int(delivery_item.delivered_quantity or 0)
+    action = (line.resolution_action or "").strip() or None
+    reason = (line.difference_reason or "").strip() or None
+    if actual < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"送货明细{delivery_item.id}实收数量不能小于0",
+        )
+    if actual == delivered:
+        return None, reason
+    if actual < delivered and action not in {"continue_delivery", "accept_short"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"送货明细{delivery_item.id}短收后必须选择继续待送或按实收结单",
+        )
+    if actual > delivered and action != "accept_over":
+        raise HTTPException(
+            status_code=400,
+            detail=f"送货明细{delivery_item.id}超收后必须确认按实际数量入账",
+        )
+    return action, reason
+
+
+def _apply_receipt_order_effect(
+    db: Session,
+    *,
+    delivery_item: DeliveryItem,
+    actual_received_quantity: int,
+    resolution_action: str | None,
+    direction: int,
+) -> int | None:
+    if resolution_action not in {"continue_delivery", "accept_short", "accept_over"}:
+        return None
+    order_item = db.get(OrderItem, delivery_item.order_item_id)
+    if order_item is None:
+        raise HTTPException(status_code=409, detail="回单关联订单明细不存在")
+    adjustment = (
+        int(actual_received_quantity) - int(delivery_item.delivered_quantity or 0)
+    ) * direction
+    adjusted_quantity = int(order_item.delivered_quantity or 0) + adjustment
+    if adjusted_quantity < 0:
+        raise HTTPException(status_code=409, detail="回单数量与订单累计已送数量冲突")
+    order_item.delivered_quantity = adjusted_quantity
+    if resolution_action == "accept_short":
+        order_item.is_force_closed = direction > 0
+    return order_item.order_id
+
+
+def _assert_no_later_dispatched_deliveries(
+    db: Session,
+    *,
+    receipt: ReturnReceipt,
+    receipt_items: list[ReturnReceiptItem],
+    delivery_items: dict[int, DeliveryItem],
+) -> None:
+    """Do not reverse a receipt after its released balance has been dispatched."""
+    relevant_order_item_ids = {
+        delivery_items[item.delivery_item_id].order_item_id
+        for item in receipt_items
+        if item.resolution_action == "continue_delivery"
+        and item.delivery_item_id in delivery_items
+    }
+    if not relevant_order_item_ids:
+        return
+
+    # Serialize edits for databases that support row-level locks. SQLite treats
+    # this as a normal read, which is sufficient for the local deployment.
+    db.scalars(
+        select(OrderItem)
+        .where(OrderItem.id.in_(relevant_order_item_ids))
+        .with_for_update()
+    ).all()
+
+    for receipt_item in receipt_items:
+        if receipt_item.resolution_action != "continue_delivery":
+            continue
+        source_item = delivery_items.get(receipt_item.delivery_item_id)
+        if source_item is None:
+            continue
+        later_delivery_number = db.scalar(
+            select(Delivery.delivery_number)
+            .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+            .where(
+                DeliveryItem.order_item_id == source_item.order_item_id,
+                DeliveryItem.delivery_id != source_item.delivery_id,
+                Delivery.status == "dispatched",
+                Delivery.dispatched_at.is_not(None),
+                Delivery.dispatched_at >= receipt.created_at,
+            )
+            .order_by(Delivery.dispatched_at, Delivery.id)
+            .limit(1)
+        )
+        if later_delivery_number:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "该回单产生的待送数量已用于后续送货单 "
+                    f"{later_delivery_number}，请先取消后续发货后再修改或取消旧回单。"
+                ),
+            )
+
+
+def _refresh_receipt_order_statuses(db: Session, order_ids: set[int]) -> None:
+    if not order_ids:
+        return
+    from app.api.deliveries import _refresh_order_status
+
+    for order_id in order_ids:
+        _refresh_order_status(db, order_id)
+
+
+def _claim_return_receipt_status(
+    db: Session,
+    *,
+    receipt_id: int,
+    expected_status: str,
+    next_status: str,
+) -> None:
+    try:
+        claimed = db.execute(
+            update(ReturnReceipt)
+            .where(
+                ReturnReceipt.id == receipt_id,
+                ReturnReceipt.status == expected_status,
+            )
+            .values(status=next_status)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="回单正在被其他操作修改，请刷新后重试",
+        ) from error
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="回单状态已变化，请刷新后重试",
+        )
+
+
 def _receipt_response(db: Session, receipt_id: int) -> dict:
     receipt = db.get(ReturnReceipt, receipt_id)
     rows = db.execute(
@@ -712,6 +860,7 @@ def _receipt_response(db: Session, receipt_id: int) -> dict:
             ReturnReceiptItem.delivery_item_id,
             DeliveryItem.delivered_quantity,
             ReturnReceiptItem.actual_received_quantity,
+            ReturnReceiptItem.resolution_action,
             ReturnReceiptItem.difference_reason,
         )
         .join(
@@ -802,33 +951,39 @@ def create_return_receipt(
             receipt.actual_received_date = payload.actual_received_date
             receipt.signed_by = (payload.signed_by or "").strip() or None
             receipt.status = "confirmed"
+        affected_order_ids: set[int] = set()
+        audit_items: list[dict] = []
         for item in delivery_items:
             line = requested[item.id]
-            if (
-                line.actual_received_quantity < 0
-                or line.actual_received_quantity > item.delivered_quantity
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"送货明细{item.id}实收数量超出有效范围",
-                )
-            reason = (line.difference_reason or "").strip()
-            if (
-                line.actual_received_quantity < item.delivered_quantity
-                and not reason
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"送货明细{item.id}存在数量差异，必须填写原因",
-                )
+            action, reason = _validated_receipt_resolution(item, line)
             db.add(
                 ReturnReceiptItem(
                     return_receipt_id=receipt.id,
                     delivery_item_id=item.id,
                     actual_received_quantity=line.actual_received_quantity,
-                    difference_reason=reason or None,
+                    resolution_action=action,
+                    difference_reason=reason,
                 )
             )
+            order_id = _apply_receipt_order_effect(
+                db,
+                delivery_item=item,
+                actual_received_quantity=line.actual_received_quantity,
+                resolution_action=action,
+                direction=1,
+            )
+            if order_id is not None:
+                affected_order_ids.add(order_id)
+            audit_items.append(
+                {
+                    "delivery_item_id": item.id,
+                    "delivered_quantity": item.delivered_quantity,
+                    "actual_received_quantity": line.actual_received_quantity,
+                    "resolution_action": action,
+                    "difference_reason": reason,
+                }
+            )
+        _refresh_receipt_order_statuses(db, affected_order_ids)
         _audit(
             db,
             user=user,
@@ -839,6 +994,7 @@ def create_return_receipt(
                 "delivery_id": delivery.id,
                 "actual_received_date": payload.actual_received_date,
                 "item_count": len(delivery_items),
+                "items": audit_items,
             },
             description="确认客户送货回单",
         )
@@ -863,6 +1019,16 @@ def update_return_receipt(
     user: User = Depends(can_operate),
 ) -> dict:
     receipt = _return_receipt_for_user(db, receipt_id, user)
+    claimed_status = receipt.status
+    if claimed_status not in {"confirmed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="回单状态不允许修改")
+    _claim_return_receipt_status(
+        db,
+        receipt_id=receipt.id,
+        expected_status=claimed_status,
+        next_status=claimed_status,
+    )
+    db.expire(receipt)
     receipt_items = db.scalars(
         select(ReturnReceiptItem)
         .where(ReturnReceiptItem.return_receipt_id == receipt.id)
@@ -884,32 +1050,46 @@ def update_return_receipt(
     if set(requested) != {item.id for item in delivery_items}:
         raise HTTPException(status_code=400, detail="回单必须包含送货单全部明细")
     existing = {item.delivery_item_id: item for item in receipt_items}
+    delivery_by_id = {item.id: item for item in delivery_items}
+    _assert_no_later_dispatched_deliveries(
+        db,
+        receipt=receipt,
+        receipt_items=receipt_items,
+        delivery_items=delivery_by_id,
+    )
     before = _receipt_response(db, receipt.id)
+    affected_order_ids: set[int] = set()
+    if claimed_status == "confirmed":
+        for previous in receipt_items:
+            order_id = _apply_receipt_order_effect(
+                db,
+                delivery_item=delivery_by_id[previous.delivery_item_id],
+                actual_received_quantity=previous.actual_received_quantity,
+                resolution_action=previous.resolution_action,
+                direction=-1,
+            )
+            if order_id is not None:
+                affected_order_ids.add(order_id)
     for delivery_item in delivery_items:
         line = requested[delivery_item.id]
-        if (
-            line.actual_received_quantity < 0
-            or line.actual_received_quantity > delivery_item.delivered_quantity
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=f"送货明细{delivery_item.id}实收数量超出有效范围",
-            )
-        reason = (line.difference_reason or "").strip()
-        if (
-            line.actual_received_quantity != delivery_item.delivered_quantity
-            and not reason
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=f"送货明细{delivery_item.id}存在数量差异，必须填写原因",
-            )
+        action, reason = _validated_receipt_resolution(delivery_item, line)
         target = existing[delivery_item.id]
         target.actual_received_quantity = line.actual_received_quantity
-        target.difference_reason = reason or None
+        target.resolution_action = action
+        target.difference_reason = reason
+        order_id = _apply_receipt_order_effect(
+            db,
+            delivery_item=delivery_item,
+            actual_received_quantity=line.actual_received_quantity,
+            resolution_action=action,
+            direction=1,
+        )
+        if order_id is not None:
+            affected_order_ids.add(order_id)
     receipt.actual_received_date = payload.actual_received_date
     receipt.signed_by = (payload.signed_by or "").strip() or None
     receipt.status = "confirmed"
+    _refresh_receipt_order_statuses(db, affected_order_ids)
     _audit(
         db,
         user=user,
@@ -1070,6 +1250,15 @@ def create_statement(
             if row is None:
                 raise HTTPException(status_code=400, detail="回单明细不存在")
             receipt_item, receipt, delivery, order_item, product, existing_id = row
+            require_customer_access(delivery.customer_id, user, db)
+            if receipt.status != "confirmed":
+                raise HTTPException(status_code=409, detail="已取消回单不能生成对账单")
+            _claim_return_receipt_status(
+                db,
+                receipt_id=receipt.id,
+                expected_status="confirmed",
+                next_status="confirmed",
+            )
             if existing_id is not None:
                 raise HTTPException(status_code=409, detail="回单明细已完成对账")
             if delivery.customer_id != payload.customer_id:
@@ -1306,6 +1495,15 @@ def cancel_return_receipt(
     user: User = Depends(can_operate),
 ) -> dict:
     receipt = _return_receipt_for_user(db, receipt_id, user)
+    if receipt.status != "confirmed":
+        raise HTTPException(status_code=409, detail="回单状态已变化，不能重复取消")
+    _claim_return_receipt_status(
+        db,
+        receipt_id=receipt.id,
+        expected_status="confirmed",
+        next_status="cancelled",
+    )
+    db.expire(receipt)
     receipt_item_ids = list(
         db.scalars(
             select(ReturnReceiptItem.id).where(
@@ -1323,8 +1521,39 @@ def cancel_return_receipt(
             detail="该送货单已进入对账/结清流程，请先取消或编辑对应对账单。",
         )
     before = _receipt_response(db, receipt.id)
-    receipt.status = "cancelled"
+    before["status"] = "confirmed"
+    receipt_items = db.scalars(
+        select(ReturnReceiptItem).where(
+            ReturnReceiptItem.return_receipt_id == receipt.id
+        )
+    ).all()
+    delivery_items = {
+        item.id: item
+        for item in db.scalars(
+            select(DeliveryItem).where(
+                DeliveryItem.id.in_([item.delivery_item_id for item in receipt_items])
+            )
+        ).all()
+    }
+    _assert_no_later_dispatched_deliveries(
+        db,
+        receipt=receipt,
+        receipt_items=receipt_items,
+        delivery_items=delivery_items,
+    )
+    affected_order_ids: set[int] = set()
+    for item in receipt_items:
+        order_id = _apply_receipt_order_effect(
+            db,
+            delivery_item=delivery_items[item.delivery_item_id],
+            actual_received_quantity=item.actual_received_quantity,
+            resolution_action=item.resolution_action,
+            direction=-1,
+        )
+        if order_id is not None:
+            affected_order_ids.add(order_id)
     receipt.signed_by = None
+    _refresh_receipt_order_statuses(db, affected_order_ids)
     _audit(
         db,
         user=user,

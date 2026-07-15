@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -270,7 +270,47 @@ def test_create_combined_delivery_then_partial_dispatch_once(
         assert session.get(Delivery, delivery_id).status == "dispatched"
 
 
-def test_over_delivery_is_rejected_before_dispatch(
+def test_new_delivery_stays_first_even_when_older_delivery_was_operated_later(
+    delivery_api_app,
+) -> None:
+    from app.models.delivery import Delivery
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        older = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": 1,
+                "delivery_date": "2026-06-13",
+                "items": [{"order_item_id": 1, "delivered_quantity": 1}],
+            },
+        )
+        newer = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": 1,
+                "delivery_date": "2026-06-14",
+                "items": [{"order_item_id": 2, "delivered_quantity": 1}],
+            },
+        )
+        assert older.status_code == 201, older.text
+        assert newer.status_code == 201, newer.text
+        with session_factory() as session:
+            session.get(Delivery, older.json()["id"]).printed_at = datetime(
+                2099, 1, 1, 0, 0, 0
+            )
+            session.commit()
+        listed = client.get("/api/deliveries")
+
+    assert listed.status_code == 200, listed.text
+    assert [row["id"] for row in listed.json()["items"][:2]] == [
+        newer.json()["id"],
+        older.json()["id"],
+    ]
+
+
+def test_over_delivery_warns_without_requiring_reason_and_can_be_dispatched(
     delivery_api_app,
 ) -> None:
     from app.models.order import OrderItem
@@ -280,17 +320,19 @@ def test_over_delivery_is_rejected_before_dispatch(
         "customer_id": 1,
         "delivery_date": "2026-06-14",
         "items": [
-            {"order_item_id": 1, "delivered_quantity": 90, "remarks": "多做10只"}
+            {"order_item_id": 1, "delivered_quantity": 90}
         ],
     }
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/deliveries", json=payload)
+        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
 
-    assert created.status_code == 400, created.text
-    assert "不能超过未送数量" in created.json()["detail"]
+    assert created.status_code == 201, created.text
+    assert created.json()["warnings"][0]["code"] == "OVER_DELIVERY"
+    assert dispatched.status_code == 200, dispatched.text
     with session_factory() as session:
-        assert session.get(OrderItem, 1).delivered_quantity == 20
+        assert session.get(OrderItem, 1).delivered_quantity == 110
 
 
 def test_telescoping_lid_delivery_capacity_uses_min_received_components(
@@ -351,7 +393,13 @@ def test_telescoping_lid_delivery_capacity_uses_min_received_components(
             json={
                 "customer_id": 1,
                 "delivery_date": "2026-06-13",
-                "items": [{"order_item_id": 2, "delivered_quantity": 100}],
+                "items": [
+                    {
+                        "order_item_id": 2,
+                        "delivered_quantity": 100,
+                        "remarks": "客户催单，仍申请超送",
+                    }
+                ],
             },
         )
         accepted = client.post(
@@ -369,9 +417,62 @@ def test_telescoping_lid_delivery_capacity_uses_min_received_components(
     )
     assert item2["remaining_quantity"] == 99
     assert rejected.status_code == 400
-    assert "当前未送数量为 99" in rejected.text
+    assert "物理可送数量为 99" in rejected.text
     assert accepted.status_code == 201, accepted.text
     assert accepted.json()["total_quantity"] == 99
+
+
+def test_telescoping_lid_missing_component_rejects_even_with_reason(
+    delivery_api_app,
+) -> None:
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        requisition = Requisition(
+            requisition_number="BL-20260613-MISSING",
+            requisition_date=date(2026, 6, 13),
+            supplier_name="苏州纸板供应商",
+            status="已报料",
+        )
+        session.add(requisition)
+        session.flush()
+        session.add(
+            RequisitionItem(
+                requisition_id=requisition.id,
+                order_item_id=2,
+                requisition_qty=100,
+                cardboard_len=Decimal("400"),
+                cardboard_width=Decimal("300"),
+                product_code_snapshot="SME-002",
+                product_name_snapshot="天地盖测试箱-盖",
+                specification_snapshot="380×260×220mm",
+                material_snapshot="A=B",
+                special_process="一开一",
+                status="已入库",
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        rejected = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": 1,
+                "delivery_date": "2026-06-13",
+                "items": [
+                    {
+                        "order_item_id": 2,
+                        "delivered_quantity": 1,
+                        "remarks": "客户催单，仍申请超送",
+                    }
+                ],
+            },
+        )
+
+    assert rejected.status_code == 400, rejected.text
+    assert "物理可送数量为 0" in rejected.text
 
 
 def test_telescoping_lid_delivery_search_uses_components_when_parent_status_stale(
@@ -689,7 +790,7 @@ def test_route_suggestions_mark_same_address_customers_as_one_stop(
     assert customers[1]["navigation_note"] == "与上一站同地址，可同站处理"
 
 
-def test_delivery_list_prioritizes_latest_operation(delivery_api_app) -> None:
+def test_delivery_list_keeps_newest_created_delivery_first(delivery_api_app) -> None:
     app, _ = delivery_api_app
     first_payload = {
         "customer_id": 1,
@@ -713,7 +814,7 @@ def test_delivery_list_prioritizes_latest_operation(delivery_api_app) -> None:
 
     assert listed.status_code == 200
     ids = [row["id"] for row in listed.json()["items"]]
-    assert ids[:2] == [first.json()["id"], second.json()["id"]]
+    assert ids[:2] == [second.json()["id"], first.json()["id"]]
 
 
 def test_phase7_migration_preserves_legacy_delivery_tables(

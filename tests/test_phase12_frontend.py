@@ -56,7 +56,7 @@ def test_phase12_bulk_selection_and_exports_are_present() -> None:
 def test_supplier_schedule_ui_is_removed_and_wms_is_direct() -> None:
     assert "登记排单" not in INDEX
     assert "供应商预计到达" not in INCOMING
-    assert "确认入库" in INCOMING
+    assert "确认实收" in INCOMING
 
 
 def test_modal_does_not_use_internal_scroll_container() -> None:
@@ -269,14 +269,39 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert 'activePage === \'incoming\'' in INDEX
     assert "仓库来料入库" in INDEX
     assert "incomingPending" in INDEX
-    assert "received_quantity:quantity" in INDEX
+    assert "received_quantity:Number(row.incoming_quantity)" in INDEX
+    assert "resolution_action" in INDEX
+    assert "继续等待供应商补货" in INDEX
+    assert "超出部分转半成品库存" in INDEX
     assert "item.customer_name" in INCOMING
     assert "item.product_code" in INCOMING
     assert "item.product_name" in INCOMING
     assert "报料尺寸" in INCOMING
     assert "压线尺寸" in INCOMING
-    assert 'data-quantity="${item.item_id}"' in INCOMING
+    assert 'data-quantity="${key}"' in INCOMING
+    assert "data-resolution" in INCOMING
+    assert "pending_receipt_item_id" in INCOMING
     assert "item.requisition_date" in INCOMING
+    assert '/api/incoming/surplus-locations' in INCOMING
+    assert 'api("/api/warehouse/locations")' not in INCOMING
+    assert 'this.hasPermission("incoming.execute")' in INDEX
+    assert 'axios.get("/api/incoming/surplus-locations")' in INDEX
+
+
+def test_delivery_variance_ui_warns_and_requires_explicit_resolution_without_reason() -> None:
+    assert "超送原因（必填）" not in INDEX
+    assert "确认继续保存超送单吗" not in INDEX
+    assert "请核对数量" in INDEX
+    assert "差异备注（可选）" in INDEX
+    assert "保留剩余数量，继续待送" in INDEX
+    assert 'value="accept_short"' in INDEX
+    assert 'value="accept_over"' in INDEX
+    assert "validateReceiptForm" in INDEX
+    assert "编辑回单" in INDEX
+    assert '@click="openReceipt(row)"' in INDEX
+    assert "this.pages.deliveries = 1;" in INDEX
+    assert "短收结单必须填写原因" not in INDEX
+    assert "短收结单必须填写原因" not in INCOMING
 
 
 def test_system_version_panel_groups_major_releases_and_hides_legacy_tools() -> None:

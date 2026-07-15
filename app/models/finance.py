@@ -87,6 +87,11 @@ class ReturnReceiptItem(Base):
             "actual_received_quantity >= 0",
             name="ck_finance_return_receipt_items_quantity",
         ),
+        CheckConstraint(
+            "resolution_action IS NULL OR resolution_action IN "
+            "('continue_delivery','accept_short','accept_over')",
+            name="ck_finance_return_receipt_items_resolution_action",
+        ),
         UniqueConstraint(
             "delivery_item_id",
             name="uq_finance_return_receipt_items_delivery_item",
@@ -107,6 +112,7 @@ class ReturnReceiptItem(Base):
         nullable=False,
     )
     actual_received_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolution_action: Mapped[str | None] = mapped_column(String(30), nullable=True)
     difference_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
-from datetime import date, datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from json import loads
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from alembic import command
@@ -19,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 def finance_api_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
+    from app.api.deliveries import router as deliveries_router
     from app.api.finance import router as finance_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
@@ -113,6 +117,7 @@ def finance_api_app(tmp_path: Path):
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(deliveries_router, prefix="/api/deliveries")
     app.include_router(finance_router, prefix="/api/finance")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -131,6 +136,19 @@ def _login(client: TestClient, role: str) -> None:
     assert response.status_code == 200
 
 
+def _race_requests(*requests):
+    barrier = Barrier(len(requests) + 1)
+
+    def run(request):
+        barrier.wait()
+        return request()
+
+    with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+        futures = [pool.submit(run, request) for request in requests]
+        barrier.wait()
+        return [future.result() for future in futures]
+
+
 def _receipt_payload(reason: str | None = "压坏拒收 2 个") -> dict:
     return {
         "delivery_id": 1,
@@ -140,13 +158,14 @@ def _receipt_payload(reason: str | None = "压坏拒收 2 个") -> dict:
             {
                 "delivery_item_id": 1,
                 "actual_received_quantity": 78,
+                "resolution_action": "continue_delivery",
                 "difference_reason": reason,
             }
         ],
     }
 
 
-def test_short_receipt_requires_reason_and_rolls_back(finance_api_app) -> None:
+def test_short_receipt_allows_empty_optional_reason(finance_api_app) -> None:
     from app.models.finance import ReturnReceipt
 
     app, session_factory = finance_api_app
@@ -157,13 +176,16 @@ def test_short_receipt_requires_reason_and_rolls_back(finance_api_app) -> None:
             json=_receipt_payload(" "),
         )
 
-    assert response.status_code == 400
+    assert response.status_code == 201, response.text
+    assert response.json()["items"][0]["difference_reason"] is None
     with session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(ReturnReceipt)) == 0
+        assert session.scalar(select(func.count()).select_from(ReturnReceipt)) == 1
 
 
 def test_create_receipt_78_of_80_and_reject_duplicate(finance_api_app) -> None:
-    app, _ = finance_api_app
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = finance_api_app
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post(
@@ -179,7 +201,12 @@ def test_create_receipt_78_of_80_and_reject_duplicate(finance_api_app) -> None:
     assert created.json()["status"] == "confirmed"
     assert created.json()["items"][0]["delivered_quantity"] == 80
     assert created.json()["items"][0]["actual_received_quantity"] == 78
+    assert created.json()["items"][0]["resolution_action"] == "continue_delivery"
     assert duplicate.status_code == 409
+    with session_factory() as session:
+        assert session.get(OrderItem, 1).delivered_quantity == 78
+        assert session.get(OrderItem, 1).is_force_closed is False
+        assert session.get(Order, 1).status == "partially_delivered"
 
 
 def test_return_receipt_detail_can_be_loaded_for_editing(finance_api_app) -> None:
@@ -220,6 +247,7 @@ def test_receipt_can_be_edited_before_statement_but_not_after(
                     {
                         "delivery_item_id": 1,
                         "actual_received_quantity": 79,
+                        "resolution_action": "continue_delivery",
                         "difference_reason": "压坏拒收1个",
                     }
                 ],
@@ -273,6 +301,7 @@ def test_confirmed_receipt_can_be_cancelled_and_reconfirmed(finance_api_app) -> 
                     {
                         "delivery_item_id": 1,
                         "actual_received_quantity": 78,
+                        "resolution_action": "continue_delivery",
                         "difference_reason": "压坏拒收 2 个",
                     }
                 ],
@@ -285,6 +314,554 @@ def test_confirmed_receipt_can_be_cancelled_and_reconfirmed(finance_api_app) -> 
     assert reopened.status_code == 200, reopened.text
     assert refreshed.json()["status"] == "confirmed"
     assert refreshed.json()["signed_by"] == "李经理"
+
+
+def test_old_receipt_cannot_change_after_released_balance_is_dispatched(
+    finance_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": 1,
+                "actual_received_date": "2026-06-14",
+                "signed_by": "王经理",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 20,
+                        "resolution_action": "continue_delivery",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        receipt_id = created.json()["id"]
+
+        with session_factory() as session:
+            receipt_created_at = session.get(ReturnReceipt, receipt_id).created_at
+            later_delivery = Delivery(
+                delivery_number="DH-20260615-002",
+                customer_id=1,
+                delivery_date=date(2026, 6, 15),
+                status="dispatched",
+                total_quantity=60,
+                dispatched_at=receipt_created_at + timedelta(seconds=1),
+            )
+            session.add(later_delivery)
+            session.flush()
+            session.add(
+                DeliveryItem(
+                    delivery_id=later_delivery.id,
+                    order_item_id=1,
+                    delivered_quantity=60,
+                    remarks=None,
+                )
+            )
+            order_item = session.get(OrderItem, 1)
+            order_item.delivered_quantity = 80
+            session.get(Order, 1).status = "partially_delivered"
+            session.commit()
+
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+        edited = client.put(
+            f"/api/finance/return_receipts/{receipt_id}",
+            json={
+                "actual_received_date": "2026-06-14",
+                "signed_by": "王经理",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 20,
+                        "resolution_action": "continue_delivery",
+                    }
+                ],
+            },
+        )
+
+    assert cancelled.status_code == 409
+    assert "DH-20260615-002" in cancelled.json()["detail"]
+    assert edited.status_code == 409
+    assert "DH-20260615-002" in edited.json()["detail"]
+    with session_factory() as session:
+        assert session.get(ReturnReceipt, receipt_id).status == "confirmed"
+        assert session.get(OrderItem, 1).delivered_quantity == 80
+
+
+def test_precreated_delivery_dispatched_after_receipt_blocks_old_receipt_change(
+    finance_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = finance_api_app
+    with session_factory() as session:
+        queued_delivery = Delivery(
+            delivery_number="DH-PRECREATED-LATER",
+            customer_id=1,
+            delivery_date=date(2026, 6, 15),
+            status="pending",
+            total_quantity=10,
+        )
+        session.add(queued_delivery)
+        session.flush()
+        queued_item = DeliveryItem(
+            delivery_id=queued_delivery.id,
+            order_item_id=1,
+            delivered_quantity=10,
+        )
+        session.add(queued_item)
+        session.flush()
+        source_delivery = Delivery(
+            delivery_number="DH-SOURCE-AFTER-QUEUE",
+            customer_id=1,
+            delivery_date=date(2026, 6, 14),
+            status="dispatched",
+            total_quantity=50,
+            dispatched_at=datetime(2026, 6, 14, 9, 0, 0),
+        )
+        session.add(source_delivery)
+        session.flush()
+        source_item = DeliveryItem(
+            delivery_id=source_delivery.id,
+            order_item_id=1,
+            delivered_quantity=50,
+        )
+        session.add(source_item)
+        session.flush()
+        assert queued_item.id < source_item.id
+        session.get(OrderItem, 1).delivered_quantity = 130
+        session.get(Order, 1).status = "delivered"
+        queued_delivery_id = queued_delivery.id
+        source_delivery_id = source_delivery.id
+        source_item_id = source_item.id
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": source_delivery_id,
+                "actual_received_date": "2026-06-14",
+                "items": [
+                    {
+                        "delivery_item_id": source_item_id,
+                        "actual_received_quantity": 20,
+                        "resolution_action": "continue_delivery",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        receipt_id = created.json()["id"]
+        with session_factory() as session:
+            receipt = session.get(ReturnReceipt, receipt_id)
+            queued = session.get(Delivery, queued_delivery_id)
+            queued.status = "dispatched"
+            queued.dispatched_at = receipt.created_at + timedelta(seconds=1)
+            session.get(OrderItem, 1).delivered_quantity = 110
+            session.commit()
+
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+
+    assert cancelled.status_code == 409
+    assert "DH-PRECREATED-LATER" in cancelled.json()["detail"]
+    with session_factory() as session:
+        assert session.get(ReturnReceipt, receipt_id).status == "confirmed"
+        assert session.get(OrderItem, 1).delivered_quantity == 110
+
+
+def test_accept_over_receipt_can_be_cancelled_after_unrelated_later_dispatch(
+    finance_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt
+    from app.models.order import OrderItem
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": 1,
+                "actual_received_date": "2026-06-14",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 81,
+                        "resolution_action": "accept_over",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        receipt_id = created.json()["id"]
+        with session_factory() as session:
+            receipt = session.get(ReturnReceipt, receipt_id)
+            later = Delivery(
+                delivery_number="DH-AFTER-OVER-RECEIPT",
+                customer_id=1,
+                delivery_date=date(2026, 6, 15),
+                status="dispatched",
+                total_quantity=10,
+                dispatched_at=receipt.created_at + timedelta(seconds=1),
+            )
+            session.add(later)
+            session.flush()
+            session.add(
+                DeliveryItem(
+                    delivery_id=later.id,
+                    order_item_id=1,
+                    delivered_quantity=10,
+                )
+            )
+            session.get(OrderItem, 1).delivered_quantity = 91
+            session.commit()
+
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+
+    assert cancelled.status_code == 200, cancelled.text
+    with session_factory() as session:
+        assert session.get(ReturnReceipt, receipt_id).status == "cancelled"
+        assert session.get(OrderItem, 1).delivered_quantity == 90
+
+
+def test_short_receipt_can_close_or_continue_and_over_receipt_is_allowed(
+    finance_api_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        accepted_short = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": 1,
+                "actual_received_date": "2026-06-14",
+                "signed_by": "王经理",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 20,
+                        "resolution_action": "accept_short",
+                    }
+                ],
+            },
+        )
+        assert accepted_short.status_code == 201, accepted_short.text
+        with session_factory() as session:
+            assert session.get(OrderItem, 1).delivered_quantity == 20
+            assert session.get(OrderItem, 1).is_force_closed is True
+            assert session.get(Order, 1).status == "delivered"
+        cancelled = client.post(
+            f"/api/finance/return_receipts/{accepted_short.json()['id']}/cancel"
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        with session_factory() as session:
+            assert session.get(OrderItem, 1).delivered_quantity == 80
+            assert session.get(OrderItem, 1).is_force_closed is False
+        accepted_over = client.put(
+            f"/api/finance/return_receipts/{accepted_short.json()['id']}",
+            json={
+                "actual_received_date": "2026-06-14",
+                "signed_by": "王经理",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 105,
+                        "resolution_action": "accept_over",
+                        "difference_reason": "客户现场多收25只",
+                    }
+                ],
+            },
+        )
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [accepted_over.json()["items"][0]["id"]],
+            },
+        )
+
+    assert accepted_over.status_code == 200, accepted_over.text
+    assert accepted_over.json()["items"][0]["resolution_action"] == "accept_over"
+    assert accepted_over.json()["items"][0]["difference_reason"] == "客户现场多收25只"
+    assert statement.status_code == 201, statement.text
+    assert statement.json()["total_receivable"] == "378.00"
+    with session_factory() as session:
+        assert session.get(OrderItem, 1).delivered_quantity == 105
+        assert session.get(OrderItem, 1).is_force_closed is False
+        assert session.get(Order, 1).status == "delivered"
+        assert session.get(DeliveryItem, 1).delivered_quantity == 80
+        assert session.get(Delivery, 1).total_quantity == 80
+        audit = session.scalar(
+            select(OperationLog)
+            .where(OperationLog.action == "UPDATE_RETURN_RECEIPT")
+            .order_by(OperationLog.id.desc())
+        )
+        audit_details = loads(audit.details)
+        assert audit_details["after"]["items"][0]["resolution_action"] == "accept_over"
+        assert audit_details["after"]["items"][0]["difference_reason"] == "客户现场多收25只"
+
+
+def test_receipt_20_of_100_reopens_remaining_80_for_delivery(
+    finance_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import OrderItem
+
+    app, session_factory = finance_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).delivered_quantity = 100
+        session.get(DeliveryItem, 1).delivered_quantity = 100
+        session.get(Delivery, 1).total_quantity = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "finance")
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": 1,
+                "actual_received_date": "2026-06-14",
+                "signed_by": "王经理",
+                "items": [
+                    {
+                        "delivery_item_id": 1,
+                        "actual_received_quantity": 20,
+                        "resolution_action": "continue_delivery",
+                        "difference_reason": "客户先收20只，余80只后续补送",
+                    }
+                ],
+            },
+        )
+        _login(client, "admin")
+        pending = client.get("/api/deliveries/pending_items")
+
+    assert receipt.status_code == 201, receipt.text
+    assert pending.status_code == 200, pending.text
+    row = next(
+        item for item in pending.json()["items"] if item["order_item_id"] == 1
+    )
+    assert row["remaining_quantity"] == 80
+
+
+def test_cancelled_receipt_item_cannot_create_statement(finance_api_app) -> None:
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+        receipt_item_id = created.json()["items"][0]["id"]
+        cancelled = client.post(
+            f"/api/finance/return_receipts/{created.json()['id']}/cancel"
+        )
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [receipt_item_id],
+            },
+        )
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert statement.status_code == 409, statement.text
+    assert "已取消回单" in statement.json()["detail"]
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Statement)) == 0
+
+
+def test_concurrent_receipt_cancel_reverses_difference_only_once(
+    finance_api_app,
+) -> None:
+    from app.models.finance import ReturnReceipt
+    from app.models.order import OrderItem
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+    receipt_id = created.json()["id"]
+
+    def cancel_request():
+        with TestClient(app) as client:
+            _login(client, "finance")
+            return client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+
+    responses = _race_requests(cancel_request, cancel_request)
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert "回单" in next(
+        response.json()["detail"] for response in responses if response.status_code == 409
+    )
+    with session_factory() as session:
+        assert session.get(ReturnReceipt, receipt_id).status == "cancelled"
+        assert session.get(OrderItem, 1).delivered_quantity == 80
+
+
+def test_cross_customer_resource_ids_are_forbidden(finance_api_app) -> None:
+    from app.core.security import hash_password
+    from app.models.access_control import UserCustomerScope
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    app, session_factory = finance_api_app
+    with session_factory() as session:
+        scoped_user = User(
+            username="scoped-finance",
+            password_hash=hash_password("RolePass123!"),
+            role="finance",
+            real_name="Scoped Finance",
+            display_name="Scoped Finance",
+            must_change_password=False,
+            customer_access_mode="selected",
+        )
+        customer_b = Customer(name="越权测试客户B")
+        session.add_all([scoped_user, customer_b])
+        session.flush()
+        session.add(UserCustomerScope(user_id=scoped_user.id, customer_id=1))
+        product = Product(
+            customer_id=customer_b.id,
+            product_code="CROSS-B-001",
+            customer_material_code="CROSS-B-MAT",
+            product_name="跨客户纸箱",
+            legacy_material_text="K=A",
+            box_category="normal",
+            cost_unit_price=Decimal("2.00"),
+        )
+        session.add(product)
+        session.flush()
+        order = Order(
+            order_number="CROSS-B-ORDER",
+            customer_id=customer_b.id,
+            customer_po="CROSS-B-PO",
+            order_date=date(2026, 6, 1),
+            delivery_date=date(2026, 6, 13),
+            status="delivered",
+            payment_status="unpaid",
+            total_amount=Decimal("30.00"),
+        )
+        session.add(order)
+        session.flush()
+        order_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=10,
+            delivered_quantity=10,
+            unit_price=Decimal("3.00"),
+            subtotal=Decimal("30.00"),
+            material_status="received",
+            snapshot_product_name="跨客户纸箱",
+            snapshot_spec="300×200×100mm",
+            snapshot_material="K=A",
+        )
+        session.add(order_item)
+        session.flush()
+        delivery = Delivery(
+            delivery_number="CROSS-B-DELIVERY",
+            customer_id=customer_b.id,
+            delivery_date=date(2026, 6, 13),
+            status="dispatched",
+            total_quantity=10,
+        )
+        session.add(delivery)
+        session.flush()
+        delivery_item = DeliveryItem(
+            delivery_id=delivery.id,
+            order_item_id=order_item.id,
+            delivered_quantity=10,
+        )
+        session.add(delivery_item)
+        session.flush()
+        receipt = ReturnReceipt(
+            delivery_id=delivery.id,
+            actual_received_date=date(2026, 6, 14),
+            signed_by="客户B",
+            status="confirmed",
+        )
+        session.add(receipt)
+        session.flush()
+        receipt_item = ReturnReceiptItem(
+            return_receipt_id=receipt.id,
+            delivery_item_id=delivery_item.id,
+            actual_received_quantity=10,
+        )
+        session.add(receipt_item)
+        session.commit()
+        delivery_id = delivery.id
+        delivery_item_id = delivery_item.id
+        receipt_id = receipt.id
+        receipt_item_id = receipt_item.id
+
+    with TestClient(app) as client:
+        _login(client, "scoped-finance")
+        created = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": "2026-06-14",
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 10,
+                    }
+                ],
+            },
+        )
+        loaded = client.get(f"/api/finance/return_receipts/{receipt_id}")
+        updated = client.put(
+            f"/api/finance/return_receipts/{receipt_id}",
+            json={
+                "actual_received_date": "2026-06-14",
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 10,
+                    }
+                ],
+            },
+        )
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [receipt_item_id],
+            },
+        )
+
+    assert [
+        created.status_code,
+        loaded.status_code,
+        updated.status_code,
+        cancelled.status_code,
+        statement.status_code,
+    ] == [403, 403, 403, 403, 403]
 
 
 def test_cancelled_receipt_is_blocked_when_statement_exists(finance_api_app) -> None:

@@ -32,7 +32,11 @@ def incoming_api_app(tmp_path: Path):
 
     engine = create_sqlite_engine(tmp_path / "incoming.sqlite3")
     Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        expire_on_commit=False,
+    )
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with session_factory() as session:
         users = [
@@ -218,6 +222,72 @@ def test_only_admin_and_workshop_can_read_pending_sorted_by_recent_record(
     assert items[0]["customer_name"] == "苏州思迈尔包装有限公司"
     assert items[0]["specification"] == "520×350×300mm"
     assert items[0]["material"] == "K=A-BC"
+
+
+def test_surplus_locations_use_incoming_execute_without_warehouse_view(
+    incoming_api_app,
+) -> None:
+    from app.models.access_control import UserPermissionOverride
+    from app.models.user import User
+    from app.models.warehouse_inventory import WarehouseLocation
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        workshop = session.scalar(select(User).where(User.username == "workshop"))
+        sales = session.scalar(select(User).where(User.username == "sales"))
+        session.add_all(
+            [
+                UserPermissionOverride(
+                    user_id=workshop.id,
+                    permission_code="warehouse.view",
+                    is_allowed=False,
+                ),
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="incoming.view",
+                    is_allowed=True,
+                ),
+                WarehouseLocation(
+                    location_code="N005-SEMI",
+                    location_name="N005半成品库位",
+                    warehouse_type="semi_finished",
+                    is_active=True,
+                ),
+                WarehouseLocation(
+                    location_code="N005-SHARED",
+                    location_name="N005共享库位",
+                    warehouse_type="shared",
+                    is_active=True,
+                ),
+                WarehouseLocation(
+                    location_code="N005-FINISHED",
+                    location_name="N005成品库位",
+                    warehouse_type="finished",
+                    is_active=True,
+                ),
+                WarehouseLocation(
+                    location_code="N005-INACTIVE",
+                    location_name="N005停用库位",
+                    warehouse_type="semi_finished",
+                    is_active=False,
+                ),
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        allowed = client.get("/api/incoming/surplus-locations")
+        client.post("/api/auth/logout")
+        _login(client, "sales")
+        read_only = client.get("/api/incoming/surplus-locations")
+
+    assert allowed.status_code == 200
+    assert [row["location_code"] for row in allowed.json()["items"]] == [
+        "N005-SEMI",
+        "N005-SHARED",
+    ]
+    assert read_only.status_code == 403
 
 
 def test_pending_incoming_prioritizes_latest_requisition_operation(
@@ -523,7 +593,11 @@ def test_batch_receive_supports_partial_success_and_backend_validation(
             "/api/incoming/batch-receive",
             json={
                 "items": [
-                    {"item_id": 1, "received_quantity": 95},
+                    {
+                        "item_id": 1,
+                        "received_quantity": 95,
+                        "resolution_action": "accept_short",
+                    },
                     {"item_id": 3, "received_quantity": 25},
                 ]
             },
@@ -541,8 +615,649 @@ def test_batch_receive_supports_partial_success_and_backend_validation(
         already_received = session.get(OrderItem, 3)
         assert received.material_status == "received"
         assert received.requisition_status == "已入库"
-        assert received.requisition_qty == 95
+        assert received.requisition_qty is None
         assert already_received.material_received_at is not None
+
+
+def test_partial_receipt_keeps_original_plan_and_can_continue_receiving(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        first = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 20,
+                "resolution_action": "await_supplier",
+                "idempotency_key": "partial-20",
+            },
+        )
+        pending = client.get("/api/incoming/pending")
+        second = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 80,
+                "idempotency_key": "partial-80",
+            },
+        )
+
+    assert first.status_code == 200
+    assert first.json()["material_status"] == "pending"
+    assert first.json()["planned_quantity"] == 100
+    assert first.json()["cumulative_received_quantity"] == 20
+    assert first.json()["remaining_quantity"] == 80
+    pending_row = next(row for row in pending.json()["items"] if row["item_id"] == 1)
+    assert pending_row["incoming_quantity"] == 80
+    assert pending_row["resolution_action"] == "await_supplier"
+    assert second.status_code == 200
+    assert second.json()["material_status"] == "received"
+    assert second.json()["cumulative_received_quantity"] == 100
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        facts = session.scalars(
+            select(IncomingReceiptItem).where(
+                IncomingReceiptItem.order_item_id == 1,
+                IncomingReceiptItem.status == "posted",
+            ).order_by(IncomingReceiptItem.id)
+        ).all()
+        assert item.requisition_qty == 100
+        assert [fact.received_quantity for fact in facts] == [20, 80]
+        assert [fact.cumulative_received_quantity for fact in facts] == [20, 100]
+
+
+def test_short_receipt_can_be_manually_closed_after_supplier_declines_replenishment(
+    incoming_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 99,
+                "resolution_action": "await_supplier",
+                "idempotency_key": "short-wait",
+            },
+        )
+        closed = client.put(
+            f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/accept-short",
+            json={},
+        )
+
+    assert received.status_code == 200
+    assert received.json()["material_status"] == "pending"
+    assert closed.status_code == 200
+    assert closed.json()["material_status"] == "received"
+    assert closed.json()["resolution_action"] == "accept_short"
+    assert closed.json()["resolution_reason"] is None
+    with session_factory() as session:
+        assert session.get(OrderItem, 1).requisition_qty == 100
+
+
+def test_variance_requires_explicit_human_decision(incoming_api_app) -> None:
+    app, _ = incoming_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        short = client.put(
+            "/api/incoming/receive/1",
+            json={"received_quantity": 99, "idempotency_key": "missing-short"},
+        )
+        over = client.put(
+            "/api/incoming/receive/2",
+            json={"received_quantity": 51, "idempotency_key": "missing-over"},
+        )
+
+    assert short.status_code == 400
+    assert "短收时请选择" in short.json()["detail"]
+    assert over.status_code == 400
+    assert "超收时请选择" in over.json()["detail"]
+
+
+def test_over_receipt_can_transfer_only_surplus_to_semi_finished_inventory(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.requisition_qty = 100
+        item.cardboard_len = 1200
+        item.cardboard_width = 800
+        item.layer_count = 5
+        item.flute_type = "AB"
+        item.snapshot_material = "K616K"
+        location = WarehouseLocation(
+            location_code="N005-SI-01",
+            location_name="N005半成品测试位",
+            warehouse_type="semi_finished",
+            is_active=True,
+        )
+        session.add(location)
+        session.commit()
+        location_id = location.id
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        response = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 102,
+                "resolution_action": "transfer_to_semi_inventory",
+                "resolution_reason": "超收2张转库存",
+                "surplus_location_id": location_id,
+                "idempotency_key": "over-to-semi",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["variance_quantity"] == 2
+    with session_factory() as session:
+        fact = session.scalar(
+            select(IncomingReceiptItem).where(
+                IncomingReceiptItem.resolution_action == "transfer_to_semi_inventory"
+            )
+        )
+        lot = session.get(InventoryLot, fact.surplus_inventory_lot_id)
+        assert lot.source_type == "purchase_surplus"
+        assert lot.quantity_available == 2
+        assert lot.semi_finished_detail.board_length_mm == 1200
+        assert session.get(OrderItem, 1).requisition_qty == 100
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{response.json()['receipt_item_id']}/revert",
+            json={"reason": "超收数量录入错误"},
+        )
+    assert reverted.status_code == 200
+    with session_factory() as session:
+        fact = session.get(IncomingReceiptItem, response.json()["receipt_item_id"])
+        lot = session.get(InventoryLot, fact.surplus_inventory_lot_id)
+        assert fact.status == "reversed"
+        assert lot.status == "closed"
+        assert lot.quantity_available == 0
+        assert session.get(OrderItem, 1).material_status == "pending"
+
+
+@pytest.mark.parametrize("used_field", ["quantity_reserved", "quantity_consumed"])
+def test_surplus_inventory_in_use_blocks_receipt_revert(
+    incoming_api_app,
+    used_field: str,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.requisition_qty = 100
+        item.cardboard_len = 1200
+        item.cardboard_width = 800
+        item.layer_count = 5
+        item.flute_type = "AB"
+        item.snapshot_material = "K616K"
+        location = WarehouseLocation(
+            location_code=f"N005-IN-USE-{used_field}",
+            location_name="N005撤销阻断测试位",
+            warehouse_type="semi_finished",
+            is_active=True,
+        )
+        session.add(location)
+        session.commit()
+        location_id = location.id
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 102,
+                "resolution_action": "transfer_to_semi_inventory",
+                "surplus_location_id": location_id,
+                "idempotency_key": f"surplus-in-use-{used_field}",
+            },
+        )
+        assert received.status_code == 200, received.text
+        with session_factory() as session:
+            fact = session.get(
+                IncomingReceiptItem,
+                received.json()["receipt_item_id"],
+            )
+            lot = session.get(InventoryLot, fact.surplus_inventory_lot_id)
+            lot.quantity_available = 1
+            setattr(lot, used_field, 1)
+            session.commit()
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/revert",
+            json={"reason": "库存已使用时不应撤销"},
+        )
+
+    assert reverted.status_code == 409
+    assert "预占、消耗" in reverted.json()["detail"]
+    with session_factory() as session:
+        fact = session.get(IncomingReceiptItem, received.json()["receipt_item_id"])
+        assert fact.status == "posted"
+        assert session.get(OrderItem, 1).material_status == "received"
+
+
+def test_over_receipt_all_to_production_does_not_create_inventory(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import InventoryLot
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        response = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 102,
+                "resolution_action": "all_to_production",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["variance_quantity"] == 2
+    assert response.json()["resolution_action"] == "all_to_production"
+    with session_factory() as session:
+        fact = session.get(IncomingReceiptItem, response.json()["receipt_item_id"])
+        assert fact.surplus_inventory_lot_id is None
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+        assert session.get(OrderItem, 1).requisition_qty == 100
+
+
+def test_receipt_idempotency_does_not_duplicate_quantity(incoming_api_app) -> None:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+
+    app, session_factory = incoming_api_app
+    payload = {"received_quantity": 100, "idempotency_key": "same-receipt-key"}
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.put("/api/incoming/receive/1", json=payload)
+        repeated = client.put("/api/incoming/receive/1", json=payload)
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.json()["receipt_item_id"] == first.json()["receipt_item_id"]
+    with session_factory() as session:
+        assert session.scalar(select(func.count(IncomingReceipt.id))) == 1
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+
+
+def test_receipt_idempotency_key_rejects_a_different_target(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    payload = {"idempotency_key": "shared-but-not-interchangeable"}
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.put("/api/incoming/receive/1", json=payload)
+        reused = client.put("/api/incoming/receive/2", json=payload)
+
+    assert first.status_code == 200, first.text
+    assert reused.status_code == 409
+    assert "幂等键已用于其他入库操作" in reused.json()["detail"]
+    with session_factory() as session:
+        assert session.scalar(select(func.count(IncomingReceipt.id))) == 1
+        assert session.get(OrderItem, 2).material_status == "pending"
+
+
+def test_partial_receipt_is_visible_in_today_history_while_waiting(
+    incoming_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 20,
+                "resolution_action": "await_supplier",
+            },
+        )
+        today = client.get("/api/incoming/received")
+
+    assert received.status_code == 200
+    fact = next(row for row in today.json()["items"] if row.get("receipt_item_id"))
+    assert fact["received_quantity_this_time"] == 20
+    assert fact["cumulative_received_quantity"] == 20
+    assert fact["remaining_quantity"] == 80
+    assert fact["resolution_action"] == "await_supplier"
+
+
+def test_new_receipt_revert_restores_pending_without_changing_plan(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={"received_quantity": 100, "idempotency_key": "revert-me"},
+        )
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/revert",
+            json={"reason": "规格录入错误"},
+        )
+        pending = client.get("/api/incoming/pending")
+
+    assert received.status_code == 200
+    assert reverted.status_code == 200
+    assert any(row["item_id"] == 1 for row in pending.json()["items"])
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        order = session.get(Order, item.order_id)
+        fact = session.get(IncomingReceiptItem, received.json()["receipt_item_id"])
+        assert item.material_status == "pending"
+        assert item.requisition_status == "已报料"
+        assert item.material_received_at is None
+        assert item.material_received_by is None
+        assert item.requisition_qty == 100
+        assert order.status == "pending_production"
+        assert fact.status == "reversed"
+        assert fact.reversal_reason == "规格录入错误"
+
+
+def test_reverting_final_partial_receipt_restores_previous_waiting_decision(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 20,
+                "resolution_action": "await_supplier",
+                "idempotency_key": "revert-partial-first",
+            },
+        )
+        final = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 80,
+                "idempotency_key": "revert-partial-final",
+            },
+        )
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{final.json()['receipt_item_id']}/revert",
+            json={"reason": "第二次实收录入错误"},
+        )
+        pending = client.get("/api/incoming/pending")
+
+    assert first.status_code == 200
+    assert final.status_code == 200
+    assert reverted.status_code == 200
+    pending_row = next(row for row in pending.json()["items"] if row["item_id"] == 1)
+    assert pending_row["cumulative_received_quantity"] == 20
+    assert pending_row["remaining_quantity"] == 80
+    assert pending_row["resolution_status"] == "pending"
+    assert pending_row["resolution_action"] == "await_supplier"
+    assert pending_row["pending_receipt_item_id"] == first.json()["receipt_item_id"]
+    with session_factory() as session:
+        first_fact = session.get(
+            IncomingReceiptItem, first.json()["receipt_item_id"]
+        )
+        assert first_fact.status == "posted"
+        assert first_fact.resolution_status == "pending"
+        assert session.get(OrderItem, 1).requisition_qty == 100
+
+
+def test_only_latest_posted_fact_can_be_reverted_or_accept_short(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 20,
+                "resolution_action": "await_supplier",
+                "idempotency_key": "fact-chain-first",
+            },
+        )
+        second = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 30,
+                "resolution_action": "await_supplier",
+                "idempotency_key": "fact-chain-second",
+            },
+        )
+        stale_revert = client.put(
+            f"/api/incoming/receipt-items/{first.json()['receipt_item_id']}/revert",
+            json={"reason": "不应允许跨过更新事实撤销"},
+        )
+        stale_accept = client.put(
+            f"/api/incoming/receipt-items/{first.json()['receipt_item_id']}/accept-short",
+            json={"reason": "不应改写旧事实"},
+        )
+        accepted = client.put(
+            f"/api/incoming/receipt-items/{second.json()['receipt_item_id']}/accept-short",
+            json={"reason": "供应商确认余量不补"},
+        )
+
+    assert stale_revert.status_code == 409
+    assert "更晚的实收记录" in stale_revert.json()["detail"]
+    assert stale_accept.status_code == 409
+    assert "最新一笔" in stale_accept.json()["detail"]
+    assert accepted.status_code == 200
+    with session_factory() as session:
+        first_fact = session.get(IncomingReceiptItem, first.json()["receipt_item_id"])
+        second_fact = session.get(IncomingReceiptItem, second.json()["receipt_item_id"])
+        assert first_fact.status == "posted"
+        assert first_fact.resolution_status == "resolved"
+        assert first_fact.resolution_action == "await_supplier"
+        assert first_fact.resolution_reason is None
+        assert second_fact.resolution_status == "resolved"
+        assert second_fact.resolution_action == "accept_short"
+        assert second_fact.resolution_reason == "供应商确认余量不补"
+
+
+def test_cross_customer_fact_actions_return_403_without_writes(
+    incoming_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.user import User
+
+    app, session_factory = incoming_api_app
+    with session_factory() as session:
+        session.get(OrderItem, 1).requisition_qty = 100
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        received = client.put(
+            "/api/incoming/receive/1",
+            json={
+                "received_quantity": 20,
+                "resolution_action": "await_supplier",
+                "idempotency_key": "cross-customer-fact",
+            },
+        )
+        assert received.status_code == 200, received.text
+        client.post("/api/auth/logout")
+        with session_factory() as session:
+            workshop = session.scalar(select(User).where(User.username == "workshop"))
+            workshop.customer_access_mode = "selected"
+            session.commit()
+        _login(client, "workshop")
+        accepted = client.put(
+            f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/accept-short",
+            json={"reason": "越权尝试"},
+        )
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/revert",
+            json={"reason": "越权尝试"},
+        )
+
+    assert accepted.status_code == 403
+    assert reverted.status_code == 403
+    with session_factory() as session:
+        fact = session.get(IncomingReceiptItem, received.json()["receipt_item_id"])
+        item = session.get(OrderItem, 1)
+        assert fact.status == "posted"
+        assert fact.resolution_status == "pending"
+        assert fact.resolution_action == "await_supplier"
+        assert item.material_status == "pending"
+
+
+def test_incoming_receipt_migration_round_trip_on_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "n005_migration.sqlite3"
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("ERP_SECRET_KEY", "n005-migration-test")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        version = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        finance_columns = {
+            row[1]: row
+            for row in connection.execute(
+                "PRAGMA table_info(finance_return_receipt_items)"
+            )
+        }
+        trigger_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            )
+        }
+        temporary_tables = connection.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE '_alembic_tmp_%'"
+        ).fetchall()
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert {"incoming_receipts", "incoming_receipt_items"} <= tables
+    assert version == "an41v7w8x9j31"
+    assert finance_columns["resolution_action"][3] == 0
+    assert finance_columns["resolution_action"][4] is None
+    assert {
+        "trg_finance_receipt_resolution_action_insert",
+        "trg_finance_receipt_resolution_action_update",
+    } <= trigger_names
+    assert temporary_tables == []
+
+    command.downgrade(config, "aj37v7w8x9f27")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        finance_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(finance_return_receipt_items)"
+            )
+        }
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert "incoming_receipts" not in tables
+    assert "incoming_receipt_items" not in tables
+    assert "resolution_action" not in finance_columns
+
+    command.upgrade(config, "an41v7w8x9j31")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0] == "an41v7w8x9j31"
+
+
+def test_migration_downgrade_refuses_to_destroy_n005_facts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "n005_migration_loss_guard.sqlite3"
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("ERP_SECRET_KEY", "n005-migration-loss-guard")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    command.upgrade(config, "an41v7w8x9j31")
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO incoming_receipts
+                (receipt_number, status, received_at, idempotency_key)
+            VALUES ('N005-LOSS-GUARD', 'posted', CURRENT_TIMESTAMP, 'loss-guard')
+            """
+        )
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match="N005"):
+        command.downgrade(config, "aj37v7w8x9f27")
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0] == "an41v7w8x9j31"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM incoming_receipts"
+        ).fetchone()[0] == 1
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_batch_receive_rejects_invalid_quantity_and_duplicate_items(

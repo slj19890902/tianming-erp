@@ -4,7 +4,16 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -15,6 +24,12 @@ if TYPE_CHECKING:
 
 class Customer(Base):
     __tablename__ = "customers"
+    __table_args__ = (
+        CheckConstraint(
+            "statement_cycle_start_day BETWEEN 1 AND 28",
+            name="ck_customers_statement_cycle_start_day",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     customer_number: Mapped[int | None] = mapped_column(
@@ -31,6 +46,11 @@ class Customer(Base):
     )
     name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
     payment_term_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    statement_cycle_start_day: Mapped[int] = mapped_column(
+        Integer,
+        default=20,
+        nullable=False,
+    )
     credit_limit: Mapped[Decimal] = mapped_column(
         Numeric(14, 2),
         default=0,

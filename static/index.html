@@ -297,6 +297,13 @@
       .order-search-highlight { background: #fef08a; border-radius: 2px; color: inherit; }
       .delivery-batch-picker-toolbar,
       .delivery-batch-picker-tools { justify-content: flex-start; }
+      .statement-delivery-table th,
+      .statement-delivery-table td { vertical-align: middle; }
+      .statement-delivery-detail-row td { padding: 0; background: #f7f7fa; }
+      .statement-delivery-detail { padding: 10px 14px 12px 54px; border-top: 1px solid var(--line); }
+      .statement-delivery-detail table { margin: 0; background: #fff; }
+      .statement-delivery-disabled { opacity: .62; background: #fff8f8; }
+      .statement-delivery-exception { margin-top: 4px; color: var(--red); font-size: 12px; line-height: 1.45; }
 
       /* Compact order filter */
       .order-filter-compact { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -1986,6 +1993,7 @@
               <div class="field"><label>联系人</label><input class="input" v-model.trim="customerForm.contact_person" /></div>
               <div class="field"><label>电话</label><input class="input" v-model.trim="customerForm.phone" /></div>
               <div class="field"><label>账期天数</label><input class="input" type="number" v-model.number="customerForm.payment_term_days" /></div>
+              <div class="field"><label>对账结转日</label><input class="input" type="number" min="1" max="28" step="1" v-model.number="customerForm.statement_cycle_start_day" /><div class="muted" style="margin-top:4px">1～28；默认20。20表示上月20日至本月19日归本月。</div></div>
               <div class="field"><label>送货方式</label><select class="select" v-model="customerForm.delivery_method"><option>自提</option><option>配送</option><option>物流</option></select></div>
               <div class="field wide"><label>地址</label><input class="input" v-model.trim="customerForm.address" /></div>
               <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
@@ -3119,7 +3127,18 @@
                 <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementForm.statement_month" @change="refreshStatementFilters" /></div>
               </div>
               <div v-if="!statementCustomers.length" class="status orange" style="margin-bottom:10px">该月份暂无可对账客户，请切换月份或先完成回单确认。</div>
-              <table><thead><tr><th><input type="checkbox" :checked="allStatementSelected" @change="toggleAllStatement($event.target.checked)" /> 全选</th><th>回单日期</th><th>送货单</th><th>产品</th><th>实收数量</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="row in pendingStatements" :key="row.return_receipt_item_id"><td><input type="checkbox" v-model="statementForm.selected[row.return_receipt_item_id]" /></td><td>{{ row.actual_received_date }}</td><td>{{ row.delivery_number }}</td><td>{{ row.product_code }} / {{ row.product_name }}</td><td>{{ row.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(row.receivable_amount) }}</td></tr></tbody></table>
+              <div v-if="statementCyclePeriod" class="status blue" style="margin-bottom:10px">本客户对账周期：{{ statementCyclePeriod }}</div>
+              <table class="statement-delivery-table"><thead><tr><th><input type="checkbox" :disabled="!pendingStatements.some(row => !row.selection_blocked)" :checked="allStatementSelected" @change="toggleAllStatement($event.target.checked)" /> 全选</th><th>送货日期</th><th>送货单号</th><th>明细数</th><th>实收总数</th><th class="sensitive-price">应收总额</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                <template v-for="row in pendingStatements" :key="row.delivery_id">
+                  <tr :class="{'statement-delivery-disabled': row.selection_blocked}">
+                    <td><input type="checkbox" :disabled="row.selection_blocked" :checked="!!statementForm.selected[row.delivery_id]" @change="toggleStatementDelivery(row, $event.target.checked)" /></td>
+                    <td>{{ row.delivery_date }}</td><td><strong>{{ row.delivery_number }}</strong></td><td>{{ row.item_count }}</td><td>{{ row.total_received_quantity }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable_amount) }}</td>
+                    <td><span v-if="row.selection_blocked" class="status red">异常历史</span><span v-else class="status green">可选择</span><div v-if="row.selection_blocked" class="statement-delivery-exception">{{ row.exception_reason || '该对账组存在历史异常，暂不可选择。' }}</div></td>
+                    <td><button class="btn small" @click="toggleStatementDeliveryExpanded(row)">{{ expandedStatementDeliveries[row.delivery_id] ? '收起明细' : '查看明细' }}</button></td>
+                  </tr>
+                  <tr v-if="expandedStatementDeliveries[row.delivery_id]" class="statement-delivery-detail-row"><td colspan="8"><div class="statement-delivery-detail"><table><thead><tr><th>产品</th><th>规格</th><th>实收数量</th><th class="sensitive-price">应收金额</th><th>差异原因</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.return_receipt_item_id"><td>{{ item.product_code }} / {{ item.product_name }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td><td>{{ item.difference_reason || '-' }}</td></tr><tr v-if="!row.items.length"><td colspan="5" class="empty">暂无产品明细</td></tr></tbody></table></div></td></tr>
+                </template>
+              </tbody></table>
               <div v-if="statementForm.customer_id && !pendingStatements.length" class="empty">该客户当前月份暂无可生成对账单的送货明细。</div>
               <div v-else-if="!statementForm.customer_id && statementCustomers.length" class="empty">请先选择客户，再查看可对账明细。</div>
             </div>
@@ -3538,6 +3557,7 @@
       const blankCustomer = () => ({
         id: null, customer_number: 1, customer_code: "", name: "",
         payment_term_days: 30, delivery_method: "配送", contact_person: "",
+        statement_cycle_start_day: 20,
         phone: "", address: "", default_tax_rate: "0.13", invoice_title: "",
         tax_no: "", bank_account: "", remark: "", status: "active"
       });
@@ -3746,6 +3766,7 @@
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false },
             tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {} },
+            expandedStatementDeliveries: {}, statementCyclePeriod: "",
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
             toast: { message: "", error: false }, toastTimer: null
@@ -4177,7 +4198,10 @@
               0
             );
           },
-          allStatementSelected() { return this.pendingStatements.length > 0 && this.pendingStatements.every(row => this.statementForm.selected[row.return_receipt_item_id]); }
+          allStatementSelected() {
+            const selectable = this.pendingStatements.filter(row => !row.selection_blocked);
+            return selectable.length > 0 && selectable.every(row => this.statementForm.selected[row.delivery_id]);
+          }
         },
         watch: {
           // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
@@ -6104,6 +6128,7 @@
           openCustomer(row=null) {
             const next = row ? JSON.parse(JSON.stringify(row)) : blankCustomer();
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
+            if (!Number.isInteger(Number(next.statement_cycle_start_day)) || Number(next.statement_cycle_start_day) < 1 || Number(next.statement_cycle_start_day) > 28) next.statement_cycle_start_day = 20;
             this.customerForm = next; this.modal = { type:"customer", title: row ? "编辑客户" : "新增客户" };
           },
           async openCustomerQuotations(row) {
@@ -7357,7 +7382,18 @@
             } finally { this.loading = false; }
           },
           toggleAllDelivery(checked) { this.deliveryOptions.forEach(row=>this.deliveryForm.selected[row.item_id]=checked); },
-          toggleAllStatement(checked) { this.pendingStatements.forEach(row=>this.statementForm.selected[row.return_receipt_item_id]=checked); },
+          toggleAllStatement(checked) {
+            this.pendingStatements.filter(row => !row.selection_blocked).forEach(row => {
+              this.statementForm.selected[row.delivery_id] = checked;
+            });
+          },
+          toggleStatementDelivery(row, checked) {
+            if (row.selection_blocked) return;
+            this.statementForm.selected[row.delivery_id] = checked;
+          },
+          toggleStatementDeliveryExpanded(row) {
+            this.expandedStatementDeliveries[row.delivery_id] = !this.expandedStatementDeliveries[row.delivery_id];
+          },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
             try { await axios.delete(`/api/master/customers/${row.id}`); await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
@@ -8936,6 +8972,8 @@
           },
           async openStatement() {
             this.statementForm = { customer_id:null, statement_month:month(), selected:{} };
+            this.expandedStatementDeliveries = {};
+            this.statementCyclePeriod = "";
             this.modal = { type:"statement", title:"生成月结对账单" };
             await this.loadStatementCustomers();
             await this.loadPendingStatements();
@@ -8952,9 +8990,52 @@
             }
           },
           async loadPendingStatements() {
-            if (!this.statementForm.customer_id) { this.pendingStatements=[]; return; }
-            this.pendingStatements = (await axios.get("/api/finance/pending_statements", { params:{ customer_id:this.statementForm.customer_id } })).data.items
-              .filter(row => String(row.actual_received_date).startsWith(this.statementForm.statement_month));
+            if (!this.statementForm.customer_id) { this.pendingStatements=[]; this.statementCyclePeriod = ""; this.expandedStatementDeliveries = {}; return; }
+            const { data } = await axios.get("/api/finance/pending_statements", {
+              params:{ customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month }
+            });
+            const rawDeliveries = Array.isArray(data?.deliveries) ? data.deliveries : this.groupLegacyStatementItems(data?.items || []);
+            this.pendingStatements = rawDeliveries.map(row => this.normalizeStatementDelivery(row));
+            this.statementForm.selected = {};
+            this.pendingStatements.filter(row => !row.selection_blocked).forEach(row => {
+              this.statementForm.selected[row.delivery_id] = true;
+            });
+            this.statementCyclePeriod = data?.period_start && data?.period_end
+              ? `${data.period_start} 至 ${data.period_end}`
+              : "";
+            this.expandedStatementDeliveries = {};
+          },
+          groupLegacyStatementItems(items) {
+            const grouped = new Map();
+            (items || []).forEach(item => {
+              const key = item.delivery_id ?? item.delivery_number;
+              if (!grouped.has(key)) grouped.set(key, {
+                delivery_id: item.delivery_id,
+                delivery_number: item.delivery_number,
+                delivery_date: item.delivery_date || item.actual_received_date,
+                items: [],
+                selection_blocked: false,
+              });
+              grouped.get(key).items.push(item);
+            });
+            return Array.from(grouped.values());
+          },
+          normalizeStatementDelivery(row) {
+            const items = Array.isArray(row.items) ? row.items : [];
+            const totalReceived = items.reduce((total, item) => total + Number(item.actual_received_quantity || 0), 0);
+            const totalReceivable = items.reduce((total, item) => total + Number(item.receivable_amount || 0), 0);
+            return {
+              ...row,
+              delivery_id: row.delivery_id ?? row.id,
+              delivery_date: row.delivery_date || row.actual_received_date || "-",
+              delivery_number: row.delivery_number || "-",
+              items,
+              item_count: Number(row.item_count ?? items.length),
+              total_received_quantity: Number(row.total_received_quantity ?? totalReceived),
+              total_receivable_amount: row.total_receivable_amount ?? totalReceivable,
+              selection_blocked: !!row.selection_blocked,
+              exception_reason: row.exception_reason || "",
+            };
           },
           async refreshStatementFilters() {
             await this.loadStatementCustomers();
@@ -9006,7 +9087,10 @@
             let successMessage = "保存成功";
             try {
               if (this.modal.type === "customer") {
+                const statementCycleStartDay = Number(this.customerForm.statement_cycle_start_day);
+                if (!Number.isInteger(statementCycleStartDay) || statementCycleStartDay < 1 || statementCycleStartDay > 28) throw new Error("对账结转日必须是1到28之间的整数");
                 const payload = { ...this.customerForm };
+                payload.statement_cycle_start_day = statementCycleStartDay;
                 delete payload.id; delete payload.is_active;
                 if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
                 else await axios.post("/api/master/customers", payload);
@@ -9219,9 +9303,9 @@
               }
               if (this.modal.type === "statement") {
                 if (!this.statementForm.customer_id) throw new Error("请先选择客户");
-                const ids = this.pendingStatements.filter(row => this.statementForm.selected[row.return_receipt_item_id]).map(row => row.return_receipt_item_id);
-                if (!ids.length) throw new Error("至少选择一条待对账明细");
-                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, return_receipt_item_ids:ids });
+                const ids = this.pendingStatements.filter(row => !row.selection_blocked && this.statementForm.selected[row.delivery_id]).map(row => row.delivery_id);
+                if (!ids.length) throw new Error("至少选择一张待对账送货单");
+                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids });
                 await this.loadFinance();
               }
               if (this.modal.type === "statementEdit") {

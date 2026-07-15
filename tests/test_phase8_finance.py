@@ -1356,3 +1356,207 @@ def test_finance_lists_statements_and_invoice_records(finance_api_app) -> None:
     assert statements.json()["items"][0]["customer_name"]
     assert invoices.status_code == 200, invoices.text
     assert invoices.json()["items"][0]["invoice_number"] == "INV-LIST-001"
+
+
+def _append_second_delivery_line(session_factory) -> int:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import OrderItem
+
+    with session_factory() as session:
+        second_order_item = OrderItem(
+            order_id=1,
+            product_id=1,
+            quantity=20,
+            delivered_quantity=20,
+            unit_price=Decimal("4.20"),
+            subtotal=Decimal("84.00"),
+            material_status="received",
+            snapshot_product_name="五层加强纸箱-第二规格",
+            snapshot_spec="420×300×250mm",
+            snapshot_material="K=A-BC",
+        )
+        session.add(second_order_item)
+        session.flush()
+        delivery = session.get(Delivery, 1)
+        delivery.total_quantity = 100
+        second_delivery_item = DeliveryItem(
+            delivery_id=delivery.id,
+            order_item_id=second_order_item.id,
+            delivered_quantity=20,
+            remarks="同一张送货单第二行",
+        )
+        session.add(second_delivery_item)
+        session.commit()
+        return second_delivery_item.id
+
+
+def _two_line_receipt_payload(second_delivery_item_id: int) -> dict:
+    return {
+        "delivery_id": 1,
+        "actual_received_date": "2026-06-14",
+        "signed_by": "王经理",
+        "items": [
+            {
+                "delivery_item_id": 1,
+                "actual_received_quantity": 80,
+                "difference_reason": None,
+            },
+            {
+                "delivery_item_id": second_delivery_item_id,
+                "actual_received_quantity": 20,
+                "difference_reason": None,
+            },
+        ],
+    }
+
+
+def test_statement_selects_whole_delivery_and_expands_all_lines(
+    finance_api_app,
+) -> None:
+    from app.models.finance import StatementItem
+
+    app, session_factory = finance_api_app
+    second_delivery_item_id = _append_second_delivery_line(session_factory)
+    with TestClient(app) as client:
+        _login(client, "finance")
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json=_two_line_receipt_payload(second_delivery_item_id),
+        )
+        assert receipt.status_code == 201, receipt.text
+        receipt_item_ids = [item["id"] for item in receipt.json()["items"]]
+        pending = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        customers = client.get(
+            "/api/finance/statement-customers",
+            params={"statement_month": "2026-06"},
+        )
+        partial = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "return_receipt_item_ids": [receipt_item_ids[0]],
+            },
+        )
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [1],
+            },
+        )
+
+    assert pending.status_code == 200, pending.text
+    delivery = pending.json()["deliveries"][0]
+    assert delivery["delivery_id"] == 1
+    assert delivery["item_count"] == 2
+    assert delivery["selection_blocked"] is False
+    assert len(delivery["items"]) == 2
+    assert customers.json()["items"][0]["pending_count"] == 1
+    assert partial.status_code == 400
+    assert "整单对账" in partial.json()["detail"]
+    assert statement.status_code == 201, statement.text
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(StatementItem)) == 2
+
+
+@pytest.mark.parametrize(
+    ("delivery_date", "included_month", "excluded_month"),
+    [
+        (date(2026, 7, 19), "2026-07", "2026-08"),
+        (date(2026, 7, 20), "2026-08", "2026-07"),
+    ],
+)
+def test_statement_period_uses_delivery_date_and_customer_cutoff(
+    finance_api_app,
+    delivery_date: date,
+    included_month: str,
+    excluded_month: str,
+) -> None:
+    from app.models.delivery import Delivery
+
+    app, session_factory = finance_api_app
+    with session_factory() as session:
+        session.get(Delivery, 1).delivery_date = delivery_date
+        session.commit()
+    payload = _receipt_payload(None)
+    payload["actual_received_date"] = "2026-07-25"
+    with TestClient(app) as client:
+        _login(client, "finance")
+        receipt = client.post("/api/finance/return_receipts", json=payload)
+        included = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": included_month},
+        )
+        excluded = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": excluded_month},
+        )
+
+    assert receipt.status_code == 201, receipt.text
+    assert [row["delivery_id"] for row in included.json()["deliveries"]] == [1]
+    assert excluded.json()["deliveries"] == []
+
+
+def test_partially_reconciled_delivery_is_returned_as_blocked_exception(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement, StatementItem
+
+    app, session_factory = finance_api_app
+    second_delivery_item_id = _append_second_delivery_line(session_factory)
+    with TestClient(app) as client:
+        _login(client, "finance")
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json=_two_line_receipt_payload(second_delivery_item_id),
+        )
+        assert receipt.status_code == 201, receipt.text
+        first_receipt_item_id = receipt.json()["items"][0]["id"]
+        with session_factory() as session:
+            old_statement = Statement(
+                statement_number="ST-202606-0099",
+                customer_id=1,
+                statement_month="2026-06",
+                total_receivable=Decimal("288.00"),
+                total_gross_profit=Decimal("72.00"),
+                status="unsettled",
+                created_by=1,
+            )
+            session.add(old_statement)
+            session.flush()
+            session.add(
+                StatementItem(
+                    statement_id=old_statement.id,
+                    return_receipt_item_id=first_receipt_item_id,
+                    actual_received_quantity=80,
+                    unit_price_snapshot=Decimal("3.60"),
+                    unit_cost_snapshot=Decimal("2.70"),
+                    receivable_amount=Decimal("288.00"),
+                    gross_profit_amount=Decimal("72.00"),
+                )
+            )
+            session.commit()
+        pending = client.get(
+            "/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": "2026-06"},
+        )
+        create = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": 1,
+                "statement_month": "2026-06",
+                "delivery_ids": [1],
+            },
+        )
+
+    blocked = pending.json()["deliveries"][0]
+    assert blocked["selection_blocked"] is True
+    assert blocked["pending_item_count"] == 1
+    assert "先处理原对账单" in blocked["exception_reason"]
+    assert pending.json()["items"] == []
+    assert create.status_code == 409

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from urllib.parse import quote
@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -180,7 +180,9 @@ class ReturnReceiptUpdate(BaseModel):
 class StatementCreate(BaseModel):
     customer_id: int
     statement_month: str
-    return_receipt_item_ids: list[int]
+    delivery_ids: list[int] = Field(default_factory=list)
+    # 兼容旧客户端；后端仍会校验这些明细是否覆盖完整送货单。
+    return_receipt_item_ids: list[int] = Field(default_factory=list)
 
     @field_validator("statement_month")
     @classmethod
@@ -189,14 +191,22 @@ class StatementCreate(BaseModel):
             raise ValueError("对账月份格式必须为 YYYY-MM")
         return value
 
-    @field_validator("return_receipt_item_ids")
+    @field_validator("delivery_ids", "return_receipt_item_ids")
     @classmethod
     def validate_ids(cls, value: list[int]) -> list[int]:
-        if not value:
-            raise ValueError("至少选择一条待对账明细")
         if len(value) != len(set(value)):
-            raise ValueError("待对账明细不能重复")
+            raise ValueError("待对账送货单或明细不能重复")
+        if any(item_id <= 0 for item_id in value):
+            raise ValueError("待对账送货单或明细ID必须为正整数")
         return value
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if not self.delivery_ids and not self.return_receipt_item_ids:
+            raise ValueError("至少选择一张待对账送货单")
+        if self.delivery_ids and self.return_receipt_item_ids:
+            raise ValueError("送货单与旧版明细选择不能同时提交")
+        return self
 
 
 class StatementUpdate(BaseModel):
@@ -208,6 +218,31 @@ class StatementUpdate(BaseModel):
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
             raise ValueError("对账月份格式必须为 YYYY-MM")
         return value
+
+
+def _statement_period(
+    statement_month: str,
+    cycle_start_day: int,
+) -> tuple[date, date]:
+    """Return the inclusive delivery-date range assigned to a statement month."""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", statement_month):
+        raise ValueError("对账月份格式必须为 YYYY-MM")
+    if not 1 <= cycle_start_day <= 28:
+        raise ValueError("客户对账结转日必须在 1 至 28 日之间")
+    year, month = (int(part) for part in statement_month.split("-"))
+    month_start = date(year, month, 1)
+    if cycle_start_day == 1:
+        next_month = (
+            date(year + 1, 1, 1)
+            if month == 12
+            else date(year, month + 1, 1)
+        )
+        return month_start, next_month - timedelta(days=1)
+    previous_month_end = month_start - timedelta(days=1)
+    return (
+        date(previous_month_end.year, previous_month_end.month, cycle_start_day),
+        date(year, month, cycle_start_day) - timedelta(days=1),
+    )
 
 
 class InvoiceCreate(BaseModel):
@@ -314,45 +349,62 @@ def list_statement_customers(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    query = (
-        select(
-            Customer.id,
-            Customer.name,
-            func.count(ReturnReceiptItem.id).label("pending_count"),
-        )
-        .join(Delivery, Delivery.customer_id == Customer.id)
-        .join(ReturnReceipt, ReturnReceipt.delivery_id == Delivery.id)
-        .join(ReturnReceiptItem, ReturnReceiptItem.return_receipt_id == ReturnReceipt.id)
-        .outerjoin(
-            StatementItem,
-            StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
-        )
-        .where(
-            ReturnReceipt.status == "confirmed",
-            StatementItem.id.is_(None),
-        )
-    )
-    if statement_month:
-        query = query.where(
-            func.strftime("%Y-%m", ReturnReceipt.actual_received_date)
-            == statement_month
-        )
     visible_customer_ids = _visible_customer_ids(user, db)
+    candidate_query = (
+        select(Delivery.customer_id)
+        .join(ReturnReceipt, ReturnReceipt.delivery_id == Delivery.id)
+        .where(ReturnReceipt.status == "confirmed")
+        .distinct()
+    )
     if visible_customer_ids is not None:
-        query = query.where(Customer.id.in_(visible_customer_ids))
-    rows = db.execute(
-        query.group_by(Customer.id, Customer.name).order_by(Customer.name)
-    ).all()
-    return {
-        "items": [
+        candidate_query = candidate_query.where(
+            Delivery.customer_id.in_(visible_customer_ids)
+        )
+    candidate_ids = set(db.scalars(candidate_query).all())
+    if not candidate_ids:
+        return {"items": []}
+    query = (
+        select(Customer)
+        .where(Customer.id.in_(candidate_ids))
+        .order_by(Customer.name)
+    )
+    items = []
+    for customer in db.scalars(query).all():
+        period_start = period_end = None
+        if statement_month:
+            try:
+                period_start, period_end = _statement_period(
+                    statement_month,
+                    customer.statement_cycle_start_day,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+        grouped = _pending_statement_groups(
+            db,
+            customer.id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        selectable_count = sum(
+            1 for delivery in grouped if not delivery["selection_blocked"]
+        )
+        blocked_count = sum(
+            1 for delivery in grouped if delivery["selection_blocked"]
+        )
+        if not selectable_count and not blocked_count:
+            continue
+        items.append(
             {
-                "id": customer_id,
-                "name": customer_name,
-                "pending_count": pending_count,
+                "id": customer.id,
+                "name": customer.name,
+                "pending_count": selectable_count,
+                "blocked_count": blocked_count,
+                "statement_cycle_start_day": customer.statement_cycle_start_day,
+                "period_start": period_start,
+                "period_end": period_end,
             }
-            for customer_id, customer_name, pending_count in rows
-        ]
-    }
+        )
+    return {"items": items}
 
 
 def _statement_detail_response(
@@ -1103,14 +1155,22 @@ def update_return_receipt(
     return _receipt_response(db, receipt.id)
 
 
-def _pending_statement_query(customer_id: int):
-    return (
+def _pending_statement_query(
+    customer_id: int,
+    *,
+    period_start: date | None = None,
+    period_end: date | None = None,
+):
+    query = (
         select(
             ReturnReceiptItem.id.label("return_receipt_item_id"),
+            ReturnReceipt.id.label("return_receipt_id"),
             ReturnReceipt.actual_received_date,
+            Delivery.id.label("delivery_id"),
             Delivery.delivery_number,
             Delivery.delivery_date,
             Delivery.customer_id,
+            Order.id.label("order_id"),
             Order.order_number,
             Order.customer_po,
             Product.product_code,
@@ -1122,6 +1182,8 @@ def _pending_statement_query(customer_id: int):
                 ReturnReceiptItem.actual_received_quantity * OrderItem.unit_price
             ).label("receivable_amount"),
             ReturnReceiptItem.difference_reason,
+            StatementItem.id.label("statement_item_id"),
+            StatementItem.statement_id,
         )
         .join(
             ReturnReceipt,
@@ -1139,58 +1201,150 @@ def _pending_statement_query(customer_id: int):
         .where(
             Delivery.customer_id == customer_id,
             ReturnReceipt.status == "confirmed",
-            StatementItem.id.is_(None),
         )
         .order_by(
-            ReturnReceipt.actual_received_date,
+            Delivery.delivery_date,
             Delivery.delivery_number,
             ReturnReceiptItem.id,
         )
     )
+    if period_start is not None:
+        query = query.where(Delivery.delivery_date >= period_start)
+    if period_end is not None:
+        query = query.where(Delivery.delivery_date <= period_end)
+    return query
+
+
+def _pending_statement_groups(
+    db: Session,
+    customer_id: int,
+    *,
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> list[dict]:
+    raw_rows = [
+        dict(row._mapping)
+        for row in db.execute(
+            _pending_statement_query(
+                customer_id,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        )
+    ]
+    if not raw_rows:
+        return []
+
+    registry = build_display_registry(db)
+    order_ids = {row["order_id"] for row in raw_rows}
+    orders = {
+        order.id: order
+        for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
+    }
+    grouped: dict[int, dict] = {}
+    for data in raw_rows:
+        receivable = Decimal(str(data["receivable_amount"] or 0)).quantize(
+            MONEY,
+            rounding=ROUND_HALF_UP,
+        )
+        data["receivable_amount"] = receivable
+        data["is_reconciled"] = data["statement_item_id"] is not None
+        order = orders.get(data["order_id"])
+        display = (
+            display_order_number(order, registry)
+            if order is not None
+            else data["order_number"]
+        )
+        data["order_number"] = display
+        data["display_order_number"] = display
+        delivery = grouped.setdefault(
+            data["delivery_id"],
+            {
+                "delivery_id": data["delivery_id"],
+                "delivery_number": data["delivery_number"],
+                "delivery_date": data["delivery_date"],
+                "actual_received_date": data["actual_received_date"],
+                "return_receipt_id": data["return_receipt_id"],
+                "items": [],
+            },
+        )
+        delivery["items"].append(data)
+
+    deliveries = []
+    for delivery in grouped.values():
+        rows = delivery["items"]
+        reconciled_count = sum(1 for row in rows if row["is_reconciled"])
+        if reconciled_count == len(rows):
+            continue
+        selection_blocked = reconciled_count > 0
+        delivery.update(
+            {
+                "item_count": len(rows),
+                "pending_item_count": len(rows) - reconciled_count,
+                "total_received_quantity": sum(
+                    int(row["actual_received_quantity"] or 0) for row in rows
+                ),
+                "total_receivable_amount": sum(
+                    (row["receivable_amount"] for row in rows),
+                    Decimal("0"),
+                ).quantize(MONEY, rounding=ROUND_HALF_UP),
+                "selection_blocked": selection_blocked,
+                "exception_reason": (
+                    "该送货单已有部分明细进入其他对账单，请先处理原对账单。"
+                    if selection_blocked
+                    else None
+                ),
+                "return_receipt_item_ids": [
+                    row["return_receipt_item_id"]
+                    for row in rows
+                    if not row["is_reconciled"]
+                ],
+            }
+        )
+        deliveries.append(delivery)
+    return deliveries
 
 
 @router.get("/pending_statements")
 def pending_statements(
     customer_id: int = Query(gt=0),
+    statement_month: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     require_customer_access(customer_id, user, db)
-    registry = build_display_registry(db)
-    order_ids = {
-        row[0]
-        for row in db.execute(
-            select(Order.id).where(Order.customer_id == customer_id)
-        ).all()
+    customer = db.get(Customer, customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    period_start = period_end = None
+    if statement_month:
+        try:
+            period_start, period_end = _statement_period(
+                statement_month,
+                customer.statement_cycle_start_day,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    deliveries = _pending_statement_groups(
+        db,
+        customer_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    # 保留旧版平铺字段供尚未刷新前端的页面只读使用；只返回可整单选择的明细。
+    rows = [
+        item
+        for delivery in deliveries
+        if not delivery["selection_blocked"]
+        for item in delivery["items"]
+    ]
+    return {
+        "items": rows,
+        "deliveries": deliveries,
+        "statement_cycle_start_day": customer.statement_cycle_start_day,
+        "period_start": period_start,
+        "period_end": period_end,
     }
-    orders = {
-        order.id: order for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
-    } if order_ids else {}
-    rows = []
-    for row in db.execute(_pending_statement_query(customer_id)):
-        data = dict(row._mapping)
-        data["receivable_amount"] = (
-            Decimal(str(data["receivable_amount"] or 0))
-            .quantize(MONEY, rounding=ROUND_HALF_UP)
-        )
-        rows.append(data)
-    if rows:
-        pending_ids = {
-            row[0]: row[1]
-            for row in db.execute(
-                select(ReturnReceiptItem.id, Order.id)
-                .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
-                .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-                .join(Order, Order.id == OrderItem.order_id)
-                .where(ReturnReceiptItem.id.in_([item["return_receipt_item_id"] for item in rows]))
-            ).all()
-        }
-        for item in rows:
-            order = orders.get(pending_ids.get(item["return_receipt_item_id"]))
-            display = display_order_number(order, registry) if order is not None else item["order_number"]
-            item["order_number"] = display
-            item["display_order_number"] = display
-    return {"items": rows}
 
 
 @router.post("/statements", status_code=status.HTTP_201_CREATED)
@@ -1200,9 +1354,100 @@ def create_statement(
     user: User = Depends(can_operate),
 ) -> dict:
     require_customer_access(payload.customer_id, user, db)
-    if db.get(Customer, payload.customer_id) is None:
+    customer = db.get(Customer, payload.customer_id)
+    if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     try:
+        period_start, period_end = _statement_period(
+            payload.statement_month,
+            customer.statement_cycle_start_day,
+        )
+        compatibility_item_ids = set(payload.return_receipt_item_ids)
+        selected_delivery_ids = set(payload.delivery_ids)
+        if compatibility_item_ids:
+            mapped_rows = db.execute(
+                select(ReturnReceiptItem.id, Delivery.id)
+                .join(
+                    DeliveryItem,
+                    DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
+                )
+                .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+                .where(ReturnReceiptItem.id.in_(compatibility_item_ids))
+            ).all()
+            if {row[0] for row in mapped_rows} != compatibility_item_ids:
+                raise HTTPException(status_code=400, detail="回单明细不存在")
+            selected_delivery_ids = {row[1] for row in mapped_rows}
+
+        selected_rows = db.execute(
+            select(
+                ReturnReceiptItem,
+                ReturnReceipt,
+                Delivery,
+                OrderItem,
+                Product,
+                StatementItem.id.label("existing_statement_item_id"),
+            )
+            .join(
+                ReturnReceipt,
+                ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
+            )
+            .join(
+                DeliveryItem,
+                DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
+            )
+            .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .join(Product, Product.id == OrderItem.product_id)
+            .outerjoin(
+                StatementItem,
+                StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+            )
+            .where(Delivery.id.in_(selected_delivery_ids))
+            .order_by(Delivery.id, ReturnReceiptItem.id)
+        ).all()
+        found_delivery_ids = {row[2].id for row in selected_rows}
+        if found_delivery_ids != selected_delivery_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="所选送货单不存在已确认的客户回单明细",
+            )
+        all_item_ids = {row[0].id for row in selected_rows}
+        if compatibility_item_ids and compatibility_item_ids != all_item_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="送货单必须整单对账，不能只选择其中部分存货编码。",
+            )
+        claimed_receipt_ids: set[int] = set()
+        for row in selected_rows:
+            receipt_item, receipt, delivery, _order_item, _product, existing_id = row
+            require_customer_access(delivery.customer_id, user, db)
+            if delivery.customer_id != payload.customer_id:
+                raise HTTPException(status_code=400, detail="送货单客户不匹配")
+            if receipt.status != "confirmed":
+                raise HTTPException(status_code=409, detail="已取消回单不能生成对账单")
+            if existing_id is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该送货单已有明细进入对账单，请先处理原对账单。",
+                )
+            if not period_start <= delivery.delivery_date <= period_end:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"送货单 {delivery.delivery_number} 的送货日期"
+                        f"不属于 {payload.statement_month} 对账周期"
+                        f"（{period_start} 至 {period_end}）。"
+                    ),
+                )
+            if receipt.id not in claimed_receipt_ids:
+                _claim_return_receipt_status(
+                    db,
+                    receipt_id=receipt.id,
+                    expected_status="confirmed",
+                    next_status="confirmed",
+                )
+                claimed_receipt_ids.add(receipt.id)
+
         statement = Statement(
             statement_number=_next_statement_number(
                 db,
@@ -1219,53 +1464,8 @@ def create_statement(
         db.flush()
         total_receivable = Decimal("0")
         total_profit = Decimal("0")
-        for receipt_item_id in payload.return_receipt_item_ids:
-            row = db.execute(
-                select(
-                    ReturnReceiptItem,
-                    ReturnReceipt,
-                    Delivery,
-                    OrderItem,
-                    Product,
-                    StatementItem.id.label("existing_statement_item_id"),
-                )
-                .join(
-                    ReturnReceipt,
-                    ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
-                )
-                .join(
-                    DeliveryItem,
-                    DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
-                )
-                .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-                .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-                .join(Product, Product.id == OrderItem.product_id)
-                .outerjoin(
-                    StatementItem,
-                    StatementItem.return_receipt_item_id
-                    == ReturnReceiptItem.id,
-                )
-                .where(ReturnReceiptItem.id == receipt_item_id)
-            ).one_or_none()
-            if row is None:
-                raise HTTPException(status_code=400, detail="回单明细不存在")
-            receipt_item, receipt, delivery, order_item, product, existing_id = row
-            require_customer_access(delivery.customer_id, user, db)
-            if receipt.status != "confirmed":
-                raise HTTPException(status_code=409, detail="已取消回单不能生成对账单")
-            _claim_return_receipt_status(
-                db,
-                receipt_id=receipt.id,
-                expected_status="confirmed",
-                next_status="confirmed",
-            )
-            if existing_id is not None:
-                raise HTTPException(status_code=409, detail="回单明细已完成对账")
-            if delivery.customer_id != payload.customer_id:
-                raise HTTPException(status_code=400, detail="回单明细客户不匹配")
-            if receipt.actual_received_date.strftime("%Y-%m") != payload.statement_month:
-                raise HTTPException(status_code=400, detail="回单日期不属于对账月份")
-
+        for row in selected_rows:
+            receipt_item, _receipt, _delivery, order_item, product, _existing_id = row
             unit_price = Decimal(str(order_item.unit_price))
             unit_cost = Decimal(str(product.cost_unit_price or 0))
             quantity = Decimal(receipt_item.actual_received_quantity)
@@ -1301,7 +1501,8 @@ def create_statement(
             details={
                 "statement_number": statement.statement_number,
                 "statement_month": statement.statement_month,
-                "item_count": len(payload.return_receipt_item_ids),
+                "delivery_count": len(selected_delivery_ids),
+                "item_count": len(selected_rows),
                 "total_receivable": statement.total_receivable,
                 "total_gross_profit": statement.total_gross_profit,
             },
@@ -1604,25 +1805,39 @@ def update_statement(
         old_month = statement.statement_month
         if payload.statement_month == old_month:
             return _statement_detail_response(db, statement.id, user)
-        receipt_months = {
-            row[0]
-            for row in db.execute(
-                select(func.strftime("%Y-%m", ReturnReceipt.actual_received_date))
-                .join(
-                    ReturnReceiptItem,
-                    ReturnReceiptItem.return_receipt_id == ReturnReceipt.id,
-                )
-                .join(
-                    StatementItem,
-                    StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
-                )
-                .where(StatementItem.statement_id == statement.id)
-            ).all()
-        }
-        if receipt_months and receipt_months != {payload.statement_month}:
+        customer = db.get(Customer, statement.customer_id)
+        if customer is None:
+            raise HTTPException(status_code=409, detail="对账单关联客户不存在。")
+        period_start, period_end = _statement_period(
+            payload.statement_month,
+            customer.statement_cycle_start_day,
+        )
+        delivery_rows = db.execute(
+            select(Delivery.delivery_number, Delivery.delivery_date)
+            .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+            .join(
+                ReturnReceiptItem,
+                ReturnReceiptItem.delivery_item_id == DeliveryItem.id,
+            )
+            .join(
+                StatementItem,
+                StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+            )
+            .where(StatementItem.statement_id == statement.id)
+            .distinct()
+        ).all()
+        invalid_deliveries = [
+            delivery_number
+            for delivery_number, delivery_date in delivery_rows
+            if not period_start <= delivery_date <= period_end
+        ]
+        if invalid_deliveries:
             raise HTTPException(
                 status_code=409,
-                detail="对账月份必须与该对账单明细的回单月份一致。",
+                detail=(
+                    "对账月份必须覆盖全部送货单的送货日期；不属于该周期的送货单："
+                    + "、".join(invalid_deliveries)
+                ),
             )
         before = _statement_detail_response(db, statement.id, user)
         statement.statement_month = payload.statement_month

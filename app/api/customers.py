@@ -35,6 +35,7 @@ class CustomerPayload(BaseModel):
     customer_code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=200)
     payment_term_days: int = Field(default=0, ge=0)
+    statement_cycle_start_day: int = Field(default=20, ge=1, le=28)
     credit_limit: Decimal = Field(default=Decimal("0"), ge=0)
     delivery_method: Literal["自提", "配送", "物流"] = "配送"
     contact_person: str | None = None

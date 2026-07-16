@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
+from app.models.access_control import UserPermissionOverride
 from app.models import Base
 from app.models.customer import Customer
 from app.models.delivery import Delivery
@@ -29,6 +30,7 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     manual_finished_in,
     manual_semi_finished_in,
+    replace_semi_finished_lot_allowed_products,
     release_active_finished_reservations_for_items,
 )
 
@@ -75,6 +77,19 @@ def delivery_inventory_app(tmp_path: Path):
         )
         db.add_all([customer, other_customer])
         db.flush()
+        sales = db.scalar(select(User).where(User.username == "sales"))
+        db.add_all(
+            UserPermissionOverride(
+                user_id=sales.id,
+                permission_code=permission_code,
+                is_allowed=True,
+            )
+            for permission_code in (
+                "requisition.view",
+                "deliveries.view",
+                "deliveries.execute",
+            )
+        )
         products = [
             Product(
                 customer_id=customer.id,
@@ -232,6 +247,13 @@ def add_semi(
             remarks=None,
             operator_id=1,
             idempotency_key=key,
+        )
+        lot = replace_semi_finished_lot_allowed_products(
+            db,
+            inventory_lot_id=lot.id,
+            product_ids=[1, 2, 3],
+            expected_version=lot.version,
+            operator_id=1,
         )
         db.commit()
         return lot.id, lot.version
@@ -750,5 +772,5 @@ def test_partial_semi_coverage_is_not_eligible_but_full_coverage_is(
             },
         )
     assert rejected.status_code == 400
-    assert "当前未送数量为 0" in rejected.json()["detail"]
+    assert "当前不可发货" in rejected.json()["detail"]
     assert accepted.status_code == 201, accepted.text

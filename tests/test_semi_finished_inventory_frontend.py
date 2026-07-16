@@ -84,7 +84,7 @@ if (JSON.stringify(result) !== JSON.stringify(["SI-RECOMMENDED","SI-20260710-40C
 
 
 def test_warehouse_exposes_multi_product_assignment_and_mold_location() -> None:
-    assert "分配成品款号" in WAREHOUSE
+    assert "分配 / 取消成品款号" in WAREHOUSE
     assert "/product-assignments?limit=500" in WAREHOUSE
     assert "保存款号分配" in WAREHOUSE
     assert "模具 / 货架位置" in WAREHOUSE
@@ -95,6 +95,37 @@ def test_warehouse_exposes_multi_product_assignment_and_mold_location() -> None:
     assert "保存模具" in WAREHOUSE
     assert "productForm.mold_tool_id" in INDEX
     assert "mold_tool_id: f.mold_tool_id" in INDEX
+
+
+def test_semi_lot_uses_one_admin_batch_editor() -> None:
+    actions = WAREHOUSE.split("function actionButtons(row)", 1)[1].split(
+        "function renderSemiLotEditor", 1
+    )[0]
+    assert 'state.user.role==="admin"' in actions
+    assert "openSemiLotEditor" in actions
+    assert "assignCustomer-" not in actions
+    for marker in (
+        "编辑半成品库存批次",
+        "/edit-semi-finished",
+        "customer_id:customerId",
+        "customer_id:null",
+        "expected_version:row.version",
+        "取消归属不会删除该客户共用的匹配记忆",
+    ):
+        assert marker in WAREHOUSE
+
+
+def test_semi_lot_keeps_replace_checkbox_and_audited_void_path() -> None:
+    assignment = WAREHOUSE.split("async function saveProductAssignments()", 1)[1].split(
+        "async function operate", 1
+    )[0]
+    assert "product_ids:[...state.assignment.selected]" in assignment
+    assert "state.assignment.selected.delete(productId)" in WAREHOUSE
+    void = WAREHOUSE.split("async function voidSemiLot()", 1)[1].split(
+        "async function openProductAssignments", 1
+    )[0]
+    for marker in ("/void-semi-finished", "expected_version:row.version", "reason:reason.trim()", "作废关闭并保留原流水"):
+        assert marker in void
 
 
 def test_finished_then_semi_requirement_and_yield_allocation_are_explicit() -> None:

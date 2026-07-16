@@ -74,6 +74,7 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    edit_semi_finished_lot_customer,
     edit_finished_lot,
     finished_inventory_candidates,
     finished_inventory_candidates_for_product,
@@ -84,6 +85,7 @@ from app.services.warehouse_inventory import (
     normalize_material_code,
     release_finished_reservation,
     reserve_finished_inventory,
+    void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
 from app.services.mold_location import describe_mold_location
@@ -403,6 +405,16 @@ class SemiFinishedManualInPayload(BaseModel):
         if value not in VALID_SOURCE_TYPES:
             raise ValueError("库存来源无效")
         return value
+
+
+class SemiFinishedLotEditPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    customer_id: int | None = Field(default=None, gt=0)
+
+
+class SemiFinishedLotVoidPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class VersionPayload(BaseModel):
@@ -3301,6 +3313,50 @@ def semi_finished_manual_in(
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+
+
+@router.post("/lots/{lot_id}/edit-semi-finished")
+def edit_semi_finished_inventory_lot(
+    lot_id: int, payload: SemiFinishedLotEditPayload,
+    db: Session = Depends(get_db), user: User = Depends(admin_only),
+) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
+    if payload.customer_id is not None:
+        require_customer_access(payload.customer_id, user, db)
+    try:
+        row = edit_semi_finished_lot_customer(
+            db, lot_id=lot_id, customer_id=payload.customer_id,
+            expected_version=payload.expected_version, operator_id=user.id,
+        )
+        db.commit()
+        return _lot_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/lots/{lot_id}/void-semi-finished")
+def void_semi_finished_inventory_lot(
+    lot_id: int, payload: SemiFinishedLotVoidPayload,
+    db: Session = Depends(get_db), user: User = Depends(admin_only),
+) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
+    try:
+        row = void_semi_finished_lot(
+            db, lot_id=lot_id, expected_version=payload.expected_version,
+            reason=payload.reason, operator_id=user.id,
+        )
+        db.commit()
+        return _lot_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
 
 
 @router.post("/lots/{lot_id}/edit-finished")

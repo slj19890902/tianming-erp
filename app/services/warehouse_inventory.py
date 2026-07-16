@@ -1040,6 +1040,131 @@ def manual_semi_finished_in(
     return lot
 
 
+SEMI_FINISHED_ASSIGN_CUSTOMER_REASON = "指定半成品归属客户"
+SEMI_FINISHED_UNASSIGN_CUSTOMER_REASON = "取消半成品归属客户"
+SEMI_FINISHED_VOID_REASON = "作废误录半成品库存批次"
+
+
+def _editable_semi_finished_lot(
+    db: Session, lot_id: int, expected_version: int
+) -> InventoryLot:
+    lot = db.get(InventoryLot, lot_id)
+    if lot is None or lot.inventory_type != "semi_finished" or lot.semi_finished_detail is None:
+        raise WarehouseInventoryError("半成品库存批次不存在", 404)
+    if lot.version != expected_version:
+        raise WarehouseInventoryError("库存批次已被其他操作更新，请刷新后重试", 409)
+    if lot.status == "closed":
+        raise WarehouseInventoryError("已关闭的半成品库存批次不能编辑", 409)
+    return lot
+
+
+def edit_semi_finished_lot_customer(
+    db: Session, *, lot_id: int, customer_id: int | None,
+    expected_version: int, operator_id: int | None,
+) -> InventoryLot:
+    lot = _editable_semi_finished_lot(db, lot_id, expected_version)
+    detail = lot.semi_finished_detail
+    assert detail is not None
+    current_customer_id = detail.owner_customer_id
+    if current_customer_id is None:
+        if customer_id is None:
+            raise WarehouseInventoryError("当前批次尚未指定客户，无需取消归属", 409)
+        customer = db.get(Customer, customer_id)
+        if customer is None or not customer.is_active or customer.status != "active":
+            raise WarehouseInventoryError("客户不存在或已停用", 404)
+        next_customer_id = customer.id
+        next_customer_name = customer.name
+        reason = SEMI_FINISHED_ASSIGN_CUSTOMER_REASON
+    else:
+        if customer_id is not None:
+            if customer_id == current_customer_id:
+                raise WarehouseInventoryError("半成品库存批次归属客户未变化", 409)
+            raise WarehouseInventoryError("如需更换客户，请先取消当前归属，再重新指定客户", 409)
+        reservation_id = db.scalar(select(InventoryReservation.id).where(
+            InventoryReservation.inventory_lot_id == lot.id
+        ).limit(1))
+        if lot.quantity_reserved or lot.quantity_consumed or reservation_id is not None:
+            raise WarehouseInventoryError(
+                "批次已有预占或消耗记录，不能取消客户归属", 409
+            )
+        next_customer_id = None
+        next_customer_name = None
+        reason = SEMI_FINISHED_UNASSIGN_CUSTOMER_REASON
+
+    before = _balances(lot)
+    now = utc_now()
+    updated_lot = db.execute(update(InventoryLot).where(
+        InventoryLot.id == lot_id,
+        InventoryLot.inventory_type == "semi_finished",
+        InventoryLot.version == expected_version,
+    ).values(version=expected_version + 1, last_movement_at=now).execution_options(
+        synchronize_session=False
+    ))
+    if updated_lot.rowcount != 1:
+        raise WarehouseInventoryError("库存批次已被其他操作更新，请刷新后重试", 409)
+    detail.owner_customer_id = next_customer_id
+    detail.owner_customer_name_snapshot = next_customer_name
+    db.flush()
+    db.expire_all()
+    refreshed = db.get(InventoryLot, lot_id)
+    assert refreshed is not None
+    _movement(
+        db, lot=refreshed, movement_type="adjust", quantity=0, before=before,
+        operator_id=operator_id, reason=reason, remarks=json.dumps({
+            "before_customer_id": current_customer_id,
+            "after_customer_id": next_customer_id,
+        }, ensure_ascii=False),
+    )
+    db.flush()
+    return refreshed
+
+
+def void_semi_finished_lot(
+    db: Session, *, lot_id: int, expected_version: int,
+    reason: str, operator_id: int | None,
+) -> InventoryLot:
+    normalized_reason = reason.strip()
+    if not normalized_reason:
+        raise WarehouseInventoryError("删除误录批次必须填写原因")
+    lot = _editable_semi_finished_lot(db, lot_id, expected_version)
+    if any((lot.quantity_reserved, lot.quantity_consumed, lot.quantity_damaged, lot.quantity_scrapped)):
+        raise WarehouseInventoryError("批次已有预占、消耗、报损或报废，不能删除", 409)
+    if lot.source_ref_type is not None or lot.source_ref_id is not None:
+        raise WarehouseInventoryError("批次关联来料或补库业务，不能删除", 409)
+    reservation_id = db.scalar(select(InventoryReservation.id).where(
+        InventoryReservation.inventory_lot_id == lot.id
+    ).limit(1))
+    if reservation_id is not None:
+        raise WarehouseInventoryError("批次已有订单或报料预占记录，不能删除", 409)
+    before = _balances(lot)
+    now = utc_now()
+    audit_note = f"作废原因：{normalized_reason}"
+    lot_remarks = "\n".join(part for part in ((lot.remarks or "").strip(), audit_note) if part)
+    updated = db.execute(update(InventoryLot).where(
+        InventoryLot.id == lot.id,
+        InventoryLot.inventory_type == "semi_finished",
+        InventoryLot.version == expected_version,
+        InventoryLot.status.in_(("active", "frozen")),
+    ).values(
+        quantity_available=0, status="closed", version=expected_version + 1,
+        last_movement_at=now, remarks=lot_remarks,
+    ).execution_options(synchronize_session=False))
+    if updated.rowcount != 1:
+        raise WarehouseInventoryError("库存批次已被其他操作更新，请刷新后重试", 409)
+
+    db.expire_all()
+    refreshed = db.get(InventoryLot, lot.id)
+    assert refreshed is not None
+    _movement(
+        db, lot=refreshed, movement_type="adjust", quantity=before["available"],
+        before=before, operator_id=operator_id,
+        reason=f"{SEMI_FINISHED_VOID_REASON}：{normalized_reason}",
+        remarks="保留原始入库流水并关闭批次",
+    )
+    db.flush()
+    return refreshed
+
+
 FINISHED_LOT_EDIT_REASON = "编辑成品库存批次"
 
 

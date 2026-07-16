@@ -73,6 +73,7 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    edit_finished_lot,
     finished_inventory_candidates,
     finished_inventory_candidates_for_product,
     inventory_age_warning,
@@ -304,6 +305,31 @@ class FinishedManualInPayload(BaseModel):
         if value not in VALID_SOURCE_TYPES:
             raise ValueError("库存来源无效")
         return value
+
+
+class FinishedLotEditPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    is_general: bool
+    customer_id: int | None = Field(default=None, gt=0)
+    product_id: int = Field(gt=0)
+    quantity_available: int = Field(ge=0)
+    location_id: int = Field(gt=0)
+    stock_date: date
+    idempotency_key: str = Field(min_length=1, max_length=100)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_finished_edit_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+    @model_validator(mode="after")
+    def customer_required_for_dedicated_inventory(self) -> "FinishedLotEditPayload":
+        if not self.is_general and self.customer_id is None:
+            raise ValueError("客户专用库存必须选择客户")
+        return self
 
 
 class SemiFinishedManualInPayload(BaseModel):
@@ -2999,7 +3025,7 @@ def list_lots(
         days = {"attention": 365, "handling": 548, "cleanup": 730}.get(stale_level)
         if days:
             query = query.where(
-                InventoryLot.last_movement_at <= datetime.now() - timedelta(days=days)
+                InventoryLot.stock_date <= date.today() - timedelta(days=days)
             )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     total = db.scalar(count_query) or 0
@@ -3143,6 +3169,34 @@ def semi_finished_manual_in(
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+
+
+@router.post("/lots/{lot_id}/edit-finished")
+def edit_finished_inventory_lot(
+    lot_id: int,
+    payload: FinishedLotEditPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
+    if not payload.is_general:
+        assert payload.customer_id is not None
+        require_customer_access(payload.customer_id, user, db)
+    try:
+        row = edit_finished_lot(
+            db,
+            lot_id=lot_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return _lot_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
 
 
 def _operate(

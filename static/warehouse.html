@@ -15,8 +15,9 @@
     .grid{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
     input,select,textarea{width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:7px 8px;background:#fff}textarea{min-height:38px;resize:vertical}
     table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;padding:9px;border-bottom:1px solid #e8edf4;vertical-align:top}th{background:#f7f9fc;color:#475569}
-    .table-wrap{overflow:auto}.tag{display:inline-block;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.tag.warn{background:#fff2cf;color:#92400e}.tag.red{background:#fee2e2;color:#991b1b}
+    .table-wrap{overflow:auto}.table-wrap.finished-lot-wrap{overflow-x:hidden}.finished-lot-table{table-layout:fixed;white-space:normal}.finished-lot-table th,.finished-lot-table td{padding:6px 5px;vertical-align:middle;overflow-wrap:anywhere}.finished-lot-table th{position:relative}.finished-lot-table th:nth-child(1){width:10.5%}.finished-lot-table th:nth-child(2){width:10%}.finished-lot-table th:nth-child(3){width:16%}.finished-lot-table th:nth-child(4){width:10%}.finished-lot-table th:nth-child(5){width:8%}.finished-lot-table th:nth-child(6){width:12%}.finished-lot-table th:nth-child(7){width:6%}.finished-lot-table th:nth-child(8){width:6.5%}.finished-lot-table th:nth-child(9){width:6.5%}.finished-lot-table th:nth-child(10){width:5%}.finished-lot-table th:nth-child(11){width:9.5%;text-align:right}.lot-column-resizer{position:absolute;z-index:3;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;touch-action:none}.lot-column-resizer:hover,.lot-column-resizer.active{background:#2563eb66}.lot-batch,.lot-status{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lot-status{width:max-content;margin-top:3px}.lot-customer{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal;line-height:1.35}.lot-material,.lot-flute{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.25}.lot-flute{color:var(--muted)}.lot-actions{display:flex;align-items:center;justify-content:flex-end;gap:3px;flex-wrap:nowrap;min-width:0;padding-top:5px;padding-bottom:5px}.lot-actions .btn{padding:3px 5px;font-size:11px;line-height:1.2;white-space:nowrap}.tag{display:inline-block;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.tag.warn{background:#fff2cf;color:#92400e}.tag.red{background:#fee2e2;color:#991b1b}
     .muted{color:var(--muted)}.message{position:fixed;right:20px;bottom:20px;max-width:420px;background:#172033;color:#fff;border-radius:8px;padding:11px 16px;z-index:10}.hidden{display:none!important}
+    .lot-edit-mask{position:fixed;z-index:60;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;background:#0f172a70}.lot-edit-dialog{width:min(780px,100%);max-height:calc(100vh - 32px);margin:0;overflow:auto;box-shadow:0 22px 70px #0f172a55}.lot-edit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.lot-edit-head h2{margin:0}.lot-edit-selected{min-height:34px;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc}.lot-edit-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
     .summary{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0}.summary strong{font-size:18px}.empty{text-align:center;color:var(--muted);padding:26px}
     .metric-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:10px}.metric-card{border:1px solid var(--line);border-radius:9px;padding:12px;background:#f8fafc}.metric-card strong{display:block;font-size:22px;margin-top:4px}.notice{border:1px solid #f4d38a;background:#fff8df;color:#713f12;border-radius:9px;padding:10px 12px}.notice.info{border-color:#bfdbfe;background:#eff6ff;color:#1e3a8a}.reason-list{white-space:normal;min-width:300px}.reason-list div+div{margin-top:4px}
     .floor3-plan-toolbar{justify-content:space-between}.floor3-plan-toolbar h2{margin:0}.floor3-plan-scroll{overflow-x:auto;overflow-y:hidden;border:1px solid var(--line);border-radius:9px;background:#eef4ef}.floor3-plan-canvas{position:relative;width:100%;line-height:0;transform-origin:top left}.floor3-plan-canvas img{display:block;width:100%;height:auto;user-select:none}.floor3-plan-hotspots{position:absolute;inset:0}.floor3-plan-hotspot{position:absolute;z-index:3;display:block;padding:0;border:1px solid #2563eb99;border-radius:5px;background:#2563eb08;color:#0f2e53;line-height:1.15;transition:background .15s,border-color .15s,box-shadow .15s;overflow:visible;pointer-events:none}.floor3-plan-hotspot.matched{background:#16a34a30;border-color:#15803d;box-shadow:0 0 0 2px #16a34a4d}.floor3-plan-hotspot.temporary{background:#f973161f;border-color:#ea580c}.floor3-plan-hotspot.selected,.floor3-plan-hotspot.selected.matched{background:#1d4ed833;border-color:#1d4ed8;box-shadow:0 0 0 3px #1d4ed842}.floor3-plan-hotspot.temporary.selected{background:#ea580c4d}.floor3-area-entry{position:absolute;z-index:9;transform:translate(-50%,-100%);min-width:34px;padding:3px 7px;border:1px solid #93a8c1;border-radius:6px;background:#fffffff2;color:#0f2e53;box-shadow:0 2px 6px #0f172a2e;cursor:pointer;font:800 11px/1.15 Arial,"Microsoft YaHei",sans-serif;white-space:nowrap}.floor3-area-entry:hover,.floor3-area-entry:focus-visible{background:#dbeafe;border-color:var(--blue);outline:none}.floor3-area-entry.matched{background:#dcfce7;border-color:#15803d;color:#166534}.floor3-area-entry.temporary{background:#fff7ed;border-color:#ea580c;color:#9a3412}.floor3-area-entry.selected{background:#dbeafe;border-color:#1d4ed8;color:#1e3a8a}.floor3-slot-marker{position:absolute;z-index:4;min-width:14px;min-height:14px;border:2px solid #fff;border-radius:4px;background:#e2e8f0;box-shadow:0 1px 4px #0f172a55;cursor:pointer;line-height:1;color:#0f172a}.floor3-slot-marker.occupied{background:#f59e0b}.floor3-slot-marker.relocation{background:#ef4444}.floor3-slot-marker.disabled{background:#94a3b8;opacity:.62;cursor:not-allowed}.floor3-slot-marker.search-match{box-shadow:0 0 0 3px #16a34a77}.floor3-slot-marker.selected{outline:3px solid #2563eb;z-index:7}.floor3-slot-marker.layout-edit{border-style:dashed;border-color:#1d4ed8;background:#dbeafe;cursor:grab}.floor3-slot-marker.layout-edit:active{cursor:grabbing}.floor3-map-pallet-card{position:absolute;z-index:8;width:240px;padding:9px;border:1px solid #93c5fd;border-radius:8px;background:#fff;box-shadow:0 8px 24px #0f172a33;font:12px/1.45 Arial,"Microsoft YaHei",sans-serif;line-height:1.45}.floor3-map-pallet-card b{display:block}.floor3-map-pallet-card p{margin:3px 0}.floor3-plan-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:var(--muted)}.floor3-plan-legend i{display:inline-block;width:10px;height:10px;border:1px solid #2563eb99;border-radius:2px;margin-right:4px;background:#2563eb12}.floor3-plan-legend i.matched{background:#16a34a42;border-color:#15803d}.floor3-plan-legend i.temporary{background:#f9731640;border-color:#ea580c}.floor3-workspace{margin-top:14px}.floor3-workspace-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}.floor3-workspace-head h2{margin:0}.floor3-area-focus{display:grid;grid-template-columns:minmax(360px,1.15fr) minmax(300px,.85fr);gap:14px;align-items:start}.floor3-area-slot-map{position:relative;min-height:420px;border:1px solid var(--line);border-radius:9px;background-color:#eef4ef;background-image:none;overflow:hidden}.floor3-layout-editor{margin-top:10px}.floor3-location-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.floor3-card{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;cursor:pointer;min-width:0}.floor3-card:hover{border-color:var(--blue);box-shadow:0 2px 8px #1e3a8a18}.floor3-card h3{font-size:15px;margin:0 0 6px;overflow-wrap:anywhere}.floor3-card p{margin:4px 0;overflow-wrap:anywhere}.floor3-card .actions{margin-top:10px}.floor3-detail-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:14px}.floor3-item-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}.floor3-item{border:1px solid var(--line);border-radius:8px;padding:10px;background:#f8fafc;min-width:0;overflow-wrap:anywhere}.floor3-bind-row{border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;background:#fbfdff}.floor3-bind-row-grid{display:grid;grid-template-columns:1.1fr 1.4fr auto 1fr 110px auto;gap:8px;align-items:end}.floor3-candidates{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.floor3-candidate{border:1px solid #93c5fd;background:#eff6ff;color:#1e3a8a;border-radius:7px;padding:6px 8px;cursor:pointer;text-align:left;min-width:0}.floor3-candidate.selected{border-color:var(--blue);background:#dbeafe}.floor3-history{padding-left:18px;margin:0}.floor3-history li{margin:5px 0;overflow-wrap:anywhere}.floor3-aisle{border-color:#f59e0b;background:#fff7ed}.floor3-aisle .tag{background:#ffedd5;color:#9a3412}
@@ -171,7 +172,7 @@
       </form>
 
       <div class="panel table-wrap">
-        <table>
+        <table id="lotTable">
           <thead id="lotHead"></thead>
           <tbody id="lotBody"></tbody>
         </table>
@@ -180,6 +181,23 @@
       <div id="reservationPanel" class="panel table-wrap hidden">
         <div style="display:flex;justify-content:space-between;align-items:center"><h2 id="reservationTitle">成品库存预占记录</h2><button class="btn" onclick="$('reservationPanel').classList.add('hidden')">关闭</button></div>
         <table><thead><tr><th>预占时间</th><th>订单</th><th>客户/产品</th><th>预占数量</th><th>状态</th><th>释放时间/原因</th></tr></thead><tbody id="reservationBody"></tbody></table>
+      </div>
+      <div id="lotEditMask" class="lot-edit-mask hidden">
+        <form id="lotEditForm" class="panel lot-edit-dialog admin-only" role="dialog" aria-modal="true" aria-labelledby="lotEditTitle">
+          <div class="lot-edit-head"><div><h2 id="lotEditTitle">编辑成品库存批次</h2><div class="muted">修改后统一写入库存流水；库龄由入库日期自动计算。</div></div><button id="lotEditClose" class="btn" type="button">关闭</button></div>
+          <div class="grid" style="margin-top:14px">
+            <div class="field"><label for="lotEditOwnership">库存归属</label><select id="lotEditOwnership"><option value="customer">客户专用库存</option><option value="general">通用库存</option></select></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditCustomer">绑定客户</label><select id="lotEditCustomer"></select></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditProductKeyword">输入存货编码 / 产品名称</label><input id="lotEditProductKeyword" maxlength="150" autocomplete="off" placeholder="输入后显示该客户候选"></div>
+            <div class="field" style="grid-column:span 2"><label>已选择产品</label><input id="lotEditProduct" type="hidden"><div id="lotEditProductSelected" class="lot-edit-selected muted">尚未选择产品</div></div>
+            <div class="field" style="grid-column:span 3"><label>匹配候选</label><div id="lotEditProductCandidates" class="floor3-candidates"><span class="muted">选择客户后输入存货编码或产品名称</span></div></div>
+            <div class="field"><label for="lotEditQuantity">可用数量（个）</label><input id="lotEditQuantity" type="number" min="0" step="1" required></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditLocation">三楼具体货位</label><select id="lotEditLocation" required></select></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditStockDate">入库日期（决定库龄）</label><input id="lotEditStockDate" type="date" required></div>
+          </div>
+          <div class="notice info" style="margin-top:12px">若选择客户专用库存，必须从该客户候选中点击存货编码；不能只改客户而保留其他客户的产品。</div>
+          <div class="lot-edit-actions"><button id="lotEditCancel" class="btn" type="button">取消</button><button id="lotEditSave" class="btn primary" type="submit">保存批次修改</button></div>
+        </form>
       </div>
       <div id="assignmentPanel" class="panel hidden">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2 id="assignmentTitle">分配适用成品款号</h2><div id="assignmentScope" class="muted"></div></div><button class="btn" onclick="$('assignmentPanel').classList.add('hidden')">关闭</button></div>
@@ -347,11 +365,12 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindRows:[],addCandidates:[],addCandidate:null}};
+    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindRows:[],addCandidates:[],addCandidate:null}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canOperate=()=>hasPermission("warehouse.execute");
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
+    const FINISHED_LOT_COLUMN_WIDTHS_KEY="warehouseFinishedLotColumnWidthsV1",FINISHED_LOT_DEFAULT_WIDTHS=[10.5,10,16,10,8,12,6,6.5,6.5,5,9.5];
     function apiErrorMessage(body,status,url){
       if(typeof body.detail==="string"&&body.detail.trim())return body.detail;
       if(Array.isArray(body.detail)&&body.detail.length){
@@ -444,6 +463,9 @@
       $("fgProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchFinishedProductCandidates()}};
       $("siLayer").onchange=updateFlutes;updateFlutes();
       $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;$("moldForm").onsubmit=saveMold;
+      $("lotEditForm").onsubmit=saveLotEditor;$("lotEditClose").onclick=$("lotEditCancel").onclick=closeLotEditor;$("lotEditMask").onclick=event=>{if(event.target===$("lotEditMask"))closeLotEditor()};
+      $("lotEditOwnership").onchange=()=>updateLotEditOwnership();$("lotEditCustomer").onchange=resetLotEditProductSearch;$("lotEditProductKeyword").oninput=scheduleLotEditProductSearch;$("lotEditProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchLotEditProductCandidates()}};
+      document.addEventListener("keydown",event=>{if(event.key==="Escape"&&!$("lotEditMask").classList.contains("hidden"))closeLotEditor()});
     }
     async function switchLocationView(view){
       if(view==="ledger"&&!canManageLocations()){toast("只有管理员可以维护全部库位台账",true);view="floor3"}
@@ -507,13 +529,14 @@
       const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;
       const active=data.items.filter(x=>x.is_active), all=active.map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`}));
       options($("locationFilter"),all,"全部库位");
-      options($("fgLocation"),active.filter(x=>["finished","shared"].includes(x.warehouse_type)).sort((a,b)=>(b.source_version==="V11")-(a.source_version==="V11")||String(a.location_code).localeCompare(String(b.location_code))).map(x=>({id:x.id,label:`${x.source_version==="V11"?`三楼 ${x.area_code||""}`:"其他库位"}｜${x.location_code} ${x.location_name}`})),"请选择三楼货位");
+      const finishedLocations=active.filter(x=>["finished","shared"].includes(x.warehouse_type)).sort((a,b)=>(b.source_version==="V11")-(a.source_version==="V11")||String(a.location_code).localeCompare(String(b.location_code))).map(x=>({id:x.id,label:`${x.source_version==="V11"?`三楼 ${x.area_code||""}`:"其他库位"}｜${x.location_code} ${x.location_name}`}));
+      options($("fgLocation"),finishedLocations,"请选择三楼货位");options($("lotEditLocation"),finishedLocations,"请选择三楼货位");
       options($("siLocation"),active.filter(x=>["semi_finished","shared"].includes(x.warehouse_type)).map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`})),"请选择");
       if(includeInactive)renderLocations();
     }
     async function loadCustomers(){
       const data=await api("/api/warehouse/references/customers");state.customers=data.items;
-      const rows=data.items.map(x=>({id:x.id,label:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");
+      const rows=data.items.map(x=>({id:x.id,label:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");
     }
     function clearFinishedProductSelection(message="尚未选择（必须点击下方候选）"){
       $("fgProduct").value="";$("fgProductSelected").textContent=message;
@@ -548,6 +571,57 @@
       $("fgProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';
       try{const query=queryString({customer_id:customerId,q:keyword,limit:30}),data=await api(`/api/warehouse/floor3/product-candidates?${query}`);if(requestId!==state.finishedProductSearchRequestId)return;state.finishedProductCandidates=data.items||data.candidates||[];renderFinishedProductCandidates()}catch(error){if(requestId!==state.finishedProductSearchRequestId)return;$("fgProductCandidates").innerHTML='<span class="muted">候选加载失败，请重试</span>';toast(`产品候选加载失败：${error.message}`,true)}
     }
+    function lotEditProductLabel(item){
+      const code=item.product_code||item.customer_material_code||item.inventory_code||item.id,name=item.product_name||item.name||"未命名产品",spec=item.specification||"";return `${code} · ${name}${spec?" · "+spec:""}`;
+    }
+    function clearLotEditProductSelection(message="尚未选择产品"){
+      state.lotEdit.selectedProduct=null;$("lotEditProduct").value="";$("lotEditProductSelected").textContent=message;$("lotEditProductSelected").classList.add("muted");
+    }
+    function renderLotEditProductCandidates(){
+      const rows=state.lotEdit.candidates||[],selectedId=Number($("lotEditProduct").value);
+      if(!rows.length){$("lotEditProductCandidates").innerHTML='<span class="muted">没有找到匹配产品，请继续完善关键词</span>';return}
+      $("lotEditProductCandidates").innerHTML=rows.map((item,index)=>{const productId=Number(item.product_id??item.id);return `<button class="floor3-candidate ${selectedId===productId?"selected":""}" type="button" onclick="selectLotEditProductCandidate(${index})">${h(lotEditProductLabel(item))} · 点击选择</button>`}).join("")+(rows.length>=30?'<span class="muted">候选较多，请继续输入以缩小范围</span>':"");
+    }
+    function selectLotEditProductCandidate(index){
+      const item=state.lotEdit.candidates[index];if(!item)return;state.lotEdit.selectedProduct=item;$("lotEditProduct").value=Number(item.product_id??item.id);$("lotEditProductSelected").textContent=`已选择：${lotEditProductLabel(item)}`;$("lotEditProductSelected").classList.remove("muted");renderLotEditProductCandidates();
+    }
+    function resetLotEditProductSearch(){
+      clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.candidates=[];$("lotEditProductKeyword").value="";clearLotEditProductSelection();
+      $("lotEditProductCandidates").innerHTML=`<span class="muted">${$("lotEditCustomer").value?"输入存货编码或产品名称":"请先选择客户"}</span>`;
+    }
+    function updateLotEditOwnership(preserveSelection=false){
+      clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.candidates=[];
+      const customerOwned=$("lotEditOwnership").value==="customer";$("lotEditCustomer").disabled=!customerOwned;$("lotEditProductKeyword").disabled=!customerOwned;
+      if(!customerOwned){$("lotEditCustomer").value="";$("lotEditProductKeyword").value="";$("lotEditProductCandidates").innerHTML='<span class="muted">保持通用库存时沿用当前产品；选择客户专用后可重新匹配存货编码</span>';return}
+      if(!preserveSelection)resetLotEditProductSearch();else $("lotEditProductCandidates").innerHTML='<span class="muted">如需修改存货编码，请输入关键词并点击候选</span>';
+    }
+    function scheduleLotEditProductSearch(){
+      clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.candidates=[];clearLotEditProductSelection();
+      if($("lotEditOwnership").value!=="customer"){$("lotEditProductCandidates").innerHTML='<span class="muted">通用库存无需重新匹配客户产品</span>';return}
+      if(!$("lotEditCustomer").value){$("lotEditProductCandidates").innerHTML='<span class="muted">请先选择客户</span>';return}
+      if(!$("lotEditProductKeyword").value.trim()){$("lotEditProductCandidates").innerHTML='<span class="muted">请输入存货编码或产品名称</span>';return}
+      $("lotEditProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';state.lotEdit.searchTimer=setTimeout(searchLotEditProductCandidates,260);
+    }
+    async function searchLotEditProductCandidates(){
+      clearTimeout(state.lotEdit.searchTimer);const customerId=Number($("lotEditCustomer").value),keyword=$("lotEditProductKeyword").value.trim(),requestId=++state.lotEdit.requestId;state.lotEdit.candidates=[];clearLotEditProductSelection();
+      if(!customerId||!keyword){$("lotEditProductCandidates").innerHTML=`<span class="muted">${customerId?"请输入存货编码或产品名称":"请先选择客户"}</span>`;return}
+      $("lotEditProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';
+      try{const data=await api(`/api/warehouse/floor3/product-candidates?${queryString({customer_id:customerId,q:keyword,limit:30})}`);if(requestId!==state.lotEdit.requestId)return;state.lotEdit.candidates=data.items||data.candidates||[];renderLotEditProductCandidates()}catch(error){if(requestId!==state.lotEdit.requestId)return;$("lotEditProductCandidates").innerHTML='<span class="muted">候选加载失败，请重试</span>';toast(`产品候选加载失败：${error.message}`,true)}
+    }
+    function openLotEditor(lotId){
+      const row=state.lots.find(item=>Number(item.id)===Number(lotId));if(!row||row.inventory_type!=="finished"){toast("未找到可编辑的成品库存批次",true);return}
+      const detail=row.detail||{},currentProduct={id:detail.product_id,product_id:detail.product_id,product_code:detail.inventory_code,product_name:detail.product_name,customer_id:detail.owner_customer_id},sessionId=state.lotEdit.sessionId+1;state.lotEdit={lotId:row.id,version:row.version,candidates:[],selectedProduct:currentProduct,searchTimer:null,requestId:state.lotEdit.requestId+1,sessionId,saving:false};
+      $("lotEditTitle").textContent=`编辑 ${row.lot_number}`;$("lotEditOwnership").value=detail.is_general?"general":"customer";$("lotEditCustomer").value=detail.owner_customer_id||"";$("lotEditProduct").value=detail.product_id||"";$("lotEditProductKeyword").value="";$("lotEditProductSelected").textContent=`当前：${detail.inventory_code||"-"} · ${detail.product_name||"-"}`;$("lotEditProductSelected").classList.remove("muted");$("lotEditQuantity").value=row.quantity_available;$("lotEditLocation").value=row.location?.id||"";$("lotEditStockDate").value=String(row.stock_date||"").slice(0,10);updateLotEditOwnership(true);$("lotEditMask").classList.remove("hidden");
+      $("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";setTimeout(()=>$("lotEditOwnership").focus(),0);
+    }
+    function closeLotEditor(){clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.sessionId+=1;state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";$("lotEditMask").classList.add("hidden")}
+    async function saveLotEditor(event){
+      event.preventDefault();if(state.lotEdit.saving)return;
+      const isGeneral=$("lotEditOwnership").value==="general",customerId=Number($("lotEditCustomer").value)||null,productId=Number($("lotEditProduct").value),quantity=Number($("lotEditQuantity").value),locationId=Number($("lotEditLocation").value),stockDate=$("lotEditStockDate").value;
+      if(!isGeneral&&!customerId){toast("客户专用库存必须选择客户",true);return}if(!productId){toast("请选择与客户匹配的存货编码",true);return}if(!Number.isInteger(quantity)||quantity<0){toast("可用数量必须是大于或等于 0 的整数",true);return}if(!locationId){toast("请选择三楼具体货位",true);return}if(!stockDate){toast("请选择入库日期",true);return}
+      const lotId=state.lotEdit.lotId,sessionId=state.lotEdit.sessionId;state.lotEdit.saving=true;$("lotEditSave").disabled=true;$("lotEditSave").textContent="保存中…";
+      try{const saved=await api(`/api/warehouse/lots/${lotId}/edit-finished`,{method:"POST",body:JSON.stringify({expected_version:state.lotEdit.version,is_general:isGeneral,customer_id:isGeneral?null:customerId,product_id:productId,quantity_available:quantity,location_id:locationId,stock_date:stockDate,idempotency_key:createIdempotencyKey()})});if(state.lotEdit.sessionId===sessionId&&state.lotEdit.lotId===lotId)closeLotEditor();toast(`已更新批次 ${saved.lot_number||""}`);await loadLots();await loadFloor3Locations()}catch(error){if(state.lotEdit.sessionId===sessionId)toast(error.message,true)}finally{if(state.lotEdit.sessionId===sessionId){state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改"}}
+    }
     function updateFlutes(){$("siFlute").innerHTML=($("siLayer").value==="3"?["A","B","E"]:["AB","BE"]).map(x=>`<option>${x}</option>`).join("")}
     async function saveFinished(e){
       e.preventDefault();const customerId=Number($("fgCustomer").value),productId=Number($("fgProduct").value),locationId=Number($("fgLocation").value),quantity=Number($("fgQuantity").value);
@@ -561,16 +635,45 @@
       const p=queryString({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
       const data=await api("/api/warehouse/lots?"+p);state.lots=data.items||[];renderLots();
     }
+    function applyFinishedLotColumnWidths(widths){
+      const headers=[...$("lotTable").querySelectorAll("thead th")];if(headers.length!==FINISHED_LOT_DEFAULT_WIDTHS.length)return;
+      const safe=Array.isArray(widths)&&widths.length===headers.length&&widths.every(value=>Number.isFinite(Number(value))&&Number(value)>0)?widths:FINISHED_LOT_DEFAULT_WIDTHS;
+      headers.forEach((header,index)=>header.style.width=`${Number(safe[index])}%`);
+    }
+    function savedFinishedLotColumnWidths(){
+      try{return JSON.parse(localStorage.getItem(FINISHED_LOT_COLUMN_WIDTHS_KEY)||"null")}catch(_error){return null}
+    }
+    function saveFinishedLotColumnWidths(){
+      const table=$("lotTable"),headers=[...table.querySelectorAll("thead th")],tableWidth=table.getBoundingClientRect().width;if(!tableWidth||!headers.length)return;
+      localStorage.setItem(FINISHED_LOT_COLUMN_WIDTHS_KEY,JSON.stringify(headers.map(header=>Number((header.getBoundingClientRect().width/tableWidth*100).toFixed(3)))));
+    }
+    function resetFinishedLotColumnWidths(){localStorage.removeItem(FINISHED_LOT_COLUMN_WIDTHS_KEY);applyFinishedLotColumnWidths(FINISHED_LOT_DEFAULT_WIDTHS)}
+    function installFinishedLotColumnResizers(){
+      const table=$("lotTable"),headers=[...table.querySelectorAll("thead th")];if(!table.classList.contains("finished-lot-table")||headers.length<2)return;
+      applyFinishedLotColumnWidths(savedFinishedLotColumnWidths());
+      headers.slice(0,-1).forEach((header,index)=>{
+        const handle=document.createElement("span");handle.className="lot-column-resizer";handle.title="拖动调整相邻列宽；双击恢复默认列宽";handle.setAttribute("aria-label",`调整${header.textContent.trim()}列宽`);header.appendChild(handle);
+        handle.ondblclick=event=>{event.preventDefault();event.stopPropagation();resetFinishedLotColumnWidths()};
+        handle.onpointerdown=event=>{
+          event.preventDefault();const nextHeader=headers[index+1],tableWidth=table.getBoundingClientRect().width,startX=event.clientX,startLeft=header.getBoundingClientRect().width,startRight=nextHeader.getBoundingClientRect().width,pairWidth=startLeft+startRight,minWidth=48;handle.classList.add("active");
+          const move=moveEvent=>{const leftWidth=Math.max(minWidth,Math.min(pairWidth-minWidth,startLeft+moveEvent.clientX-startX));header.style.width=`${leftWidth/tableWidth*100}%`;nextHeader.style.width=`${(pairWidth-leftWidth)/tableWidth*100}%`};
+          const finish=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",finish);window.removeEventListener("pointercancel",finish);handle.classList.remove("active");saveFinishedLotColumnWidths()};
+          window.addEventListener("pointermove",move);window.addEventListener("pointerup",finish);window.addEventListener("pointercancel",finish);
+        };
+      });
+    }
     function renderLots(){
       const finished=state.tab==="finished";
+      $("lotTable").classList.toggle("finished-lot-table",finished);$("lotTable").closest(".table-wrap").classList.toggle("finished-lot-wrap",finished);
       $("lotHead").innerHTML=finished?`<tr><th>批次/状态</th><th>客户</th><th>存货编码/产品</th><th>规格</th><th>材质/楞型</th><th>库位</th><th>可用</th><th>已预占</th><th>已消耗</th><th>库龄</th><th>操作</th></tr>`:`<tr><th>批次/状态</th><th>供应商/客户</th><th>材质/楞型</th><th>实际尺寸</th><th>片料类型/说明</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`;
+      if(finished)installFinishedLotColumnResizers();
       $("lotBody").innerHTML=state.lots.map(row=>{
         const d=row.detail,w=row.age_warning_level?`<span class="tag ${row.age_warning_level==="cleanup"?"red":"warn"}" title="${row.age_warning_text}">${row.age_days}天</span>`:`${row.age_days}天`;
-        const common=`<td><b>${row.lot_number}</b><br><span class="tag">${labels[row.status]||row.status}</span></td>`;
-        const detail=finished?`<td>${d.is_general?"通用库存":(d.owner_customer_name||"-")}</td><td>${d.inventory_code||"-"}<br>${d.product_name||"-"}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td>${d.material_code||"-"} / ${d.flute_type||"-"}</td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
+        const common=`<td><span class="lot-batch" title="${h(row.lot_number)}"><b>${h(row.lot_number)}</b></span><span class="tag lot-status">${h(labels[row.status]||row.status)}</span></td>`;
+        const detail=finished?`<td><span class="lot-customer" title="${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}">${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}</span></td><td>${h(d.inventory_code||"-")}<br>${h(d.product_name||"-")}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td><span class="lot-material">${h(d.material_code||"-")}</span><span class="lot-flute">${h(d.flute_type||"-")}</span></td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
         const balances=finished?`<td><b>${row.quantity_available}</b> 个</td><td><button class="btn" onclick="showLotReservations(${row.id},'${row.lot_number}')">${row.quantity_reserved} 个</button></td><td>${row.quantity_consumed} 个</td>`:`<td><b>${row.quantity_available}</b> ${labels[row.unit]}</td>`;
         const locationText=`${row.location.location_code}${row.floor3_binding?`<br><span class="tag blue">三楼已绑定</span><br><span class="muted">${h(row.floor3_binding.pallet_code)}</span>`:""}`;
-        return `<tr>${common}${detail}<td>${locationText}</td>${balances}<td>${w}</td><td class="actions">${actionButtons(row)}</td></tr>`}).join("");
+        return `<tr>${common}${detail}<td>${locationText}</td>${balances}<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td></tr>`}).join("");
       $("lotEmpty").classList.toggle("hidden",state.lots.length>0);
       const available=state.lots.reduce((n,x)=>n+x.quantity_available,0),frozen=state.lots.filter(x=>x.status==="frozen").length;
       $("lotSummary").innerHTML=`<span>批次 <strong>${state.lots.length}</strong></span><span>当前可用 <strong>${available}</strong> ${finished?"个":"张/片"}</span><span>冻结批次 <strong>${frozen}</strong></span>`;
@@ -585,11 +688,17 @@
     }
     function actionButtons(row){
       if(!canOperate())return "";
+      if(row.inventory_type==="finished"){
+        if(state.user.role!=="admin"||row.status!=="active")return "";
+        const edit=`<button class="btn primary" onclick="openLotEditor(${row.id})">编辑</button>`;
+        const general=!row.detail.is_general?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
+        return edit+general;
+      }
+      const adjust=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button>`:"";
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
-      const normal=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button><button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
-      const general=state.user.role==="admin"&&row.inventory_type==="finished"&&!row.detail.is_general&&row.status==="active"?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
+      const normal=row.status==="active"?`${adjust}<button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
       const assignment=state.user.role==="admin"&&row.inventory_type==="semi_finished"?`<button class="btn primary" onclick="openProductAssignments(${row.id})">分配成品款号</button>`:"";
-      return assignment+freeze+normal+general;
+      return assignment+freeze+normal;
     }
     async function openProductAssignments(lotId){
       try{

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 import json
 import socket
@@ -9,7 +10,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import qrcode
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -30,12 +31,27 @@ from app.models.product import Product
 from app.models.order import Order, OrderItem
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
+    Floor3LocationLayout,
+    InventoryLocationMovement,
     InventoryLot,
     InventoryMovement,
+    InventoryPallet,
+    InventoryPalletItem,
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
     WarehouseLocation,
+)
+from app.services.floor3_locations import (
+    Floor3LocationError,
+    add_pallet_item,
+    clear_pallet,
+    create_pallet,
+    create_layout_slot,
+    move_pallet,
+    set_pallet_relocation,
+    set_layout_slot_active,
+    update_layout_area,
 )
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
@@ -57,6 +73,7 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    edit_finished_lot,
     finished_inventory_candidates,
     finished_inventory_candidates_for_product,
     inventory_age_warning,
@@ -108,6 +125,158 @@ class LocationPayload(BaseModel):
         return value
 
 
+class Floor3PalletItemPayload(BaseModel):
+    customer_id: int | None = Field(default=None, gt=0)
+    product_id: int | None = Field(default=None, gt=0)
+    inventory_code: str | None = Field(default=None, max_length=150)
+    order_no: str | None = Field(default=None, max_length=100)
+    product_name: str | None = Field(default=None, max_length=250)
+    item_type: str = "finished"
+    quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=3)
+    unit: str | None = Field(default=None, max_length=20)
+    match_status: str = "matched"
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator(
+        "inventory_code", "order_no", "product_name", "unit", "remarks"
+    )
+    @classmethod
+    def strip_floor3_item_text(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+    @field_validator("item_type")
+    @classmethod
+    def valid_floor3_item_type(cls, value: str) -> str:
+        if value not in {"finished", "semi_finished", "raw_material"}:
+            raise ValueError("货物类型无效")
+        return value
+
+    @field_validator("match_status")
+    @classmethod
+    def valid_floor3_match_status(cls, value: str) -> str:
+        if value not in {"matched", "pending"}:
+            raise ValueError("产品匹配状态无效")
+        return value
+
+
+class Floor3PalletCreatePayload(BaseModel):
+    location_id: int = Field(gt=0)
+    pallet_code: str | None = Field(default=None, max_length=80)
+    remarks: str | None = Field(default=None, max_length=500)
+    items: list[Floor3PalletItemPayload] = Field(min_length=1, max_length=50)
+
+    @field_validator("pallet_code", "remarks")
+    @classmethod
+    def strip_floor3_pallet_text(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+
+class Floor3PalletAddItemPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    item: Floor3PalletItemPayload
+
+
+class Floor3PalletMovePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    to_location_id: int = Field(gt=0)
+    confirmed: bool
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_floor3_move_remarks(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_floor3_move_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+    @field_validator("confirmed")
+    @classmethod
+    def require_floor3_move_confirmation(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("移位操作必须明确确认")
+        return value
+
+
+class Floor3LayoutGeometryPayload(BaseModel):
+    left_pct: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
+    top_pct: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
+    width_pct: Decimal = Field(gt=0, le=100, max_digits=7, decimal_places=4)
+    height_pct: Decimal = Field(gt=0, le=100, max_digits=7, decimal_places=4)
+    z_index: int = Field(default=0, ge=-1000, le=1000)
+
+    @model_validator(mode="after")
+    def valid_floor3_layout_bounds(self) -> "Floor3LayoutGeometryPayload":
+        if self.left_pct + self.width_pct > Decimal("100"):
+            raise ValueError(
+                "布局不能超出地图右边界：left_pct + width_pct 不能超过 100"
+            )
+        if self.top_pct + self.height_pct > Decimal("100"):
+            raise ValueError(
+                "布局不能超出地图下边界：top_pct + height_pct 不能超过 100"
+            )
+        return self
+
+
+class Floor3LayoutCreateSlotPayload(Floor3LayoutGeometryPayload):
+    location_code: str = Field(min_length=1, max_length=50)
+    location_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("location_code", "location_name")
+    @classmethod
+    def strip_floor3_layout_slot_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class Floor3LayoutAreaSlotPayload(Floor3LayoutGeometryPayload):
+    location_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+
+
+class Floor3LayoutAreaPatchPayload(BaseModel):
+    slots: list[Floor3LayoutAreaSlotPayload] = Field(min_length=1, max_length=500)
+
+
+class Floor3LayoutSlotStatePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+
+
+class Floor3PalletClearPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    remarks: str = Field(min_length=1, max_length=500)
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_floor3_clear_remarks(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("清空货位必须填写原因")
+        return text
+
+
+class Floor3PalletRelocationPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    needs_relocation: bool
+    remarks: str = Field(min_length=1, max_length=500)
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_floor3_relocation_remarks(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("修改待归位标记必须填写原因")
+        return text
+
+
 class MoldToolPayload(BaseModel):
     mold_code: str = Field(min_length=1, max_length=100)
     mold_name: str = Field(min_length=1, max_length=200)
@@ -136,6 +305,31 @@ class FinishedManualInPayload(BaseModel):
         if value not in VALID_SOURCE_TYPES:
             raise ValueError("库存来源无效")
         return value
+
+
+class FinishedLotEditPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    is_general: bool
+    customer_id: int | None = Field(default=None, gt=0)
+    product_id: int = Field(gt=0)
+    quantity_available: int = Field(ge=0)
+    location_id: int = Field(gt=0)
+    stock_date: date
+    idempotency_key: str = Field(min_length=1, max_length=100)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_finished_edit_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("幂等键不能为空")
+        return text
+
+    @model_validator(mode="after")
+    def customer_required_for_dedicated_inventory(self) -> "FinishedLotEditPayload":
+        if not self.is_general and self.customer_id is None:
+            raise ValueError("客户专用库存必须选择客户")
+        return self
 
 
 class SemiFinishedManualInPayload(BaseModel):
@@ -372,16 +566,319 @@ def _location_dict(row: WarehouseLocation) -> dict:
         "location_code": row.location_code,
         "location_name": row.location_name,
         "warehouse_type": row.warehouse_type,
+        "warehouse_floor": getattr(row, "warehouse_floor", None),
+        "area_code": getattr(row, "area_code", None),
+        "storage_type": getattr(row, "storage_type", None),
+        "level_no": getattr(row, "level_no", None),
+        "side_code": getattr(row, "side_code", None),
+        "sort_order": getattr(row, "sort_order", 0),
+        "is_temporary": getattr(row, "is_temporary", False),
+        "source_version": getattr(row, "source_version", None),
         "is_active": row.is_active,
         "remarks": row.remarks,
     }
 
 
+def _formal_inventory_location_condition():
+    """Allow standard locations plus valid third-floor V11 locations."""
+    return or_(
+        WarehouseLocation.source_version.is_(None),
+        WarehouseLocation.source_version != "V11",
+        and_(
+            WarehouseLocation.source_version == "V11",
+            WarehouseLocation.warehouse_floor == 3,
+        ),
+    )
+
+
+def _reject_floor3_for_semi_finished_inventory(
+    db: Session,
+    location_id: int,
+) -> None:
+    location = db.get(WarehouseLocation, location_id)
+    if (
+        location is not None
+        and location.source_version == "V11"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="三楼货位目前只接入成品仓；半成品请使用半成品库位。",
+        )
+
+
+def _reject_v11_location_configuration(row: WarehouseLocation) -> None:
+    if row.source_version == "V11":
+        raise HTTPException(
+            status_code=409,
+            detail="三楼货位只能通过三楼平面图维护。",
+        )
+
+
+def _floor3_item_visible(
+    row: InventoryPalletItem,
+    visible_customer_ids: set[int] | None,
+) -> bool:
+    if visible_customer_ids is None:
+        return True
+    return row.customer_id is not None and row.customer_id in visible_customer_ids
+
+
+def _floor3_item_dict(
+    row: InventoryPalletItem,
+    customer_names: dict[int, str],
+) -> dict:
+    linked_lot = row.inventory_lot
+    quantity = (
+        int(linked_lot.quantity_available or 0)
+        + int(linked_lot.quantity_reserved or 0)
+        if linked_lot is not None
+        else row.quantity
+    )
+    return {
+        "id": row.id,
+        "customer_id": row.customer_id,
+        "customer_name": customer_names.get(row.customer_id) if row.customer_id else None,
+        "product_id": row.product_id,
+        "inventory_code": row.inventory_code,
+        "order_no": row.order_no,
+        "product_name": row.product_name,
+        "item_type": row.item_type,
+        "quantity": float(quantity) if quantity is not None else None,
+        "inventory_lot_id": row.inventory_lot_id,
+        "lot_number": linked_lot.lot_number if linked_lot is not None else None,
+        "official_inventory": linked_lot is not None,
+        "quantity_available": (
+            linked_lot.quantity_available if linked_lot is not None else None
+        ),
+        "quantity_reserved": (
+            linked_lot.quantity_reserved if linked_lot is not None else None
+        ),
+        "unit": row.unit,
+        "match_status": row.match_status,
+        "remarks": row.remarks,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _floor3_pallet_dict(
+    row: InventoryPallet,
+    *,
+    visible_customer_ids: set[int] | None,
+    customer_names: dict[int, str],
+) -> dict:
+    all_items = list(row.items)
+    visible_items = [
+        item
+        for item in all_items
+        if _floor3_item_visible(item, visible_customer_ids)
+    ]
+    if visible_customer_ids is not None and len(visible_items) != len(all_items):
+        # A mixed or fully hidden pallet must not disclose pallet identifiers,
+        # free-text remarks, item counts, or even its visible subset.  The
+        # surrounding location payload already communicates neutral occupancy.
+        return {"access_restricted": True}
+    total_quantity = sum(
+        (
+            Decimal(
+                int(item.inventory_lot.quantity_available or 0)
+                + int(item.inventory_lot.quantity_reserved or 0)
+            )
+            if item.inventory_lot is not None
+            else item.quantity
+        )
+        for item in visible_items
+    )
+    return {
+        "id": row.id,
+        "pallet_code": row.pallet_code,
+        "location_id": row.location_id,
+        "status": row.status,
+        "is_current": row.is_current,
+        "needs_relocation": row.needs_relocation,
+        "remarks": row.remarks,
+        "version": getattr(row, "version", None),
+        "item_count": len(all_items),
+        "visible_item_count": len(visible_items),
+        "hidden_item_count": len(all_items) - len(visible_items),
+        "total_quantity": float(total_quantity),
+        "items": [
+            _floor3_item_dict(item, customer_names) for item in visible_items
+        ],
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "closed_at": row.closed_at,
+    }
+
+
+def _floor3_layout_dict(row: Floor3LocationLayout | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "location_id": row.location_id,
+        "left_pct": float(row.left_pct),
+        "top_pct": float(row.top_pct),
+        "width_pct": float(row.width_pct),
+        "height_pct": float(row.height_pct),
+        "z_index": row.z_index,
+        "version": row.version,
+        "source_type": row.source_type,
+        "updated_at": row.updated_at,
+    }
+
+
+def _floor3_location_dict(
+    row: WarehouseLocation,
+    *,
+    pallet: InventoryPallet | None,
+    visible_customer_ids: set[int] | None,
+    customer_names: dict[int, str],
+) -> dict:
+    payload = _location_dict(row)
+    payload["layout"] = _floor3_layout_dict(row.floor3_layout)
+    payload["current_pallet"] = (
+        _floor3_pallet_dict(
+            pallet,
+            visible_customer_ids=visible_customer_ids,
+            customer_names=customer_names,
+        )
+        if pallet is not None
+        else None
+    )
+    payload["occupancy_status"] = "occupied" if pallet is not None else "empty"
+    return payload
+
+
+def _floor3_customer_names(
+    db: Session,
+    pallets: list[InventoryPallet],
+) -> dict[int, str]:
+    ids = {
+        item.customer_id
+        for pallet in pallets
+        for item in pallet.items
+        if item.customer_id is not None
+    }
+    if not ids:
+        return {}
+    return dict(
+        db.execute(
+            select(Customer.id, Customer.name).where(Customer.id.in_(ids))
+        ).all()
+    )
+
+
+def _require_floor3_pallet_customer_access(
+    db: Session,
+    pallet: InventoryPallet,
+    user: User,
+) -> None:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is None:
+        return
+    inaccessible = [
+        item
+        for item in pallet.items
+        if item.customer_id is None or item.customer_id not in visible_customer_ids
+    ]
+    if inaccessible:
+        raise HTTPException(status_code=403, detail="当前栈板包含无权访问的客户内容")
+
+
+def _require_floor3_item_customer_access(
+    db: Session,
+    payload: Floor3PalletItemPayload,
+    user: User,
+) -> None:
+    customer_id = payload.customer_id
+    if payload.product_id is not None:
+        product = db.get(Product, payload.product_id)
+        if product is None:
+            raise HTTPException(status_code=404, detail="产品不存在")
+        customer_id = product.customer_id
+        if payload.customer_id is not None and payload.customer_id != customer_id:
+            raise HTTPException(status_code=409, detail="所选产品不属于当前客户")
+    if customer_id is None and _visible_customer_ids(user, db) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="当前账号只能登记已授权客户，待匹配内容也必须先选择客户",
+        )
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+
+
+def _floor3_log(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    action: str,
+    pallet: InventoryPallet,
+    description: str,
+    details: dict,
+) -> None:
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            username=user.username,
+            role=user.role,
+            action=action,
+            resource=f"warehouse/floor3/pallets/{pallet.id}",
+            entity_type="inventory_pallet",
+            entity_id=pallet.id,
+            description=description,
+            details=json.dumps(details, ensure_ascii=False, default=str),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+
+
+def _floor3_layout_log(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    action: str,
+    location: WarehouseLocation,
+    description: str,
+    details: dict,
+) -> None:
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            username=user.username,
+            role=user.role,
+            action=action,
+            resource=f"warehouse/floor3/layout/slots/{location.id}",
+            entity_type="floor3_location_layout",
+            entity_id=location.floor3_layout.id if location.floor3_layout else None,
+            description=description,
+            details=json.dumps(details, ensure_ascii=False, default=str),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+
+
 def _lot_query():
-    return select(InventoryLot).options(
-        selectinload(InventoryLot.location),
-        selectinload(InventoryLot.finished_detail),
-        selectinload(InventoryLot.semi_finished_detail),
+    return (
+        select(InventoryLot)
+        .where(
+            InventoryLot.warehouse_location_id.in_(
+                select(WarehouseLocation.id).where(
+                    _formal_inventory_location_condition()
+                )
+            )
+        )
+        .options(
+            selectinload(InventoryLot.location),
+            selectinload(InventoryLot.finished_detail),
+            selectinload(InventoryLot.semi_finished_detail),
+            selectinload(InventoryLot.pallet_item).selectinload(
+                InventoryPalletItem.pallet
+            ),
+        )
     )
 
 
@@ -412,10 +909,12 @@ def _require_lot_customer_access(
     db: Session,
     lot_id: int,
     user: User,
-) -> InventoryLot | None:
+) -> InventoryLot:
     lot = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
     if lot is None:
-        return None
+        # Fail closed: callers pass the raw id to mutation services, so a lot
+        # outside the visible formal-ledger scope must not fall through.
+        raise HTTPException(status_code=404, detail="库存批次不存在")
     customer_id = None
     if lot.finished_detail is not None:
         customer_id = lot.finished_detail.owner_customer_id
@@ -428,6 +927,8 @@ def _require_lot_customer_access(
 
 def _lot_dict(row: InventoryLot) -> dict:
     warning = inventory_age_warning(row)
+    pallet_item = row.pallet_item
+    pallet = pallet_item.pallet if pallet_item is not None else None
     detail: dict = {}
     if row.finished_detail:
         item = row.finished_detail
@@ -485,6 +986,16 @@ def _lot_dict(row: InventoryLot) -> dict:
         "last_movement_at": row.last_movement_at,
         "version": row.version,
         "remarks": row.remarks,
+        "floor3_binding": (
+            {
+                "pallet_id": pallet.id,
+                "pallet_code": pallet.pallet_code,
+                "pallet_version": pallet.version,
+                "location_id": pallet.location_id,
+            }
+            if pallet is not None and pallet.is_current
+            else None
+        ),
         "age_days": warning.days,
         "age_warning_level": warning.level,
         "age_warning_text": warning.text,
@@ -1284,13 +1795,785 @@ def update_semi_lot_product_assignments(
         _handle_integrity(error)
 
 
+def _floor3_pallet_query():
+    return select(InventoryPallet).options(
+        selectinload(InventoryPallet.items).selectinload(
+            InventoryPalletItem.inventory_lot
+        )
+    )
+
+
+def _floor3_get_pallet(db: Session, pallet_id: int) -> InventoryPallet:
+    row = db.scalar(
+        _floor3_pallet_query().where(InventoryPallet.id == pallet_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="栈板不存在")
+    if row.location_id is not None:
+        location = db.get(WarehouseLocation, row.location_id)
+        if (
+            location is None
+            or location.warehouse_floor != 3
+            or location.source_version != "V11"
+        ):
+            raise HTTPException(status_code=404, detail="三楼 V11 栈板不存在")
+    return row
+
+
+def _floor3_pallet_response(
+    db: Session,
+    pallet: InventoryPallet,
+    user: User,
+) -> dict:
+    loaded = db.scalar(
+        _floor3_pallet_query().where(InventoryPallet.id == pallet.id)
+    ) or pallet
+    visible_customer_ids = _visible_customer_ids(user, db)
+    return _floor3_pallet_dict(
+        loaded,
+        visible_customer_ids=visible_customer_ids,
+        customer_names=_floor3_customer_names(db, [loaded]),
+    )
+
+
+@router.post("/floor3/layout/areas/{area_code}/slots", status_code=201)
+def create_floor3_layout_slot(
+    area_code: str,
+    payload: Floor3LayoutCreateSlotPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        location = create_layout_slot(
+            db,
+            area_code=area_code,
+            location_code=payload.location_code,
+            location_name=payload.location_name,
+            left_pct=payload.left_pct,
+            top_pct=payload.top_pct,
+            width_pct=payload.width_pct,
+            height_pct=payload.height_pct,
+            z_index=payload.z_index,
+            operator_id=user.id,
+        )
+        _floor3_layout_log(
+            db,
+            request=request,
+            user=user,
+            action="CREATE",
+            location=location,
+            description="创建三楼互动地图物理栈板位",
+            details={"area_code": location.area_code, "location_code": location.location_code},
+        )
+        db.commit()
+        return {
+            "location": _location_dict(location),
+            "layout": _floor3_layout_dict(location.floor3_layout),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="货位编码或布局已存在") from error
+
+
+@router.patch("/floor3/layout/areas/{area_code}")
+def patch_floor3_layout_area(
+    area_code: str,
+    payload: Floor3LayoutAreaPatchPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        layouts = update_layout_area(
+            db,
+            area_code=area_code,
+            slots=[slot.model_dump() for slot in payload.slots],
+            operator_id=user.id,
+        )
+        locations = {
+            layout.location_id: db.get(WarehouseLocation, layout.location_id)
+            for layout in layouts
+        }
+        for layout in layouts:
+            location = locations[layout.location_id]
+            assert location is not None
+            _floor3_layout_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                location=location,
+                description="批量更新三楼互动地图布局",
+                details={
+                    "area_code": area_code.strip().upper(),
+                    "layout_version": layout.version,
+                },
+            )
+        db.commit()
+        return {"items": [_floor3_layout_dict(layout) for layout in layouts]}
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/floor3/layout/slots/{location_id}/disable")
+def disable_floor3_layout_slot(
+    location_id: int,
+    payload: Floor3LayoutSlotStatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        location = set_layout_slot_active(
+            db,
+            location_id=location_id,
+            is_active=False,
+            expected_version=payload.expected_version,
+            operator_id=user.id,
+        )
+        _floor3_layout_log(
+            db,
+            request=request,
+            user=user,
+            action="UPDATE",
+            location=location,
+            description="停用三楼互动地图物理栈板位",
+            details={"expected_version": payload.expected_version, "is_active": False},
+        )
+        db.commit()
+        return {"location": _location_dict(location), "layout": _floor3_layout_dict(location.floor3_layout)}
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/floor3/layout/slots/{location_id}/enable")
+def enable_floor3_layout_slot(
+    location_id: int,
+    payload: Floor3LayoutSlotStatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    try:
+        location = set_layout_slot_active(
+            db,
+            location_id=location_id,
+            is_active=True,
+            expected_version=payload.expected_version,
+            operator_id=user.id,
+        )
+        _floor3_layout_log(
+            db,
+            request=request,
+            user=user,
+            action="UPDATE",
+            location=location,
+            description="启用三楼互动地图物理栈板位",
+            details={"expected_version": payload.expected_version, "is_active": True},
+        )
+        db.commit()
+        return {"location": _location_dict(location), "layout": _floor3_layout_dict(location.floor3_layout)}
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.get("/floor3/locations")
+def list_floor3_locations(
+    q: str | None = None,
+    customer_id: int | None = Query(default=None, gt=0),
+    area_code: str | None = None,
+    occupancy: str | None = None,
+    include_inactive: bool = False,
+    page_size: int = Query(default=500, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+
+    query = select(WarehouseLocation).options(
+        selectinload(WarehouseLocation.floor3_layout)
+    ).where(
+        WarehouseLocation.warehouse_floor == 3,
+        WarehouseLocation.source_version == "V11",
+    )
+    if not include_inactive:
+        query = query.where(WarehouseLocation.is_active.is_(True))
+    if area_code:
+        query = query.where(WarehouseLocation.area_code == area_code.strip())
+
+    current_location_ids = select(InventoryPallet.location_id).where(
+        InventoryPallet.is_current.is_(True),
+        InventoryPallet.location_id.is_not(None),
+    )
+    if customer_id is not None:
+        customer_location_ids = (
+            select(InventoryPallet.location_id)
+            .join(
+                InventoryPalletItem,
+                InventoryPalletItem.pallet_id == InventoryPallet.id,
+            )
+            .where(
+                InventoryPallet.is_current.is_(True),
+                InventoryPallet.location_id.is_not(None),
+                InventoryPalletItem.customer_id == customer_id,
+            )
+        )
+        query = query.where(WarehouseLocation.id.in_(customer_location_ids))
+    if occupancy == "occupied":
+        query = query.where(WarehouseLocation.id.in_(current_location_ids))
+    elif occupancy == "empty":
+        query = query.where(WarehouseLocation.id.not_in(current_location_ids))
+    elif occupancy:
+        raise HTTPException(status_code=400, detail="货位占用状态无效")
+
+    visible_customer_ids = _visible_customer_ids(user, db)
+    keyword = (q or "").strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        pallet_search_conditions = [
+            InventoryPalletItem.inventory_code.like(pattern),
+            InventoryPalletItem.order_no.like(pattern),
+            InventoryPalletItem.product_name.like(pattern),
+            Customer.name.like(pattern),
+        ]
+        if visible_customer_ids is None:
+            pallet_search_conditions.append(InventoryPallet.pallet_code.like(pattern))
+        matching_location_ids = (
+            select(InventoryPallet.location_id)
+            .outerjoin(
+                InventoryPalletItem,
+                InventoryPalletItem.pallet_id == InventoryPallet.id,
+            )
+            .outerjoin(Customer, Customer.id == InventoryPalletItem.customer_id)
+            .where(
+                InventoryPallet.is_current.is_(True),
+                InventoryPallet.location_id.is_not(None),
+                or_(*pallet_search_conditions),
+            )
+        )
+        if visible_customer_ids is not None:
+            matching_location_ids = matching_location_ids.where(
+                InventoryPalletItem.customer_id.in_(visible_customer_ids)
+            )
+        query = query.where(
+            or_(
+                WarehouseLocation.location_code.like(pattern),
+                WarehouseLocation.location_name.like(pattern),
+                WarehouseLocation.area_code.like(pattern),
+                WarehouseLocation.id.in_(matching_location_ids),
+            )
+        )
+
+    locations = db.scalars(
+        query.order_by(
+            WarehouseLocation.sort_order,
+            WarehouseLocation.location_code,
+        ).limit(page_size)
+    ).all()
+    location_ids = [row.id for row in locations]
+    pallets = (
+        db.scalars(
+            _floor3_pallet_query().where(
+                InventoryPallet.location_id.in_(location_ids),
+                InventoryPallet.is_current.is_(True),
+            )
+        ).all()
+        if location_ids
+        else []
+    )
+    pallets_by_location = {row.location_id: row for row in pallets}
+    customer_names = _floor3_customer_names(db, pallets)
+    return {
+        "items": [
+            _floor3_location_dict(
+                row,
+                pallet=pallets_by_location.get(row.id),
+                visible_customer_ids=visible_customer_ids,
+                customer_names=customer_names,
+            )
+            for row in locations
+        ],
+        "total": len(locations),
+    }
+
+
+@router.get("/floor3/locations/{location_id}")
+def get_floor3_location(
+    location_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    location = db.scalar(
+        select(WarehouseLocation).options(
+            selectinload(WarehouseLocation.floor3_layout)
+        ).where(
+            WarehouseLocation.id == location_id,
+            WarehouseLocation.warehouse_floor == 3,
+            WarehouseLocation.source_version == "V11",
+        )
+    )
+    if location is None:
+        raise HTTPException(status_code=404, detail="三楼货位不存在")
+    pallet = db.scalar(
+        _floor3_pallet_query().where(
+            InventoryPallet.location_id == location.id,
+            InventoryPallet.is_current.is_(True),
+        )
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    customer_names = _floor3_customer_names(db, [pallet] if pallet else [])
+    history_rows = db.scalars(
+        select(InventoryLocationMovement)
+        .where(
+            or_(
+                InventoryLocationMovement.from_location_id == location.id,
+                InventoryLocationMovement.to_location_id == location.id,
+            )
+        )
+        .order_by(
+            InventoryLocationMovement.moved_at.desc(),
+            InventoryLocationMovement.id.desc(),
+        )
+        .limit(50)
+    ).all()
+    history_pallet_ids = {row.pallet_id for row in history_rows}
+    history_pallets = (
+        db.scalars(
+            _floor3_pallet_query().where(InventoryPallet.id.in_(history_pallet_ids))
+        ).all()
+        if history_pallet_ids
+        else []
+    )
+    history_pallet_map = {row.id: row for row in history_pallets}
+    location_ids = {
+        value
+        for movement in history_rows
+        for value in (movement.from_location_id, movement.to_location_id)
+        if value is not None
+    }
+    location_codes = (
+        dict(
+            db.execute(
+                select(WarehouseLocation.id, WarehouseLocation.location_code).where(
+                    WarehouseLocation.id.in_(location_ids)
+                )
+            ).all()
+        )
+        if location_ids
+        else {}
+    )
+    history = []
+    for movement in history_rows:
+        history_pallet = history_pallet_map.get(movement.pallet_id)
+        if history_pallet is None:
+            continue
+        if visible_customer_ids is not None and any(
+            not _floor3_item_visible(item, visible_customer_ids)
+            for item in history_pallet.items
+        ):
+            continue
+        history.append(
+            {
+                "id": movement.id,
+                "pallet_id": movement.pallet_id,
+                "pallet_code": history_pallet.pallet_code,
+                "movement_type": movement.movement_type,
+                "from_location_id": movement.from_location_id,
+                "from_location_code": location_codes.get(movement.from_location_id),
+                "to_location_id": movement.to_location_id,
+                "to_location_code": location_codes.get(movement.to_location_id),
+                "operator_id": movement.operator_id,
+                "moved_at": movement.moved_at,
+                "remarks": movement.remarks,
+            }
+        )
+    return {
+        **_floor3_location_dict(
+            location,
+            pallet=pallet,
+            visible_customer_ids=visible_customer_ids,
+            customer_names=customer_names,
+        ),
+        "movement_history": history,
+    }
+
+
+@router.get("/floor3/product-candidates")
+def floor3_product_candidates(
+    q: str = Query(min_length=1, max_length=150),
+    customer_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    keyword = q.strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="请输入存货编码、订单号或产品名称")
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    pattern = f"%{keyword}%"
+
+    order_rows_query = (
+        select(
+            OrderItem.product_id,
+            Order.customer_id,
+            Order.order_number,
+            Order.customer_po,
+            OrderItem.item_order_number,
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            or_(
+                Order.order_number.like(pattern),
+                Order.customer_po.like(pattern),
+                OrderItem.item_order_number.like(pattern),
+            )
+        )
+    )
+    if customer_id is not None:
+        order_rows_query = order_rows_query.where(Order.customer_id == customer_id)
+    elif visible_customer_ids is not None:
+        order_rows_query = order_rows_query.where(
+            Order.customer_id.in_(visible_customer_ids)
+        )
+    order_rows = db.execute(order_rows_query.limit(limit * 5)).all()
+    order_product_ids = {row.product_id for row in order_rows}
+
+    product_query = (
+        select(Product, Customer)
+        .join(Customer, Customer.id == Product.customer_id)
+        .where(
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                Product.product_name.like(pattern),
+                Customer.name.like(pattern),
+                Product.id.in_(order_product_ids) if order_product_ids else False,
+            ),
+        )
+    )
+    if customer_id is not None:
+        product_query = product_query.where(Product.customer_id == customer_id)
+    elif visible_customer_ids is not None:
+        product_query = product_query.where(Product.customer_id.in_(visible_customer_ids))
+    products = db.execute(product_query.limit(limit * 3)).all()
+
+    orders_by_product: dict[int, list[str]] = {}
+    exact_order_product_ids: set[int] = set()
+    keyword_folded = keyword.casefold()
+    for row in order_rows:
+        values = [row.order_number, row.customer_po, row.item_order_number]
+        labels = [str(value) for value in values if value]
+        orders_by_product.setdefault(row.product_id, []).extend(labels)
+        if any(str(value).strip().casefold() == keyword_folded for value in values if value):
+            exact_order_product_ids.add(row.product_id)
+
+    candidates = []
+    for product, customer in products:
+        code_values = [product.product_code, product.customer_material_code]
+        code_exact = any(
+            str(value).strip().casefold() == keyword_folded
+            for value in code_values
+            if value
+        )
+        name_exact = product.product_name.strip().casefold() == keyword_folded
+        order_exact = product.id in exact_order_product_ids
+        if code_exact:
+            priority, match_type = 0, "customer_inventory_code_exact"
+        elif order_exact:
+            priority, match_type = 1, "customer_order_exact"
+        elif name_exact:
+            priority, match_type = 2, "customer_product_name_exact"
+        else:
+            priority, match_type = 3, "fuzzy_candidate"
+        candidates.append(
+            {
+                "priority": priority,
+                "match_type": match_type,
+                "is_exact": priority < 3,
+                "product_id": product.id,
+                "customer_id": customer.id,
+                "customer_name": customer.name,
+                "product_code": product.product_code,
+                "customer_material_code": product.customer_material_code,
+                "product_name": product.product_name,
+                "specification": " × ".join(
+                    str(round(value))
+                    for value in (product.length_mm, product.width_mm, product.height_mm)
+                    if value is not None
+                ),
+                "matched_order_numbers": sorted(
+                    set(orders_by_product.get(product.id, []))
+                )[:10],
+                "is_tianhua": "天华" in customer.name,
+            }
+        )
+    candidates.sort(
+        key=lambda row: (
+            row["priority"],
+            row["customer_name"],
+            row["product_code"] or "",
+            row["product_id"],
+        )
+    )
+    items = candidates[:limit]
+    return {
+        "items": items,
+        "total": len(items),
+        "selection_required": bool(items),
+        "auto_bind_allowed": False,
+        "message": "请选择确认的产品；系统不会自动猜测或创建产品。",
+    }
+
+
+@router.post("/pallets", status_code=201)
+def create_floor3_pallet(
+    payload: Floor3PalletCreatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    for item in payload.items:
+        _require_floor3_item_customer_access(db, item, user)
+    try:
+        row = create_pallet(
+            db,
+            location_id=payload.location_id,
+            pallet_code=payload.pallet_code,
+            items=[item.model_dump() for item in payload.items],
+            remarks=payload.remarks,
+            operator_id=user.id,
+        )
+        _floor3_log(
+            db,
+            request=request,
+            user=user,
+            action="CREATE",
+            pallet=row,
+            description="创建三楼物理栈板并绑定现场内容",
+            details={
+                "location_id": payload.location_id,
+                "item_count": len(payload.items),
+            },
+        )
+        db.commit()
+        return {
+            "message": "已绑定到三楼货位",
+            "pallet": _floor3_pallet_response(db, row, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="栈板编号已存在，或该货位已被其他栈板占用，请刷新后重试",
+        ) from error
+
+
+@router.post("/pallets/{pallet_id}/items")
+def add_floor3_pallet_item(
+    pallet_id: int,
+    payload: Floor3PalletAddItemPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    current = _floor3_get_pallet(db, pallet_id)
+    _require_floor3_pallet_customer_access(db, current, user)
+    _require_floor3_item_customer_access(db, payload.item, user)
+    try:
+        row = add_pallet_item(
+            db,
+            pallet_id=pallet_id,
+            expected_version=payload.expected_version,
+            item=payload.item.model_dump(),
+            operator_id=user.id,
+        )
+        _floor3_log(
+            db,
+            request=request,
+            user=user,
+            action="UPDATE",
+            pallet=row,
+            description="增加同栈板产品",
+            details={
+                "product_id": payload.item.product_id,
+                "quantity": payload.item.quantity,
+                "expected_version": payload.expected_version,
+            },
+        )
+        db.commit()
+        return {
+            "message": "已增加同栈板产品",
+            "pallet": _floor3_pallet_response(db, row, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/pallets/{pallet_id}/move")
+def move_floor3_pallet(
+    pallet_id: int,
+    payload: Floor3PalletMovePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    current = _floor3_get_pallet(db, pallet_id)
+    _require_floor3_pallet_customer_access(db, current, user)
+    from_location_id = current.location_id
+    try:
+        result = move_pallet(
+            db,
+            pallet_id=pallet_id,
+            expected_version=payload.expected_version,
+            to_location_id=payload.to_location_id,
+            remarks=payload.remarks,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        if not result.replayed:
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                pallet=result.pallet,
+                description="三楼栈板移位",
+                details={
+                    "from_location_id": from_location_id,
+                    "to_location_id": payload.to_location_id,
+                    "expected_version": payload.expected_version,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "栈板已移位",
+            "pallet": _floor3_pallet_response(db, result.pallet, user),
+            "idempotent_replay": result.replayed,
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="目标货位已被占用，请刷新后重试") from error
+
+
+@router.post("/pallets/{pallet_id}/clear")
+def clear_floor3_pallet(
+    pallet_id: int,
+    payload: Floor3PalletClearPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    current = _floor3_get_pallet(db, pallet_id)
+    _require_floor3_pallet_customer_access(db, current, user)
+    from_location_id = current.location_id
+    try:
+        row = clear_pallet(
+            db,
+            pallet_id=pallet_id,
+            expected_version=payload.expected_version,
+            remarks=payload.remarks,
+            operator_id=user.id,
+        )
+        _floor3_log(
+            db,
+            request=request,
+            user=user,
+            action="UPDATE",
+            pallet=row,
+            description="清空三楼货位的当前栈板",
+            details={
+                "from_location_id": from_location_id,
+                "reason": payload.remarks,
+                "expected_version": payload.expected_version,
+            },
+        )
+        db.commit()
+        return {
+            "message": "货位已清空，历史记录已保留",
+            "pallet": _floor3_pallet_response(db, row, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/pallets/{pallet_id}/relocation-flag")
+def set_floor3_pallet_relocation_flag(
+    pallet_id: int,
+    payload: Floor3PalletRelocationPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    current = _floor3_get_pallet(db, pallet_id)
+    _require_floor3_pallet_customer_access(db, current, user)
+    try:
+        row = set_pallet_relocation(
+            db,
+            pallet_id=pallet_id,
+            expected_version=payload.expected_version,
+            needs_relocation=payload.needs_relocation,
+            operator_id=user.id,
+        )
+        _floor3_log(
+            db,
+            request=request,
+            user=user,
+            action="UPDATE",
+            pallet=row,
+            description="标记三楼栈板待归位" if payload.needs_relocation else "取消三楼栈板待归位",
+            details={
+                "needs_relocation": payload.needs_relocation,
+                "reason": payload.remarks,
+                "expected_version": payload.expected_version,
+            },
+        )
+        db.commit()
+        return {
+            "message": "已更新待归位标记",
+            "pallet": _floor3_pallet_response(db, row, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
 @router.get("/locations")
 def list_locations(
     include_inactive: bool = False,
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    query = select(WarehouseLocation)
+    query = select(WarehouseLocation).where(_formal_inventory_location_condition())
     if not include_inactive:
         query = query.where(WarehouseLocation.is_active.is_(True))
     rows = db.scalars(query.order_by(WarehouseLocation.location_code)).all()
@@ -1643,6 +2926,7 @@ def update_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    _reject_v11_location_configuration(row)
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     try:
@@ -1662,6 +2946,7 @@ def enable_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    _reject_v11_location_configuration(row)
     row.is_active = True
     db.commit()
     return _location_dict(row)
@@ -1676,6 +2961,7 @@ def disable_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    _reject_v11_location_configuration(row)
     row.is_active = False
     db.commit()
     return _location_dict(row)
@@ -1739,7 +3025,7 @@ def list_lots(
         days = {"attention": 365, "handling": 548, "cleanup": 730}.get(stale_level)
         if days:
             query = query.where(
-                InventoryLot.last_movement_at <= datetime.now() - timedelta(days=days)
+                InventoryLot.stock_date <= date.today() - timedelta(days=days)
             )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     total = db.scalar(count_query) or 0
@@ -1819,8 +3105,15 @@ def list_movements(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    query = select(InventoryMovement).join(InventoryLot).options(
-        selectinload(InventoryMovement.lot)
+    query = (
+        select(InventoryMovement)
+        .join(InventoryLot)
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .where(_formal_inventory_location_condition())
+        .options(selectinload(InventoryMovement.lot))
     )
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
@@ -1868,6 +3161,7 @@ def semi_finished_manual_in(
 ) -> dict:
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, user, db)
+    _reject_floor3_for_semi_finished_inventory(db, payload.location_id)
     try:
         row = manual_semi_finished_in(db, operator_id=user.id, **payload.model_dump())
         db.commit()
@@ -1875,6 +3169,34 @@ def semi_finished_manual_in(
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+
+
+@router.post("/lots/{lot_id}/edit-finished")
+def edit_finished_inventory_lot(
+    lot_id: int,
+    payload: FinishedLotEditPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    _require_lot_customer_access(db, lot_id, user)
+    if not payload.is_general:
+        assert payload.customer_id is not None
+        require_customer_access(payload.customer_id, user, db)
+    try:
+        row = edit_finished_lot(
+            db,
+            lot_id=lot_id,
+            operator_id=user.id,
+            **payload.model_dump(),
+        )
+        db.commit()
+        return _lot_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
 
 
 def _operate(

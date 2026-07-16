@@ -88,6 +88,14 @@ def stock_replenishment_app(tmp_path: Path):
                 warehouse_type="semi_finished",
                 is_active=True,
             ),
+            WarehouseLocation(
+                location_code="V11-FG-A01",
+                location_name="三楼 V11 成品货位",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=3,
+                source_version="V11",
+            ),
         ]
         session.add_all([product, *locations])
         session.commit()
@@ -199,6 +207,60 @@ def test_warning_policy_creates_prefilled_replenishment_draft(
         assert draft.status_code == 200
         assert draft.json()["items"][0]["quantity"] == 50
         assert draft.json()["items"][0]["location_id"] == 2
+
+
+def test_formal_replenishment_rejects_v11_locations_and_policies(
+    stock_replenishment_app,
+) -> None:
+    app, _session_factory = stock_replenishment_app
+    with TestClient(app) as client:
+        _login(client)
+
+        locations = client.get("/api/requisition/stock-replenishment/locations")
+        assert locations.status_code == 200, locations.text
+        assert {row["location_code"] for row in locations.json()["items"]} == {
+            "FG-A01",
+            "SI-A01",
+        }
+
+        policy_payload = _semi_policy_payload()
+        policy_payload["default_location_id"] = 3
+        rejected_policy = client.post(
+            "/api/requisition/stock-policies", json=policy_payload
+        )
+        assert rejected_policy.status_code == 409, rejected_policy.text
+        assert "V11 三楼 Phase A" in rejected_policy.json()["detail"]
+
+        valid_policy = client.post(
+            "/api/requisition/stock-policies", json=_semi_policy_payload()
+        )
+        assert valid_policy.status_code == 201, valid_policy.text
+        update_payload = _semi_policy_payload()
+        update_payload["default_location_id"] = 3
+        rejected_update = client.put(
+            f"/api/requisition/stock-policies/{valid_policy.json()['id']}",
+            json=update_payload,
+        )
+        assert rejected_update.status_code == 409, rejected_update.text
+        assert "V11 三楼 Phase A" in rejected_update.json()["detail"]
+
+        rejected_item = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "customer_request",
+                "stock_now": False,
+                "items": [
+                    {
+                        "target_inventory_type": "finished",
+                        "product_id": 1,
+                        "quantity": 1,
+                        "location_id": 3,
+                    }
+                ],
+            },
+        )
+        assert rejected_item.status_code == 409, rejected_item.text
+        assert "V11 三楼 Phase A" in rejected_item.json()["detail"]
 
 
 def test_historical_replenishment_can_stock_one_traceable_semi_finished_lot(

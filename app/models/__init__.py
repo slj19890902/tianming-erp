@@ -86,9 +86,13 @@ from app.models.quotation import (  # noqa: E402,F401
 )
 from app.models.warehouse_inventory import (  # noqa: E402,F401
     DeliveryInventoryAllocation,
+    Floor3LocationLayout,
     FinishedGoodsInventoryDetail,
     InventoryLot,
+    InventoryLocationMovement,
     InventoryMovement,
+    InventoryPallet,
+    InventoryPalletItem,
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,

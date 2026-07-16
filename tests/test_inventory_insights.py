@@ -114,7 +114,8 @@ def test_empty_insights_are_explicit_and_never_fake_cash_value(db: Session) -> N
 def test_finished_stock_links_its_own_demand_and_flags_missing_cost(db: Session) -> None:
     as_of = date(2026, 7, 12)
     product, lot = seed_finished_lot(db)
-    lot.last_movement_at = datetime.combine(as_of - timedelta(days=200), datetime.min.time())
+    lot.stock_date = as_of - timedelta(days=200)
+    lot.last_movement_at = datetime.combine(as_of, datetime.min.time())
     add_open_order(db, product, as_of=as_of)
     db.flush()
 

@@ -38,9 +38,7 @@ def _money(value: Decimal | None) -> str | None:
 
 
 def _age_days(lot: InventoryLot, as_of: date) -> int:
-    anchor = lot.last_movement_at
-    anchor_date = anchor.date() if isinstance(anchor, datetime) else lot.stock_date
-    return max((as_of - anchor_date).days, 0)
+    return max((as_of - lot.stock_date).days, 0)
 
 
 def _age_bucket(days: int) -> tuple[str, str]:
@@ -231,16 +229,16 @@ def build_inventory_insights(
                         estimated_cost_status = "estimated_product_cost"
 
         if days > 730:
-            reasons.append({"code": "age_cleanup", "text": "超过 2 年未异动，列入清理候选。"})
+            reasons.append({"code": "age_cleanup", "text": "库龄超过 2 年，列入清理候选。"})
             priority = min(priority, 0)
         elif days > 548:
-            reasons.append({"code": "age_handling", "text": "超过 1.5 年未异动，需要制定处理方案。"})
+            reasons.append({"code": "age_handling", "text": "库龄超过 1.5 年，需要制定处理方案。"})
             priority = min(priority, 1)
         elif days > 365:
-            reasons.append({"code": "age_attention", "text": "超过 1 年未异动，需要重点关注。"})
+            reasons.append({"code": "age_attention", "text": "库龄超过 1 年，需要重点关注。"})
             priority = min(priority, 2)
         elif days > 180:
-            reasons.append({"code": "age_slow", "text": "超过 180 天未异动，属于慢动库存。"})
+            reasons.append({"code": "age_slow", "text": "库龄超过 180 天，属于慢动库存。"})
             priority = min(priority, 3)
 
         if lot.location is None or not lot.location.is_active:

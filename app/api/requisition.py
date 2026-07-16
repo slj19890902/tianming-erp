@@ -3107,7 +3107,13 @@ def search_stock_replenishment_locations(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    query = select(WarehouseLocation).where(WarehouseLocation.is_active.is_(True))
+    query = select(WarehouseLocation).where(
+        WarehouseLocation.is_active.is_(True),
+        or_(
+            WarehouseLocation.source_version.is_(None),
+            WarehouseLocation.source_version != "V11",
+        ),
+    )
     if target_inventory_type:
         target = target_inventory_type.strip().lower()
         allowed = {
@@ -3360,6 +3366,10 @@ def _build_replenishment_item(
         location = db.get(WarehouseLocation, location_id)
         if location is None or not location.is_active:
             raise StockReplenishmentError("补库明细库位不存在或已停用。")
+        if location.source_version == "V11":
+            raise StockReplenishmentError(
+                "V11 三楼 Phase A 货位不能用于正式库存补库。", 409
+            )
         allowed = {
             "finished": {"finished", "shared"},
             "semi_finished": {"semi_finished", "shared"},

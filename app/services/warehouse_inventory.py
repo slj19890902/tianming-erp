@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from hashlib import sha256
 import json
 import re
 import unicodedata
@@ -21,6 +22,7 @@ from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
+    InventoryPallet,
     InventoryReservation,
     SemiFinishedInventoryDetail,
     WarehouseLocation,
@@ -66,14 +68,13 @@ def normalize_material_code(value: str | None) -> str:
 
 def inventory_age_warning(lot: InventoryLot, *, today: date | None = None) -> AgeWarning:
     current = today or date.today()
-    base_date = (lot.last_movement_at.date() if lot.last_movement_at else lot.stock_date)
-    days = max((current - base_date).days, 0)
+    days = max((current - lot.stock_date).days, 0)
     if days >= 730:
-        return AgeWarning(days, "cleanup", "超过2年未变动，请盘点并处理")
+        return AgeWarning(days, "cleanup", "库龄超过2年，请盘点并处理")
     if days >= 548:
-        return AgeWarning(days, "handling", "超过18个月未变动，请安排处理")
+        return AgeWarning(days, "handling", "库龄超过18个月，请安排处理")
     if days >= 365:
-        return AgeWarning(days, "attention", "超过1年未变动，请重点关注")
+        return AgeWarning(days, "attention", "库龄超过1年，请重点关注")
     return AgeWarning(days, None, None)
 
 
@@ -89,6 +90,15 @@ def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLo
     }[inventory_type]
     if location is None:
         raise WarehouseInventoryError("库位不存在", 404)
+    if getattr(location, "source_version", None) == "V11":
+        if inventory_type != "finished":
+            raise WarehouseInventoryError(
+                "三楼货位目前只接入成品仓；半成品请使用半成品库位", 409
+            )
+        if getattr(location, "warehouse_floor", None) != 3:
+            raise WarehouseInventoryError(
+                "V11 货位楼层无效，不能办理成品入库", 409
+            )
     if not location.is_active:
         raise WarehouseInventoryError("该库位已停用，不能入库")
     if location.warehouse_type not in allowed:
@@ -183,7 +193,7 @@ def manual_finished_in(
         return existing
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
-    _location(db, location_id, "finished")
+    location = _location(db, location_id, "finished")
     customer = db.get(Customer, customer_id)
     product = db.get(Product, product_id)
     if customer is None:
@@ -248,6 +258,16 @@ def manual_finished_in(
         remarks=remarks,
         idempotency_key=idempotency_key,
     )
+    if getattr(location, "source_version", None) == "V11":
+        # Local import avoids a module cycle while keeping the official lot and
+        # its physical-map projection in the same database transaction.
+        from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
+
+        bind_finished_lot_to_floor3_pallet(
+            db,
+            lot=lot,
+            operator_id=operator_id,
+        )
     db.flush()
     return lot
 
@@ -1008,6 +1028,366 @@ def manual_semi_finished_in(
         operator_id=operator_id,
         reason="手工半成品入库",
         remarks=remarks,
+        idempotency_key=idempotency_key,
+    )
+    db.flush()
+    return lot
+
+
+FINISHED_LOT_EDIT_REASON = "编辑成品库存批次"
+
+
+def _finished_lot_edit_request(
+    *,
+    expected_version: int,
+    is_general: bool,
+    customer_id: int | None,
+    product_id: int,
+    quantity_available: int,
+    location_id: int,
+    stock_date: date,
+) -> dict[str, object]:
+    return {
+        "expected_version": expected_version,
+        "is_general": is_general,
+        "customer_id": customer_id,
+        "product_id": product_id,
+        "quantity_available": quantity_available,
+        "location_id": location_id,
+        "stock_date": stock_date.isoformat(),
+    }
+
+
+def _idempotent_finished_lot_edit(
+    db: Session,
+    *,
+    lot_id: int,
+    idempotency_key: str,
+    request_payload: dict[str, object],
+) -> InventoryLot | None:
+    movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == idempotency_key
+        )
+    )
+    if movement is None:
+        return None
+    try:
+        audit = json.loads(movement.remarks or "")
+    except (TypeError, json.JSONDecodeError):
+        audit = None
+    if (
+        movement.inventory_lot_id != lot_id
+        or movement.movement_type != "adjust"
+        or movement.reason != FINISHED_LOT_EDIT_REASON
+        or not isinstance(audit, dict)
+        or audit.get("action") != FINISHED_LOT_EDIT_REASON
+        or audit.get("request") != request_payload
+    ):
+        raise WarehouseInventoryError("幂等键已用于不同的库存业务", 409)
+    lot = db.get(InventoryLot, lot_id)
+    if lot is None:
+        raise WarehouseInventoryError("库存批次不存在", 404)
+    return lot
+
+
+def _finished_product_snapshot(
+    db: Session,
+    *,
+    product_id: int,
+    is_general: bool,
+    customer_id: int | None,
+) -> tuple[Product, Customer, str | None]:
+    product = db.get(Product, product_id)
+    if product is None or not product.is_active or product.deleted_at is not None:
+        raise WarehouseInventoryError("所选产品不存在或已停用", 409)
+    if not is_general:
+        if customer_id is None:
+            raise WarehouseInventoryError("客户专用库存必须选择客户")
+        if product.customer_id != customer_id:
+            raise WarehouseInventoryError("所选产品不属于当前客户", 409)
+    customer = db.get(Customer, product.customer_id)
+    if customer is None:
+        raise WarehouseInventoryError("所选产品缺少有效客户", 409)
+    material_code = (
+        product.material.code
+        if product.material is not None
+        else product.default_material_code
+    ) or product.legacy_material_text
+    return product, customer, material_code
+
+
+def _edit_change(
+    changes: dict[str, dict[str, object]],
+    field: str,
+    before: object,
+    after: object,
+) -> None:
+    if before != after:
+        changes[field] = {"before": before, "after": after}
+
+
+def edit_finished_lot(
+    db: Session,
+    *,
+    lot_id: int,
+    expected_version: int,
+    is_general: bool,
+    customer_id: int | None,
+    product_id: int,
+    quantity_available: int,
+    location_id: int,
+    stock_date: date,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> InventoryLot:
+    """Edit one formal finished-goods lot and its physical projection atomically."""
+    idempotency_key = idempotency_key.strip()
+    if not idempotency_key:
+        raise WarehouseInventoryError("幂等键不能为空")
+    if quantity_available < 0:
+        raise WarehouseInventoryError("可用库存不能小于0")
+    request_payload = _finished_lot_edit_request(
+        expected_version=expected_version,
+        is_general=is_general,
+        customer_id=customer_id,
+        product_id=product_id,
+        quantity_available=quantity_available,
+        location_id=location_id,
+        stock_date=stock_date,
+    )
+    existing = _idempotent_finished_lot_edit(
+        db,
+        lot_id=lot_id,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+    )
+    if existing is not None:
+        return existing
+
+    lot = db.get(InventoryLot, lot_id)
+    if (
+        lot is None
+        or lot.inventory_type != "finished"
+        or lot.finished_detail is None
+    ):
+        raise WarehouseInventoryError("成品库存批次不存在", 404)
+    if lot.version != expected_version:
+        raise WarehouseInventoryError(
+            "库存已被其他人修改，请刷新后重试", 409
+        )
+    if lot.status != "active":
+        raise WarehouseInventoryError("只有正常状态的成品库存可以编辑", 409)
+
+    target_location = _location(db, location_id, "finished")
+    product, product_customer, material_code = _finished_product_snapshot(
+        db,
+        product_id=product_id,
+        is_general=is_general,
+        customer_id=customer_id,
+    )
+    detail = lot.finished_detail
+    owner_customer_id = None if is_general else product_customer.id
+    owner_customer_name = product_customer.name
+    identity_changed = (
+        detail.product_id != product.id
+        or detail.owner_customer_id != owner_customer_id
+        or detail.is_general != is_general
+    )
+    if identity_changed and (
+        lot.quantity_reserved > 0 or lot.quantity_consumed > 0
+    ):
+        raise WarehouseInventoryError(
+            "批次已有预占或消耗，不能修改产品、客户或通用归属", 409
+        )
+    target_snapshots: dict[str, object] = {
+        "inventory_code_snapshot": product.product_code,
+        "product_name_snapshot": product.product_name,
+        "box_type_snapshot": product.box_style,
+        "length_mm": round(product.length_mm) if product.length_mm is not None else None,
+        "width_mm": round(product.width_mm) if product.width_mm is not None else None,
+        "height_mm": round(product.height_mm) if product.height_mm is not None else None,
+        "material_code_snapshot": material_code,
+        "flute_type_snapshot": product.flute_type,
+    }
+
+    changes: dict[str, dict[str, object]] = {}
+    _edit_change(changes, "is_general", detail.is_general, is_general)
+    _edit_change(
+        changes,
+        "owner_customer_id",
+        detail.owner_customer_id,
+        owner_customer_id,
+    )
+    _edit_change(
+        changes,
+        "owner_customer_name_snapshot",
+        detail.owner_customer_name_snapshot,
+        owner_customer_name,
+    )
+    _edit_change(changes, "product_id", detail.product_id, product.id)
+    for field, value in target_snapshots.items():
+        _edit_change(changes, field, getattr(detail, field), value)
+    _edit_change(
+        changes,
+        "quantity_available",
+        lot.quantity_available,
+        quantity_available,
+    )
+    _edit_change(
+        changes,
+        "warehouse_location_id",
+        lot.warehouse_location_id,
+        target_location.id,
+    )
+    _edit_change(
+        changes,
+        "stock_date",
+        lot.stock_date.isoformat(),
+        stock_date.isoformat(),
+    )
+
+    before = _balances(lot)
+    location_changed = lot.warehouse_location_id != target_location.id
+    pallet_item = lot.pallet_item
+    pallet = pallet_item.pallet if pallet_item is not None else None
+    pallet_moved = False
+    if pallet_item is not None:
+        if pallet is None or not pallet.is_current or pallet.location_id is None:
+            raise WarehouseInventoryError("成品库存绑定的真实栈板状态无效", 409)
+        if pallet.location_id != lot.warehouse_location_id:
+            raise WarehouseInventoryError("成品库存与真实栈板货位不一致", 409)
+
+    if location_changed and target_location.source_version == "V11":
+        occupied = db.scalar(
+            select(InventoryPallet).where(
+                InventoryPallet.location_id == target_location.id,
+                InventoryPallet.is_current.is_(True),
+            )
+        )
+        if occupied is not None and (pallet is None or occupied.id != pallet.id):
+            raise WarehouseInventoryError("目标三楼货位已被其它真实栈板占用", 409)
+
+    now = utc_now()
+    if location_changed and pallet is not None:
+        from app.services.floor3_locations import Floor3LocationError, move_pallet
+
+        move_key = f"finished-edit:{sha256(idempotency_key.encode('utf-8')).hexdigest()}"
+        try:
+            move_pallet(
+                db,
+                pallet_id=pallet.id,
+                expected_version=pallet.version,
+                to_location_id=target_location.id,
+                remarks=FINISHED_LOT_EDIT_REASON,
+                operator_id=operator_id,
+                idempotency_key=move_key,
+            )
+        except Floor3LocationError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+        pallet_moved = True
+        result = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version + 1,
+                InventoryLot.warehouse_location_id == target_location.id,
+            )
+            .values(
+                quantity_available=quantity_available,
+                stock_date=stock_date,
+                last_movement_at=now,
+            )
+        )
+    else:
+        result = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version,
+            )
+            .values(
+                quantity_available=quantity_available,
+                warehouse_location_id=target_location.id,
+                stock_date=stock_date,
+                version=expected_version + 1,
+                last_movement_at=now,
+            )
+        )
+    if result.rowcount != 1:
+        raise WarehouseInventoryError(
+            "库存已被其他人修改，请刷新后重试", 409
+        )
+
+    detail.owner_customer_id = owner_customer_id
+    detail.owner_customer_name_snapshot = owner_customer_name
+    detail.is_general = is_general
+    detail.product_id = product.id
+    for field, value in target_snapshots.items():
+        setattr(detail, field, value)
+
+    if pallet_item is not None:
+        projection_values = {
+            "customer_id": product_customer.id,
+            "product_id": product.id,
+            "inventory_code": product.product_code,
+            "customer_name_snapshot": product_customer.name,
+            "product_name": product.product_name,
+            "quantity": max(quantity_available + lot.quantity_reserved, 1),
+            "match_status": "matched",
+        }
+        projection_changed = any(
+            getattr(pallet_item, field) != value
+            for field, value in projection_values.items()
+        )
+        for field, value in projection_values.items():
+            setattr(pallet_item, field, value)
+        if projection_changed and not pallet_moved and pallet is not None:
+            pallet_result = db.execute(
+                update(InventoryPallet)
+                .where(
+                    InventoryPallet.id == pallet.id,
+                    InventoryPallet.version == pallet.version,
+                )
+                .values(version=pallet.version + 1, updated_by=operator_id)
+            )
+            if pallet_result.rowcount != 1:
+                raise WarehouseInventoryError(
+                    "真实栈板已被其他操作更新，请刷新后重试", 409
+                )
+
+    db.flush()
+    if pallet_item is None and target_location.source_version == "V11":
+        from app.services.floor3_locations import (
+            Floor3LocationError,
+            bind_finished_lot_to_floor3_pallet,
+        )
+
+        try:
+            bind_finished_lot_to_floor3_pallet(
+                db,
+                lot=lot,
+                operator_id=operator_id,
+            )
+        except Floor3LocationError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+
+    db.refresh(lot)
+    audit = {
+        "action": FINISHED_LOT_EDIT_REASON,
+        "request": request_payload,
+        "changed_fields": list(changes),
+        "changes": changes,
+    }
+    _movement(
+        db,
+        lot=lot,
+        movement_type="adjust",
+        quantity=quantity_available - before["available"],
+        before=before,
+        operator_id=operator_id,
+        reason=FINISHED_LOT_EDIT_REASON,
+        remarks=json.dumps(audit, ensure_ascii=False, sort_keys=True),
         idempotency_key=idempotency_key,
     )
     db.flush()

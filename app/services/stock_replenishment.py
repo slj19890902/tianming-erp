@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.product import Product
@@ -43,10 +43,15 @@ def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:
                 FinishedGoodsInventoryDetail,
                 FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
             )
+            .join(WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id)
             .where(
                 InventoryLot.inventory_type == "finished",
                 InventoryLot.status == "active",
                 FinishedGoodsInventoryDetail.product_id == policy.product_id,
+                or_(
+                    WarehouseLocation.source_version.is_(None),
+                    WarehouseLocation.source_version != "V11",
+                ),
             )
         )
         return int(value or 0)
@@ -79,7 +84,14 @@ def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:
             SemiFinishedInventoryDetail,
             SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
         )
-        .where(*conditions)
+        .join(WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id)
+        .where(
+            *conditions,
+            or_(
+                WarehouseLocation.source_version.is_(None),
+                WarehouseLocation.source_version != "V11",
+            ),
+        )
     )
     return int(value or 0)
 
@@ -162,6 +174,10 @@ def validate_stock_policy(db: Session, policy: InventoryStockPolicy) -> None:
         location = db.get(WarehouseLocation, policy.default_location_id)
         if location is None or not location.is_active:
             raise StockReplenishmentError("默认库位不存在或已停用。")
+        if location.source_version == "V11":
+            raise StockReplenishmentError(
+                "V11 三楼 Phase A 货位不能用于正式库存预警策略。", 409
+            )
         allowed = {
             "finished": {"finished", "shared"},
             "semi_finished": {"semi_finished", "shared"},

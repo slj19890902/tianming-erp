@@ -1,0 +1,32 @@
+{
+  "source_version": "V11",
+  "warehouse_floor": 3,
+  "warehouse_type": "finished",
+  "excluded_codes": ["LA1", "LA2", "LCD1"],
+  "groups": [
+    {"area_code": "A1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 5}, {"side_code": "R", "start": 1, "end": 5}]},
+    {"area_code": "A2", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 13}, {"side_code": "R", "start": 1, "end": 12}]},
+    {"area_code": "AB1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 3}, {"side_code": "R", "start": 1, "end": 3}]},
+    {"area_code": "AB2", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "P", "start": 1, "end": 2}]},
+    {"area_code": "B1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 7}, {"side_code": "R", "start": 1, "end": 7}]},
+    {"area_code": "B2", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 12}, {"side_code": "R", "start": 1, "end": 11}]},
+    {"area_code": "C1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 11}, {"side_code": "R", "start": 1, "end": 11}]},
+    {"area_code": "C2", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 11}, {"side_code": "M", "start": 1, "end": 11}, {"side_code": "R", "start": 1, "end": 11}]},
+    {"area_code": "CD1", "storage_type": "ground", "remarks": "CD1\u5bb9\u91cf\u5f85\u73b0\u573a\u590d\u6838", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "U", "start": 1, "end": 5}, {"side_code": "M", "start": 1, "end": 5}, {"side_code": "D", "start": 1, "end": 4}]},
+    {"area_code": "D1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 10}, {"side_code": "R", "start": 1, "end": 10}]},
+    {"area_code": "D1", "storage_type": "rack", "code_template": "{area_code}-S{level_no}-{number:02d}", "segments": [{"level_no": 2, "start": 1, "end": 8}]},
+    {"area_code": "D2", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 10}, {"side_code": "R", "start": 1, "end": 9}]},
+    {"area_code": "DE1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "P", "start": 1, "end": 5}]},
+    {"area_code": "E1", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 9}, {"side_code": "M", "start": 1, "end": 9}, {"side_code": "R", "start": 1, "end": 9}]},
+    {"area_code": "E2", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 11}, {"side_code": "M", "start": 1, "end": 11}, {"side_code": "R", "start": 1, "end": 11}]},
+    {"area_code": "E3", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 3}, {"side_code": "R", "start": 1, "end": 3}]},
+    {"area_code": "E4", "storage_type": "ground", "code_template": "{area_code}-{side_code}{number:02d}", "segments": [{"side_code": "L", "start": 1, "end": 6}, {"side_code": "R", "start": 1, "end": 6}]},
+    {"area_code": "E4", "storage_type": "rack", "code_template": "{area_code}-S{level_no}-{number:02d}", "segments": [{"level_no": 2, "start": 1, "end": 4}]},
+    {"area_code": "F1", "storage_type": "rack", "code_template": "{area_code}-S{level_no}-{number:02d}", "segments": [{"level_no": 1, "start": 1, "end": 4}, {"level_no": 2, "start": 1, "end": 8}]},
+    {"area_code": "F12", "storage_type": "temporary_aisle", "code_template": "{area_code}-P{number:02d}", "segments": [{"side_code": "P", "start": 1, "end": 8}]},
+    {"area_code": "F2", "storage_type": "rack", "code_template": "{area_code}-S{level_no}-{side_code}{number:02d}", "segments": [{"level_no": 1, "side_code": "L", "start": 1, "end": 5}, {"level_no": 1, "side_code": "R", "start": 1, "end": 5}, {"level_no": 2, "side_code": "L", "start": 1, "end": 5}, {"level_no": 2, "side_code": "R", "start": 1, "end": 5}, {"level_no": 3, "side_code": "L", "start": 1, "end": 5}, {"level_no": 3, "side_code": "R", "start": 1, "end": 5}]},
+    {"area_code": "F3", "storage_type": "rack", "code_template": "{area_code}-S{level_no}-{side_code}{number:02d}", "segments": [{"level_no": 1, "side_code": "L", "start": 1, "end": 5}, {"level_no": 1, "side_code": "R", "start": 1, "end": 5}, {"level_no": 2, "side_code": "L", "start": 1, "end": 5}, {"level_no": 2, "side_code": "R", "start": 1, "end": 5}, {"level_no": 3, "side_code": "L", "start": 1, "end": 5}, {"level_no": 3, "side_code": "R", "start": 1, "end": 5}]},
+    {"area_code": "F34", "storage_type": "temporary_aisle", "code_template": "{area_code}-P{number:02d}", "segments": [{"side_code": "P", "start": 1, "end": 3}]},
+    {"area_code": "F4", "storage_type": "rack", "code_template": "{area_code}-S{level_no}-{side_code}{number:02d}", "segments": [{"level_no": 1, "side_code": "L", "start": 1, "end": 5}, {"level_no": 1, "side_code": "R", "start": 1, "end": 5}, {"level_no": 2, "side_code": "L", "start": 1, "end": 5}, {"level_no": 2, "side_code": "R", "start": 1, "end": 5}, {"level_no": 3, "side_code": "L", "start": 1, "end": 5}, {"level_no": 3, "side_code": "R", "start": 1, "end": 5}]}
+  ]
+}

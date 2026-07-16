@@ -15,16 +15,68 @@
     .grid{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
     input,select,textarea{width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:7px 8px;background:#fff}textarea{min-height:38px;resize:vertical}
     table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;padding:9px;border-bottom:1px solid #e8edf4;vertical-align:top}th{background:#f7f9fc;color:#475569}
-    .table-wrap{overflow:auto}.tag{display:inline-block;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.tag.warn{background:#fff2cf;color:#92400e}.tag.red{background:#fee2e2;color:#991b1b}
+    .table-wrap{overflow:auto}.table-wrap.finished-lot-wrap{overflow-x:hidden}.finished-lot-table{table-layout:fixed;white-space:normal}.finished-lot-table th,.finished-lot-table td{padding:6px 5px;vertical-align:middle;overflow-wrap:anywhere}.finished-lot-table th{position:relative}.finished-lot-table th:nth-child(1){width:10.5%}.finished-lot-table th:nth-child(2){width:10%}.finished-lot-table th:nth-child(3){width:16%}.finished-lot-table th:nth-child(4){width:10%}.finished-lot-table th:nth-child(5){width:8%}.finished-lot-table th:nth-child(6){width:12%}.finished-lot-table th:nth-child(7){width:6%}.finished-lot-table th:nth-child(8){width:6.5%}.finished-lot-table th:nth-child(9){width:6.5%}.finished-lot-table th:nth-child(10){width:5%}.finished-lot-table th:nth-child(11){width:9.5%;text-align:right}.lot-column-resizer{position:absolute;z-index:3;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;touch-action:none}.lot-column-resizer:hover,.lot-column-resizer.active{background:#2563eb66}.lot-batch,.lot-status{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lot-status{width:max-content;margin-top:3px}.lot-customer{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal;line-height:1.35}.lot-material,.lot-flute{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.25}.lot-flute{color:var(--muted)}.lot-actions{display:flex;align-items:center;justify-content:flex-end;gap:3px;flex-wrap:nowrap;min-width:0;padding-top:5px;padding-bottom:5px}.lot-actions .btn{padding:3px 5px;font-size:11px;line-height:1.2;white-space:nowrap}.tag{display:inline-block;border-radius:99px;padding:2px 8px;background:#e8efff;color:#1d4ed8}.tag.warn{background:#fff2cf;color:#92400e}.tag.red{background:#fee2e2;color:#991b1b}
     .muted{color:var(--muted)}.message{position:fixed;right:20px;bottom:20px;max-width:420px;background:#172033;color:#fff;border-radius:8px;padding:11px 16px;z-index:10}.hidden{display:none!important}
+    .lot-edit-mask{position:fixed;z-index:60;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;background:#0f172a70}.lot-edit-dialog{width:min(780px,100%);max-height:calc(100vh - 32px);margin:0;overflow:auto;box-shadow:0 22px 70px #0f172a55}.lot-edit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.lot-edit-head h2{margin:0}.lot-edit-selected{min-height:34px;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc}.lot-edit-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
     .summary{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0}.summary strong{font-size:18px}.empty{text-align:center;color:var(--muted);padding:26px}
     .metric-grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:10px}.metric-card{border:1px solid var(--line);border-radius:9px;padding:12px;background:#f8fafc}.metric-card strong{display:block;font-size:22px;margin-top:4px}.notice{border:1px solid #f4d38a;background:#fff8df;color:#713f12;border-radius:9px;padding:10px 12px}.notice.info{border-color:#bfdbfe;background:#eff6ff;color:#1e3a8a}.reason-list{white-space:normal;min-width:300px}.reason-list div+div{margin-top:4px}
-    @media(max-width:900px){.grid,.metric-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}header{padding:0 12px}.wrap{padding:0 8px}.desktop-note{display:none}}
+    .floor3-plan-toolbar{justify-content:space-between}.floor3-plan-toolbar h2{margin:0}.floor3-plan-scroll{overflow-x:auto;overflow-y:hidden;border:1px solid var(--line);border-radius:9px;background:#eef4ef}.floor3-plan-canvas{position:relative;width:100%;line-height:0;transform-origin:top left}.floor3-plan-canvas img{display:block;width:100%;height:auto;user-select:none}.floor3-plan-hotspots{position:absolute;inset:0}.floor3-plan-hotspot{position:absolute;z-index:3;display:block;padding:0;border:1px solid #2563eb99;border-radius:5px;background:#2563eb08;color:#0f2e53;line-height:1.15;transition:background .15s,border-color .15s,box-shadow .15s;overflow:visible;pointer-events:none}.floor3-plan-hotspot.matched{background:#16a34a30;border-color:#15803d;box-shadow:0 0 0 2px #16a34a4d}.floor3-plan-hotspot.temporary{background:#f973161f;border-color:#ea580c}.floor3-plan-hotspot.selected,.floor3-plan-hotspot.selected.matched{background:#1d4ed833;border-color:#1d4ed8;box-shadow:0 0 0 3px #1d4ed842}.floor3-plan-hotspot.temporary.selected{background:#ea580c4d}.floor3-area-entry{position:absolute;z-index:9;transform:translate(-50%,-100%);min-width:34px;padding:3px 7px;border:1px solid #93a8c1;border-radius:6px;background:#fffffff2;color:#0f2e53;box-shadow:0 2px 6px #0f172a2e;cursor:pointer;font:800 11px/1.15 Arial,"Microsoft YaHei",sans-serif;white-space:nowrap}.floor3-area-entry:hover,.floor3-area-entry:focus-visible{background:#dbeafe;border-color:var(--blue);outline:none}.floor3-area-entry.matched{background:#dcfce7;border-color:#15803d;color:#166534}.floor3-area-entry.temporary{background:#fff7ed;border-color:#ea580c;color:#9a3412}.floor3-area-entry.selected{background:#dbeafe;border-color:#1d4ed8;color:#1e3a8a}.floor3-slot-marker{position:absolute;z-index:4;min-width:14px;min-height:14px;border:2px solid #fff;border-radius:4px;background:#e2e8f0;box-shadow:0 1px 4px #0f172a55;cursor:pointer;line-height:1;color:#0f172a}.floor3-slot-marker.occupied{background:#f59e0b}.floor3-slot-marker.relocation{background:#ef4444}.floor3-slot-marker.disabled{background:#94a3b8;opacity:.62;cursor:not-allowed}.floor3-slot-marker.search-match{box-shadow:0 0 0 3px #16a34a77}.floor3-slot-marker.selected{outline:3px solid #2563eb;z-index:7}.floor3-slot-marker.layout-edit{border-style:dashed;border-color:#1d4ed8;background:#dbeafe;cursor:grab}.floor3-slot-marker.layout-edit:active{cursor:grabbing}.floor3-map-pallet-card{position:absolute;z-index:8;width:240px;padding:9px;border:1px solid #93c5fd;border-radius:8px;background:#fff;box-shadow:0 8px 24px #0f172a33;font:12px/1.45 Arial,"Microsoft YaHei",sans-serif;line-height:1.45}.floor3-map-pallet-card b{display:block}.floor3-map-pallet-card p{margin:3px 0}.floor3-plan-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:var(--muted)}.floor3-plan-legend i{display:inline-block;width:10px;height:10px;border:1px solid #2563eb99;border-radius:2px;margin-right:4px;background:#2563eb12}.floor3-plan-legend i.matched{background:#16a34a42;border-color:#15803d}.floor3-plan-legend i.temporary{background:#f9731640;border-color:#ea580c}.floor3-workspace{margin-top:14px}.floor3-workspace-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}.floor3-workspace-head h2{margin:0}.floor3-area-focus{display:grid;grid-template-columns:minmax(360px,1.15fr) minmax(300px,.85fr);gap:14px;align-items:start}.floor3-area-slot-map{position:relative;min-height:420px;border:1px solid var(--line);border-radius:9px;background-color:#eef4ef;background-image:none;overflow:hidden}.floor3-layout-editor{margin-top:10px}.floor3-location-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.floor3-card{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;cursor:pointer;min-width:0}.floor3-card:hover{border-color:var(--blue);box-shadow:0 2px 8px #1e3a8a18}.floor3-card h3{font-size:15px;margin:0 0 6px;overflow-wrap:anywhere}.floor3-card p{margin:4px 0;overflow-wrap:anywhere}.floor3-card .actions{margin-top:10px}.floor3-detail-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:14px}.floor3-item-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}.floor3-item{border:1px solid var(--line);border-radius:8px;padding:10px;background:#f8fafc;min-width:0;overflow-wrap:anywhere}.floor3-bind-row{border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;background:#fbfdff}.floor3-bind-row-grid{display:grid;grid-template-columns:1.1fr 1.4fr auto 1fr 110px auto;gap:8px;align-items:end}.floor3-candidates{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.floor3-candidate{border:1px solid #93c5fd;background:#eff6ff;color:#1e3a8a;border-radius:7px;padding:6px 8px;cursor:pointer;text-align:left;min-width:0}.floor3-candidate.selected{border-color:var(--blue);background:#dbeafe}.floor3-history{padding-left:18px;margin:0}.floor3-history li{margin:5px 0;overflow-wrap:anywhere}.floor3-aisle{border-color:#f59e0b;background:#fff7ed}.floor3-aisle .tag{background:#ffedd5;color:#9a3412}
+    .floor3-plan-scroll.zoomed{overflow:auto}
+    .floor3-map-pallet-card{max-height:42%;overflow:auto}
+    .floor3-area-slot-map .floor3-slot-marker{transform:none;background:#e2e8f0dc}
+    .floor3-slot-marker.overview-e4-rack{transform:translateX(-50%)}
+    .floor3-area-slot-map .floor3-slot-marker.occupied{background:#f59e0be6}
+    .location-view-tabs{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-bottom:8px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:#fff}
+    .location-view-tabs .active{background:var(--blue);border-color:var(--blue);color:#fff}
+    .location-view-tabs .muted{margin-left:auto}
+    #floor3MoveConfirm:not(.hidden){position:fixed;z-index:30;left:50%;top:50%;width:min(460px,calc(100vw - 32px));margin:0;transform:translate(-50%,-50%);box-shadow:0 18px 60px #0f172a55}
+    .floor3-plan-scroll{overflow:hidden}.floor3-plan-canvas{aspect-ratio:47.4/27.15;max-height:100%;background:#f5f8f6;border-radius:7px;overflow:hidden}.floor3-scale-base{position:absolute;inset:0;background-color:#f5f8f6;background-image:linear-gradient(#cbd5e155 1px,transparent 1px),linear-gradient(90deg,#cbd5e155 1px,transparent 1px);background-size:2.1097% 3.6832%;line-height:1.2}.floor3-scale-zone,.floor3-scale-aisle,.floor3-scale-slot,.floor3-scale-rack{position:absolute;pointer-events:none}.floor3-scale-zone{border:1px solid #52708d;border-radius:4px;background:#dbeafe66}.floor3-scale-zone.group-b{background:#e0f2fe66}.floor3-scale-zone.group-c,.floor3-scale-zone.group-cd{background:#dcfce766}.floor3-scale-zone.group-d,.floor3-scale-zone.group-de{background:#ecfccb66}.floor3-scale-zone.group-e{background:#ffedd566}.floor3-scale-zone.group-f{background:#fee2e266}.floor3-scale-zone.temp{border:2px dashed #ea580c;background:#ffedd580}.floor3-scale-zone.rack-only{background:#f3e8ff73}.floor3-scale-aisle{z-index:1;border:2px solid #15803d;background:#dcfce7;color:#166534;font-size:clamp(8px,.72vw,12px);font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;letter-spacing:1px}.floor3-scale-slot{z-index:2;border:1px solid #64748b70;border-radius:2px;background:#fff7}.floor3-scale-slot.rack-bottom{border-style:dashed;background:#fef3c766}.floor3-scale-rack{z-index:2;border:2px solid #7c3aed;background:repeating-linear-gradient(90deg,#ede9feaa 0,#ede9feaa calc(6.666% - 1px),#7c3aed calc(6.666% - 1px),#7c3aed 6.666%);box-shadow:inset 0 0 0 1px #fff8}.floor3-plan-hotspots{z-index:3}.floor3-plan-hotspot{background:#fff0;border-color:#2563eb70}.floor3-plan-hotspot:hover,.floor3-plan-hotspot:focus-visible{background:#2563eb12}.floor3-plan-hotspot.temporary{background:#f9731614}.floor3-f-entry{position:absolute;z-index:9;transform:translateX(-100%);padding:5px 10px;border:2px solid #7c3aed;border-radius:7px;background:#f3e8ff;color:#4c1d95;font-weight:800;line-height:1.1;box-shadow:0 3px 10px #4c1d9538;cursor:pointer;white-space:nowrap}.floor3-f-entry:hover,.floor3-f-entry:focus-visible,.floor3-f-entry.matched{background:#ddd6fe;border-color:#6d28d9;outline:none}.floor3-slot-marker.rack-cell{border-radius:2px;border-color:#7c3aed;background:#ddd6fe;cursor:pointer}.floor3-slot-marker.rack-cell.occupied{background:#a78bfa}.floor3-slot-marker.temporary-slot{border-color:#ea580c}.floor3-map-pallet-card{width:min(310px,38vw);max-height:48%;overflow:auto}.floor3-map-pallet-card .floor3-popover-item,.floor3-overview-selection .floor3-popover-item{border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px}.floor3-area-slot-map{background-image:linear-gradient(#cbd5e155 1px,transparent 1px),linear-gradient(90deg,#cbd5e155 1px,transparent 1px);background-size:8% 8%}.floor3-area-zone-backdrop{position:absolute;inset:0;border:2px solid #52708d;border-radius:8px;background:#dbeafe4d;pointer-events:none}.floor3-area-zone-backdrop.temp{border-style:dashed;border-color:#ea580c;background:#ffedd566}.floor3-area-zone-title{position:absolute;left:10px;top:8px;z-index:1;font-size:18px;font-weight:700;color:#0f2e53}.floor3-area-theory-slot{position:absolute;border:1px dashed #64748b70;border-radius:3px;background:#fff6}.floor3-capacity-note{font-size:11px;color:#475569;background:#fff9;border-radius:4px;padding:2px 5px}.floor3-plan-legend i.rack{background:#ddd6fe;border-color:#7c3aed}.floor3-plan-legend i.theory{background:#fff;border-style:dashed;border-color:#64748b}
+    .floor3-overview-stage{display:grid;grid-template-columns:minmax(0,3.2fr) minmax(280px,1fr);gap:10px;flex:1;min-height:0;min-width:0}.floor3-overview-rail{min-height:0;min-width:0;border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:10px;overflow:auto}.floor3-overview-rail h3{margin:0 0 2px;font-size:15px}.floor3-overview-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:9px 0}.floor3-overview-metric{border:1px solid #dbe3ef;border-radius:7px;background:#fff;padding:7px}.floor3-overview-metric b{display:block;font-size:18px;color:#1d4ed8}.floor3-overview-zones{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.floor3-overview-zone{border:1px solid #cbd5e1;border-radius:6px;background:#fff;padding:5px 4px;cursor:pointer;text-align:center;color:#334155}.floor3-overview-zone:hover,.floor3-overview-zone:focus-visible{border-color:var(--blue);background:#eff6ff;outline:none}.floor3-overview-zone strong{display:block;font-size:13px}.floor3-overview-zone small{font-size:10px;color:#64748b}.floor3-overview-zone.temporary{border-color:#fdba74;background:#fff7ed}.floor3-overview-zone.matched{border-color:#22c55e;background:#f0fdf4}.floor3-overview-rail .floor3-plan-legend{display:grid;grid-template-columns:1fr;margin:10px 0 0;padding-top:9px;border-top:1px solid var(--line);gap:5px}.floor3-overview-selection{height:100%;overflow-y:auto;overflow-x:hidden}.floor3-overview-selection-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}.floor3-overview-selection .tag{margin-right:4px}.floor3-overview-empty{padding:18px 8px;text-align:center;color:var(--muted)}
+    .floor3-f-rack-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;min-width:0;padding:14px;background:linear-gradient(180deg,#f8fafc,#eef2ff);overflow:hidden}.floor3-f-column{min-width:0}.floor3-rack-3d{min-width:0;perspective:900px}.floor3-rack-3d h3{margin:0 0 8px;color:#4c1d95}.floor3-rack-frame{position:relative;padding:13px 12px 11px;border:4px solid #69412a;border-top-width:8px;border-radius:5px;background:linear-gradient(135deg,#fef3c7,#e9d5ff);box-shadow:8px 9px 0 #6b442355,0 12px 24px #312e8130;transform:rotateX(2deg) rotateY(-2deg);transform-style:preserve-3d}.floor3-rack-level{position:relative;margin:7px 0;padding:8px 6px 6px;border-bottom:7px solid #85542f;background:#ffffffc7;box-shadow:inset 0 -3px 0 #c08457}.floor3-rack-level-label{display:block;margin-bottom:5px;font-weight:700;color:#713f12}.floor3-rack-cells{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.floor3-rack-cell{min-width:0;min-height:42px;padding:4px 2px;border:1px solid #7c3aed;border-radius:3px;background:linear-gradient(145deg,#ede9fe,#c4b5fd);box-shadow:3px 3px 0 #6d28d950;color:#3b0764;font-size:10px;cursor:pointer;overflow:hidden;text-overflow:ellipsis}.floor3-rack-cell.occupied{background:linear-gradient(145deg,#fde68a,#f59e0b);border-color:#b45309;color:#78350f}.floor3-rack-cell.selected{outline:3px solid #2563eb}.floor3-rack-cell.bottom-pallet{background:linear-gradient(145deg,#fed7aa,#fb923c);border-color:#9a3412}.floor3-f-temporary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.floor3-f-temporary-card{border:2px dashed #ea580c;border-radius:8px;background:#fff7ed;padding:10px;min-width:0}.floor3-f-temporary-slots{display:flex;gap:6px;flex-wrap:wrap}.floor3-f-temporary-slots .floor3-rack-cell{flex:1 1 70px}.floor3-f-rack-panel{padding:0;border:0;background:transparent;box-shadow:none}.floor3-area-slot-map.floor3-f-group-map{height:auto!important;min-height:0;overflow-y:auto;overflow-x:hidden;background:none}.floor3-area-slot-map.floor3-d1-map{height:auto!important;min-height:0;overflow:hidden;background:none}.floor3-d1-layout{height:100%;padding:15px;background:linear-gradient(180deg,#f8fafc,#ecfccb);overflow:hidden}.floor3-d1-layout h3{margin:0 0 8px;color:#365314}.floor3-d1-frame{padding:13px 12px 12px;border:4px solid #4d3b2c;border-top-width:8px;border-radius:6px;background:linear-gradient(145deg,#fefce8,#dcfce7);box-shadow:8px 9px 0 #3f3f4650,0 12px 24px #36531425}.floor3-d1-level{padding:9px 7px 8px;border-bottom:7px solid #7c5a3b;background:#ffffffd9;box-shadow:inset 0 -3px 0 #a16207}.floor3-d1-level+.floor3-d1-ground{margin-top:14px}.floor3-d1-level-title{display:block;margin-bottom:6px;font-weight:800;color:#365314}.floor3-d1-rack-row,.floor3-d1-pallet-row{display:grid;gap:5px}.floor3-d1-rack-row{grid-template-columns:repeat(8,minmax(0,1fr))}.floor3-d1-pallet-row{grid-template-columns:repeat(10,minmax(0,1fr));margin-top:7px}.floor3-d1-pallet-row .floor3-rack-cell{background:linear-gradient(145deg,#fed7aa,#fb923c);border-color:#9a3412;color:#78350f}.floor3-d1-row-label{display:block;margin-top:7px;font-size:11px;font-weight:700;color:#713f12}
+    .floor3-plan-hotspot{z-index:3}
+    .floor3-area-focus.floor3-f-mode{grid-template-columns:repeat(2,minmax(0,1fr))}.floor3-area-focus.floor3-f-mode .floor3-f-rack-layout{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}.floor3-area-slot-map.floor3-vertical-structure-map{height:auto!important;min-height:0;overflow:hidden;background:none}.floor3-vertical-layout{height:100%;padding:15px;background:linear-gradient(180deg,#f8fafc,#fff7ed);overflow:hidden}.floor3-vertical-layout h3{margin:0 0 8px;color:#7c2d12}.floor3-vertical-frame{padding:12px;border:4px solid #4d3b2c;border-top-width:8px;border-radius:6px;background:linear-gradient(145deg,#fff7ed,#fef3c7);box-shadow:8px 9px 0 #3f3f4650}.floor3-vertical-section+.floor3-vertical-section{margin-top:12px}.floor3-e4-columns{display:grid;grid-template-columns:minmax(110px,.75fr) repeat(2,minmax(135px,1fr));gap:10px;align-items:start}.floor3-e4-columns .floor3-vertical-section+.floor3-vertical-section{margin-top:0}.floor3-vertical-title{display:block;margin-bottom:6px;font-weight:800;color:#7c2d12}.floor3-vertical-list{display:grid;grid-template-columns:1fr;gap:5px}.floor3-vertical-list .floor3-rack-cell{width:100%;min-height:34px}.floor3-vertical-list.ground .floor3-rack-cell{background:linear-gradient(145deg,#fed7aa,#fb923c);border-color:#9a3412;color:#78350f}.floor3-slot-marker.area-e4,.floor3-slot-marker.area-de1{min-width:6px;min-height:6px;border-width:1px;border-radius:1px}
+    .floor3-map-pallet-card{transform:translate(-50%,-50%)}
+    .floor3-command-panel{padding:10px 12px;margin-bottom:8px;box-shadow:0 1px 3px #0f172a0d}.floor3-command-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.floor3-command-title h2{margin:0;font-size:18px}.floor3-command-eyebrow{display:block;color:#2563eb;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.floor3-mode-badge{font-weight:700}.floor3-toolbar-row{display:grid;grid-template-columns:auto minmax(130px,170px) minmax(150px,200px) minmax(120px,150px) minmax(240px,1fr) auto auto;gap:7px;align-items:center}.floor3-toolbar-row .btn{white-space:nowrap}.floor3-edit-notice{margin-top:8px;padding:8px 10px;border-color:#fdba74;background:#fff7ed;color:#9a3412}.floor3-edit-notice strong{color:#7c2d12}.floor3-slot-marker.occupied{background:#3b82f6}.floor3-slot-marker.relocation{background:#ef4444}
+    .floor3-overview-stage{grid-template-columns:minmax(190px,220px) minmax(0,1fr) minmax(270px,300px);gap:8px}.floor3-area-navigator{min-width:0;min-height:0;border:1px solid var(--line);border-radius:9px;background:#f8fafc;padding:9px;overflow:auto;transition:width .2s ease,opacity .2s ease,padding .2s ease}.floor3-area-nav-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.floor3-area-nav-head h3{margin:0;font-size:15px}.floor3-area-nav-head p{margin:2px 0 0}.floor3-overview-stage.area-nav-collapsed{grid-template-columns:0 minmax(0,1fr) minmax(270px,300px)}.floor3-overview-stage.area-nav-collapsed .floor3-area-navigator{width:0;padding:0;border:0;opacity:0;overflow:hidden}.floor3-nav-group{margin-top:8px}.floor3-nav-group-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#475569;font-size:11px;font-weight:800}.floor3-nav-group-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}.floor3-overview-zone{min-height:42px}.floor3-search-results{margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}.floor3-search-results-head{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px}.floor3-search-result-list{display:grid;gap:5px}.floor3-search-result{width:100%;border:1px solid #cbd5e1;border-radius:7px;background:#fff;padding:7px;text-align:left;color:#334155;cursor:pointer}.floor3-search-result:hover,.floor3-search-result:focus-visible{border-color:#2563eb;background:#eff6ff;outline:none}.floor3-search-result b,.floor3-search-result span{display:block}.floor3-search-result small{display:block;color:#64748b;white-space:normal}.floor3-canvas-shell{position:relative;min-width:0;min-height:0;display:flex}.floor3-canvas-shell .floor3-plan-scroll{width:100%}.floor3-canvas-hint{position:absolute;left:10px;bottom:10px;z-index:12;padding:4px 8px;border:1px solid #cbd5e1;border-radius:99px;background:#ffffffd9;color:#64748b;font-size:11px;pointer-events:none;box-shadow:0 2px 8px #0f172a14}.floor3-plan-scroll.zoomed{cursor:grab;overscroll-behavior:contain}.floor3-plan-scroll.zoomed.is-panning{cursor:grabbing;user-select:none}.floor3-slot-marker.search-focus{z-index:12;animation:floor3-search-pulse .7s ease-in-out 2}.floor3-marker-label{display:none;position:absolute;left:50%;top:100%;transform:translate(-50%,3px);padding:2px 4px;border-radius:4px;background:#0f172ae8;color:#fff;font-size:9px;font-weight:700;white-space:nowrap;pointer-events:none}.floor3-plan-canvas[data-density="detail"] .floor3-slot-marker.occupied .floor3-marker-label,.floor3-slot-marker:hover .floor3-marker-label,.floor3-slot-marker:focus-visible .floor3-marker-label{display:block}.floor3-overview-rail{box-shadow:0 1px 3px #0f172a0d}.floor3-overview-default h3{margin-bottom:4px}.floor3-overview-default .floor3-plan-legend{margin-top:12px}.floor3-fullscreen-target:fullscreen{background:var(--bg);padding:8px}.floor3-fullscreen-target:fullscreen #floor3MapPanel{height:calc(100vh - 112px)}
+    .floor3-plan-canvas.is-searching .floor3-slot-marker:not(.search-match),.floor3-plan-canvas.is-searching .floor3-area-entry:not(.matched),.floor3-plan-canvas.is-searching .floor3-f-entry:not(.matched){opacity:.32}.floor3-plan-canvas.is-searching .floor3-slot-marker.search-match{opacity:1}.floor3-plan-canvas.is-searching .floor3-plan-hotspot:not(.matched){opacity:.45}
+    @keyframes floor3-search-pulse{0%,100%{box-shadow:0 0 0 2px #facc1577}50%{box-shadow:0 0 0 8px #facc15aa}}
+    @media(max-width:1180px) and (min-width:901px){.floor3-overview-stage{grid-template-columns:180px minmax(0,1fr) 250px}.floor3-overview-stage.area-nav-collapsed{grid-template-columns:0 minmax(0,1fr) 250px}.floor3-toolbar-row{grid-template-columns:auto 130px 150px 120px minmax(180px,1fr) auto auto}.floor3-command-title .actions .btn:first-of-type{display:none}}
+    @media(min-width:901px){
+      body.floor3-mode{height:100vh;overflow:hidden}
+      body.floor3-mode .wrap{max-width:none;width:100%;height:100vh;margin:0;padding:6px 10px;display:flex;flex-direction:column;overflow:hidden}
+      body.floor3-mode header,body.floor3-mode .wrap>.tabs,body.floor3-mode #locationViewTabs{display:none}
+      body.floor3-mode .tabs{flex:0 0 auto;margin-bottom:8px}
+      body.floor3-mode #floor3LocationSection{display:flex;flex:1;min-height:0;flex-direction:column}
+      body.floor3-mode #floor3FilterPanel{flex:0 0 auto;margin-bottom:6px;padding:6px 8px}
+      body.floor3-mode #floor3FilterPanel .floor3-filter-note{display:none}
+      body.floor3-mode .floor3-toolbar{flex-wrap:nowrap}
+      body.floor3-mode .floor3-toolbar select{width:180px}
+      body.floor3-mode .floor3-toolbar input{width:auto;min-width:220px;flex:1}
+      body.floor3-mode #floor3MapPanel{display:flex;flex:1;min-height:0;flex-direction:column;margin-bottom:0;padding:6px 8px}
+      body.floor3-mode .floor3-plan-toolbar{flex:0 0 auto}
+      body.floor3-mode .floor3-plan-scroll{display:flex;flex:1;min-height:0;align-items:center;justify-content:center;overflow:hidden}
+      body.floor3-mode .floor3-plan-scroll.zoomed{display:block}
+      body.floor3-mode .floor3-overview-rail{overflow:auto;padding:8px}
+      body.floor3-mode .floor3-overview-metrics{gap:4px;margin:6px 0}
+      body.floor3-mode .floor3-overview-metric{padding:4px 6px}
+      body.floor3-mode .floor3-overview-zones{display:block}
+      body.floor3-mode .floor3-overview-zone{padding:3px 2px}
+      body.floor3-mode .floor3-overview-rail .floor3-plan-legend{grid-template-columns:repeat(2,minmax(0,1fr));margin:6px 0 0;padding-top:6px;gap:3px}
+      body.floor3-mode #floor3Workspace:not(.hidden){min-height:0;overflow:auto}
+      body.floor3-mode.floor3-workspace-mode #floor3MapPanel{flex:0 0 52%}
+      body.floor3-mode.floor3-workspace-mode #floor3Workspace{flex:1}
+      body.floor3-mode.floor3-area-mode #floor3Workspace{flex:1;margin-top:0}
+      body.floor3-mode.floor3-area-mode #locationViewTabs{display:none}
+      body.floor3-mode.floor3-area-mode .floor3-area-focus{min-height:0}
+      body.floor3-mode.floor3-area-mode .floor3-area-slot-map{min-height:0;height:min(62vh,620px)}
+    }
+    @media(max-width:900px){.grid,.metric-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}header{padding:0 12px}.wrap{padding:0 8px}.desktop-note{display:none}.floor3-detail-grid,.floor3-area-focus{grid-template-columns:1fr}.floor3-bind-row-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.floor3-command-title{align-items:flex-start}.floor3-toolbar-row{grid-template-columns:repeat(2,minmax(0,1fr))}.floor3-toolbar-row #floor3KeywordFilter{grid-column:1/-1}.floor3-overview-stage,.floor3-overview-stage.area-nav-collapsed{grid-template-columns:1fr}.floor3-overview-stage.area-nav-collapsed .floor3-area-navigator{display:none}.floor3-area-navigator,.floor3-overview-rail{max-height:280px}.floor3-canvas-shell{min-height:420px}.floor3-f-rack-layout{grid-template-columns:1fr}.floor3-f-temporary{grid-template-columns:1fr}}
+    @media(max-width:560px){.grid,.metric-grid,.floor3-location-grid,.floor3-item-grid,.floor3-bind-row-grid{grid-template-columns:1fr}.floor3-toolbar>*{width:100%!important;flex:1 1 100%}.floor3-plan-toolbar{align-items:flex-start}.floor3-plan-toolbar .actions{width:100%}.floor3-plan-toolbar .btn{flex:1}.floor3-plan-scroll{overflow:hidden;-webkit-overflow-scrolling:touch}.floor3-plan-canvas{min-width:0}.floor3-area-slot-map{min-height:340px}.floor3-workspace-head{align-items:flex-start;flex-direction:column}.floor3-card{padding:11px}.floor3-card .actions .btn{flex:1 1 auto;min-height:40px}.floor3-candidate{width:100%}.floor3-rack-cells{grid-template-columns:repeat(2,minmax(0,1fr))}}
   </style>
 </head>
 <body>
   <header>
-    <div><h1>仓库库存管理</h1><span class="muted desktop-note">阶段 A：手工入库、冻结、报损、调整与流水</span></div>
+    <div><h1>仓库库存管理</h1><span class="muted desktop-note">成品入仓、三楼货位与库存流水联动</span></div>
     <div class="actions"><span id="userName"></span><a class="btn" href="/">返回 ERP</a></div>
   </header>
   <main class="wrap">
@@ -33,10 +85,15 @@
       <button class="btn" data-tab="semi_finished">半成品仓</button>
       <button class="btn" data-tab="insights">库存经营看板</button>
       <button class="btn" data-tab="movements">库存流水</button>
-      <button class="btn admin-only" data-tab="locations">库位管理</button>
+      <button class="btn" data-tab="locations">库位管理</button>
       <button class="btn" data-tab="molds">模具位置</button>
     </div>
     <div id="pageError" class="panel hidden" style="border-color:#fecaca;color:#991b1b"></div>
+    <div id="locationViewTabs" class="location-view-tabs hidden">
+      <button class="btn active" data-location-view="floor3" type="button">三楼平面图</button>
+      <button class="btn admin-only" data-location-view="ledger" type="button">全部库位台账</button>
+      <span class="muted">平面图管理真实栈板位置；台账维护其它成品、半成品及共用库位。</span>
+    </div>
 
     <section id="insightSection" class="hidden">
       <div class="panel">
@@ -63,7 +120,7 @@
     <section id="inventorySection">
       <div class="panel">
         <div class="toolbar">
-          <button id="openInForm" class="btn primary operate-only">手工入库</button>
+          <button id="openInForm" class="btn primary operate-only">入成品仓</button>
           <select id="statusFilter" style="width:140px"><option value="">全部状态</option><option value="active">正常</option><option value="frozen">冻结</option><option value="closed">关闭</option></select>
           <select id="locationFilter" style="width:180px"><option value="">全部库位</option></select>
           <select id="staleFilter" style="width:180px"><option value="">全部库龄</option><option value="attention">超过1年</option><option value="handling">超过18个月</option><option value="cleanup">超过2年</option></select>
@@ -74,16 +131,21 @@
       </div>
 
       <form id="finishedForm" class="panel hidden operate-only">
-        <h2>手工成品入库</h2>
+        <h2>入成品仓（一步完成）</h2>
+        <p class="notice info">做完马上送货时无需办理入仓；需要暂存时，只选客户、产品、数量和三楼货位，系统会自动建立库存、栈板绑定和流水。</p>
         <div class="grid">
           <div class="field"><label>客户</label><select id="fgCustomer" required></select></div>
-          <div class="field"><label>常用箱 / 产品</label><select id="fgProduct" required></select></div>
-          <div class="field"><label>库位</label><select id="fgLocation" required></select></div>
+          <div class="field" style="grid-column:span 2"><label>输入存货编码 / 产品名称</label><input id="fgProductKeyword" maxlength="150" autocomplete="off" placeholder="输入后自动显示匹配候选"></div>
+          <div class="field" style="grid-column:span 2"><label>已选择常用箱 / 产品</label><input id="fgProduct" type="hidden"><div id="fgProductSelected" class="muted">尚未选择（必须点击下方候选）</div></div>
+          <div class="field" style="grid-column:1/-1"><label>匹配候选</label><div id="fgProductCandidates" class="floor3-candidates"><span class="muted">请先选择客户，再输入存货编码或产品名称</span></div></div>
           <div class="field"><label>实际成品数量（个）</label><input id="fgQuantity" type="number" min="1" required></div>
-          <div class="field"><label>入库日期</label><input id="fgDate" type="date" required></div>
-          <div class="field"><label>来源</label><select id="fgSource"><option value="manual">手工入库</option><option value="production_surplus">生产余量</option><option value="stocktake">盘点录入</option><option value="transfer">调拨转入</option></select></div>
-          <div class="field" style="grid-column:span 3"><label>备注</label><input id="fgRemarks" placeholder="说明库存来源或现场情况"></div>
-          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">确认入库</button></div>
+          <div class="field"><label>三楼具体货位</label><select id="fgLocation" required></select></div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">入成品仓</button></div>
+          <details style="grid-column:1/-1"><summary>可选：修改日期、来源或备注</summary><div class="grid" style="margin-top:10px">
+            <div class="field"><label>入库日期</label><input id="fgDate" type="date" required></div>
+            <div class="field"><label>来源</label><select id="fgSource"><option value="manual">完工暂存 / 手工入库</option><option value="production_surplus">生产余量</option><option value="stocktake">盘点录入</option><option value="transfer">调拨转入</option></select></div>
+            <div class="field"><label>备注</label><input id="fgRemarks" placeholder="可不填"></div>
+          </div></details>
         </div>
       </form>
 
@@ -110,7 +172,7 @@
       </form>
 
       <div class="panel table-wrap">
-        <table>
+        <table id="lotTable">
           <thead id="lotHead"></thead>
           <tbody id="lotBody"></tbody>
         </table>
@@ -120,11 +182,102 @@
         <div style="display:flex;justify-content:space-between;align-items:center"><h2 id="reservationTitle">成品库存预占记录</h2><button class="btn" onclick="$('reservationPanel').classList.add('hidden')">关闭</button></div>
         <table><thead><tr><th>预占时间</th><th>订单</th><th>客户/产品</th><th>预占数量</th><th>状态</th><th>释放时间/原因</th></tr></thead><tbody id="reservationBody"></tbody></table>
       </div>
+      <div id="lotEditMask" class="lot-edit-mask hidden">
+        <form id="lotEditForm" class="panel lot-edit-dialog admin-only" role="dialog" aria-modal="true" aria-labelledby="lotEditTitle">
+          <div class="lot-edit-head"><div><h2 id="lotEditTitle">编辑成品库存批次</h2><div class="muted">修改后统一写入库存流水；库龄由入库日期自动计算。</div></div><button id="lotEditClose" class="btn" type="button">关闭</button></div>
+          <div class="grid" style="margin-top:14px">
+            <div class="field"><label for="lotEditOwnership">库存归属</label><select id="lotEditOwnership"><option value="customer">客户专用库存</option><option value="general">通用库存</option></select></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditCustomer">绑定客户</label><select id="lotEditCustomer"></select></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditProductKeyword">输入存货编码 / 产品名称</label><input id="lotEditProductKeyword" maxlength="150" autocomplete="off" placeholder="输入后显示该客户候选"></div>
+            <div class="field" style="grid-column:span 2"><label>已选择产品</label><input id="lotEditProduct" type="hidden"><div id="lotEditProductSelected" class="lot-edit-selected muted">尚未选择产品</div></div>
+            <div class="field" style="grid-column:span 3"><label>匹配候选</label><div id="lotEditProductCandidates" class="floor3-candidates"><span class="muted">选择客户后输入存货编码或产品名称</span></div></div>
+            <div class="field"><label for="lotEditQuantity">可用数量（个）</label><input id="lotEditQuantity" type="number" min="0" step="1" required></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditLocation">三楼具体货位</label><select id="lotEditLocation" required></select></div>
+            <div class="field" style="grid-column:span 2"><label for="lotEditStockDate">入库日期（决定库龄）</label><input id="lotEditStockDate" type="date" required></div>
+          </div>
+          <div class="notice info" style="margin-top:12px">若选择客户专用库存，必须从该客户候选中点击存货编码；不能只改客户而保留其他客户的产品。</div>
+          <div class="lot-edit-actions"><button id="lotEditCancel" class="btn" type="button">取消</button><button id="lotEditSave" class="btn primary" type="submit">保存批次修改</button></div>
+        </form>
+      </div>
       <div id="assignmentPanel" class="panel hidden">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2 id="assignmentTitle">分配适用成品款号</h2><div id="assignmentScope" class="muted"></div></div><button class="btn" onclick="$('assignmentPanel').classList.add('hidden')">关闭</button></div>
         <div class="toolbar" style="margin:12px 0"><input id="assignmentKeyword" style="width:320px" placeholder="搜索存货编码 / 产品名称 / 规格 / 模具位置"><button class="btn" type="button" onclick="searchAssignmentProducts()">搜索</button><span id="assignmentCount" class="muted"></span></div>
         <div class="table-wrap"><table><thead><tr><th>选择</th><th>存货编码 / 产品</th><th>成品规格</th><th>报料规格</th><th>材质 / 楞型</th><th>模具 / 货架位置</th><th>匹配建议</th></tr></thead><tbody id="assignmentBody"></tbody></table></div>
         <div class="actions admin-only" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" type="button" onclick="saveProductAssignments()">保存款号分配</button></div>
+      </div>
+    </section>
+
+    <section id="floor3LocationSection" class="hidden floor3-fullscreen-target">
+      <div id="floor3FilterPanel" class="panel floor3-command-panel">
+        <div class="floor3-command-title">
+          <div><span class="floor3-command-eyebrow">三楼成品仓 · 真实货位数据</span><h2>仓库可视化库存</h2></div>
+          <div class="actions"><span id="floor3ModeBadge" class="tag floor3-mode-badge">浏览模式</span><button class="btn" type="button" onclick="switchTab('finished')">返回仓库菜单</button><button class="btn" type="button" onclick="switchTab('movements')">操作记录</button><button class="btn admin-only" type="button" onclick="switchLocationView('ledger')">全部库位台账</button></div>
+        </div>
+        <div class="floor3-toolbar-row">
+          <button id="floor3AreaNavToggle" class="btn" type="button" aria-expanded="true">收起区域</button>
+          <select id="floor3AreaFilter" aria-label="三楼区域筛选"></select>
+          <select id="floor3CustomerFilter" aria-label="客户筛选"><option value="">全部客户</option></select>
+          <select id="floor3OccupancyFilter" aria-label="货位占用筛选"><option value="">全部状态</option><option value="empty">空闲</option><option value="occupied">占用</option></select>
+          <input id="floor3KeywordFilter" placeholder="搜索客户 / 存货编码 / 订单号 / 产品 / 栈板 / 货位" autocomplete="off">
+          <button id="refreshFloor3Locations" class="btn primary" type="button">查询定位</button>
+          <button id="floor3ClearSearch" class="btn hidden" type="button">清除定位</button>
+        </div>
+        <div id="floor3EditNotice" class="notice floor3-edit-notice hidden"><strong>当前处于库位调整模式。</strong>只有此模式下才可拖动真实栈板；释放后仍需确认，保存失败会恢复原位置。</div>
+        <div class="muted floor3-filter-note" style="margin-top:7px">三楼固定货位与移动栈板分开记录；F12、F34 为橙色“过道临放”，不能替代正式货位。</div>
+      </div>
+      <div id="floor3MapPanel" class="panel">
+        <div class="toolbar floor3-plan-toolbar"><div class="actions"><h2>三楼货位平面图</h2><span id="floor3CurrentScope" class="muted">全部区域</span></div><div class="actions"><button id="floor3MoveModeToggle" class="btn operate-only" type="button">库位调整</button><button id="floor3PlanReset" class="btn" type="button">适应画布</button><button id="floor3DefaultView" class="btn" type="button">恢复默认</button><button id="floor3PlanZoomOut" class="btn" type="button" aria-label="缩小平面图">－</button><span id="floor3PlanZoomLabel" class="muted">100%</span><button id="floor3PlanZoomIn" class="btn" type="button" aria-label="放大平面图">＋</button><button id="floor3FullscreenToggle" class="btn" type="button">全屏</button><button id="floor3LegendToggle" class="btn" type="button">图例</button><button id="floor3LayoutEditToggle" class="btn admin-only" type="button">布局编辑</button></div></div>
+        <div id="floor3OverviewStage" class="floor3-overview-stage">
+          <aside id="floor3AreaNavigator" class="floor3-area-navigator" aria-label="三楼区域导航">
+            <div class="floor3-area-nav-head"><div><h3>区域导航</h3><p class="muted">点击区域聚焦</p></div><button id="floor3AreaNavClose" class="btn" type="button" aria-label="收起区域导航">‹</button></div>
+            <div id="floor3OverviewStats" class="floor3-overview-metrics"></div>
+            <div id="floor3OverviewZones" class="floor3-overview-zones"></div>
+            <div id="floor3SearchResults" class="floor3-search-results hidden"></div>
+          </aside>
+          <div class="floor3-canvas-shell"><div class="floor3-plan-scroll"><div id="floor3PlanCanvas" class="floor3-plan-canvas" aria-label="三楼仓库横向实尺互动平面图"><div id="floor3ScaleBase" class="floor3-scale-base"></div><div id="floor3PlanHotspots" class="floor3-plan-hotspots"></div></div></div><div class="floor3-canvas-hint">滚轮缩放 · 放大后拖动空白处平移</div></div>
+          <aside class="floor3-overview-rail" aria-label="三楼区域导航与图例">
+            <div id="floor3OverviewDefault" class="floor3-overview-default">
+              <h3>当前位置详情</h3><div class="muted">点击区域入口聚焦；点击具体货位或搜索结果后，在这里查看真实栈板与物料。</div>
+              <div id="floor3LegendPanel" class="floor3-plan-legend"><span><i></i>区域边界</span><span><i class="matched"></i>搜索命中</span><span><i class="rack"></i>货架格</span><span><i class="temporary"></i>F12 / F34 过道临放</span><span><i class="theory"></i>理论轮廓</span><span><i style="background:#2563eb;border-color:#1d4ed8"></i>正常占用</span></div>
+            </div>
+            <div id="floor3OverviewSelection" class="floor3-overview-selection hidden"></div>
+          </aside>
+        </div>
+      </div>
+      <div id="floor3MoveConfirm" class="panel hidden"></div>
+      <div id="floor3Workspace" class="floor3-workspace hidden">
+        <div class="floor3-workspace-head"><div><h2 id="floor3WorkspaceTitle">请选择区域</h2><div id="floor3WorkspaceHint" class="muted">请先在平面图上点击一个区域，随后显示该区域的具体货位。</div></div><div class="actions"><button id="floor3AreaLayoutEditToggle" class="btn admin-only hidden" type="button">布局编辑</button><button id="floor3ClearArea" class="btn hidden" type="button">返回平面图</button></div></div>
+        <div id="floor3AreaFocus" class="floor3-area-focus hidden"><div><div id="floor3AreaSlotMap" class="floor3-area-slot-map" aria-label="区域货位缩略布局" ondragover="floor3AllowLayoutDrop(event)" ondrop="floor3DropLayout(event)"></div><div id="floor3LayoutEditor" class="floor3-layout-editor admin-only hidden"></div></div><div id="floor3AreaDetailRail"><div id="floor3DetailPanel" class="panel hidden"></div></div></div>
+        <div id="floor3LocationCards" class="floor3-location-grid hidden"></div>
+        <div id="floor3LocationEmpty" class="panel empty hidden">暂无符合条件的三楼货位</div>
+      </div>
+
+      <div id="floor3BindPanel" class="panel hidden operate-only">
+        <h2>快速绑定到当前货位</h2>
+        <p class="muted">输入客户和关键词后只展示候选；必须点击候选才能绑定。没有确定产品时，可勾选“暂存为待匹配”保存现场快照。</p>
+        <form id="floor3BindForm">
+          <div class="grid">
+            <div class="field"><label>栈板编号（可空）</label><input id="floor3PalletCode" placeholder="例如 PLT-3F-0048"></div>
+            <div class="field" style="grid-column:span 2"><label>栈板备注</label><input id="floor3PalletRemarks" placeholder="现场备注"></div>
+          </div>
+          <div id="floor3BindRows"></div>
+          <div class="actions" style="margin-top:10px"><button id="addFloor3BindRow" class="btn" type="button">添加同栈板产品（至少可加到5行）</button><button class="btn primary" type="submit">保存栈板绑定</button></div>
+        </form>
+      </div>
+
+      <div id="floor3AddItemPanel" class="panel hidden operate-only">
+        <h2>增加同栈板产品</h2>
+        <p class="muted">仍需先搜索并点击选择候选；待匹配行只保存快照，不会自动选择产品。</p>
+        <div class="floor3-bind-row-grid">
+          <div class="field"><label>客户</label><select id="floor3AddCustomer"></select></div>
+          <div class="field"><label>关键词</label><input id="floor3AddKeyword" placeholder="客户 / 编码 / 订单 / 产品"></div>
+          <button id="floor3AddSearch" class="btn" type="button">搜索候选</button>
+          <div class="field"><label>产品候选</label><div id="floor3AddSelected" class="muted">尚未选择</div></div>
+          <div class="field"><label>数量</label><input id="floor3AddQuantity" type="number" min="0.01" step="any" required></div>
+          <label class="field"><span>暂存为待匹配</span><input id="floor3AddPending" type="checkbox"></label>
+        </div>
+        <div id="floor3AddCandidates" class="floor3-candidates"></div>
+        <div class="actions" style="margin-top:10px"><button id="floor3AddSave" class="btn primary" type="button">加入当前栈板</button></div>
       </div>
     </section>
 
@@ -212,11 +365,12 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],tab:"finished",locations:[],customers:[],lots:[],molds:[],insights:null,assignment:{lotId:null,items:[],selected:new Set()}};
+    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindRows:[],addCandidates:[],addCandidate:null}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canOperate=()=>hasPermission("warehouse.execute");
     const labels={active:"正常",frozen:"冻结",closed:"关闭",finished:"成品",semi_finished:"半成品",shared:"共用",boxes:"个",sheets:"张/片",manual_in:"手工入库",reserve:"成品预占",release_reserve:"释放预占",released:"已释放",consumed:"已消耗",adjust:"调整",freeze:"冻结",unfreeze:"解冻",damage:"报损",scrap:"报废",transfer_to_general:"转通用"};
+    const FINISHED_LOT_COLUMN_WIDTHS_KEY="warehouseFinishedLotColumnWidthsV1",FINISHED_LOT_DEFAULT_WIDTHS=[10.5,10,16,10,8,12,6,6.5,6.5,5,9.5];
     function apiErrorMessage(body,status,url){
       if(typeof body.detail==="string"&&body.detail.trim())return body.detail;
       if(Array.isArray(body.detail)&&body.detail.length){
@@ -229,7 +383,7 @@
     function queryString(values){const p=new URLSearchParams();Object.entries(values).forEach(([key,value])=>{if(value!==""&&value!==null&&value!==undefined)p.set(key,value)});return p.toString()}
     function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
     function today(){return new Date().toISOString().slice(0,10)}
-    function options(select,items,placeholder){select.innerHTML=`<option value="">${placeholder}</option>`+items.map(x=>`<option value="${x.id}">${x.label}</option>`).join("")}
+    function options(select,items,placeholder){select.innerHTML=`<option value="">${h(placeholder)}</option>`+items.map(x=>`<option value="${h(x.id)}">${h(x.label)}</option>`).join("")}
     function h(value){return String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char])}
     function showPageError(message){
       $("pageError").textContent=message;
@@ -266,22 +420,83 @@
     }
     function bind(){
       document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
+      document.querySelectorAll("[data-location-view]").forEach(btn=>btn.onclick=()=>switchLocationView(btn.dataset.locationView));
       $("refreshLots").onclick=loadLots;$("refreshMovements").onclick=loadMovements;
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};
       $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
+      $("refreshFloor3Locations").onclick=loadFloor3Locations;
+      $("floor3AreaFilter").onchange=event=>selectFloor3Area(event.target.value);
+      $("floor3CustomerFilter").onchange=loadFloor3Locations;
+      $('floor3OccupancyFilter').onchange=loadFloor3Locations;
+      $("floor3KeywordFilter").oninput=scheduleFloor3Search;
+      $("floor3KeywordFilter").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadFloor3Locations()}};
+      $("floor3ClearSearch").onclick=clearFloor3Search;
+      $("floor3AreaNavToggle").onclick=toggleFloor3AreaNavigator;
+      $("floor3AreaNavClose").onclick=toggleFloor3AreaNavigator;
+      $("floor3PlanZoomOut").onclick=()=>setFloor3PlanZoom(state.floor3.planZoom-20);
+      $("floor3PlanZoomIn").onclick=()=>setFloor3PlanZoom(state.floor3.planZoom+20);
+      $("floor3PlanReset").onclick=()=>setFloor3PlanZoom(100);
+      $("floor3DefaultView").onclick=resetFloor3View;
+      $("floor3MoveModeToggle").onclick=toggleFloor3MoveMode;
+      $("floor3FullscreenToggle").onclick=toggleFloor3Fullscreen;
+      $("floor3LegendToggle").onclick=toggleFloor3Legend;
+      const floor3Scroller=$("floor3PlanCanvas").closest(".floor3-plan-scroll");
+      floor3Scroller.addEventListener("wheel",floor3HandleWheel,{passive:false});
+      floor3Scroller.addEventListener("mousedown",floor3StartPan);
+      window.addEventListener("mousemove",floor3MovePan);
+      window.addEventListener("mouseup",floor3EndPan);
+      window.addEventListener("blur",floor3EndPan);
+      document.addEventListener("fullscreenchange",renderFloor3FullscreenState);
+      $("floor3PlanCanvas").onclick=event=>{if(event.target===$("floor3PlanCanvas")||event.target===$("floor3ScaleBase")){state.floor3.mapPopoverLocationId=null;renderFloor3Plan()}};
+      window.addEventListener("resize",()=>{if(state.tab==="locations"&&state.locationView==="floor3")setFloor3PlanZoom(state.floor3.planZoom)});
+      $("floor3ClearArea").onclick=clearFloor3Area;
+      $("floor3LayoutEditToggle").onclick=toggleFloor3LayoutEdit;
+      $("floor3AreaLayoutEditToggle").onclick=toggleFloor3LayoutEdit;
+      $("addFloor3BindRow").onclick=()=>{if(!canOperate())return;addFloor3BindRow()};
+      $("floor3BindForm").onsubmit=saveFloor3Pallet;
+      $("floor3AddSearch").onclick=searchFloor3AddCandidates;
+      $("floor3AddSave").onclick=saveFloor3AdditionalItem;
       $("openInForm").onclick=()=>{(state.tab==="finished"?$("finishedForm"):$("semiForm")).classList.toggle("hidden")};
-      $("fgCustomer").onchange=loadProducts;$("siLayer").onchange=updateFlutes;updateFlutes();
+      $("fgCustomer").onchange=resetFinishedProductSearch;
+      $("fgProductKeyword").oninput=scheduleFinishedProductSearch;
+      $("fgProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchFinishedProductCandidates()}};
+      $("siLayer").onchange=updateFlutes;updateFlutes();
       $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;$("moldForm").onsubmit=saveMold;
+      $("lotEditForm").onsubmit=saveLotEditor;$("lotEditClose").onclick=$("lotEditCancel").onclick=closeLotEditor;$("lotEditMask").onclick=event=>{if(event.target===$("lotEditMask"))closeLotEditor()};
+      $("lotEditOwnership").onchange=()=>updateLotEditOwnership();$("lotEditCustomer").onchange=resetLotEditProductSearch;$("lotEditProductKeyword").oninput=scheduleLotEditProductSearch;$("lotEditProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchLotEditProductCandidates()}};
+      document.addEventListener("keydown",event=>{if(event.key==="Escape"&&!$("lotEditMask").classList.contains("hidden"))closeLotEditor()});
     }
-    function switchTab(tab){
+    async function switchLocationView(view){
+      if(view==="ledger"&&!canManageLocations()){toast("只有管理员可以维护全部库位台账",true);view="floor3"}
+      state.locationView=view==="ledger"?"ledger":"floor3";
+      document.querySelectorAll("[data-location-view]").forEach(button=>button.classList.toggle("active",button.dataset.locationView===state.locationView));
+      const inLocationHub=state.tab==="locations",floor3Active=inLocationHub&&state.locationView==="floor3",ledgerActive=inLocationHub&&state.locationView==="ledger";
+      document.body.classList.toggle("floor3-mode",floor3Active);
+      if(!floor3Active){document.body.classList.remove("floor3-area-mode","floor3-workspace-mode");state.floor3.moveMode=false;state.floor3.layoutEdit=false;state.floor3.pendingMove=null;renderFloor3MoveConfirmation()}
+      $("floor3LocationSection").classList.toggle("hidden",!floor3Active);
+      $("locationSection").classList.toggle("hidden",!ledgerActive);
+      if(!inLocationHub)return;
+      if(floor3Active)await refreshFloor3LocationData();else await loadLocations(true);
+    }
+    async function switchTab(tab){
       state.tab=tab;document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x.dataset.tab===tab));
+      if(["finished","semi_finished"].includes(tab))$("openInForm").textContent=tab==="finished"?"入成品仓":"入半成品仓";
+      $("locationViewTabs").classList.toggle("hidden",tab!=="locations");
+      document.body.classList.remove("floor3-mode","floor3-area-mode","floor3-workspace-mode");
+      state.floor3.moveMode=false;state.floor3.pan.active=false;
       $("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab));
       $("insightSection").classList.toggle("hidden",tab!=="insights");
-      $("movementSection").classList.toggle("hidden",tab!=="movements");$("locationSection").classList.toggle("hidden",tab!=="locations");
+      $("movementSection").classList.toggle("hidden",tab!=="movements");$("locationSection").classList.add("hidden");
       $("moldSection").classList.toggle("hidden",tab!=="molds");
+      $("floor3LocationSection").classList.add("hidden");
       $("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
-      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else loadLocations(true);
+      if(tab==="locations"){
+        state.locationView="floor3";state.floor3.viewMode="overview";state.floor3.selectedAreaCode="";state.floor3.layoutEdit=false;state.floor3.mapPopoverLocationId=null;
+        $("floor3AreaFilter").value="";$("floor3CustomerFilter").value="";$("floor3KeywordFilter").value="";$("floor3OccupancyFilter").value="";closeFloor3Detail();
+        await switchLocationView("floor3");return
+      }
+      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();
     }
     async function loadInsights(){
       try{state.insights=await api("/api/warehouse/insights");renderInsights()}catch(err){toast(`库存经营看板加载失败：${err.message}`,true)}
@@ -314,22 +529,104 @@
       const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;
       const active=data.items.filter(x=>x.is_active), all=active.map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`}));
       options($("locationFilter"),all,"全部库位");
-      options($("fgLocation"),active.filter(x=>["finished","shared"].includes(x.warehouse_type)).map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`})),"请选择");
+      const finishedLocations=active.filter(x=>["finished","shared"].includes(x.warehouse_type)).sort((a,b)=>(b.source_version==="V11")-(a.source_version==="V11")||String(a.location_code).localeCompare(String(b.location_code))).map(x=>({id:x.id,label:`${x.source_version==="V11"?`三楼 ${x.area_code||""}`:"其他库位"}｜${x.location_code} ${x.location_name}`}));
+      options($("fgLocation"),finishedLocations,"请选择三楼货位");options($("lotEditLocation"),finishedLocations,"请选择三楼货位");
       options($("siLocation"),active.filter(x=>["semi_finished","shared"].includes(x.warehouse_type)).map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`})),"请选择");
       if(includeInactive)renderLocations();
     }
     async function loadCustomers(){
       const data=await api("/api/warehouse/references/customers");state.customers=data.items;
-      const rows=data.items.map(x=>({id:x.id,label:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");
+      const rows=data.items.map(x=>({id:x.id,label:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");
     }
-    async function loadProducts(){
-      if(!$("fgCustomer").value){options($("fgProduct"),[],"先选客户");return}
-      const data=await api(`/api/warehouse/references/products?customer_id=${$("fgCustomer").value}`);
-      options($("fgProduct"),data.items.map(x=>({id:x.id,label:`${x.product_code} · ${x.product_name}${x.specification?" · "+x.specification:""}`})),"请选择产品");
+    function clearFinishedProductSelection(message="尚未选择（必须点击下方候选）"){
+      $("fgProduct").value="";$("fgProductSelected").textContent=message;
+    }
+    function resetFinishedProductSearch(){
+      clearTimeout(state.finishedProductSearchTimer);state.finishedProductSearchRequestId+=1;state.finishedProductCandidates=[];$("fgProductKeyword").value="";clearFinishedProductSelection();
+      $("fgProductCandidates").innerHTML=`<span class="muted">${$("fgCustomer").value?"请输入存货编码或产品名称":"请先选择客户，再输入存货编码或产品名称"}</span>`;
+      if($("fgCustomer").value)$("fgProductKeyword").focus();
+    }
+    function renderFinishedProductCandidates(){
+      const selectedId=Number($("fgProduct").value),rows=state.finishedProductCandidates||[];
+      if(!rows.length){$("fgProductCandidates").innerHTML='<span class="muted">没有找到匹配产品，请继续完善关键词</span>';return}
+      const buttons=rows.map((item,index)=>{const productId=Number(item.product_id??item.id),code=item.product_code||item.customer_material_code||item.inventory_code||productId,name=item.product_name||item.name||"未命名产品",spec=item.specification||"";return `<button class="floor3-candidate ${selectedId===productId?"selected":""}" type="button" onclick="selectFinishedProductCandidate(${index})"><b>${h(code)}</b> · ${h(name)}${spec?` · ${h(spec)}`:""} · 点击选择</button>`}).join("");
+      $("fgProductCandidates").innerHTML=buttons+(rows.length>=30?'<span class="muted">候选较多，请继续输入以缩小范围</span>':"");
+    }
+    function selectFinishedProductCandidate(index){
+      const item=state.finishedProductCandidates[index];if(!item)return;const productId=Number(item.product_id??item.id),code=item.product_code||item.customer_material_code||item.inventory_code||productId,name=item.product_name||item.name||"未命名产品",spec=item.specification||"";
+      $("fgProduct").value=productId;$("fgProductSelected").textContent=`已选择：${code} · ${name}${spec?" · "+spec:""}`;renderFinishedProductCandidates();$("fgQuantity").focus();
+    }
+    function scheduleFinishedProductSearch(){
+      clearTimeout(state.finishedProductSearchTimer);state.finishedProductSearchRequestId+=1;state.finishedProductCandidates=[];clearFinishedProductSelection();
+      const keyword=$("fgProductKeyword").value.trim();
+      if(!$("fgCustomer").value){$("fgProductCandidates").innerHTML='<span class="muted">请先选择客户</span>';return}
+      if(!keyword){$("fgProductCandidates").innerHTML='<span class="muted">请输入存货编码或产品名称</span>';return}
+      $("fgProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';
+      state.finishedProductSearchTimer=setTimeout(searchFinishedProductCandidates,260);
+    }
+    async function searchFinishedProductCandidates(){
+      clearTimeout(state.finishedProductSearchTimer);const customerId=Number($("fgCustomer").value),keyword=$("fgProductKeyword").value.trim(),requestId=++state.finishedProductSearchRequestId;state.finishedProductCandidates=[];clearFinishedProductSelection();
+      if(!customerId){$("fgProductCandidates").innerHTML='<span class="muted">请先选择客户</span>';return}
+      if(!keyword){$("fgProductCandidates").innerHTML='<span class="muted">请输入存货编码或产品名称</span>';return}
+      $("fgProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';
+      try{const query=queryString({customer_id:customerId,q:keyword,limit:30}),data=await api(`/api/warehouse/floor3/product-candidates?${query}`);if(requestId!==state.finishedProductSearchRequestId)return;state.finishedProductCandidates=data.items||data.candidates||[];renderFinishedProductCandidates()}catch(error){if(requestId!==state.finishedProductSearchRequestId)return;$("fgProductCandidates").innerHTML='<span class="muted">候选加载失败，请重试</span>';toast(`产品候选加载失败：${error.message}`,true)}
+    }
+    function lotEditProductLabel(item){
+      const code=item.product_code||item.customer_material_code||item.inventory_code||item.id,name=item.product_name||item.name||"未命名产品",spec=item.specification||"";return `${code} · ${name}${spec?" · "+spec:""}`;
+    }
+    function clearLotEditProductSelection(message="尚未选择产品"){
+      state.lotEdit.selectedProduct=null;$("lotEditProduct").value="";$("lotEditProductSelected").textContent=message;$("lotEditProductSelected").classList.add("muted");
+    }
+    function renderLotEditProductCandidates(){
+      const rows=state.lotEdit.candidates||[],selectedId=Number($("lotEditProduct").value);
+      if(!rows.length){$("lotEditProductCandidates").innerHTML='<span class="muted">没有找到匹配产品，请继续完善关键词</span>';return}
+      $("lotEditProductCandidates").innerHTML=rows.map((item,index)=>{const productId=Number(item.product_id??item.id);return `<button class="floor3-candidate ${selectedId===productId?"selected":""}" type="button" onclick="selectLotEditProductCandidate(${index})">${h(lotEditProductLabel(item))} · 点击选择</button>`}).join("")+(rows.length>=30?'<span class="muted">候选较多，请继续输入以缩小范围</span>':"");
+    }
+    function selectLotEditProductCandidate(index){
+      const item=state.lotEdit.candidates[index];if(!item)return;state.lotEdit.selectedProduct=item;$("lotEditProduct").value=Number(item.product_id??item.id);$("lotEditProductSelected").textContent=`已选择：${lotEditProductLabel(item)}`;$("lotEditProductSelected").classList.remove("muted");renderLotEditProductCandidates();
+    }
+    function resetLotEditProductSearch(){
+      clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.candidates=[];$("lotEditProductKeyword").value="";clearLotEditProductSelection();
+      $("lotEditProductCandidates").innerHTML=`<span class="muted">${$("lotEditCustomer").value?"输入存货编码或产品名称":"请先选择客户"}</span>`;
+    }
+    function updateLotEditOwnership(preserveSelection=false){
+      clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.candidates=[];
+      const customerOwned=$("lotEditOwnership").value==="customer";$("lotEditCustomer").disabled=!customerOwned;$("lotEditProductKeyword").disabled=!customerOwned;
+      if(!customerOwned){$("lotEditCustomer").value="";$("lotEditProductKeyword").value="";$("lotEditProductCandidates").innerHTML='<span class="muted">保持通用库存时沿用当前产品；选择客户专用后可重新匹配存货编码</span>';return}
+      if(!preserveSelection)resetLotEditProductSearch();else $("lotEditProductCandidates").innerHTML='<span class="muted">如需修改存货编码，请输入关键词并点击候选</span>';
+    }
+    function scheduleLotEditProductSearch(){
+      clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.candidates=[];clearLotEditProductSelection();
+      if($("lotEditOwnership").value!=="customer"){$("lotEditProductCandidates").innerHTML='<span class="muted">通用库存无需重新匹配客户产品</span>';return}
+      if(!$("lotEditCustomer").value){$("lotEditProductCandidates").innerHTML='<span class="muted">请先选择客户</span>';return}
+      if(!$("lotEditProductKeyword").value.trim()){$("lotEditProductCandidates").innerHTML='<span class="muted">请输入存货编码或产品名称</span>';return}
+      $("lotEditProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';state.lotEdit.searchTimer=setTimeout(searchLotEditProductCandidates,260);
+    }
+    async function searchLotEditProductCandidates(){
+      clearTimeout(state.lotEdit.searchTimer);const customerId=Number($("lotEditCustomer").value),keyword=$("lotEditProductKeyword").value.trim(),requestId=++state.lotEdit.requestId;state.lotEdit.candidates=[];clearLotEditProductSelection();
+      if(!customerId||!keyword){$("lotEditProductCandidates").innerHTML=`<span class="muted">${customerId?"请输入存货编码或产品名称":"请先选择客户"}</span>`;return}
+      $("lotEditProductCandidates").innerHTML='<span class="muted">正在匹配候选…</span>';
+      try{const data=await api(`/api/warehouse/floor3/product-candidates?${queryString({customer_id:customerId,q:keyword,limit:30})}`);if(requestId!==state.lotEdit.requestId)return;state.lotEdit.candidates=data.items||data.candidates||[];renderLotEditProductCandidates()}catch(error){if(requestId!==state.lotEdit.requestId)return;$("lotEditProductCandidates").innerHTML='<span class="muted">候选加载失败，请重试</span>';toast(`产品候选加载失败：${error.message}`,true)}
+    }
+    function openLotEditor(lotId){
+      const row=state.lots.find(item=>Number(item.id)===Number(lotId));if(!row||row.inventory_type!=="finished"){toast("未找到可编辑的成品库存批次",true);return}
+      const detail=row.detail||{},currentProduct={id:detail.product_id,product_id:detail.product_id,product_code:detail.inventory_code,product_name:detail.product_name,customer_id:detail.owner_customer_id},sessionId=state.lotEdit.sessionId+1;state.lotEdit={lotId:row.id,version:row.version,candidates:[],selectedProduct:currentProduct,searchTimer:null,requestId:state.lotEdit.requestId+1,sessionId,saving:false};
+      $("lotEditTitle").textContent=`编辑 ${row.lot_number}`;$("lotEditOwnership").value=detail.is_general?"general":"customer";$("lotEditCustomer").value=detail.owner_customer_id||"";$("lotEditProduct").value=detail.product_id||"";$("lotEditProductKeyword").value="";$("lotEditProductSelected").textContent=`当前：${detail.inventory_code||"-"} · ${detail.product_name||"-"}`;$("lotEditProductSelected").classList.remove("muted");$("lotEditQuantity").value=row.quantity_available;$("lotEditLocation").value=row.location?.id||"";$("lotEditStockDate").value=String(row.stock_date||"").slice(0,10);updateLotEditOwnership(true);$("lotEditMask").classList.remove("hidden");
+      $("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";setTimeout(()=>$("lotEditOwnership").focus(),0);
+    }
+    function closeLotEditor(){clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.sessionId+=1;state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";$("lotEditMask").classList.add("hidden")}
+    async function saveLotEditor(event){
+      event.preventDefault();if(state.lotEdit.saving)return;
+      const isGeneral=$("lotEditOwnership").value==="general",customerId=Number($("lotEditCustomer").value)||null,productId=Number($("lotEditProduct").value),quantity=Number($("lotEditQuantity").value),locationId=Number($("lotEditLocation").value),stockDate=$("lotEditStockDate").value;
+      if(!isGeneral&&!customerId){toast("客户专用库存必须选择客户",true);return}if(!productId){toast("请选择与客户匹配的存货编码",true);return}if(!Number.isInteger(quantity)||quantity<0){toast("可用数量必须是大于或等于 0 的整数",true);return}if(!locationId){toast("请选择三楼具体货位",true);return}if(!stockDate){toast("请选择入库日期",true);return}
+      const lotId=state.lotEdit.lotId,sessionId=state.lotEdit.sessionId;state.lotEdit.saving=true;$("lotEditSave").disabled=true;$("lotEditSave").textContent="保存中…";
+      try{const saved=await api(`/api/warehouse/lots/${lotId}/edit-finished`,{method:"POST",body:JSON.stringify({expected_version:state.lotEdit.version,is_general:isGeneral,customer_id:isGeneral?null:customerId,product_id:productId,quantity_available:quantity,location_id:locationId,stock_date:stockDate,idempotency_key:createIdempotencyKey()})});if(state.lotEdit.sessionId===sessionId&&state.lotEdit.lotId===lotId)closeLotEditor();toast(`已更新批次 ${saved.lot_number||""}`);await loadLots();await loadFloor3Locations()}catch(error){if(state.lotEdit.sessionId===sessionId)toast(error.message,true)}finally{if(state.lotEdit.sessionId===sessionId){state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改"}}
     }
     function updateFlutes(){$("siFlute").innerHTML=($("siLayer").value==="3"?["A","B","E"]:["AB","BE"]).map(x=>`<option>${x}</option>`).join("")}
     async function saveFinished(e){
-      e.preventDefault();try{await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:+$("fgCustomer").value,product_id:+$("fgProduct").value,location_id:+$("fgLocation").value,quantity:+$("fgQuantity").value,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:createIdempotencyKey()})});toast("成品入库成功");e.target.reset();$("fgDate").value=today();await loadLots()}catch(err){toast(err.message,true)}
+      e.preventDefault();const customerId=Number($("fgCustomer").value),productId=Number($("fgProduct").value),locationId=Number($("fgLocation").value),quantity=Number($("fgQuantity").value);
+      if(!customerId){toast("请先选择客户",true);return}if(!productId){toast("请先输入存货编码或产品名称，并点击选择匹配候选",true);return}if(!Number.isFinite(quantity)||quantity<=0){toast("实际成品数量必须大于 0",true);return}if(!locationId){toast("请选择三楼具体货位",true);return}
+      try{const saved=await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:customerId,product_id:productId,location_id:locationId,quantity,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:createIdempotencyKey()})}),location=saved.location?.location_code||"所选货位";toast(`已入成品仓并绑定 ${location}`);e.target.reset();$("fgDate").value=today();resetFinishedProductSearch();await loadLots();await loadFloor3Locations()}catch(err){toast(err.message,true)}
     }
     async function saveSemi(e){
       e.preventDefault();try{await api("/api/warehouse/semi-finished/manual-in",{method:"POST",body:JSON.stringify({location_id:+$("siLocation").value,quantity:+$("siQuantity").value,stock_date:$("siDate").value,source_type:$("siSource").value,material_code:$("siMaterial").value,layer_count:+$("siLayer").value,flute_type:$("siFlute").value,board_length_mm:+$("siLength").value,board_width_mm:+$("siWidth").value,sheet_type:$("siSheetType").value,supplier_name:$("siSupplier").value||null,customer_id:$("siCustomer").value?+$("siCustomer").value:null,cutting_note:$("siCuttingNote").value||null,remarks:$("siRemarks").value||null,idempotency_key:createIdempotencyKey()})});toast("半成品入库成功");e.target.reset();$("siDate").value=today();updateFlutes();await loadLots()}catch(err){toast(err.message,true)}
@@ -338,15 +635,45 @@
       const p=queryString({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
       const data=await api("/api/warehouse/lots?"+p);state.lots=data.items||[];renderLots();
     }
+    function applyFinishedLotColumnWidths(widths){
+      const headers=[...$("lotTable").querySelectorAll("thead th")];if(headers.length!==FINISHED_LOT_DEFAULT_WIDTHS.length)return;
+      const safe=Array.isArray(widths)&&widths.length===headers.length&&widths.every(value=>Number.isFinite(Number(value))&&Number(value)>0)?widths:FINISHED_LOT_DEFAULT_WIDTHS;
+      headers.forEach((header,index)=>header.style.width=`${Number(safe[index])}%`);
+    }
+    function savedFinishedLotColumnWidths(){
+      try{return JSON.parse(localStorage.getItem(FINISHED_LOT_COLUMN_WIDTHS_KEY)||"null")}catch(_error){return null}
+    }
+    function saveFinishedLotColumnWidths(){
+      const table=$("lotTable"),headers=[...table.querySelectorAll("thead th")],tableWidth=table.getBoundingClientRect().width;if(!tableWidth||!headers.length)return;
+      localStorage.setItem(FINISHED_LOT_COLUMN_WIDTHS_KEY,JSON.stringify(headers.map(header=>Number((header.getBoundingClientRect().width/tableWidth*100).toFixed(3)))));
+    }
+    function resetFinishedLotColumnWidths(){localStorage.removeItem(FINISHED_LOT_COLUMN_WIDTHS_KEY);applyFinishedLotColumnWidths(FINISHED_LOT_DEFAULT_WIDTHS)}
+    function installFinishedLotColumnResizers(){
+      const table=$("lotTable"),headers=[...table.querySelectorAll("thead th")];if(!table.classList.contains("finished-lot-table")||headers.length<2)return;
+      applyFinishedLotColumnWidths(savedFinishedLotColumnWidths());
+      headers.slice(0,-1).forEach((header,index)=>{
+        const handle=document.createElement("span");handle.className="lot-column-resizer";handle.title="拖动调整相邻列宽；双击恢复默认列宽";handle.setAttribute("aria-label",`调整${header.textContent.trim()}列宽`);header.appendChild(handle);
+        handle.ondblclick=event=>{event.preventDefault();event.stopPropagation();resetFinishedLotColumnWidths()};
+        handle.onpointerdown=event=>{
+          event.preventDefault();const nextHeader=headers[index+1],tableWidth=table.getBoundingClientRect().width,startX=event.clientX,startLeft=header.getBoundingClientRect().width,startRight=nextHeader.getBoundingClientRect().width,pairWidth=startLeft+startRight,minWidth=48;handle.classList.add("active");
+          const move=moveEvent=>{const leftWidth=Math.max(minWidth,Math.min(pairWidth-minWidth,startLeft+moveEvent.clientX-startX));header.style.width=`${leftWidth/tableWidth*100}%`;nextHeader.style.width=`${(pairWidth-leftWidth)/tableWidth*100}%`};
+          const finish=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",finish);window.removeEventListener("pointercancel",finish);handle.classList.remove("active");saveFinishedLotColumnWidths()};
+          window.addEventListener("pointermove",move);window.addEventListener("pointerup",finish);window.addEventListener("pointercancel",finish);
+        };
+      });
+    }
     function renderLots(){
       const finished=state.tab==="finished";
+      $("lotTable").classList.toggle("finished-lot-table",finished);$("lotTable").closest(".table-wrap").classList.toggle("finished-lot-wrap",finished);
       $("lotHead").innerHTML=finished?`<tr><th>批次/状态</th><th>客户</th><th>存货编码/产品</th><th>规格</th><th>材质/楞型</th><th>库位</th><th>可用</th><th>已预占</th><th>已消耗</th><th>库龄</th><th>操作</th></tr>`:`<tr><th>批次/状态</th><th>供应商/客户</th><th>材质/楞型</th><th>实际尺寸</th><th>片料类型/说明</th><th>库位</th><th>可用</th><th>库龄</th><th>操作</th></tr>`;
+      if(finished)installFinishedLotColumnResizers();
       $("lotBody").innerHTML=state.lots.map(row=>{
         const d=row.detail,w=row.age_warning_level?`<span class="tag ${row.age_warning_level==="cleanup"?"red":"warn"}" title="${row.age_warning_text}">${row.age_days}天</span>`:`${row.age_days}天`;
-        const common=`<td><b>${row.lot_number}</b><br><span class="tag">${labels[row.status]||row.status}</span></td>`;
-        const detail=finished?`<td>${d.is_general?"通用库存":(d.owner_customer_name||"-")}</td><td>${d.inventory_code||"-"}<br>${d.product_name||"-"}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td>${d.material_code||"-"} / ${d.flute_type||"-"}</td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
+        const common=`<td><span class="lot-batch" title="${h(row.lot_number)}"><b>${h(row.lot_number)}</b></span><span class="tag lot-status">${h(labels[row.status]||row.status)}</span></td>`;
+        const detail=finished?`<td><span class="lot-customer" title="${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}">${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}</span></td><td>${h(d.inventory_code||"-")}<br>${h(d.product_name||"-")}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td><span class="lot-material">${h(d.material_code||"-")}</span><span class="lot-flute">${h(d.flute_type||"-")}</span></td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
         const balances=finished?`<td><b>${row.quantity_available}</b> 个</td><td><button class="btn" onclick="showLotReservations(${row.id},'${row.lot_number}')">${row.quantity_reserved} 个</button></td><td>${row.quantity_consumed} 个</td>`:`<td><b>${row.quantity_available}</b> ${labels[row.unit]}</td>`;
-        return `<tr>${common}${detail}<td>${row.location.location_code}</td>${balances}<td>${w}</td><td class="actions">${actionButtons(row)}</td></tr>`}).join("");
+        const locationText=`${row.location.location_code}${row.floor3_binding?`<br><span class="tag blue">三楼已绑定</span><br><span class="muted">${h(row.floor3_binding.pallet_code)}</span>`:""}`;
+        return `<tr>${common}${detail}<td>${locationText}</td>${balances}<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td></tr>`}).join("");
       $("lotEmpty").classList.toggle("hidden",state.lots.length>0);
       const available=state.lots.reduce((n,x)=>n+x.quantity_available,0),frozen=state.lots.filter(x=>x.status==="frozen").length;
       $("lotSummary").innerHTML=`<span>批次 <strong>${state.lots.length}</strong></span><span>当前可用 <strong>${available}</strong> ${finished?"个":"张/片"}</span><span>冻结批次 <strong>${frozen}</strong></span>`;
@@ -361,11 +688,17 @@
     }
     function actionButtons(row){
       if(!canOperate())return "";
+      if(row.inventory_type==="finished"){
+        if(state.user.role!=="admin"||row.status!=="active")return "";
+        const edit=`<button class="btn primary" onclick="openLotEditor(${row.id})">编辑</button>`;
+        const general=!row.detail.is_general?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
+        return edit+general;
+      }
+      const adjust=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button>`:"";
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
-      const normal=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button><button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
-      const general=state.user.role==="admin"&&row.inventory_type==="finished"&&!row.detail.is_general&&row.status==="active"?`<button class="btn" onclick="operate(${row.id},'transfer-to-general',${row.version})">转通用</button>`:"";
+      const normal=row.status==="active"?`${adjust}<button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
       const assignment=state.user.role==="admin"&&row.inventory_type==="semi_finished"?`<button class="btn primary" onclick="openProductAssignments(${row.id})">分配成品款号</button>`:"";
-      return assignment+freeze+normal+general;
+      return assignment+freeze+normal;
     }
     async function openProductAssignments(lotId){
       try{
@@ -451,6 +784,636 @@
       try{await api(`/api/warehouse/locations${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("库位保存成功");e.target.reset();$("locationId").value="";await loadLocations(true)}catch(err){toast(err.message,true)}
     }
     async function toggleLocation(id,active){try{await api(`/api/warehouse/locations/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadLocations(true)}catch(err){toast(err.message,true)}}
+
+    // 三楼货位：固定货位、移动栈板和现场临时绑定均在本页完成，接口仍复用统一 api/toast/权限门禁。
+    const FLOOR3_AREA_OPTIONS=[
+      ["A1","A1 区"],["A2","A2 区"],["AB1","AB1 区"],["AB2","AB2 区"],["B1","B1 区"],["B2","B2 区"],
+      ["C1","C1 区"],["C2","C2 区"],["CD1","CD1 区"],["D1","D1 区"],["D2","D2 区"],["DE1","DE1 区"],
+      ["E1","E1 区"],["E2","E2 区"],["E3","E3 区"],["E4","E4 区"],["F1","F1 区"],["F2","F2 区"],
+      ["F3","F3 区"],["F4","F4 区"],["F12","F12 过道临放"],["F34","F34 过道临放"]
+    ];
+    // 三楼实尺模型：单位为米。页面坐标全部由这组实尺换算，不再依赖 PNG 像素热区。
+    const FLOOR3_WORLD={x:-1.15,y:-1.15,w:37,h:47.4};
+    const FLOOR3_OVERVIEW_WORLD={x:-1.15,y:-1.15,w:27.15,h:47.4};
+    const FLOOR3_F_AREA_CODES=["F1","F2","F3","F4","F12","F34"];
+    const FLOOR3_DISPLAY_ROTATED=true;
+    const FLOOR3_MAIN_AISLE={x:-.1,y:22.7,w:34.7,h:1.9};
+    const FLOOR3_ZONES=[
+      {id:"A2",x:0,y:8.7,w:3.1,h:14,kind:"floor",group:"a",allowPallets:true},{id:"B2",x:4.6,y:8.7,w:3,h:14,kind:"floor",group:"b",allowPallets:true},{id:"C2",x:9.1,y:8.7,w:3.5,h:14,kind:"floor",group:"c",allowPallets:true},{id:"D2",x:14.1,y:8.7,w:2.6,h:14,kind:"floor",group:"d",allowPallets:true},{id:"E2",x:18.2,y:8.7,w:5,h:14,kind:"floor",group:"e",allowPallets:true},
+      {id:"A1",x:0,y:24.6,w:3.1,h:7.43,kind:"floor",group:"a",allowPallets:true},{id:"B1",x:4.6,y:24.6,w:3,h:10.8,kind:"floor",group:"b",allowPallets:true},{id:"C1",x:9.1,y:24.6,w:3.5,h:13.7,kind:"floor",group:"c",allowPallets:true},{id:"D1",x:14.1,y:24.6,w:2.55,h:15,kind:"rack-floor",group:"d",allowPallets:true},{id:"E1",x:18.15,y:24.6,w:5,h:12,kind:"floor",group:"e",allowPallets:true},
+      {id:"AB2",x:4.8,y:0,w:2.6,h:1.6,kind:"floor",group:"ab",allowPallets:true},{id:"AB1",x:4.8,y:3.1,w:2.6,h:4.1,kind:"floor",group:"ab",allowPallets:true},{id:"E4",x:18.05,y:.5,w:5.3,h:1.2,kind:"rack-floor",group:"e",allowPallets:true},{id:"E3",x:19.3,y:3.2,w:2.8,h:4,kind:"floor",group:"e",allowPallets:true},
+      {id:"CD1",x:9.1,y:41.1,w:6.6,h:4,kind:"floor",group:"cd",allowPallets:true},{id:"DE1",x:18.15,y:38.1,w:6.3,h:1.2,kind:"floor",group:"de",allowPallets:true},
+      {id:"F1",x:24.7,y:16.2,w:1.8,h:6.5,kind:"rack-floor",group:"f",allowPallets:true},{id:"F12",x:26.5,y:16.2,w:2.9,h:6.5,kind:"temp",group:"f",allowPallets:true,temporary:true},{id:"F2",x:29.4,y:16.2,w:1.2,h:6.5,kind:"rack-only",group:"f",allowPallets:false},{id:"F3",x:30.6,y:16.2,w:1.2,h:6.5,kind:"rack-only",group:"f",allowPallets:false},{id:"F34",x:31.8,y:15.9,w:1.5,h:6.8,kind:"temp",group:"f",allowPallets:true,temporary:true},{id:"F4",x:33.3,y:16.2,w:1.2,h:6.5,kind:"rack-only",group:"f",allowPallets:false}
+    ];
+    const FLOOR3_RACK_DEFS=[
+      {id:"D1-RACK",zoneId:"D1",cellCapacity:8,side:"left"},{id:"E4-RACK",zoneId:"E4",cellCapacity:4,full:true},{id:"F1-RACK",zoneId:"F1",cellCapacity:12,full:true},{id:"F2-RACK",zoneId:"F2",cellCapacity:30,full:true},{id:"F3-RACK",zoneId:"F3",cellCapacity:30,full:true},{id:"F4-RACK",zoneId:"F4",cellCapacity:30,full:true}
+    ];
+    const FLOOR3_SCALE_CONFIG={palletW:1.2,palletH:1,gap:.05,margin:.05};
+    function floor3WorldPctX(value){return ((value-FLOOR3_OVERVIEW_WORLD.x)/FLOOR3_OVERVIEW_WORLD.w)*100}
+    function floor3WorldPctY(value){return ((value-FLOOR3_OVERVIEW_WORLD.y)/FLOOR3_OVERVIEW_WORLD.h)*100}
+    function floor3WorldRect(rect){
+      if(!FLOOR3_DISPLAY_ROTATED)return {left:floor3WorldPctX(rect.x),top:floor3WorldPctY(rect.y),width:(rect.w/FLOOR3_OVERVIEW_WORLD.w)*100,height:(rect.h/FLOOR3_OVERVIEW_WORLD.h)*100};
+      return {left:floor3WorldPctY(rect.y),top:100-floor3WorldPctX(rect.x+rect.w),width:(rect.h/FLOOR3_OVERVIEW_WORLD.h)*100,height:(rect.w/FLOOR3_OVERVIEW_WORLD.w)*100};
+    }
+    function floor3RotateLocalLayout(layout){return {...layout,left_pct:layout.top_pct,top_pct:100-layout.left_pct-layout.width_pct,width_pct:layout.height_pct,height_pct:layout.width_pct}}
+    function floor3UnrotateLocalLayout(layout){return {...layout,left_pct:100-layout.top_pct-layout.height_pct,top_pct:layout.left_pct,width_pct:layout.height_pct,height_pct:layout.width_pct}}
+    const FLOOR3_PLAN_HOTSPOTS=FLOOR3_ZONES.filter(zone=>!FLOOR3_F_AREA_CODES.includes(zone.id)).map(zone=>{const rect=floor3WorldRect(zone);return [zone.id,rect.left,rect.top,rect.width,rect.height]});
+    const FLOOR3_F_GROUP_HOTSPOT=["F",50.4,1.8];
+    const FLOOR3_ITEM_TYPES=[['finished','成品'],['semi_finished','半成品'],['raw_material','原材料']];
+    function floor3InitAreaFilter(){
+      if($("floor3AreaFilter").options.length)return;
+      $("floor3AreaFilter").innerHTML='<option value="">全部区域（F区合并显示）</option><option value="F">F 区总览</option>'+FLOOR3_AREA_OPTIONS.map(x=>`<option value="${h(x[0])}">${h(x[1])}</option>`).join("");
+    }
+    function scheduleFloor3Search(){
+      clearTimeout(state.floor3.searchTimer);state.floor3.searchTimer=setTimeout(()=>loadFloor3Locations(),260);
+    }
+    async function clearFloor3Search(){
+      clearTimeout(state.floor3.searchTimer);$("floor3KeywordFilter").value="";$("floor3CustomerFilter").value="";state.floor3.searchFocusLocationId=null;state.floor3.mapPopoverLocationId=null;await loadFloor3Locations();
+    }
+    async function resetFloor3View(){
+      clearTimeout(state.floor3.searchTimer);state.floor3.viewMode="overview";state.floor3.selectedAreaCode="";state.floor3.mapPopoverLocationId=null;state.floor3.searchFocusLocationId=null;state.floor3.pendingMove=null;state.floor3.moveMode=false;state.floor3.layoutEdit=false;state.floor3.pan.active=false;
+      $("floor3AreaFilter").value="";$("floor3CustomerFilter").value="";$("floor3KeywordFilter").value="";$("floor3OccupancyFilter").value="";closeFloor3Detail();setFloor3PlanZoom(100);await loadFloor3Locations();
+    }
+    function toggleFloor3AreaNavigator(){
+      state.floor3.areaNavCollapsed=!state.floor3.areaNavCollapsed;
+      const stage=$("floor3OverviewStage"),button=$("floor3AreaNavToggle");stage.classList.toggle("area-nav-collapsed",state.floor3.areaNavCollapsed);button.textContent=state.floor3.areaNavCollapsed?"展开区域":"收起区域";button.setAttribute("aria-expanded",String(!state.floor3.areaNavCollapsed));
+      setFloor3PlanZoom(state.floor3.planZoom);
+    }
+    function toggleFloor3Legend(){
+      state.floor3.legendVisible=!state.floor3.legendVisible;$("floor3LegendPanel").classList.toggle("hidden",!state.floor3.legendVisible);$("floor3LegendToggle").classList.toggle("primary",state.floor3.legendVisible);
+    }
+    async function toggleFloor3Fullscreen(){
+      try{if(document.fullscreenElement)await document.exitFullscreen();else await $("floor3LocationSection").requestFullscreen()}catch(error){toast(`全屏切换失败：${error.message}`,true)}
+    }
+    function renderFloor3FullscreenState(){
+      const active=document.fullscreenElement===$("floor3LocationSection");$("floor3FullscreenToggle").textContent=active?"退出全屏":"全屏";setFloor3PlanZoom(state.floor3.planZoom);
+    }
+    async function toggleFloor3MoveMode(){
+      if(!canOperate()){toast("当前账号没有库位调整权限",true);return}
+      state.floor3.moveMode=!state.floor3.moveMode;if(state.floor3.moveMode){state.floor3.layoutEdit=false;try{await loadFloor3MoveLocations()}catch(error){state.floor3.moveMode=false;toast(`库位候选加载失败：${error.message}`,true)}}state.floor3.pendingMove=null;renderFloor3MoveConfirmation();renderFloor3Locations();if(state.floor3.detail)renderFloor3Detail();
+    }
+    function renderFloor3ModeState(){
+      const badge=$("floor3ModeBadge"),button=$("floor3MoveModeToggle"),notice=$("floor3EditNotice");if(!badge||!button||!notice)return;
+      badge.textContent=state.floor3.moveMode?"库位调整模式":(state.floor3.layoutEdit?"布局编辑模式":"浏览模式");badge.classList.toggle("warn",state.floor3.moveMode||state.floor3.layoutEdit);button.textContent=state.floor3.moveMode?"退出库位调整":"库位调整";button.classList.toggle("primary",state.floor3.moveMode);notice.classList.toggle("hidden",!state.floor3.moveMode);
+    }
+    function floor3HandleWheel(event){
+      if(state.floor3.viewMode!=="overview")return;event.preventDefault();const direction=event.deltaY<0?10:-10;setFloor3PlanZoom(state.floor3.planZoom+direction,{clientX:event.clientX,clientY:event.clientY});
+    }
+    function floor3StartPan(event){
+      if(event.button!==0||state.floor3.planZoom<=100||event.target.closest("button,input,select"))return;const scroller=event.currentTarget;state.floor3.pan={active:true,startX:event.clientX,startY:event.clientY,scrollLeft:scroller.scrollLeft,scrollTop:scroller.scrollTop};scroller.classList.add("is-panning");event.preventDefault();
+    }
+    function floor3MovePan(event){
+      if(!state.floor3.pan.active)return;const scroller=$("floor3PlanCanvas").closest(".floor3-plan-scroll");scroller.scrollLeft=state.floor3.pan.scrollLeft-(event.clientX-state.floor3.pan.startX);scroller.scrollTop=state.floor3.pan.scrollTop-(event.clientY-state.floor3.pan.startY);
+    }
+    function floor3EndPan(){
+      if(!state.floor3.pan.active)return;state.floor3.pan.active=false;$("floor3PlanCanvas").closest(".floor3-plan-scroll").classList.remove("is-panning");
+    }
+    function floor3CustomerOptions(selected){
+      return '<option value="">请选择客户</option>'+state.customers.map(x=>`<option value="${x.id}" ${String(x.id)===String(selected||"")?"selected":""}>${h(x.name||x.customer_name||x.customer_code||x.id)}</option>`).join("");
+    }
+    function floor3CurrentPallet(row){return row?.current_pallet||row?.pallet||row?.currentPallet||null}
+    function floor3PalletRestricted(pallet){return Boolean(pallet?.access_restricted)}
+    function floor3Items(row){const pallet=floor3CurrentPallet(row);return floor3PalletRestricted(pallet)?[]:(row?.items||pallet?.items||[])}
+    function floor3ExpectedVersion(palletId){
+      const pallet=floor3CurrentPallet(state.floor3.detail),version=Number(pallet?.version);
+      if(!pallet||floor3PalletRestricted(pallet)||Number(pallet.id)!==Number(palletId)||!Number.isInteger(version)||version<=0)return null;
+      return version;
+    }
+    function floor3ExpectedPalletVersion(pallet){const version=Number(pallet?.version);return Number.isInteger(version)&&version>0?version:null}
+    function canManageLocations(){return state.user?.role==="admin"}
+    function floor3CanEditLayout(){return state.user?.role==="admin"}
+    function floor3LocationOccupied(row){
+      const pallet=floor3CurrentPallet(row);
+      return Boolean(pallet||row?.occupancy==="occupied"||row?.occupancy_status==="occupied"||row?.status==="occupied"||row?.is_occupied);
+    }
+    function floor3IsTemporary(row){
+      const code=String(row?.area_code||"").toUpperCase(),locationCode=String(row?.location_code||row?.code||"").toUpperCase();
+      return Boolean(row?.is_temporary||row?.is_temporary_area||code==="F12"||code==="F34"||locationCode.includes("F12")||locationCode.includes("F34"));
+    }
+    function floor3NeedsRelocation(row,pallet){
+      if(row?.needs_relocation||pallet?.needs_relocation||floor3IsTemporary(row))return true;
+      const expected=String(row?.warehouse_type||row?.location_type||"");
+      return floor3Items({items:pallet?.items||row?.items||[]}).some(item=>
+        (expected==="finished"&&item.item_type&&item.item_type!=="finished")||
+        (expected==="semi_finished"&&item.item_type==="finished")
+      );
+    }
+    function floor3AreaCode(row){return String(row?.area_code||"").trim().toUpperCase()}
+    function floor3AreaMatches(row,areaCode){const code=floor3AreaCode(row),target=String(areaCode||"").trim().toUpperCase();return target==="F"?FLOOR3_F_AREA_CODES.includes(code):code===target}
+    function floor3FGroupBounds(){
+      const zones=FLOOR3_ZONES.filter(zone=>FLOOR3_F_AREA_CODES.includes(zone.id));
+      const minX=Math.min(...zones.map(zone=>zone.x)),minY=Math.min(...zones.map(zone=>zone.y)),maxX=Math.max(...zones.map(zone=>zone.x+zone.w)),maxY=Math.max(...zones.map(zone=>zone.y+zone.h));
+      return {x:minX,y:minY,w:maxX-minX,h:maxY-minY};
+    }
+    function floor3StorageType(row){
+      const value=String(row?.storage_type||row?.location_storage_type||"").trim().toLowerCase();
+      if(value)return value;
+      return floor3IsTemporary(row)?"temporary_aisle":"ground";
+    }
+    function floor3IsRack(row){return floor3StorageType(row)==="rack"}
+    function floor3CanMovePallet(row){const pallet=floor3CurrentPallet(row);return Boolean(state.floor3.moveMode&&row&&row.is_active!==false&&!floor3IsRack(row)&&pallet&&!floor3PalletRestricted(pallet)&&canOperate())}
+    function floor3CanReceivePallet(row){return Boolean(row&&row.is_active!==false&&!floor3IsRack(row)&&!floor3LocationOccupied(row))}
+    function floor3Zone(areaCode){const normalized=String(areaCode||"").trim().toUpperCase();return FLOOR3_ZONES.find(zone=>zone.id===normalized)||null}
+    function floor3PackZone(zone){
+      if(!zone?.allowPallets)return {count:0,slots:[]};
+      const g=FLOOR3_SCALE_CONFIG.gap,m=FLOOR3_SCALE_CONFIG.margin,W=zone.w-2*m,H=zone.h-2*m;
+      if(W<=0||H<=0)return {count:0,slots:[]};
+      const types=[{key:"H",pw:FLOOR3_SCALE_CONFIG.palletW,ph:FLOOR3_SCALE_CONFIG.palletH},{key:"V",pw:FLOOR3_SCALE_CONFIG.palletH,ph:FLOOR3_SCALE_CONFIG.palletW}];
+      types.forEach(type=>type.across=Math.max(0,Math.floor((W+g+1e-9)/(type.pw+g))));
+      let best={count:0,nH:0,nV:0,totalH:0,score:-Infinity},maxRows=Math.ceil(H/Math.min(FLOOR3_SCALE_CONFIG.palletH,FLOOR3_SCALE_CONFIG.palletW))+2;
+      for(let nH=0;nH<=maxRows;nH++)for(let nV=0;nV<=maxRows;nV++){
+        const rows=nH+nV;if(!rows)continue;const totalH=nH*types[0].ph+nV*types[1].ph+(rows-1)*g;if(totalH>H+1e-9)continue;
+        const count=nH*types[0].across+nV*types[1].across,score=count*100000-(H-totalH)*100-Math.abs(nH-nV);if(score>best.score)best={count,nH,nV,totalH,score};
+      }
+      const sequence=[];let horizontal=best.nH,vertical=best.nV;while(horizontal>0||vertical>0){if(vertical>0){sequence.push(types[1]);vertical--}if(horizontal>0){sequence.push(types[0]);horizontal--}}
+      const slots=[];let y=zone.y+m+Math.max(0,(H-best.totalH)/2);for(const type of sequence){const rowW=type.across*type.pw+Math.max(0,type.across-1)*g;let x=zone.x+m+Math.max(0,(W-rowW)/2);for(let index=0;index<type.across;index++){slots.push({x,y,w:type.pw,h:type.ph});x+=type.pw+g}y+=type.ph+g}
+      return {count:slots.length,slots};
+    }
+    function floor3RackRect(definition){
+      const zone=floor3Zone(definition?.zoneId);if(!zone)return null;
+      if(definition.id==="D1-RACK")return {x:zone.x,y:zone.y,w:1.2,h:zone.h};
+      return {x:zone.x,y:zone.y,w:zone.w,h:zone.h};
+    }
+    function floor3TheoreticalCapacity(areaCode){
+      if(areaCode==="F")return FLOOR3_F_AREA_CODES.reduce((sum,code)=>sum+floor3TheoreticalCapacity(code),0);
+      if(areaCode==="D1")return 28;
+      if(areaCode==="E4")return 16;
+      if(areaCode==="DE1")return 5;
+      const zone=floor3Zone(areaCode),ground=floor3PackZone(zone).count,rack=FLOOR3_RACK_DEFS.filter(item=>item.zoneId===areaCode).reduce((sum,item)=>sum+item.cellCapacity,0);
+      return ground+rack;
+    }
+    function floor3RectStyle(rect){const scaled=floor3WorldRect(rect);return `left:${scaled.left}%;top:${scaled.top}%;width:${scaled.width}%;height:${scaled.height}%`}
+    function renderFloor3ScaleBase(){
+      const base=$("floor3ScaleBase");if(!base)return;
+      const aisle=`<div class="floor3-scale-aisle" style="${floor3RectStyle(FLOOR3_MAIN_AISLE)}">主通道 1.90m · 禁止堆货</div>`;
+      const overviewZones=FLOOR3_ZONES.filter(zone=>!FLOOR3_F_AREA_CODES.includes(zone.id));
+      const zones=overviewZones.map(zone=>`<div class="floor3-scale-zone group-${zone.group} ${zone.temporary?"temp":""} ${zone.kind==="rack-only"?"rack-only":""}" style="${floor3RectStyle(zone)}"></div>`).join("");
+      const structuredAreas=new Set(["D1","E4","DE1"]);
+      const theory=overviewZones.flatMap(zone=>structuredAreas.has(zone.id)?[]:floor3PackZone(zone).slots.map(slot=>`<div class="floor3-scale-slot ${zone.kind==="rack-floor"?"rack-bottom":""}" style="${floor3RectStyle(slot)}"></div>`)).join("");
+      const racks=FLOOR3_RACK_DEFS.filter(definition=>!FLOOR3_F_AREA_CODES.includes(definition.zoneId)&&!structuredAreas.has(definition.zoneId)).map(definition=>{const rect=floor3RackRect(definition);return rect?`<div class="floor3-scale-rack" style="${floor3RectStyle(rect)}" title="${definition.zoneId} 货架 · ${definition.cellCapacity} 个登记格"></div>`:""}).join("");
+      base.innerHTML=zones+theory+racks+aisle;
+    }
+    function floor3AreaBackdropHtml(areaCode){
+      const zone=floor3Zone(areaCode);if(!zone)return "";
+      const relative=rect=>{const source={left_pct:((rect.x-zone.x)/zone.w)*100,top_pct:((rect.y-zone.y)/zone.h)*100,width_pct:(rect.w/zone.w)*100,height_pct:(rect.h/zone.h)*100},display=FLOOR3_DISPLAY_ROTATED?floor3RotateLocalLayout(source):source;return `left:${display.left_pct}%;top:${display.top_pct}%;width:${display.width_pct}%;height:${display.height_pct}%`};
+      const slots=floor3PackZone(zone).slots.map(slot=>`<i class="floor3-area-theory-slot" style="${relative(slot)}"></i>`).join("");
+      const racks=FLOOR3_RACK_DEFS.filter(item=>item.zoneId===areaCode).map(item=>{const rect=floor3RackRect(item);return `<i class="floor3-scale-rack" style="${relative(rect)}"></i>`}).join("");
+      return `<div class="floor3-area-zone-backdrop ${zone.temporary?"temp":""}">${slots}${racks}<span class="floor3-area-zone-title">${h(areaCode)} 区</span></div>`;
+    }
+    function floor3IsSearching(){return Boolean($("floor3KeywordFilter").value.trim()||$("floor3CustomerFilter").value)}
+    function floor3HasWorkspaceFilter(){return Boolean(state.floor3.selectedAreaCode||(!floor3IsSearching()&&$("floor3OccupancyFilter").value))}
+    function floor3LocationLayout(row){
+      const raw=state.floor3.layoutDraft[row.id]||row.layout||{};
+      const number=(value,fallback)=>Number.isFinite(Number(value))?Number(value):fallback;
+      const base={left_pct:Math.max(0,Math.min(98,number(raw.left_pct,50))),top_pct:Math.max(0,Math.min(98,number(raw.top_pct,50))),width_pct:Math.max(.7,number(raw.width_pct,1.2)),height_pct:Math.max(.7,number(raw.height_pct,1.2)),z_index:number(raw.z_index,4),version:raw.version??row.layout?.version??null,source_type:raw.source_type||row.layout?.source_type||"api"};
+      if(!state.floor3.layoutDraft[row.id]&&base.source_type==="seeded"){const display=floor3StructuredDefaultDisplayLayout(row);return display?{...floor3UnrotateLocalLayout(display),z_index:display.z_index,version:base.version,source_type:base.source_type}:base}
+      return base;
+    }
+    function floor3StructuredDefaultDisplayLayout(row){return floor3D1DefaultDisplayLayout(row)||floor3E4DefaultDisplayLayout(row)||floor3DE1DefaultDisplayLayout(row)}
+    function floor3D1DefaultDisplayLayout(row){
+      const code=String(row?.location_code||row?.code||"").toUpperCase(),rack=code.match(/^D1-S2-(\d{2})$/),ground=code.match(/^D1-([LR])(\d{2})$/);
+      if(rack){const index=Number(rack[1])-1;if(index>=0&&index<8)return {left_pct:1+index*12.25,top_pct:4,width_pct:11.5,height_pct:30,z_index:6}}
+      if(ground){const index=Number(ground[2])-1;if(index>=0&&index<10)return {left_pct:.8+index*9.85,top_pct:ground[1]==="L"?41:70,width_pct:9.1,height_pct:25,z_index:5}}
+      return null;
+    }
+    function floor3E4DefaultDisplayLayout(row){
+      const code=String(row?.location_code||row?.code||"").toUpperCase(),rack=code.match(/^E4-S2-(\d{2})$/),ground=code.match(/^E4-([LR])(\d{2})$/);
+      if(rack){const index=Number(rack[1])-1;if(index>=0&&index<4)return {left_pct:2,top_pct:2+index*24,width_pct:27,height_pct:21,z_index:6}}
+      if(ground){const index=Number(ground[2])-1;if(index>=0&&index<6)return {left_pct:ground[1]==="L"?58:128,top_pct:2+index*16,width_pct:63,height_pct:13.5,z_index:5}}
+      return null;
+    }
+    function floor3DE1DefaultDisplayLayout(row){
+      const code=String(row?.location_code||row?.code||"").toUpperCase(),ground=code.match(/^DE1-P(\d{2})$/);if(!ground)return null;
+      const index=Number(ground[1])-1;return index>=0&&index<5?{left_pct:12,top_pct:3+index*19,width_pct:76,height_pct:16,z_index:5}:null;
+    }
+    function floor3AreaRect(areaCode){
+      const zone=floor3Zone(areaCode);return zone?floor3WorldRect(zone):null;
+    }
+    function floor3MarkerLayout(row,areaFocus){
+      const source=floor3LocationLayout(row),layout=FLOOR3_DISPLAY_ROTATED?floor3RotateLocalLayout(source):source,area=floor3AreaRect(floor3AreaCode(row));
+      if(areaFocus||!area)return layout;
+      return {...layout,left_pct:area.left+(layout.left_pct/100)*area.width,top_pct:area.top+(layout.top_pct/100)*area.height,width_pct:(layout.width_pct/100)*area.width,height_pct:(layout.height_pct/100)*area.height};
+    }
+    function floor3SetAreaBackdrop(areaCode){
+      const target=$("floor3AreaSlotMap");if(!target)return;
+      target.classList.toggle("floor3-f-group-map",areaCode==="F");
+      target.classList.toggle("floor3-d1-map",areaCode==="D1");
+      target.classList.toggle("floor3-vertical-structure-map",areaCode==="E4"||areaCode==="DE1");
+      $("floor3AreaFocus").classList.toggle("floor3-f-mode",areaCode==="F");
+      if(areaCode==="F"){target.dataset.areaCode="F";target.dataset.storageKind="rack-group";target.style.aspectRatio="auto";return}
+      if(areaCode==="D1"){target.dataset.areaCode="D1";target.dataset.storageKind="rack-floor";target.style.aspectRatio="auto";return}
+      if(areaCode==="E4"||areaCode==="DE1"){target.dataset.areaCode=areaCode;target.dataset.storageKind=areaCode==="E4"?"rack-floor":"ground";target.style.aspectRatio="auto";return}
+      const zone=floor3Zone(areaCode);if(!zone)return;
+      target.dataset.areaCode=zone.id;target.dataset.storageKind=zone.kind;
+      target.style.aspectRatio=FLOOR3_DISPLAY_ROTATED?`${zone.h}/${zone.w}`:`${zone.w}/${zone.h}`;
+    }
+    function floor3SlotsForArea(areaCode){return (state.floor3.mapLocations||[]).filter(row=>floor3AreaMatches(row,areaCode))}
+    function floor3AreaStats(areaCode){
+      const rows=(state.floor3.mapLocations.length?state.floor3.mapLocations:state.floor3.locations).filter(row=>floor3AreaMatches(row,areaCode)),enabled=rows.filter(row=>row.is_active!==false),occupied=enabled.filter(floor3LocationOccupied),items=rows.flatMap(floor3Items),customers=new Set(items.map(item=>item.customer_id||item.customer_name).filter(Boolean));
+      return {total:rows.length,enabled:enabled.length,occupied:occupied.length,empty:Math.max(0,enabled.length-occupied.length),utilization:enabled.length?Math.round((occupied.length/enabled.length)*100):0,relocation:rows.filter(row=>floor3NeedsRelocation(row,floor3CurrentPallet(row))).length,rack:rows.filter(floor3IsRack).length,theoretical:floor3TheoreticalCapacity(areaCode),customerCount:customers.size,quantity:items.reduce((sum,item)=>sum+(Number(item.quantity)||0),0)};
+    }
+    function floor3MatchedAreas(){const result=new Set((state.floor3.locations||[]).map(floor3AreaCode).filter(Boolean));if([...result].some(code=>FLOOR3_F_AREA_CODES.includes(code)))result.add("F");return result}
+    function setFloor3PlanZoom(value,anchor=null){
+      const canvas=$("floor3PlanCanvas"),scroller=canvas.closest(".floor3-plan-scroll"),previousWidth=canvas.offsetWidth,previousHeight=canvas.offsetHeight,canvasRect=canvas.getBoundingClientRect(),offsetX=anchor?anchor.clientX-canvasRect.left:0,offsetY=anchor?anchor.clientY-canvasRect.top:0,xRatio=anchor&&previousWidth?offsetX/previousWidth:0,yRatio=anchor&&previousHeight?offsetY/previousHeight:0;
+      state.floor3.planZoom=Math.max(100,Math.min(180,value));
+      scroller.classList.toggle("zoomed",state.floor3.planZoom>100);
+      const ratio=FLOOR3_DISPLAY_ROTATED?FLOOR3_OVERVIEW_WORLD.h/FLOOR3_OVERVIEW_WORLD.w:FLOOR3_OVERVIEW_WORLD.w/FLOOR3_OVERVIEW_WORLD.h,availableWidth=scroller.clientWidth,availableHeight=scroller.clientHeight;
+      if(availableWidth>0){
+        const heightLimit=availableHeight>0?availableHeight:availableWidth/ratio,baseWidth=Math.min(availableWidth,heightLimit*ratio),scale=state.floor3.planZoom/100;
+        canvas.style.width=`${baseWidth*scale}px`;canvas.style.height=`${baseWidth/ratio*scale}px`;
+      }
+      if(state.floor3.planZoom===100){scroller.scrollTop=0;scroller.scrollLeft=0}else if(anchor){const scrollerRect=scroller.getBoundingClientRect(),pointerX=anchor.clientX-scrollerRect.left,pointerY=anchor.clientY-scrollerRect.top;scroller.scrollLeft=Math.max(0,xRatio*canvas.offsetWidth-pointerX);scroller.scrollTop=Math.max(0,yRatio*canvas.offsetHeight-pointerY)}
+      canvas.dataset.density=state.floor3.planZoom>=140?"detail":(state.floor3.planZoom>=120?"location":"overview");
+      $("floor3PlanZoomLabel").textContent=`${state.floor3.planZoom}%`;
+    }
+    function floor3PalletSummary(row){
+      const pallet=floor3CurrentPallet(row),items=floor3Items(row),total=items.reduce((sum,item)=>sum+(Number(item.quantity)||0),0);
+      if(!pallet)return "";
+      if(floor3PalletRestricted(pallet))return '<b>占用</b><p class="muted">此栈板内容受权限保护</p>';
+      const styleCount=new Set(items.map(item=>item.product_id||item.inventory_code||item.product_code||item.product_name||item.name).filter(Boolean)).size;
+      return `<b>${h(row.location_code||row.code||row.id)} · ${h(pallet.pallet_code||pallet.code||pallet.id)}</b><p>款式数：${h(styleCount)} · 物料行：${h(items.length)} · 待归位：${floor3NeedsRelocation(row,pallet)?"是":"否"}</p>${items.map(item=>`<p class="floor3-popover-item"><b>客户：${h(item.customer_name||item.customer||pallet.customer_name||"未标客户")}</b>存货编码：${h(item.inventory_code||item.product_code||"-")}<br>产品名称：${h(item.product_name||item.name||"-")}<br>数量：${h(item.quantity)} ${h(item.unit||"")}</p>`).join("")}<p><b>合计：${h(total)}</b></p>`;
+    }
+    function floor3MarkerTooltip(row){
+      const code=row.location_code||row.code||row.id,pallet=floor3CurrentPallet(row),items=floor3Items(row);if(!pallet)return `${code} · 空闲`;
+      if(floor3PalletRestricted(pallet))return `${code} · 已占用（内容受权限保护）`;
+      const item=items[0]||{},extra=items.length>1?` · 另有 ${items.length-1} 款`:"";return `${code} · ${item.customer_name||"未标客户"} · ${item.inventory_code||item.product_code||"未标编码"} · ${item.product_name||item.name||"未标产品"} · ${item.quantity??"-"} ${item.unit||""}${extra}`;
+    }
+    function floor3SlotMarker(row,areaFocus=false){
+      const layout=floor3MarkerLayout(row,areaFocus),pallet=floor3CurrentPallet(row),occupied=floor3LocationOccupied(row),restricted=floor3PalletRestricted(pallet),selected=Number(state.floor3.mapPopoverLocationId)===Number(row.id),matches=floor3IsSearching()&&(state.floor3.locations||[]).some(item=>Number(item.id)===Number(row.id));
+      const classes=["floor3-slot-marker",`area-${floor3AreaCode(row).toLowerCase()}`,floor3IsRack(row)?"rack-cell":"",!areaFocus&&floor3AreaCode(row)==="E4"&&floor3IsRack(row)?"overview-e4-rack":"",floor3IsTemporary(row)?"temporary-slot":"",occupied?"occupied":"",row.is_active===false?"disabled":"",floor3NeedsRelocation(row,pallet)?"relocation":"",selected?"selected":"",matches?"search-match":"",Number(state.floor3.searchFocusLocationId)===Number(row.id)?"search-focus":"",state.floor3.layoutEdit?"layout-edit":""].filter(Boolean).join(" ");
+      const style=`left:${layout.left_pct}%;top:${layout.top_pct}%;width:${layout.width_pct}%;height:${layout.height_pct}%;z-index:${layout.z_index}`;
+      const edit=state.floor3.layoutEdit&&floor3CanEditLayout();
+      const draggable=edit||floor3CanMovePallet(row);
+      const dragHandlers=edit?`ondragstart="floor3StartLayoutDrag(event,${row.id})" ondragend="floor3EndLayoutDrag(event,${row.id})"`:(floor3CanMovePallet(row)?`ondragstart="floor3StartPalletDrag(event,${row.id})"`:"");
+      const dropHandlers=!edit&&floor3CanReceivePallet(row)?`ondragover="floor3AllowPalletDrop(event)" ondrop="floor3DropPallet(event,${row.id})"`:"";
+      const label=edit?`编辑 ${row.location_code||row.code||row.id}`:(floor3IsRack(row)?`货架格：${row.location_code||row.code||row.id}`:(occupied?`占用：${row.location_code||row.code||row.id}`:`空货位：${row.location_code||row.code||row.id}`));
+      const tooltip=floor3MarkerTooltip(row),code=row.location_code||row.code||row.id;
+      const marker=`<button type="button" class="${classes}" data-floor3-slot-id="${row.id}" style="${style}" draggable="${draggable}" ${dragHandlers} ${dropHandlers} onclick="floor3OpenMapSlot(event,${row.id})" aria-label="${h(label)}" title="${h(tooltip)}">${areaFocus?h(code):""}<span class="floor3-marker-label">${h(code)}</span></button>`;
+      return marker;
+    }
+    function floor3RackLevel(row){const match=String(row?.location_code||row?.code||"").match(/-S(\d+)-/i);return match?Number(match[1]):1}
+    function floor3FRackCell(row,bottom=false){
+      const occupied=floor3LocationOccupied(row),selected=Number(state.floor3.selectedLocationId)===Number(row.id),code=row.location_code||row.code||row.id;
+      const classes=["floor3-rack-cell",occupied?"occupied":"",selected?"selected":"",bottom?"bottom-pallet":""].filter(Boolean).join(" ");
+      return `<button type="button" class="${classes}" data-floor3-rack-slot-id="${row.id}" onclick="floor3OpenMapSlot(event,${row.id})" title="${h(code)} · ${occupied?"已有物料":"空闲"}"><b>${h(code)}</b><br>${occupied?"已有物料":"空闲"}</button>`;
+    }
+    function floor3FRackCard(areaCode,rows){
+      const areaRows=rows.filter(row=>floor3AreaCode(row)===areaCode).sort((a,b)=>String(a.location_code||a.code||"").localeCompare(String(b.location_code||b.code||""),"zh-CN",{numeric:true}));
+      const levels=areaCode==="F1"?[2,1]:[3,2,1];
+      const levelHtml=levels.map(level=>{const levelRows=areaRows.filter(row=>floor3RackLevel(row)===level),bottom=areaCode==="F1"&&level===1,label=bottom?"底部栈板货物":`${level} 层货架物料`;return `<div class="floor3-rack-level"><span class="floor3-rack-level-label">${label}</span><div class="floor3-rack-cells">${levelRows.map(row=>floor3FRackCell(row,bottom)).join("")||'<span class="muted">暂无登记格</span>'}</div></div>`}).join("");
+      return `<section class="floor3-rack-3d" data-floor3-rack="${areaCode}"><h3>${areaCode} 货架</h3><div class="floor3-rack-frame">${levelHtml}</div></section>`;
+    }
+    function floor3FTemporaryHtml(rows){
+      return ["F12","F34"].map(code=>{const slots=rows.filter(row=>floor3AreaCode(row)===code).sort((a,b)=>String(a.location_code||a.code||"").localeCompare(String(b.location_code||b.code||""),"zh-CN",{numeric:true}));return `<section class="floor3-f-temporary-card"><h3>${code} 过道临放</h3><div class="floor3-f-temporary-slots">${slots.map(row=>floor3FRackCell(row,false)).join("")||'<span class="muted">暂无临放位</span>'}</div></section>`}).join("");
+    }
+    function floor3FGroupHtml(rows){
+      return `<div class="floor3-f-rack-layout floor3-f-primary"><div class="floor3-f-column">${floor3FRackCard("F1",rows)}<div class="floor3-f-temporary">${floor3FTemporaryHtml(rows)}</div></div>${floor3FRackCard("F2",rows)}</div>`;
+    }
+    function floor3FSecondaryHtml(rows){
+      return `<div class="floor3-f-rack-layout floor3-f-secondary">${floor3FRackCard("F3",rows)}${floor3FRackCard("F4",rows)}</div>`;
+    }
+    function floor3D1LayoutHtml(rows){
+      const sorted=values=>values.sort((a,b)=>String(a.location_code||a.code||"").localeCompare(String(b.location_code||b.code||""),"zh-CN",{numeric:true}));
+      const rack=sorted(rows.filter(row=>floor3IsRack(row))),left=sorted(rows.filter(row=>String(row.location_code||row.code||"").toUpperCase().startsWith("D1-L"))),right=sorted(rows.filter(row=>String(row.location_code||row.code||"").toUpperCase().startsWith("D1-R")));
+      const cells=(values,bottom=false)=>values.map(row=>floor3FRackCell(row,bottom)).join("")||'<span class="muted">暂无登记位</span>';
+      return `<div class="floor3-d1-layout"><h3>D1 区 · 底部两排栈板 / 二层一排货架</h3><div class="floor3-d1-frame"><div class="floor3-d1-level"><span class="floor3-d1-level-title">二层货架格（8 格）</span><div class="floor3-d1-rack-row">${cells(rack)}</div></div><div class="floor3-d1-ground"><span class="floor3-d1-level-title">底部栈板位（两排，各 10 位）</span><span class="floor3-d1-row-label">L 排</span><div class="floor3-d1-pallet-row">${cells(left,true)}</div><span class="floor3-d1-row-label">R 排</span><div class="floor3-d1-pallet-row">${cells(right,true)}</div></div></div></div>`;
+    }
+    function floor3VerticalStructureHtml(areaCode,rows){
+      const sorted=values=>values.sort((a,b)=>String(a.location_code||a.code||"").localeCompare(String(b.location_code||b.code||""),"zh-CN",{numeric:true})),cells=(values,bottom=false)=>values.map(row=>floor3FRackCell(row,bottom)).join("")||'<span class="muted">暂无登记位</span>';
+      const rack=sorted(rows.filter(row=>floor3IsRack(row))),ground=sorted(rows.filter(row=>!floor3IsRack(row)));
+      if(areaCode==="E4"){
+        const left=sorted(ground.filter(row=>String(row.location_code||row.code||"").toUpperCase().startsWith("E4-L"))),right=sorted(ground.filter(row=>String(row.location_code||row.code||"").toUpperCase().startsWith("E4-R")));
+        return `<div class="floor3-vertical-layout"><h3>E4 区 · 一列货架 / 两列栈板</h3><div class="floor3-vertical-frame floor3-e4-columns"><div class="floor3-vertical-section"><span class="floor3-vertical-title">左侧货架（从上到下 4 格）</span><div class="floor3-vertical-list">${cells(rack)}</div></div><div class="floor3-vertical-section"><span class="floor3-vertical-title">右侧栈板 L 列（6 位）</span><div class="floor3-vertical-list ground">${cells(left,true)}</div></div><div class="floor3-vertical-section"><span class="floor3-vertical-title">右侧栈板 R 列（6 位）</span><div class="floor3-vertical-list ground">${cells(right,true)}</div></div></div></div>`;
+      }
+      return `<div class="floor3-vertical-layout"><h3>${h(areaCode)} 区 · 现场纵向排列</h3><div class="floor3-vertical-frame"><div class="floor3-vertical-section"><span class="floor3-vertical-title">栈板位（从上到下）</span><div class="floor3-vertical-list ground">${cells(ground,true)}</div></div></div></div>`;
+    }
+    function renderFloor3AreaSlots(){
+      const area=state.floor3.selectedAreaCode,rows=floor3SlotsForArea(area);
+      floor3SetAreaBackdrop(area);
+      $("floor3AreaSlotMap").innerHTML=area==="F"?floor3FGroupHtml(rows):(area==="D1"?floor3D1LayoutHtml(rows):((area==="E4"||area==="DE1")?floor3VerticalStructureHtml(area,rows):floor3AreaBackdropHtml(area)+(rows.map(row=>floor3SlotMarker(row,true)).join("")||'<div class="empty">该区域暂无已配置物理货位</div>')));
+      if(!state.floor3.detail){
+        const totals=new Map();rows.forEach(row=>floor3Items(row).forEach(item=>{const unit=item.unit||"件";totals.set(unit,(totals.get(unit)||0)+(Number(item.quantity)||0))}));
+        const totalText=[...totals.entries()].map(([unit,quantity])=>`${h(quantity)} ${h(unit)}`).join(" / ")||"0";
+        const stats=floor3AreaStats(area),panel=$("floor3DetailPanel");panel.classList.remove("hidden");
+        panel.classList.toggle("floor3-f-rack-panel",area==="F");
+        panel.innerHTML=area==="F"?floor3FSecondaryHtml(rows):`<h2>${h(area)} 区概览</h2><p>已配置：${stats.total} · 实际启用容量：${stats.enabled} · 已占用：${stats.occupied} · 空闲：${stats.empty}</p><p>使用率：<b>${stats.utilization}%</b> · 客户数：${stats.customerCount} · 异常/待归位：${stats.relocation}</p><p>实尺模型理论容量：${stats.theoretical}（仅轮廓，不自动建货位）</p><p>当前登记数量合计：<b>${totalText}</b></p><p class="muted">点击左侧具体货位，查看真实栈板、产品明细、数量与移动历史。</p>`;
+      }
+      renderFloor3LayoutEditor(rows);
+    }
+    function renderFloor3LayoutEditor(rows){
+      const editor=$("floor3LayoutEditor"),enabled=state.floor3.layoutEdit&&floor3CanEditLayout()&&state.floor3.selectedAreaCode!=="F";
+      editor.classList.toggle("hidden",!enabled);
+      if(!enabled)return;
+      const rackOnly=floor3Zone(state.floor3.selectedAreaCode)?.kind==="rack-only";
+      editor.innerHTML=`<div class="panel"><h3>布局编辑</h3><p class="muted">可新增、停用或拖动${rackOnly?"货架格":"栈板货位"}；保存布局不会改变库存数量。占用位置不能停用。</p><div class="toolbar"><input id="floor3NewSlotCode" placeholder="新${rackOnly?"货架格":"货位"}编码"><button class="btn" type="button" onclick="addFloor3LayoutSlot()">新增${rackOnly?"货架格":"物理位"}</button><button class="btn primary" type="button" onclick="saveFloor3Layouts()">保存布局</button><button class="btn" type="button" onclick="resetFloor3LayoutDrafts()">撤销本区未保存调整</button><button class="btn" type="button" onclick="toggleFloor3LayoutEdit()">退出编辑</button></div><div class="actions" style="margin-top:8px">${rows.map(row=>`<span class="tag">${h(row.location_code||row.code||row.id)} ${row.is_active===false?"已停用":""} <button class="btn" type="button" onclick="toggleFloor3LayoutSlot(${row.id},${row.is_active===false})">${row.is_active===false?"恢复":"停用"}</button></span>`).join("")}</div></div>`;
+    }
+    function floor3AreaEntryAnchor(left,top,width){
+      return {left:Math.max(2.5,Math.min(97.5,left+(width/2))),top:Math.max(5.1,top-.6)};
+    }
+    function renderFloor3Plan(){
+      const matched=floor3MatchedAreas(),searching=floor3IsSearching();
+      $("floor3PlanCanvas").classList.toggle("is-searching",searching);
+      renderFloor3ScaleBase();
+      const areas=FLOOR3_PLAN_HOTSPOTS.map(([code,left,top,width,height])=>{
+        const stats=floor3AreaStats(code),temporary=code==="F12"||code==="F34";
+        const selected=state.floor3.selectedAreaCode===code,matchedArea=searching&&matched.has(code),outlineClasses=["floor3-plan-hotspot",temporary?"temporary":"",selected?"selected":"",matchedArea?"matched":""].filter(Boolean).join(" "),entryClasses=["floor3-area-entry",temporary?"temporary":"",selected?"selected":"",matchedArea?"matched":""].filter(Boolean).join(" "),entry=floor3AreaEntryAnchor(left,top,width);
+        return `<div class="${outlineClasses}" data-floor3-area-outline="${code}" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%" aria-hidden="true"></div><button type="button" class="${entryClasses}" data-floor3-area-entry="${code}" style="left:${entry.left}%;top:${entry.top}%" onclick="selectFloor3Area('${code}',true)" aria-label="进入 ${code} 区：启用货位 ${stats.enabled}，占用 ${stats.occupied}，待归位 ${stats.relocation}，理论容量 ${stats.theoretical}">${code}</button>`;
+      }).join("");
+      const [fCode,fLeft,fTop]=FLOOR3_F_GROUP_HOTSPOT,fStats=floor3AreaStats("F"),fClasses=["floor3-f-entry",searching&&matched.has("F")?"matched":""].filter(Boolean).join(" ");
+      const fArea=`<button type="button" class="${fClasses}" data-floor3-area="F" style="left:${fLeft}%;top:${fTop}%" onclick="selectFloor3Area('F',true)" aria-label="F 区总览：启用货位 ${fStats.enabled}，占用 ${fStats.occupied}">${fCode} 区</button>`;
+      const overviewSlots=(state.floor3.mapLocations||[]).filter(row=>!FLOOR3_F_AREA_CODES.includes(floor3AreaCode(row))).map(row=>floor3SlotMarker(row)).join("");
+      $("floor3PlanHotspots").innerHTML=areas+fArea+overviewSlots;
+      renderFloor3OverviewRail(matched,searching);
+      setFloor3PlanZoom(state.floor3.planZoom);
+    }
+    function floor3OverviewSelectionHtml(row){
+      const code=row.location_code||row.code||row.id,pallet=floor3CurrentPallet(row),occupied=floor3LocationOccupied(row),rack=floor3IsRack(row),temporary=floor3IsTemporary(row);
+      const type=rack?"货架格":(temporary?"过道临放位":"地面栈板位");
+      return `<div class="floor3-overview-selection-head"><div><h3>${h(code)}</h3><div class="muted">${h(floor3AreaCode(row))} 区 · ${type}</div></div><button class="btn" type="button" onclick="clearFloor3OverviewSelection()">返回总览</button></div><p><span class="tag ${occupied?"warn":""}">${occupied?"已占用":"空闲"}</span>${floor3NeedsRelocation(row,pallet)?'<span class="tag red">待归位</span>':""}</p>${pallet?floor3PalletSummary(row):'<div class="floor3-overview-empty">当前货位没有登记栈板或物料</div>'}`;
+    }
+    function clearFloor3OverviewSelection(){state.floor3.mapPopoverLocationId=null;state.floor3.searchFocusLocationId=null;renderFloor3Plan()}
+    function floor3SearchResultRows(){
+      if(!floor3IsSearching())return [];const customerId=Number($("floor3CustomerFilter").value)||null,result=[];
+      (state.floor3.locations||[]).forEach(row=>{const items=floor3Items(row).filter(item=>!customerId||Number(item.customer_id)===customerId);if(items.length){items.forEach(item=>result.push({location:row,item}))}else if(!customerId){result.push({location:row,item:null})}});return result.slice(0,60);
+    }
+    function renderFloor3SearchResults(){
+      const panel=$("floor3SearchResults"),searching=floor3IsSearching(),rows=floor3SearchResultRows();panel.classList.toggle("hidden",!searching);$("floor3ClearSearch").classList.toggle("hidden",!searching);if(!searching)return;
+      panel.innerHTML=`<div class="floor3-search-results-head"><b>定位结果</b><span class="muted">${rows.length} 条</span></div><div class="floor3-search-result-list">${rows.map(({location,item})=>`<button type="button" class="floor3-search-result" onclick="focusFloor3SearchResult(${location.id})"><b>${h(location.location_code||location.code||location.id)} · ${h(item?.inventory_code||item?.product_code||"空货位")}</b><span>${h(item?.product_name||item?.name||location.location_name||"")}</span><small>${h(item?.customer_name||"未标客户")} · ${h(item?.quantity??"")} ${h(item?.unit||"")} · ${h(floor3AreaCode(location))} 区</small></button>`).join("")||'<div class="floor3-overview-empty">没有符合条件的货位</div>'}</div>`;
+    }
+    async function focusFloor3SearchResult(locationId){
+      const row=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===Number(locationId));if(!row)return;const areaCode=floor3AreaCode(row);state.floor3.searchFocusLocationId=locationId;
+      if(FLOOR3_F_AREA_CODES.includes(areaCode)){
+        state.floor3.viewMode="areaFocus";state.floor3.selectedAreaCode="F";state.floor3.mapPopoverLocationId=null;$("floor3AreaFilter").value="F";state.floor3.locations=(state.floor3.mapLocations||[]).filter(item=>floor3AreaMatches(item,"F"));renderFloor3Locations();await openFloor3Location(locationId);requestAnimationFrame(()=>document.querySelector(`[data-floor3-slot-id="${locationId}"]`)?.scrollIntoView({block:"center",inline:"center",behavior:"smooth"}));return;
+      }
+      state.floor3.viewMode="overview";state.floor3.selectedAreaCode="";state.floor3.mapPopoverLocationId=locationId;$("floor3AreaFilter").value="";renderFloor3Locations();setFloor3PlanZoom(Math.max(140,state.floor3.planZoom));requestAnimationFrame(()=>{const marker=document.querySelector(`[data-floor3-slot-id="${locationId}"]`),scroller=$("floor3PlanCanvas").closest(".floor3-plan-scroll");if(!marker)return;scroller.scrollTo({left:Math.max(0,marker.offsetLeft-scroller.clientWidth/2),top:Math.max(0,marker.offsetTop-scroller.clientHeight/2),behavior:"smooth"})});
+    }
+    function renderFloor3OverviewRail(matched,searching){
+      const rows=state.floor3.mapLocations||[],enabled=rows.filter(row=>row.is_active!==false),occupied=enabled.filter(floor3LocationOccupied),relocation=enabled.filter(row=>floor3NeedsRelocation(row,floor3CurrentPallet(row)));
+      const stats=$("floor3OverviewStats"),zones=$("floor3OverviewZones"),defaultPanel=$("floor3OverviewDefault"),selectionPanel=$("floor3OverviewSelection");if(!stats||!zones||!defaultPanel||!selectionPanel)return;
+      const selected=rows.find(row=>Number(row.id)===Number(state.floor3.mapPopoverLocationId));
+      defaultPanel.classList.toggle("hidden",Boolean(selected));selectionPanel.classList.toggle("hidden",!selected);
+      selectionPanel.innerHTML=selected?floor3OverviewSelectionHtml(selected):"";renderFloor3SearchResults();
+      if(selected)return;
+      stats.innerHTML=`<div class="floor3-overview-metric"><span class="muted">启用货位</span><b>${enabled.length}</b></div><div class="floor3-overview-metric"><span class="muted">已占用</span><b>${occupied.length}</b></div><div class="floor3-overview-metric"><span class="muted">空闲</span><b>${Math.max(0,enabled.length-occupied.length)}</b></div><div class="floor3-overview-metric"><span class="muted">待归位</span><b>${relocation.length}</b></div>`;
+      const groups=[["A / B 区",["A1","A2","AB1","AB2","B1","B2"]],["C / D 区",["C1","C2","CD1","D1","D2","DE1"]],["E 区",["E1","E2","E3","E4"]],["F 区",["F"]]];
+      zones.innerHTML=groups.map(([label,codes])=>`<div class="floor3-nav-group"><div class="floor3-nav-group-title"><span>${label}</span></div><div class="floor3-nav-group-grid">${codes.map(code=>{const area=floor3AreaStats(code),classes=["floor3-overview-zone",code==="F"?"temporary":"",searching&&matched.has(code)?"matched":""].filter(Boolean).join(" ");return `<button type="button" class="${classes}" onclick="selectFloor3Area('${code}',true)"><strong>${h(code)}</strong><small>${area.occupied}/${area.enabled} 占用 · ${area.utilization}%</small></button>`}).join("")}</div></div>`).join("");
+    }
+    async function selectFloor3Area(areaCode,fromMap=false){
+      floor3InitAreaFilter();
+      state.floor3.selectedAreaCode=areaCode||"";
+      state.floor3.viewMode=areaCode?"areaFocus":"overview";
+      state.floor3.mapPopoverLocationId=null;
+      $("floor3AreaFilter").value=state.floor3.selectedAreaCode;
+      if(fromMap){$("floor3KeywordFilter").value="";$("floor3CustomerFilter").value="";$("floor3OccupancyFilter").value=""}
+      closeFloor3Detail();
+      await loadFloor3Locations();
+    }
+    async function clearFloor3Area(){
+      state.floor3.selectedAreaCode="";$("floor3AreaFilter").value="";$("floor3KeywordFilter").value="";$("floor3CustomerFilter").value="";$("floor3OccupancyFilter").value="";
+      state.floor3.viewMode="overview";state.floor3.layoutEdit=false;state.floor3.mapPopoverLocationId=null;
+      closeFloor3Detail();
+      await loadFloor3Locations();
+    }
+    async function loadFloor3Locations(throwOnError=false){
+      floor3InitAreaFilter();
+      const requestId=++state.floor3.searchRequestId;
+      const areaCode=$("floor3AreaFilter").value;
+      state.floor3.selectedAreaCode=areaCode;
+      const keyword=$("floor3KeywordFilter").value.trim(),customerId=$("floor3CustomerFilter").value,occupancy=$("floor3OccupancyFilter").value;
+      const query=queryString({area_code:areaCode==="F"?"":areaCode,customer_id:customerId,q:keyword,occupancy,include_inactive:floor3CanEditLayout()?"true":"",page_size:"500"});
+      try{
+        const data=await api(`/api/warehouse/floor3/locations?${query}`);
+        if(requestId!==state.floor3.searchRequestId)return;
+        const items=data.items||[];state.floor3.locations=areaCode==="F"?items.filter(row=>floor3AreaMatches(row,"F")):items;
+        if(!areaCode&&!customerId&&!keyword&&!occupancy)state.floor3.mapLocations=state.floor3.locations;
+        renderFloor3Locations();
+      }catch(error){if(requestId!==state.floor3.searchRequestId)return;if(throwOnError)throw error;toast(`三楼货位加载失败：${error.message}`,true)}
+    }
+    async function refreshFloor3LocationData(){
+      const overview=await api(`/api/warehouse/floor3/locations?${queryString({include_inactive:floor3CanEditLayout()?"true":"",page_size:"500"})}`);
+      state.floor3.mapLocations=overview.items||[];
+      renderFloor3Plan();
+      await loadFloor3Locations(true);
+    }
+    async function loadFloor3MoveLocations(){
+      const query=queryString({occupancy:"empty",page_size:"500"});
+      const data=await api(`/api/warehouse/floor3/locations?${query}`);
+      state.floor3.moveLocations=(data.items||[]).filter(floor3CanReceivePallet);
+    }
+    function renderFloor3Locations(){
+      const rows=state.floor3.locations||[],hasWorkspace=floor3HasWorkspaceFilter(),searching=floor3IsSearching(),areaFocus=state.floor3.viewMode==="areaFocus";
+      renderFloor3Plan();
+      document.body.classList.toggle("floor3-area-mode",areaFocus);
+      document.body.classList.toggle("floor3-workspace-mode",hasWorkspace&&!areaFocus);
+      $("floor3FilterPanel").classList.remove("hidden");
+      $("floor3MapPanel").classList.toggle("hidden",areaFocus);
+      $("floor3Workspace").classList.toggle("hidden",!hasWorkspace);
+      $("floor3AreaFocus").classList.toggle("hidden",!areaFocus);
+      if(areaFocus)renderFloor3AreaSlots();
+      $("floor3WorkspaceTitle").textContent=state.floor3.selectedAreaCode?`${state.floor3.selectedAreaCode} 区货位`:(searching?"搜索匹配货位":"请选择区域");
+      $("floor3CurrentScope").textContent=state.floor3.selectedAreaCode?`${state.floor3.selectedAreaCode} 区`:(searching?"搜索定位结果":"全部区域");
+      $("floor3WorkspaceHint").textContent=state.floor3.selectedAreaCode?"区域缩略布局使用真实物理位；点击货位可查看详情。":(searching?`已找到 ${rows.length} 个匹配货位；绿色标记为搜索命中。`:"请先在平面图上点击一个区域，随后显示该区域的具体货位。");
+      $("floor3ClearArea").classList.toggle("hidden",!hasWorkspace);
+      $("floor3AreaLayoutEditToggle").classList.toggle("hidden",!areaFocus||!floor3CanEditLayout()||state.floor3.selectedAreaCode==="F");
+      $("floor3AreaLayoutEditToggle").textContent=state.floor3.layoutEdit?"退出布局编辑":"布局编辑";
+      $("floor3OverviewStage").classList.toggle("area-nav-collapsed",state.floor3.areaNavCollapsed);$("floor3AreaNavToggle").textContent=state.floor3.areaNavCollapsed?"展开区域":"收起区域";$("floor3AreaNavToggle").setAttribute("aria-expanded",String(!state.floor3.areaNavCollapsed));$("floor3LegendPanel").classList.toggle("hidden",!state.floor3.legendVisible);renderFloor3ModeState();
+      $("floor3LocationCards").classList.toggle("hidden",!hasWorkspace||areaFocus);
+      $("floor3LocationCards").innerHTML=(hasWorkspace?rows:[]).map(row=>{
+        const pallet=floor3CurrentPallet(row),restricted=floor3PalletRestricted(pallet),items=floor3Items(row),temporary=floor3IsTemporary(row),needs=floor3NeedsRelocation(row,pallet);
+        const code=row.location_code||row.code||`货位 ${row.id}`,area=row.area_name||row.area_code||"未分区";
+        const occupancy=floor3LocationOccupied(row)?"占用":"空闲";
+        const palletText=restricted?"当前货位已占用（客户范围受限）":(pallet?`栈板：${h(pallet.pallet_code||pallet.code||pallet.id)} · ${items.length} 款`:`暂无栈板`);
+        return `<article class="floor3-card ${temporary?"floor3-aisle":""}" data-location-id="${row.id}" onclick="openFloor3Location(${row.id})"><h3>${h(code)} <span class="tag">${h(area)}</span></h3><p><span class="tag ${occupancy==="占用"?"warn":""}">${occupancy}</span> ${temporary?'<span class="tag">过道临放</span>':""} ${needs?'<span class="tag red">需归位</span>':""}</p><p class="muted">${palletText}</p><p class="muted">${h(row.location_name||row.name||"")}</p><div class="actions"><button class="btn" type="button" onclick="event.stopPropagation();openFloor3Location(${row.id})">查看详情</button></div></article>`;
+      }).join("");
+      $("floor3LocationEmpty").classList.toggle("hidden",!hasWorkspace||rows.length>0||areaFocus);
+    }
+    async function floor3OpenMapSlot(event,locationId){
+      event.stopPropagation();
+      const row=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===Number(locationId));if(!row)return;
+      if(state.floor3.viewMode==="areaFocus"){await openFloor3Location(locationId);return}
+      state.floor3.mapPopoverLocationId=locationId;renderFloor3Plan();
+    }
+    async function floor3OpenLocationFromMap(locationId){
+      const row=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===Number(locationId));if(!row)return;
+      await selectFloor3Area(floor3AreaCode(row),true);await openFloor3Location(locationId);
+    }
+    function floor3AllowPalletDrop(event){event.preventDefault();event.dataTransfer.dropEffect="move"}
+    function floor3StartPalletDrag(event,locationId){const row=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===Number(locationId));if(!floor3CanMovePallet(row)){event.preventDefault();return}event.stopPropagation();event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("application/x-floor3-pallet",String(locationId))}
+    function floor3DropPallet(event,targetId){
+      event.preventDefault();event.stopPropagation();const sourceId=Number(event.dataTransfer.getData("application/x-floor3-pallet"));
+      const source=(state.floor3.mapLocations||[]).find(row=>Number(row.id)===sourceId),target=(state.floor3.mapLocations||[]).find(row=>Number(row.id)===Number(targetId)),pallet=floor3CurrentPallet(source);
+      if(!floor3CanMovePallet(source)||!floor3CanReceivePallet(target)||!pallet){toast("栈板只能在空闲启用的地面位或 F12/F34 临时位之间移动；货架格不能作为栈板目标",true);return}
+      state.floor3.pendingMove={source,target,pallet};renderFloor3MoveConfirmation();
+    }
+    function renderFloor3MoveConfirmation(){
+      const pending=state.floor3.pendingMove,panel=$("floor3MoveConfirm");panel.classList.toggle("hidden",!pending);if(!pending)return;
+      panel.innerHTML=`<b>确认地图拖拽移位</b><p>${h(pending.source.location_code||pending.source.code||pending.source.id)} → ${h(pending.target.location_code||pending.target.code||pending.target.id)}（栈板：${h(pending.pallet.pallet_code||pending.pallet.code||pending.pallet.id)}）</p><div class="actions"><button class="btn primary" type="button" onclick="confirmFloor3MapMove()">确认移位</button><button class="btn" type="button" onclick="cancelFloor3MapMove()">取消</button></div>`;
+    }
+    function cancelFloor3MapMove(){state.floor3.pendingMove=null;renderFloor3MoveConfirmation()}
+    async function confirmFloor3MapMove(){
+      const pending=state.floor3.pendingMove;if(!pending)return;const expectedVersion=floor3ExpectedPalletVersion(pending.pallet);
+      if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      try{await performFloor3Move(pending.pallet.id,expectedVersion,pending.target.id,"地图拖拽移位");toast("栈板移位成功");state.floor3.pendingMove=null;renderFloor3MoveConfirmation();await refreshFloor3LocationData()}catch(error){if(error.status===409){toast("目标货位状态已变化，已刷新地图",true);state.floor3.pendingMove=null;renderFloor3MoveConfirmation();await refreshFloor3LocationData();return}toast(`栈板移位失败：${error.message}`,true)}
+    }
+    async function performFloor3Move(palletId,expectedVersion,targetId,remarks){return api(`/api/warehouse/pallets/${palletId}/move`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,to_location_id:Number(targetId),remarks,confirmed:true,idempotency_key:createIdempotencyKey()})})}
+    function floor3StartLayoutDrag(event,locationId){
+      if(!state.floor3.layoutEdit||!floor3CanEditLayout()){event.preventDefault();return}
+      const marker=event.currentTarget,canvas=marker.closest(".floor3-area-slot-map"),canvasRect=canvas?.getBoundingClientRect(),markerRect=marker.getBoundingClientRect();
+      if(!canvasRect?.width||!canvasRect?.height){event.preventDefault();return}
+      state.floor3.layoutDrag={locationId:Number(locationId),offsetLeftPct:((event.clientX-markerRect.left)/canvasRect.width)*100,offsetTopPct:((event.clientY-markerRect.top)/canvasRect.height)*100};
+      event.stopPropagation();event.dataTransfer.setData("application/x-floor3-layout",String(locationId));event.dataTransfer.effectAllowed="move";
+    }
+    function floor3AllowLayoutDrop(event){if(!state.floor3.layoutEdit||!floor3CanEditLayout()||!state.floor3.layoutDrag)return;event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect="move"}
+    function floor3LayoutDropDisplay(display,pointerLeft,pointerTop,offsetLeftPct,offsetTopPct){return {...display,left_pct:Math.max(0,Math.min(100-display.width_pct,pointerLeft-offsetLeftPct)),top_pct:Math.max(0,Math.min(100-display.height_pct,pointerTop-offsetTopPct))}}
+    function floor3DropLayout(event){
+      if(!state.floor3.layoutEdit||!floor3CanEditLayout()||!state.floor3.layoutDrag)return;
+      event.preventDefault();event.stopPropagation();const canvas=event.currentTarget,rect=canvas.getBoundingClientRect(),drag=state.floor3.layoutDrag,locationId=Number(event.dataTransfer.getData("application/x-floor3-layout")||drag.locationId);
+      const row=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===locationId);if(!row||!rect.width||!rect.height){state.floor3.layoutDrag=null;return}
+      const previous=floor3LocationLayout(row),display=FLOOR3_DISPLAY_ROTATED?floor3RotateLocalLayout(previous):previous,pointerLeft=((event.clientX-rect.left)/rect.width)*100,pointerTop=((event.clientY-rect.top)/rect.height)*100;
+      const moved=floor3LayoutDropDisplay(display,pointerLeft,pointerTop,drag.offsetLeftPct,drag.offsetTopPct),source=FLOOR3_DISPLAY_ROTATED?floor3UnrotateLocalLayout(moved):moved;
+      state.floor3.layoutDraft[locationId]={...previous,left_pct:Math.max(0,Math.min(100-source.width_pct,source.left_pct)),top_pct:Math.max(0,Math.min(100-source.height_pct,source.top_pct))};state.floor3.layoutDrag=null;renderFloor3AreaSlots();
+    }
+    function floor3EndLayoutDrag(){state.floor3.layoutDrag=null}
+    function resetFloor3LayoutDrafts(){
+      const areaIds=new Set(floor3SlotsForArea(state.floor3.selectedAreaCode).map(row=>Number(row.id))),draftIds=Object.keys(state.floor3.layoutDraft).filter(id=>areaIds.has(Number(id)));
+      if(!draftIds.length){toast("当前区域没有未保存的布局调整");return}
+      draftIds.forEach(id=>delete state.floor3.layoutDraft[id]);state.floor3.layoutDrag=null;renderFloor3AreaSlots();toast("已恢复到本次编辑前的位置");
+    }
+    function toggleFloor3LayoutEdit(){
+      if(!floor3CanEditLayout()){toast("仅管理员可以编辑布局",true);return}
+      if(!state.floor3.layoutEdit&&!state.floor3.selectedAreaCode){toast("请先进入一个区域再编辑布局",true);return}
+      state.floor3.layoutEdit=!state.floor3.layoutEdit;state.floor3.layoutDrag=null;if(state.floor3.layoutEdit)state.floor3.moveMode=false;renderFloor3Locations();
+    }
+    async function saveFloor3Layouts(){
+      if(!floor3CanEditLayout()||!state.floor3.selectedAreaCode)return;const areaIds=new Set(floor3SlotsForArea(state.floor3.selectedAreaCode).map(row=>Number(row.id))),slots=Object.entries(state.floor3.layoutDraft).filter(([id])=>areaIds.has(Number(id))).map(([id,layout])=>({location_id:Number(id),expected_version:Number(layout.version),left_pct:layout.left_pct,top_pct:layout.top_pct,width_pct:layout.width_pct,height_pct:layout.height_pct,z_index:layout.z_index}));
+      if(!slots.length){toast("没有待保存的布局调整");return}
+      try{await api(`/api/warehouse/floor3/layout/areas/${encodeURIComponent(state.floor3.selectedAreaCode)}`,{method:"PATCH",body:JSON.stringify({slots})});toast("布局已保存；库存数量未改变");state.floor3.layoutDraft={};await refreshFloor3LocationData()}catch(error){toast(`布局保存失败：${error.message}`,true)}
+    }
+    function floor3DefaultNewSlotLayout(){return {left_pct:50,top_pct:50,width_pct:1.2,height_pct:1.2,z_index:4}}
+    async function addFloor3LayoutSlot(){
+      if(!floor3CanEditLayout()||!state.floor3.selectedAreaCode)return;const code=$("floor3NewSlotCode").value.trim();if(!code){toast("请输入新货位编码",true);return}
+      try{await api(`/api/warehouse/floor3/layout/areas/${encodeURIComponent(state.floor3.selectedAreaCode)}/slots`,{method:"POST",body:JSON.stringify({location_code:code,location_name:code,...floor3DefaultNewSlotLayout()})});$("floor3NewSlotCode").value="";state.floor3.mapPopoverLocationId=null;await refreshFloor3LocationData();toast("物理位已新增，并已同步到全局平面图；未改变库存数量")}catch(error){toast(`新增物理位失败：${error.message}`,true)}
+    }
+    async function toggleFloor3LayoutSlot(locationId,enable){
+      if(!floor3CanEditLayout())return;const row=(state.floor3.mapLocations||[]).find(item=>Number(item.id)===Number(locationId));if(!row)return;
+      if(!enable&&floor3LocationOccupied(row)){toast("占用货位不能停用",true);return}
+      const expectedVersion=Number(floor3LocationLayout(row).version);if(!expectedVersion){toast("布局版本缺失，请刷新后重试",true);return}
+      try{await api(`/api/warehouse/floor3/layout/slots/${locationId}/${enable?"enable":"disable"}`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion})});toast(enable?"货位已恢复":"货位已停用");await refreshFloor3LocationData()}catch(error){toast(`货位状态更新失败：${error.message}`,true)}
+    }
+    async function openFloor3Location(locationId){
+      if(!hasPermission("warehouse.view"))return;
+      try{
+        state.floor3.selectedLocationId=locationId;
+        state.floor3.detail=await api(`/api/warehouse/floor3/locations/${locationId}`);
+        state.floor3.moveLocations=[];
+        const detailLocation=state.floor3.detail?.location||state.floor3.detail,pallet=state.floor3.detail?.current_pallet||state.floor3.detail?.pallet;
+        if(floor3CanMovePallet({...detailLocation,current_pallet:pallet})){
+          try{await loadFloor3MoveLocations()}catch(error){toast(`移位候选加载失败：${error.message}`,true)}
+        }
+        renderFloor3Detail();
+        if(state.floor3.selectedAreaCode==="F")renderFloor3AreaSlots();
+      }catch(error){toast(`货位详情加载失败：${error.message}`,true)}
+    }
+    function floor3FormatItem(item){
+      const sourceTag=item.official_inventory?'<br><span class="tag">正式成品库存</span>':(item.match_status==="pending"?'<br><span class="tag warn">待匹配快照</span>':'<br><span class="tag warn">现场盘点快照</span>');
+      return `<div class="floor3-item"><b>${h(item.product_name||item.name||item.inventory_code||"待匹配")}</b><br><span class="muted">存货编码：${h(item.inventory_code||item.product_code||"-")} · 订单：${h(item.order_no||item.order_number||"-")}</span><br><span>数量：${h(item.quantity)} ${h(item.unit||"")}</span>${sourceTag}</div>`;
+    }
+    function floor3MoveOptions(currentId){
+      return '<option value="">请选择空闲启用地面位 / 临时位</option>'+state.floor3.moveLocations.filter(row=>Number(row.id)!==Number(currentId)&&floor3CanReceivePallet(row)).map(row=>`<option value="${row.id}">${h(row.location_code||row.code||row.id)} · ${h(row.area_name||row.area_code||"")}</option>`).join("");
+    }
+    function renderFloor3Detail(){
+      const detail=state.floor3.detail;if(!detail)return;
+      const location=detail.location||detail,pallet=detail.current_pallet||detail.pallet||null,restricted=floor3PalletRestricted(pallet),items=restricted?[]:(detail.items||pallet?.items||[]);
+      const code=location.location_code||location.code||`货位 ${location.id}`;
+      const needs=floor3NeedsRelocation(location,pallet);
+      const history=detail.history||detail.movement_history||[];
+      const rack=floor3IsRack(location),movable=floor3CanMovePallet({...location,current_pallet:pallet});
+      const palletSummary=restricted?"当前位置已占用（客户范围受限）":(pallet?`当前${rack?"货架登记单元":"栈板"}：${h(pallet.pallet_code||pallet.code||pallet.id)}`:"当前为空闲");
+      const itemSummary=restricted?'<div class="empty">位置内容受客户范围权限保护</div>':(items.map(floor3FormatItem).join("")||`<div class="empty">当前没有${rack?"货架物料":"栈板产品"}</div>`);
+      const movePanel=movable?`<div class="panel"><h2>移位</h2><select id="floor3MoveTarget">${floor3MoveOptions(location.id)}</select><input id="floor3MoveRemarks" style="margin-top:8px" placeholder="移位备注"><button class="btn primary" style="margin-top:8px" type="button" onclick="moveFloor3Pallet(${pallet.id})">确认移位</button></div>`:"";
+      const actionPanel=pallet&&!restricted&&canOperate()?`<div class="panel"><button class="btn" type="button" onclick="toggleFloor3AddItemPanel()">增加${rack?"货架物料":"同栈板产品"}</button>${rack?"":`<button class="btn" type="button" style="margin-left:8px" onclick="setFloor3Relocation(${pallet.id},${needs?"false":"true"})">${needs?"取消待归位":"标记待归位"}</button>`}<button class="btn danger" type="button" style="margin-left:8px" onclick="clearFloor3Pallet(${pallet.id})">清空${rack?"货架格":"栈板"}</button></div>`:"";
+      const writePanels=movePanel+actionPanel;
+      $("floor3DetailPanel").classList.remove("hidden","floor3-f-rack-panel");
+      $("floor3DetailPanel").innerHTML=`<div class="floor3-detail-grid"><div><div class="actions" style="justify-content:space-between"><div><h2>${h(code)} 详情</h2><div class="muted">区域：${h(location.area_name||location.area_code||"未分区")} · ${rack?"货架格（只登记和查看物料）":(floor3IsTemporary(location)?"过道临放":"固定地面位")} ${needs&&!rack?"· 需归位":""}</div></div><button class="btn" type="button" onclick="closeFloor3Detail()">关闭</button></div><div class="panel" style="padding:10px;margin-top:10px"><b>${palletSummary}</b>${pallet&&!restricted&&needs&&!rack?'<span class="tag red" style="margin-left:8px">需归位</span>':""}<div class="floor3-item-grid" style="margin-top:10px">${itemSummary}</div></div>${history.length?`<h3>历史</h3><ul class="floor3-history">${history.map(x=>`<li>${h(x.moved_at||x.created_at||"")} · ${h(x.movement_type||x.action||"")} · ${h(x.from_location_code||"-")} → ${h(x.to_location_code||"-")} ${h(x.remarks||"")}</li>`).join("")}</ul>`:""}</div><div>${writePanels}</div></div>`;
+      $("floor3BindPanel").classList.toggle("hidden",Boolean(pallet)||!canOperate());
+      $("floor3AddItemPanel").classList.add("hidden");
+      if(pallet&&!restricted&&canOperate())resetFloor3AddItemForm();
+    }
+    function closeFloor3Detail(){
+      state.floor3.selectedLocationId=null;state.floor3.detail=null;
+      $("floor3DetailPanel").classList.add("hidden");$("floor3BindPanel").classList.add("hidden");$("floor3AddItemPanel").classList.add("hidden");
+      if(state.floor3.viewMode==="areaFocus")renderFloor3AreaSlots();
+    }
+    function floor3BindRowDefaults(){return {customerId:"",keyword:"",candidates:[],candidate:null,quantity:"",itemType:"finished",pending:false,inventoryCode:"",orderNo:"",productName:"",remarks:""}}
+    function addFloor3BindRow(){syncFloor3BindRows();state.floor3.bindRows.push(floor3BindRowDefaults());renderFloor3BindRows()}
+    function removeFloor3BindRow(index){syncFloor3BindRows();if(state.floor3.bindRows.length>1)state.floor3.bindRows.splice(index,1);renderFloor3BindRows()}
+    function floor3BindRowHtml(row,index){
+      const candidate=row.candidate, selectedText=candidate?`${candidate.product_code||candidate.inventory_code||candidate.product_id||candidate.id} · ${candidate.product_name||candidate.name||""}`:"尚未选择（搜索后必须点击候选）";
+      return `<div class="floor3-bind-row" data-floor3-bind-row="${index}"><div class="floor3-bind-row-grid"><div class="field"><label>客户</label><select class="floor3-bind-customer">${floor3CustomerOptions(row.customerId)}</select></div><div class="field"><label>关键词</label><input class="floor3-bind-query" value="${h(row.keyword)}" placeholder="客户 / 编码 / 订单 / 产品"></div><button class="btn floor3-search-candidates" type="button" onclick="searchFloor3BindCandidates(${index})">搜索候选</button><div class="field"><label>已选择候选</label><div class="muted">${h(selectedText)}</div></div><div class="field"><label>数量（必须&gt;0）</label><input class="floor3-bind-quantity" type="number" min="0.01" step="any" value="${h(row.quantity)}" required></div><button class="btn danger" type="button" onclick="removeFloor3BindRow(${index})">删除行</button></div><div class="floor3-candidates">${(row.candidates||[]).map((item,candidateIndex)=>`<button class="floor3-candidate ${row.candidate===item?"selected":""}" type="button" onclick="selectFloor3BindCandidate(${index},${candidateIndex})">${h(item.product_code||item.inventory_code||item.id)} · ${h(item.product_name||item.name||"")} · 点击选择</button>`).join("")||'<span class="muted">暂无候选</span>'}</div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px"><div class="field"><label>存货编码快照</label><input class="floor3-bind-inventory-code" value="${h(row.inventoryCode)}"></div><div class="field"><label>订单号快照</label><input class="floor3-bind-order-no" value="${h(row.orderNo)}"></div><div class="field"><label>产品名称快照</label><input class="floor3-bind-product-name" value="${h(row.productName)}"></div><div class="field"><label>货物类型</label><select class="floor3-bind-item-type">${FLOOR3_ITEM_TYPES.map(x=>`<option value="${x[0]}" ${row.itemType===x[0]?"selected":""}>${x[1]}</option>`).join("")}</select></div></div><label style="display:block;margin-top:8px"><input class="floor3-bind-pending" type="checkbox" ${row.pending?"checked":""}> 暂存为待匹配（保存以上快照）</label></div>`;
+    }
+    function renderFloor3BindRows(){
+      $("floor3BindRows").innerHTML=state.floor3.bindRows.map(floor3BindRowHtml).join("");
+    }
+    function syncFloor3BindRows(){
+      document.querySelectorAll("[data-floor3-bind-row]").forEach((element,index)=>{
+        const row=state.floor3.bindRows[index]||floor3BindRowDefaults();
+        row.customerId=element.querySelector(".floor3-bind-customer").value;row.keyword=element.querySelector(".floor3-bind-query").value.trim();row.quantity=element.querySelector(".floor3-bind-quantity").value;row.inventoryCode=element.querySelector(".floor3-bind-inventory-code").value.trim();row.orderNo=element.querySelector(".floor3-bind-order-no").value.trim();row.productName=element.querySelector(".floor3-bind-product-name").value.trim();row.itemType=element.querySelector(".floor3-bind-item-type").value;row.pending=element.querySelector(".floor3-bind-pending").checked;state.floor3.bindRows[index]=row;
+      });
+    }
+    async function searchFloor3BindCandidates(index){
+      syncFloor3BindRows();const row=state.floor3.bindRows[index];if(!row)return;
+      try{const query=queryString({customer_id:row.customerId,q:row.keyword});const data=await api(`/api/warehouse/floor3/product-candidates?${query}`);row.candidates=data.items||data.candidates||[];row.candidate=null;renderFloor3BindRows()}catch(error){toast(`产品候选加载失败：${error.message}`,true)}
+    }
+    function selectFloor3BindCandidate(rowIndex,candidateIndex){
+      syncFloor3BindRows();const row=state.floor3.bindRows[rowIndex];if(!row||!row.candidates[candidateIndex])return;row.candidate=row.candidates[candidateIndex];renderFloor3BindRows();
+    }
+    function floor3BuildItem(row){
+      const quantity=Number(row.quantity);if(!Number.isFinite(quantity)||quantity<=0)return null;
+      if(!row.pending&&!row.candidate)return null;
+      if(row.pending&&!row.inventoryCode&&!row.orderNo&&!row.productName)return null;
+      const candidate=row.candidate||{};
+      return {customer_id:row.customerId?Number(row.customerId):(candidate.customer_id??null),product_id:row.pending?null:(candidate.product_id??candidate.id),inventory_code:row.pending?row.inventoryCode:(candidate.product_code||candidate.inventory_code||row.inventoryCode||null),order_no:row.orderNo||null,product_name:row.pending?row.productName:(candidate.product_name||candidate.name||row.productName||null),item_type:row.itemType,quantity,unit:row.itemType==="finished"?"boxes":"sheets",match_status:row.pending?"pending":"matched",remarks:row.remarks||null};
+    }
+    async function saveFloor3Pallet(event){
+      event.preventDefault();if(!canOperate())return;syncFloor3BindRows();
+      if(!state.floor3.selectedLocationId){toast("请先点击选择一个空闲货位",true);return}
+      const items=state.floor3.bindRows.map(floor3BuildItem);if(items.some(item=>!item)){toast("每行必须有数量>0，并点击选择产品；待匹配行需填写快照",true);return}
+      try{await api("/api/warehouse/pallets",{method:"POST",body:JSON.stringify({location_id:Number(state.floor3.selectedLocationId),pallet_code:$("floor3PalletCode").value.trim()||null,remarks:$("floor3PalletRemarks").value.trim()||null,items})});toast("栈板绑定成功");$("floor3PalletCode").value="";$("floor3PalletRemarks").value="";state.floor3.bindRows=[floor3BindRowDefaults()];await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`栈板绑定失败：${error.message}`,true)}
+    }
+    function toggleFloor3AddItemPanel(){const pallet=floor3CurrentPallet(state.floor3.detail);if(!canOperate()||floor3PalletRestricted(pallet))return;$("floor3AddItemPanel").classList.toggle("hidden")}
+    function resetFloor3AddItemForm(){
+      $("floor3AddCustomer").innerHTML=floor3CustomerOptions("");$("floor3AddKeyword").value="";$("floor3AddQuantity").value="";$("floor3AddPending").checked=false;$("floor3AddSelected").textContent="尚未选择";$("floor3AddCandidates").innerHTML="";state.floor3.addCandidates=[];state.floor3.addCandidate=null;
+    }
+    async function searchFloor3AddCandidates(){
+      if(!canOperate())return;const query=queryString({customer_id:$("floor3AddCustomer").value,q:$("floor3AddKeyword").value.trim()});
+      try{const data=await api(`/api/warehouse/floor3/product-candidates?${query}`);state.floor3.addCandidates=data.items||data.candidates||[];state.floor3.addCandidate=null;$("floor3AddSelected").textContent="尚未选择";$("floor3AddCandidates").innerHTML=state.floor3.addCandidates.map((item,index)=>`<button class="floor3-candidate" type="button" onclick="selectFloor3AddCandidate(${index})">${h(item.product_code||item.inventory_code||item.id)} · ${h(item.product_name||item.name||"")} · 点击选择</button>`).join("")||'<span class="muted">暂无候选</span>'}catch(error){toast(`产品候选加载失败：${error.message}`,true)}
+    }
+    function selectFloor3AddCandidate(index){state.floor3.addCandidate=state.floor3.addCandidates[index]||null;if(state.floor3.addCandidate)$("floor3AddSelected").textContent=`已选择：${state.floor3.addCandidate.product_code||state.floor3.addCandidate.inventory_code||state.floor3.addCandidate.id} · ${state.floor3.addCandidate.product_name||state.floor3.addCandidate.name||""}`}
+    async function saveFloor3AdditionalItem(){
+      if(!canOperate())return;const detail=state.floor3.detail,pallet=detail?.current_pallet||detail?.pallet;if(!pallet||floor3PalletRestricted(pallet)){toast("当前栈板不可操作，请刷新后重试",true);return}
+      const expectedVersion=floor3ExpectedVersion(pallet.id);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      const quantity=Number($("floor3AddQuantity").value),pending=$("floor3AddPending").checked,candidate=state.floor3.addCandidate,keyword=$("floor3AddKeyword").value.trim();
+      if(!Number.isFinite(quantity)||quantity<=0){toast("数量必须大于0",true);return}if(!pending&&!candidate){toast("请点击选择产品候选，不能自动选择",true);return}if(pending&&!keyword){toast("待匹配至少填写关键词作为快照",true);return}
+      const item={customer_id:$("floor3AddCustomer").value?Number($("floor3AddCustomer").value):(candidate?.customer_id??null),product_id:pending?null:(candidate.product_id??candidate.id),inventory_code:pending?keyword:(candidate.product_code||candidate.inventory_code||null),product_name:pending?keyword:(candidate.product_name||candidate.name||null),quantity,item_type:"finished",unit:"boxes",match_status:pending?"pending":"matched"};
+      try{await api(`/api/warehouse/pallets/${pallet.id}/items`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,item})});toast("同栈板产品已增加");await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`增加同栈板产品失败：${error.message}`,true)}
+    }
+    async function moveFloor3Pallet(palletId){
+      if(!canOperate()||!state.floor3.moveMode){toast("请先进入库位调整模式",true);return}const target=$("floor3MoveTarget").value;if(!target){toast("请选择空闲启用货位",true);return}
+      const expectedVersion=floor3ExpectedVersion(palletId);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      try{await performFloor3Move(palletId,expectedVersion,target,$("floor3MoveRemarks").value.trim()||"手工移位");toast("栈板移位成功");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){if(error.status===409){toast("目标货位状态已变化，已刷新数据",true);await refreshFloor3LocationData();return}toast(`栈板移位失败：${error.message}`,true)}
+    }
+    async function clearFloor3Pallet(palletId){
+      if(!canOperate())return;if(!confirm("确认清空当前栈板？产品记录会离开当前货位。"))return;if(!confirm("请再次确认：清空后需要通过历史追溯，是否继续？"))return;
+      const response=prompt("请输入清空备注");if(response===null)return;const remarks=response.trim();if(!remarks){toast("清空备注不能为空",true);return}
+      const expectedVersion=floor3ExpectedVersion(palletId);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      try{await api(`/api/warehouse/pallets/${palletId}/clear`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,remarks})});toast("栈板已清空");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`清空栈板失败：${error.message}`,true)}
+    }
+    async function setFloor3Relocation(palletId,needsRelocation){
+      if(!canOperate())return;const remarks=prompt(needsRelocation?"请输入待归位原因":"请输入取消待归位原因")?.trim();if(!remarks)return;
+      const expectedVersion=floor3ExpectedVersion(palletId);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      try{await api(`/api/warehouse/pallets/${palletId}/relocation-flag`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,needs_relocation:Boolean(needsRelocation),remarks})});toast("待归位标记已更新");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`待归位标记失败：${error.message}`,true)}
+    }
+    floor3InitAreaFilter();state.floor3.bindRows=[floor3BindRowDefaults()];renderFloor3BindRows();
     init();
   </script>
 </body>

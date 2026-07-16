@@ -1189,7 +1189,7 @@ def test_incoming_receipt_migration_round_trip_on_copy(
         ).fetchall()
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert {"incoming_receipts", "incoming_receipt_items"} <= tables
-    assert version == "an41v7w8x9j31"
+    assert version == "at47v7w8x9p37"
     assert finance_columns["resolution_action"][3] == 0
     assert finance_columns["resolution_action"][4] is None
     assert {

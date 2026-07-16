@@ -74,6 +74,7 @@ from app.services.order_pdf_import import (
     merge_simair_text_and_ocr_drafts,
     match_import_draft,
     parse_purchase_order_text,
+    resolve_pdf_customer_route,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
 from app.services.pdf_ocr import analyze_pdf_text_quality, ocr_pdf_bytes, should_use_ocr
@@ -1269,6 +1270,7 @@ def _parse_order_pdf_preview(
     """Parse an order PDF for preview, using OCR only when text parsing needs it."""
     text = extract_text_from_pdf_bytes(content)
     quality_status = str(analyze_pdf_text_quality(text)["status"])
+    customer_route = resolve_pdf_customer_route(text or "", template_rules)
     draft: dict | None = None
     text_draft: dict | None = None
     parse_error: PdfParseError | None = None
@@ -1279,7 +1281,9 @@ def _parse_order_pdf_preview(
                 text,
                 source_name=filename,
                 template_rules=template_rules,
+                customer_route=customer_route,
             )
+            customer_route = draft.get("customer_route") or customer_route
             if quality_status == "garbled_text_layer" and draft.get("customer_type") == "simair":
                 text_draft = draft
                 draft = None
@@ -1295,6 +1299,8 @@ def _parse_order_pdf_preview(
         )
         if ocr_text and ocr_method not in {"ocr_unavailable", "ocr_failed"}:
             try:
+                if customer_route.get("status") == "unmatched":
+                    customer_route = resolve_pdf_customer_route(ocr_text, template_rules)
                 ocr_parse_text = ocr_text
                 exact_po = str((text_draft or {}).get("customer_po") or "").strip()
                 if exact_po and exact_po.casefold() not in ocr_text.casefold():
@@ -1305,6 +1311,7 @@ def _parse_order_pdf_preview(
                     ocr_parse_text,
                     source_name=filename,
                     template_rules=template_rules,
+                    customer_route=customer_route,
                 )
                 result = (
                     merge_simair_text_and_ocr_drafts(text_draft, ocr_draft)
@@ -1336,6 +1343,7 @@ def _parse_order_pdf_preview(
         text or "",
         source_name=filename,
         template_rules=template_rules,
+        customer_route=customer_route,
     )
 
 

@@ -2348,13 +2348,6 @@
                           <input v-if="item.is_new_product" class="input" style="width:100%" v-model.trim="item.raw_product_name" placeholder="产品名称" />
                           <span v-else>{{ item.raw_product_name || "-" }}</span>
                         </div>
-                        <!-- 多候选时显示候选下拉 -->
-                        <div v-if="!item.is_new_product && item.product_candidates && item.product_candidates.length > 1" style="margin-top:4px">
-                          <select class="select" v-model="item.matched_product_id" @change="selectImportProduct(item)" style="font-size:12px">
-                            <option :value="null">请选择候选产品</option>
-                            <option v-for="p in item.product_candidates" :key="p.id" :value="p.id">{{ p.product_code }} / 思迈尔变体参考号 {{ p.customer_material_code || '-' }} / {{ p.product_name }} / {{ p.specification || '-' }} / {{ p.sale_unit_price || '-' }}</option>
-                          </select>
-                        </div>
                         <!-- 无匹配时允许新建 -->
                         <label v-if="!item.matched_product_id" style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px;cursor:pointer">
                           <input type="checkbox" v-model="item.is_new_product" @change="toggleNewProduct(item)" style="margin:0" /> 新产品（系统新建）
@@ -2405,6 +2398,18 @@
                                 class="btn small"
                                 style="margin-top:4px"
                                 @click="startEditImportItem(draft, item)">编辑</button>
+                      </td>
+                    </tr>
+                    <!-- 多候选副行：只切换常用箱，不改写 PDF 存货编码 -->
+                    <tr v-if="!item.is_new_product && item.product_candidates && item.product_candidates.length > 1" class="order-item-sub-row import-product-candidate-row">
+                      <td colspan="8" style="padding:4px 6px 7px">
+                        <div style="display:flex;gap:8px;align-items:center">
+                          <label style="font-size:12px;font-weight:600;white-space:nowrap">匹配候选（只选择常用箱，不会改写 PDF 存货编码）</label>
+                          <select class="select" v-model="item.matched_product_id" @change="selectImportProduct(item)" style="font-size:12px;flex:1;min-width:0">
+                            <option :value="null">请选择候选产品</option>
+                            <option v-for="p in item.product_candidates" :key="p.id" :value="p.id">{{ importProductCandidateLabel(draft, p) }}</option>
+                          </select>
+                        </div>
                       </td>
                     </tr>
                     <!-- 编辑行 -->
@@ -7563,6 +7568,32 @@
               return names.length ? `匹配到多个候选：${names.join("、")}` : "匹配到多个客户，请人工选择";
             }
             return "未匹配到客户，请手工选择";
+          },
+          isSimairImportCustomer(draft) {
+            if (!draft?.matched_customer_id) return false;
+            const matched = this.customerOptions.find(
+              row => Number(row.id) === Number(draft.matched_customer_id)
+            ) || (draft.customer_candidates || []).find(
+              row => Number(row.id) === Number(draft.matched_customer_id)
+            );
+            return String(matched?.name || "").includes("思迈尔");
+          },
+          importProductCandidateLabel(draft, candidate) {
+            const defaultPrice = candidate?.sale_unit_price === null
+              || candidate?.sale_unit_price === undefined
+              || candidate?.sale_unit_price === ""
+              ? "-"
+              : this.money(candidate.sale_unit_price);
+            const parts = [
+              `常用箱编码 ${candidate?.product_code || "-"}`,
+              `名称 ${candidate?.product_name || "-"}`,
+              `规格 ${candidate?.specification || "-"}`,
+              `默认单价 ${defaultPrice}`,
+            ];
+            if (this.isSimairImportCustomer(draft)) {
+              parts.splice(1, 0, `思迈尔变体参考号 ${candidate?.customer_material_code || "-"}`);
+            }
+            return parts.join(" / ");
           },
           canConfirmImportDraft(draft) {
             return !this.importDraftBlockReasons(draft).length;

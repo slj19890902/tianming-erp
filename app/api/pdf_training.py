@@ -50,6 +50,7 @@ from app.services.order_pdf_import import (
     file_sha256,
     merge_simair_text_and_ocr_drafts,
     parse_purchase_order_text,
+    resolve_pdf_customer_route,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
 from app.services.pdf_ocr import (
@@ -139,17 +140,21 @@ def _parse_pdf_sample_content(
     parse_method = "failed"
     text_quality = "image_only"
     text_draft: dict | None = None
+    customer_route = resolve_pdf_customer_route("", template_rules)
 
     try:
         extracted_text = extract_text_from_pdf_bytes(content)
         if extracted_text and extracted_text.strip():
             text_quality = str(analyze_pdf_text_quality(extracted_text)["status"])
+            customer_route = resolve_pdf_customer_route(extracted_text, template_rules)
             try:
                 parse_result = parse_purchase_order_text(
                     extracted_text,
                     source_name=source_name,
                     template_rules=template_rules,
+                    customer_route=customer_route,
                 )
+                customer_route = parse_result.get("customer_route") or customer_route
                 parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
                 parse_method = "text"
                 if text_quality == "garbled_text_layer" and parse_result.get("customer_type") == "simair":
@@ -172,6 +177,8 @@ def _parse_pdf_sample_content(
             ocr_text_raw = ocr_text
             if text_quality != "readable_text" or parse_result is None or not parse_result.get("items"):
                 try:
+                    if customer_route.get("status") == "unmatched":
+                        customer_route = resolve_pdf_customer_route(ocr_text, template_rules)
                     ocr_parse_text = ocr_text
                     if text_draft and text_draft.get("customer_po"):
                         exact_po = str(text_draft["customer_po"]).strip()
@@ -181,6 +188,7 @@ def _parse_pdf_sample_content(
                         ocr_parse_text,
                         source_name=source_name,
                         template_rules=template_rules,
+                        customer_route=customer_route,
                     )
                     parse_result = (
                         merge_simair_text_and_ocr_drafts(text_draft, ocr_parse)

@@ -187,6 +187,95 @@ def detect_pdf_customer_by_template(
     return None
 
 
+def _parser_key(customer_type: str | None) -> str:
+    if customer_type in ("tianhua_chao", "tianhua_energy"):
+        return "tianhua"
+    return customer_type if customer_type in {"gaotai", "simair"} else "generic"
+
+
+def _effective_template_rules(template_rules: list[dict] | None) -> list[dict]:
+    if template_rules:
+        return template_rules
+    from app.services.pdf_customer_templates import GAOTAI_TEMPLATE_RULE
+    return [GAOTAI_TEMPLATE_RULE]
+
+
+def resolve_pdf_customer_route(text: str, template_rules: list[dict] | None = None) -> dict:
+    """Resolve template identity once; callers keep this route for OCR/post-processing."""
+    candidates = []
+    typed_candidates = []
+    for rule in _effective_template_rules(template_rules):
+        customer_name = str(rule.get("customer_name") or "").strip() or None
+        customer_type = rule.get("customer_type")
+        if customer_type in (None, "", "unknown"):
+            customer_type = _detect_customer_type(customer_name, None)
+        candidate = {
+            "template_id": rule.get("template_id"),
+            "template_customer_id": rule.get("customer_id"),
+            "template_customer_valid": rule.get("template_customer_valid"),
+            "customer_type": customer_type,
+            "customer_name": customer_name,
+            "parser_key": _parser_key(customer_type),
+        }
+        if customer_type not in (None, "", "unknown"):
+            typed_candidates.append(candidate)
+        if detect_pdf_customer_by_template(text, [rule]) is not None:
+            candidates.append(candidate)
+    po_match = ORDER_NO_RE.search(text or "")
+    legacy_type = _detect_customer_type(None, po_match.group(1) if po_match else None, text)
+    if candidates and legacy_type in {"tianhua_chao", "tianhua_energy"} and all(
+        item["parser_key"] != "tianhua" for item in candidates):
+        candidates = []
+    if not candidates and legacy_type not in (None, "", "unknown"):
+        candidates = [
+            item for item in typed_candidates
+            if item["customer_type"] == legacy_type
+        ]
+    route = {
+        "status": "unmatched", "parser_key": "generic", "template_id": None,
+        "template_customer_id": None, "customer_type": "unknown",
+        "customer_name": None, "candidates": candidates,
+    }
+    identities = {
+        ("id", item["template_customer_id"])
+        if item["template_customer_id"] is not None
+        else ("name", (item["customer_name"] or "").casefold(), item["customer_type"])
+        for item in candidates
+    }
+    invalid = any(
+        item["template_customer_id"] is not None and item["template_customer_valid"] is False
+        for item in candidates
+    )
+    parser_keys = {item["parser_key"] for item in candidates}
+    if not candidates:
+        return route
+    if invalid or len(identities) > 1 or len(parser_keys) > 1:
+        return {**route, "status": "needs_confirmation"}
+    selected = candidates[0]
+    return {**route, **selected, "status": "locked", "candidates": candidates}
+
+
+def _template_match_from_route(route: dict, template_rules: list[dict] | None) -> dict | None:
+    if route.get("status") != "locked":
+        return None
+    for rule in _effective_template_rules(template_rules):
+        template_id = route.get("template_id")
+        same_template = template_id is not None and rule.get("template_id") == template_id
+        same_builtin = (
+            template_id is None
+            and (rule.get("customer_type") or "unknown") == route.get("customer_type")
+            and str(rule.get("customer_name") or "").strip() == (route.get("customer_name") or "")
+        )
+        if same_template or same_builtin:
+            return {
+                "customer_name": route.get("customer_name"),
+                "customer_type": route.get("customer_type"),
+                "template_name": rule.get("template_name"),
+                "rule": rule,
+            }
+    return None
+
+
 def normalize_gaotai_product_code(code: str) -> tuple[str, str | None]:
     raw = (code or "").strip()
     match = re.fullmatch(r"30(\d{5})", raw, re.IGNORECASE)
@@ -200,6 +289,7 @@ def apply_customer_template_postprocess(
     result: dict,
     raw_text: str,
     template_rules: list[dict] | None = None,
+    customer_route: dict | None = None,
 ) -> dict:
     output = json.loads(json.dumps(result, ensure_ascii=False, default=str))
     warnings = list(output.get("warnings") or [])
@@ -222,7 +312,11 @@ def apply_customer_template_postprocess(
             ],
         }
     ]
-    matched = detect_pdf_customer_by_template(raw_text, effective_rules)
+    matched = (
+        _template_match_from_route(customer_route, effective_rules)
+        if customer_route and customer_route.get("status") in {"locked", "needs_confirmation"}
+        else detect_pdf_customer_by_template(raw_text, effective_rules)
+    )
     if matched:
         if matched.get("customer_name"):
             output["customer_name"] = matched["customer_name"]
@@ -1364,10 +1458,31 @@ def _classify_pdf(
 # 主解析入口
 # ---------------------------------------------------------------------------
 
+def _finish_customer_route(result: dict, route: dict) -> dict:
+    final_route = dict(route)
+    customer_type = result.get("customer_type")
+    if final_route.get("status") == "unmatched" and customer_type not in (None, "", "unknown"):
+        final_route.update(
+            status="locked",
+            parser_key=_parser_key(customer_type),
+            customer_type=customer_type,
+            customer_name=result.get("customer_name"),
+        )
+    result["customer_route"] = final_route
+    if final_route.get("status") == "needs_confirmation":
+        result["recognition_status"] = "needs_confirmation"
+        result["parse_status"] = "needs_confirmation"
+        warning = "客户模板绑定无效或存在跨客户歧义，请人工确认客户。"
+        if warning not in result.setdefault("warnings", []):
+            result["warnings"].append(warning)
+    return result
+
+
 def parse_purchase_order_text(
     text: str,
     source_name: str | None = None,
     template_rules: list[dict] | None = None,
+    customer_route: dict | None = None,
 ) -> dict:
     lines = [_clean_line(line) for line in text.splitlines() if _clean_line(line)]
     if not lines:
@@ -1376,8 +1491,28 @@ def parse_purchase_order_text(
             "文件中未提取到可识别文字，可能是图片型 PDF，需要 OCR。",
             "ocr_required" if ocr_available() else "ocr_unavailable",
         )
+    route = dict(customer_route or resolve_pdf_customer_route(text, template_rules))
+    if route.get("status") == "needs_confirmation":
+        return _finish_customer_route({
+            "source_name": source_name or "uploaded.pdf",
+            "source_type": "purchase_order_pdf",
+            "customer_name_raw": None,
+            "customer_name": None,
+            "customer_type": "unknown",
+            "customer_po": None,
+            "order_date": None,
+            "delivery_date": None,
+            "recognition_status": "needs_confirmation",
+            "parse_status": "needs_confirmation",
+            "duplicate_status": None,
+            "duplicate_reason": None,
+            "item_count": 0,
+            "items": [],
+            "warnings": [],
+            "is_tianhua": False,
+        }, route)
     order_match = ORDER_NO_RE.search(text)
-    template_match = detect_pdf_customer_by_template(text, template_rules)
+    template_match = _template_match_from_route(route, template_rules)
     if not order_match and template_match and template_match.get("customer_type") == "gaotai":
         gaotai_order_no = _extract_gaotai_order_no(text)
         if gaotai_order_no:
@@ -1394,7 +1529,18 @@ def parse_purchase_order_text(
     # 提取客户名
     customer_name = _extract_customer_name(lines, customer_po)
     detected_customer_type = _detect_customer_type(customer_name, customer_po, text)
-    if detected_customer_type in ("tianhua_chao", "tianhua_energy"):
+    if route.get("status") == "locked":
+        parser_key = route.get("parser_key")
+        routed_type = route.get("customer_type")
+        if parser_key == "tianhua":
+            customer_type = routed_type if routed_type in ("tianhua_chao", "tianhua_energy") else "tianhua_chao"
+        elif parser_key in {"gaotai", "simair"}:
+            customer_type = parser_key
+        else:
+            customer_type = routed_type if routed_type not in (None, "", "unknown") else detected_customer_type
+        if route.get("customer_name"):
+            customer_name = route["customer_name"]
+    elif detected_customer_type in ("tianhua_chao", "tianhua_energy"):
         template_match = None
         customer_type = detected_customer_type
     else:
@@ -1425,7 +1571,7 @@ def parse_purchase_order_text(
             warnings.extend(integrity_check["integrity_errors"])
             order_date_match = DMY_DATE_RE.search(text[order_match.end():order_match.end() + 100])
             status = "recognized" if not warnings and integrity_check["integrity_status"] == "passed" else "needs_confirmation"
-            return _apply_quantity_review_flags({
+            return _finish_customer_route(_apply_quantity_review_flags({
                 "source_name": source_name or "uploaded.pdf",
                 "source_type": "purchase_order_pdf",
                 "customer_name_raw": customer_name,
@@ -1444,8 +1590,8 @@ def parse_purchase_order_text(
                 "warnings": warnings,
                 "integrity_check": integrity_check,
                 "is_tianhua": False,
-            })
-        return {
+            }), route)
+        return _finish_customer_route({
             "source_name": source_name or "uploaded.pdf",
             "source_type": "purchase_order_pdf",
             "customer_name_raw": customer_name,
@@ -1463,11 +1609,11 @@ def parse_purchase_order_text(
             "items": [],
             "warnings": ["已识别客户（思迈尔），但当前版本暂未建立该客户解析模板。"],
             "is_tianhua": False,
-        }
+        }, route)
 
     # 天明：疑似销售方向文件，明确返回状态，不纳入采购订单解析
     if customer_type == "tianming":
-        return {
+        return _finish_customer_route({
             "source_name": source_name or "uploaded.pdf",
             "source_type": "purchase_order_pdf",
             "customer_name_raw": customer_name,
@@ -1485,7 +1631,7 @@ def parse_purchase_order_text(
             "items": [],
             "warnings": ["疑似销售方向文件（发往天明），待人工确认。"],
             "is_tianhua": False,
-        }
+        }, route)
 
     # 其他未识别客户：明确失败原因，不静默
     if customer_type == "unknown" and not customer_name:
@@ -1568,8 +1714,13 @@ def parse_purchase_order_text(
         "is_tianhua": is_tianhua,
         "has_extra_columns": has_extra_columns,
     }
-    return _apply_quantity_review_flags(
-        apply_customer_template_postprocess(result, text, template_rules=template_rules)
+    return _finish_customer_route(
+        _apply_quantity_review_flags(
+            apply_customer_template_postprocess(
+                result, text, template_rules=template_rules, customer_route=route
+            )
+        ),
+        route,
     )
 
 
@@ -1986,11 +2137,34 @@ def mark_order_duplicate(db: Session, draft: dict) -> dict:
 
 
 def match_import_draft(db: Session, draft: dict, customer_id: int | None = None) -> dict:
-    match_status, matched_customer_id, candidates = _customer_match(
-        db, draft.get("customer_name_raw") or draft.get("customer_name")
-    )
+    route = draft.get("customer_route") if isinstance(draft.get("customer_route"), dict) else {}
     if customer_id is not None:
-        match_status, matched_customer_id = "matched", customer_id
+        match_status, matched_customer_id, candidates = "matched", customer_id, []
+    elif route.get("status") == "needs_confirmation":
+        match_status, matched_customer_id = "needs_confirmation", None
+        candidates = [
+            {"id": item.get("template_customer_id"), "name": item.get("customer_name")}
+            for item in route.get("candidates", [])
+            if item.get("template_customer_id") is not None
+        ]
+    elif route.get("status") == "locked" and route.get("template_customer_id") is not None:
+        bound_customer = db.scalar(
+            select(Customer).where(
+                Customer.id == route["template_customer_id"],
+                Customer.is_active.is_(True),
+                Customer.status == "active",
+            )
+        )
+        if bound_customer is None:
+            match_status, matched_customer_id, candidates = "needs_confirmation", None, []
+            draft = {**draft, "customer_route": {**route, "status": "needs_confirmation"}}
+        else:
+            match_status, matched_customer_id = "matched", bound_customer.id
+            candidates = [{"id": bound_customer.id, "name": bound_customer.name}]
+    else:
+        match_status, matched_customer_id, candidates = _customer_match(
+            db, draft.get("customer_name_raw") or draft.get("customer_name")
+        )
     result = rematch_draft_items(db, draft, matched_customer_id)
     result.update(
         customer_match_status=match_status,
@@ -2002,6 +2176,8 @@ def match_import_draft(db: Session, draft: dict, customer_id: int | None = None)
         warnings.append("未匹配到客户，请手动选择客户。")
     elif match_status == "multiple_candidates":
         warnings.append("匹配到多个客户候选，请人工确认。")
+    elif match_status == "needs_confirmation" and "客户模板绑定无效或存在跨客户歧义，请人工确认客户。" not in warnings:
+        warnings.append("客户模板绑定无效或存在跨客户歧义，请人工确认客户。")
     if any(not item.get("matched_product_id") for item in result["items"]):
         warnings.append("部分明细未唯一匹配产品，请逐行选择。")
     result["warnings"] = warnings

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -362,9 +363,59 @@ def test_pdf_training_detail_supports_single_sample_reparse() -> None:
 
 def test_order_pdf_preview_explains_simair_merge_and_candidate_evidence() -> None:
     assert "source_text_quality === 'garbled_text_layer'" in INDEX
-    assert "思迈尔变体参考号" in INDEX
-    assert "p.specification || '-'" in INDEX
-    assert "p.sale_unit_price || '-'" in INDEX
+    assert "isSimairImportCustomer(draft)" in INDEX
+    assert "importProductCandidateLabel(draft, p)" in INDEX
+
+
+def test_order_pdf_multi_candidate_picker_uses_full_width_subrow() -> None:
+    table_start = INDEX.index('<!-- PDF草稿明细：简洁2行布局，常用箱名称/规格/材质为主 -->')
+    table_end = INDEX.index("</table>", table_start)
+    table_block = INDEX[table_start:table_end]
+    header_start = table_block.index("<thead>")
+    header_end = table_block.index("</thead>", header_start)
+    column_count = len(
+        re.findall(r"<th(?:\s|>)", table_block[header_start:header_end])
+    )
+
+    main_row_start = table_block.index("<!-- 主行 -->")
+    main_row_end = table_block.index("</tr>", main_row_start) + len("</tr>")
+    edit_row_start = table_block.index("<!-- 编辑行 -->", main_row_end)
+    main_row = table_block[main_row_start:main_row_end]
+    candidate_row = table_block[main_row_end:edit_row_start]
+
+    assert column_count == 8
+    assert 'class="order-item-sub-row import-product-candidate-row"' in candidate_row
+    assert f'colspan="{column_count}"' in candidate_row
+    assert "匹配候选（只选择常用箱，不会改写 PDF 存货编码）" in candidate_row
+    assert 'v-model="item.matched_product_id"' in candidate_row
+    assert '@change="selectImportProduct(item)"' in candidate_row
+    assert "importProductCandidateLabel(draft, p)" in candidate_row
+    assert '@change="selectImportProduct(item)"' not in main_row
+
+
+def test_order_pdf_candidate_label_uses_confirmed_customer_for_simair_reference() -> None:
+    customer_check_start = INDEX.index("isSimairImportCustomer(draft)")
+    label_start = INDEX.index(
+        "importProductCandidateLabel(draft, candidate)", customer_check_start
+    )
+    customer_check = INDEX[customer_check_start:label_start]
+    label_end = INDEX.index("canConfirmImportDraft(draft)", label_start)
+    label_block = INDEX[label_start:label_end]
+
+    assert "draft?.matched_customer_id" in customer_check
+    assert "Number(draft.matched_customer_id)" in customer_check
+    assert "draft.customer_candidates || []" in customer_check
+    assert 'includes("思迈尔")' in customer_check
+    assert "customer_name_raw" not in customer_check
+    assert "customer_type" not in customer_check
+
+    assert '常用箱编码 ${candidate?.product_code || "-"}' in label_block
+    assert '名称 ${candidate?.product_name || "-"}' in label_block
+    assert '规格 ${candidate?.specification || "-"}' in label_block
+    assert "candidate?.sale_unit_price" in label_block
+    assert "默认单价 ${defaultPrice}" in label_block
+    assert "if (this.isSimairImportCustomer(draft))" in label_block
+    assert '思迈尔变体参考号 ${candidate?.customer_material_code || "-"}' in label_block
 
 
 def test_quotation_conversion_uses_visible_report_and_crease_form() -> None:

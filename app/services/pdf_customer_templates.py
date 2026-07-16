@@ -49,7 +49,7 @@ def _json_dict(raw: str | None) -> dict:
 
 def load_active_pdf_template_rules(db: Session) -> list[dict]:
     rows = db.execute(
-        select(PdfOrderCustomerTemplate, Customer.name)
+        select(PdfOrderCustomerTemplate, Customer)
         .outerjoin(Customer, PdfOrderCustomerTemplate.customer_id == Customer.id)
         .where(PdfOrderCustomerTemplate.is_active.is_(True))
         .order_by(PdfOrderCustomerTemplate.created_at.desc())
@@ -57,13 +57,18 @@ def load_active_pdf_template_rules(db: Session) -> list[dict]:
 
     rules: list[dict] = []
     has_gaotai = False
-    for template, customer_name in rows:
+    for template, customer in rows:
         payload = _json_dict(template.column_map_json)
         merged = {
             "template_id": template.id,
             "template_name": template.template_name,
             "customer_id": template.customer_id,
-            "customer_name": payload.get("customer_name") or customer_name,
+            "customer_name": payload.get("customer_name") or (customer.name if customer else None),
+            "customer_type": payload.get("customer_type"),
+            "template_customer_valid": (
+                bool(customer and customer.is_active and customer.status == "active")
+                if template.customer_id is not None else None
+            ),
             "customer_name_pattern": template.customer_name_pattern,
             "order_no_pattern": template.order_no_pattern,
             "date_pattern": template.date_pattern,

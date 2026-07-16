@@ -187,6 +187,9 @@ def manual_finished_in(
     idempotency_key: str | None,
     source_ref_type: str | None = None,
     source_ref_id: int | None = None,
+    pallet_id: int | None = None,
+    pallet_code: str | None = None,
+    require_empty_pallet: bool = False,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -267,6 +270,9 @@ def manual_finished_in(
             db,
             lot=lot,
             operator_id=operator_id,
+            pallet_id=pallet_id,
+            pallet_code=pallet_code,
+            require_empty_pallet=require_empty_pallet,
         )
     db.flush()
     return lot

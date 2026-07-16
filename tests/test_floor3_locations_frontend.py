@@ -97,7 +97,6 @@ def test_floor3_restricted_pallet_never_renders_write_controls() -> None:
     assert "当前货位已占用（客户范围受限）" in WAREHOUSE_HTML
     assert "位置内容受客户范围权限保护" in WAREHOUSE_HTML
     assert "pallet&&!restricted&&canOperate()?" in detail_block
-    assert "pallet&&canOperate()?" not in detail_block
     assert "pallet&&!restricted&&canOperate()?" in detail_block
 
 
@@ -198,8 +197,10 @@ def test_floor3_map_slot_selection_renders_in_fixed_right_rail() -> None:
     )[0]
     for field in ("customer_name", "customer", "inventory_code", "product_name", "quantity", "styleCount"):
         assert field in summary_block
-    for label in ("客户", "存货编码", "产品名称", "数量", "款式数"):
+    for label in ("客户", "存货编码", "产品名称", "款式数"):
         assert label in summary_block
+    assert "floor3QuantityHtml(item)" in summary_block
+    assert "floor3-item-quantity" in WAREHOUSE_HTML
 
 
 def test_floor3_f2_f3_f4_rack_cells_are_clickable_but_not_pallet_drag_endpoints() -> None:
@@ -404,7 +405,9 @@ def test_floor3_move_mode_is_explicit_and_stale_controls_cannot_move_inventory()
     assert 'id="floor3EditNotice"' in WAREHOUSE_HTML
     assert "async function toggleFloor3MoveMode()" in WAREHOUSE_HTML
     assert 'state.floor3.moveMode=!state.floor3.moveMode' in WAREHOUSE_HTML
-    assert 'if(!canOperate()||!state.floor3.moveMode){toast("请先进入库位调整模式",true);return}' in WAREHOUSE_HTML
+    assert 'if(!canOperate()||!state.floor3.moveMode){toast("请先进入移动栈板模式",true);return}' in WAREHOUSE_HTML
+    assert "移动栈板模式" in WAREHOUSE_HTML
+    assert "调整平面图布局" in WAREHOUSE_HTML
     assert "if(state.floor3.detail)renderFloor3Detail()" in WAREHOUSE_HTML
     assert 'if(!floor3Active){document.body.classList.remove("floor3-area-mode","floor3-workspace-mode");state.floor3.moveMode=false' in WAREHOUSE_HTML
 
@@ -514,9 +517,9 @@ def test_floor3_map_overlays_physical_slots_and_keeps_slot_clicks_out_of_area_fo
     summary = WAREHOUSE_HTML.split("function floor3PalletSummary(row)", 1)[1].split(
         "function floor3SlotMarker", 1
     )[0]
-    assert "items.reduce((sum,item)=>sum+(Number(item.quantity)||0),0)" in summary
     assert "item.inventory_code||item.product_code" in summary
-    assert "<b>合计：${h(total)}</b>" in summary
+    assert "floor3QuantityHtml(item)" in summary
+    assert "<b>合计：" not in summary
     overview_click = WAREHOUSE_HTML.split("function floor3OpenMapSlot", 1)[1].split(
         "function floor3AllowPalletDrop", 1
     )[0]
@@ -538,7 +541,7 @@ def test_floor3_drag_requires_confirmation_and_rejects_invalid_targets_client_si
     assert "state.floor3.pendingMove={source,target,pallet}" in drop_block
     assert "api(" not in drop_block
     assert "function cancelFloor3MapMove(){state.floor3.pendingMove=null" in WAREHOUSE_HTML
-    assert '"地图拖拽移位"' in WAREHOUSE_HTML
+    assert '"地图拖拽移动栈板"' in WAREHOUSE_HTML
     assert "if(error.status===409)" in WAREHOUSE_HTML
     assert "await refreshFloor3LocationData()" in WAREHOUSE_HTML
     assert WAREHOUSE_HTML.count("state.floor3.pendingMove=null;renderFloor3MoveConfirmation()") >= 2
@@ -561,7 +564,7 @@ def test_floor3_area_focus_and_admin_layout_edit_are_separate_modes() -> None:
     assert "function floor3SetAreaBackdrop(areaCode)" in WAREHOUSE_HTML
     assert "target.dataset.areaCode=zone.id" in WAREHOUSE_HTML
     assert "floor3AreaBackdropHtml" in WAREHOUSE_HTML
-    assert "当前登记数量合计" in WAREHOUSE_HTML
+    assert "当前登记数量合计" not in WAREHOUSE_HTML
     assert "点击左侧具体货位" in WAREHOUSE_HTML
     assert 'if(state.floor3.viewMode==="areaFocus")renderFloor3AreaSlots()' in WAREHOUSE_HTML
     assert "保存布局不会改变库存数量" in WAREHOUSE_HTML
@@ -848,3 +851,116 @@ def test_floor3_clear_cancel_and_blank_reason_do_not_send_request() -> None:
     assert '||"现场清空"' not in clear_block
     assert clear_block.index("if(response===null)return") < clear_block.index("/clear`")
     assert clear_block.index("if(!remarks){toast(") < clear_block.index("/clear`")
+
+
+def test_floor3_dynamic_bind_customers_are_redrawn_after_customer_load() -> None:
+    loader = WAREHOUSE_HTML.split("async function loadCustomers(){", 1)[1].split(
+        "function clearFinishedProductSelection", 1
+    )[0]
+    assert 'state.customers=data.items' in loader
+    assert "syncFloor3BindRows();renderFloor3BindRows()" in loader
+    assert loader.index("state.customers=data.items") < loader.index("renderFloor3BindRows()")
+    assert 'class="floor3-bind-customer" onchange="scheduleFloor3BindCandidateSearch(' in WAREHOUSE_HTML
+
+
+def test_floor3_bind_candidate_search_is_guarded_debounced_and_stale_safe() -> None:
+    schedule = WAREHOUSE_HTML.split("function scheduleFloor3BindCandidateSearch(index){", 1)[1].split(
+        "async function searchFloor3BindCandidates", 1
+    )[0]
+    search = WAREHOUSE_HTML.split("async function searchFloor3BindCandidates(index){", 1)[1].split(
+        "function selectFloor3BindCandidate", 1
+    )[0]
+    sync = WAREHOUSE_HTML.split("function syncFloor3BindRows(){", 1)[1].split(
+        "function setFloor3BindCandidateMessage", 1
+    )[0]
+    assert "setTimeout(()=>searchFloor3BindCandidates(index),260)" in schedule
+    assert "if(!row.keyword)" in schedule and "if(!row.keyword)" in search
+    assert search.index("if(!row.keyword)") < search.index("api(`/api/warehouse/floor3/product-candidates?")
+    assert "requestId=++row.requestId" in search
+    assert "requestId!==row.requestId" in search
+    assert "limit:30" in search
+    assert "criteriaChanged" in sync
+    assert "row.candidates=[];row.candidate=null" in sync
+    assert 'oninput="scheduleFloor3BindCandidateSearch(' in WAREHOUSE_HTML
+
+
+def test_floor3_bind_panel_lives_in_detail_rail_and_closes_independently() -> None:
+    assert WAREHOUSE_HTML.count('id="floor3BindPanel"') == 1
+    assert '<div id="floor3AreaDetailRail"><div id="floor3DetailPanel"' in WAREHOUSE_HTML
+    assert WAREHOUSE_HTML.index('id="floor3AreaDetailRail"') < WAREHOUSE_HTML.index('id="floor3BindPanel"')
+    assert 'id="floor3BindClose"' in WAREHOUSE_HTML
+    assert "function closeFloor3BindPanel(){state.floor3.bindPanelOpen=false" in WAREHOUSE_HTML
+    assert "state.floor3.bindPanelOpen=false;" in WAREHOUSE_HTML
+    assert 'onclick="openFloor3BindPanel()">快速绑定货物' in WAREHOUSE_HTML
+    assert ".floor3-area-focus #floor3AreaDetailRail .floor3-detail-grid{display:block}" in WAREHOUSE_HTML
+    assert ".floor3-area-focus #floor3AreaDetailRail .btn{max-width:100%;white-space:normal}" in WAREHOUSE_HTML
+    assert ".floor3-area-focus>div:first-child{min-width:0}" in WAREHOUSE_HTML
+    assert ".floor3-area-slot-map{position:relative;width:100%;max-width:100%;min-width:0" in WAREHOUSE_HTML
+
+
+def test_floor3_units_are_localized_and_right_rail_has_no_quantity_total() -> None:
+    assert 'boxes:"个",sheets:"张"' in WAREHOUSE_HTML
+    assert "function floor3UnitLabel(unit){return labels[unit]||unit||\"件\"}" in WAREHOUSE_HTML
+    summary = WAREHOUSE_HTML.split("function floor3PalletSummary(row)", 1)[1].split(
+        "function floor3MarkerTooltip", 1
+    )[0]
+    assert "floor3QuantityHtml(item)" in summary
+    assert "合计：" not in summary
+    assert "floor3UnitLabel(item.unit)" in WAREHOUSE_HTML
+    assert "floor3-item-quantity" in WAREHOUSE_HTML
+
+
+def test_floor3_finished_binding_and_legacy_promotion_use_explicit_contract() -> None:
+    build = WAREHOUSE_HTML.split("function floor3BuildItem(row){", 1)[1].split(
+        "async function saveFloor3Pallet", 1
+    )[0]
+    for field in ("create_finished_inventory", "stock_date", "idempotency_key"):
+        assert field in build
+    assert 'createFinishedInventory=!row.pending&&row.itemType==="finished"' in build
+    assert "stock_date:createFinishedInventory?today():null" in build
+    assert "idempotency_key:createFinishedInventory?row.idempotencyKey:null" in build
+    assert "createFinishedInventory&&!Number.isInteger(quantity)" in build
+    save = WAREHOUSE_HTML.split("async function saveFloor3Pallet(event){", 1)[1].split(
+        "function toggleFloor3AddItemPanel", 1
+    )[0]
+    assert "hasFinishedInventory&&hasSnapshot" in save
+    assert "正式成品行与现场快照行不能混合" in save
+    assert "item?.official_inventory===false" in WAREHOUSE_HTML
+    assert "一键同步成品仓" in WAREHOUSE_HTML
+    assert "/api/warehouse/pallets/${palletId}/items/${itemId}/promote-finished" in WAREHOUSE_HTML
+    promotion = WAREHOUSE_HTML.split("async function promoteFloor3FinishedItem", 1)[1].split(
+        "async function moveFloor3Pallet", 1
+    )[0]
+    assert "expected_version:Number(expectedVersion)" in promotion
+    assert "stock_date:today()" in promotion
+    assert "promotionKeys[itemId]" in promotion
+    assert "idempotency_key:idempotencyKey" in promotion
+    assert "promotionPending" in promotion
+
+
+def test_floor3_structured_ground_and_temporary_cells_support_pallet_drag() -> None:
+    cell = WAREHOUSE_HTML.split("function floor3FRackCell(row,bottom=false){", 1)[1].split(
+        "function floor3FRackCard", 1
+    )[0]
+    assert "floor3CanMovePallet(row)" in cell
+    assert "floor3CanReceivePallet(row)" in cell
+    assert "floor3StartPalletDrag" in cell
+    assert "floor3DropPallet" in cell
+    assert "draggable=\"${movable}\"" in cell
+    assert "function floor3CanMovePallet(row)" in WAREHOUSE_HTML
+    assert "!floor3IsRack(row)" in WAREHOUSE_HTML
+    refresh = WAREHOUSE_HTML.split("async function refreshFloor3AfterPalletMove", 1)[1].split(
+        "async function confirmFloor3MapMove", 1
+    )[0]
+    assert "closeFloor3Detail();await refreshFloor3LocationData()" in refresh
+    assert "await openFloor3Location(targetId)" in refresh
+
+
+def test_semi_finished_location_dropdown_prioritizes_sf_temp_and_explains_empty_state() -> None:
+    loader = WAREHOUSE_HTML.split("async function loadLocations(includeInactive=false){", 1)[1].split(
+        "async function loadCustomers", 1
+    )[0]
+    assert 'String(a.location_code).toUpperCase()==="SF-TEMP"' in loader
+    assert '$("siLocation").disabled=!semiLocations.length' in loader
+    assert 'id="siLocationHint"' in WAREHOUSE_HTML
+    assert "暂无半成品库位，请先完成 SF-TEMP 迁移或新增半成品库位" in WAREHOUSE_HTML

@@ -428,6 +428,8 @@
       .order-code-input { min-width: 80px !important; width: 80px; }
       .order-name-cell { min-width: 180px; }
       .order-item-sub-row td { background: #f8fafc; border-top: none; padding-top: 0 !important; }
+      .order-quantity-inventory { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+      .order-quantity-inventory .inventory-recommend-button { min-height:26px; padding:3px 7px; white-space:normal; line-height:1.2; }
 
       /* Modal */
       .modal-mask {
@@ -2372,7 +2374,7 @@
                       </td>
                       <!-- 数量 -->
                       <td style="padding:4px 6px;vertical-align:top">
-                        <input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:8ch" @input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)" />
+                        <div class="order-quantity-inventory"><input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:8ch" @input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div>
                         <div v-if="!Number.isInteger(Number(item.quantity))" style="font-size:10px;color:#dc2626;margin-top:2px">数量不是整数，请人工确认</div>
                       </td>
                       <!-- 客户单价 + 冲突提示 -->
@@ -2568,7 +2570,7 @@
                     <!-- 规格 -->
                     <td><input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
                     <!-- 数量 -->
-                    <td><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)" /></td>
+                    <td><div class="order-quantity-inventory"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div></td>
                     <!-- 单价 -->
                     <td class="sensitive-price"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
                     <!-- 图纸 -->
@@ -4785,6 +4787,46 @@
           semiCandidateNeedsOverride(candidate) {
             return candidate?.source === "manual" || (candidate?.source === "learned" && (candidate.signature_differences || []).length > 0);
           },
+          inventoryCandidateWarnings(candidate) {
+            return [
+              ...(candidate?.warning_codes || []),
+              ...(candidate?.warning_messages || []),
+              ...(candidate?.warnings || []),
+            ].filter(Boolean);
+          },
+          isSafeSystemInventoryCandidate(component, candidate) {
+            if (!candidate || candidate.source === "manual" || candidate.requires_confirmation === true || candidate.requires_override === true || candidate.override_required === true) return false;
+            if (this.inventoryCandidateWarnings(candidate).length) return false;
+            if (component === "finished") return candidate.is_general !== true && candidate.ownership !== "general" && candidate.inventory_scope !== "general";
+            return !this.semiCandidateNeedsOverride(candidate) && !(candidate.signature_differences || []).length;
+          },
+          safeSystemInventoryCandidates(line, component) {
+            const state = line?._inventory;
+            const part = component === "finished" ? state?.finished : state?.semi?.[component];
+            return (part?.candidates || []).filter(candidate => this.isSafeSystemInventoryCandidate(component, candidate));
+          },
+          hasSafeOrderLineInventoryRecommendation(line) {
+            const state = line?._inventory;
+            if (!state || state.loading || state.stale || state.api_error || !state.context) return false;
+            if (!this.inventoryStateMatchesLine(line, state.context.customer_id)) return false;
+            return ["finished", ...this.inventoryComponents(line)].some(component => {
+              const part = component === "finished" ? state.finished : state.semi[component];
+              return !part.skipped && !(part.selected_candidates || []).length && !part.selected && this.safeSystemInventoryCandidates(line, component).length > 0;
+            });
+          },
+          confirmSafeOrderLineInventoryRecommendations(line) {
+            const state = line?._inventory;
+            if (!state || !this.hasSafeOrderLineInventoryRecommendation(line)) return;
+            let changed = false;
+            ["finished", ...this.inventoryComponents(line)].forEach(component => {
+              const part = component === "finished" ? state.finished : state.semi[component];
+              if (part.skipped || (part.selected_candidates || []).length || part.selected) return;
+              const candidates = this.safeSystemInventoryCandidates(line, component);
+              if (!candidates.length) return;
+              part.selected_candidates = candidates; part.selected = candidates[0]; part.allocations = []; part.skipped = false; changed = true;
+            });
+            if (changed) this.reallocateAllDraftInventory();
+          },
           inventorySourcesText(sources) {
             return (sources || []).map(source => `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${source.location_code || source.location_name || "库位未标注"} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? 0}`).join("；");
           },
@@ -4881,12 +4923,10 @@
           },
           confirmOrderLineInventory(line, component, candidate=null, manual=false) {
             if (manual && !line._inventory.semi[component].manual_override) return;
-            const label = component === "finished" ? "成品" : `半成品${this.componentLabel(component)}`;
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
-            const candidates = manual ? [candidate] : state.candidates;
-            if (manual) candidate.source = "manual";
-            const warning = component !== "finished" && candidates.some(row => this.semiCandidateNeedsOverride(row)) ? "其中有规格差异，确认即表示已核对并同意 override。" : "";
-            if (!candidates.length || !confirm(`确认按 FIFO 使用 ${candidates.length} 个${label}推荐批次抵扣本订单？${warning}每次抵扣均需人工确认。`)) return;
+            const candidates = manual ? [candidate].filter(Boolean) : this.safeSystemInventoryCandidates(line, component);
+            if (manual && candidate) candidate.source = "manual";
+            if (!candidates.length) { this.showToast("没有可一键确认的安全系统推荐；风险候选需人工核对或选择本次不用库存", true); return; }
             state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false;
             this.reallocateAllDraftInventory();
           },

@@ -36,10 +36,13 @@ class PdfParseError(ValueError):
 
 # v0.19.1: 扩展支持思迈尔 P-XXXXXXX(-N) 格式
 ORDER_NO_RE = re.compile(
-    r"\b((?:THPO|PO)[A-Z0-9-]{6,}|P-\d{7}(?:-\d+)?|\d{4}-CG\d{6}-\d{2})\b",
+    r"(?<![A-Z0-9])"
+    r"((?:THPO|PO)[A-Z0-9-]{6,}|P-\d{7}(?:-\d+)?|\d{4}-CG\d{6}-\d{2})"
+    r"(?![A-Z0-9-])",
     re.IGNORECASE,
 )
 DATE_RE = re.compile(r"\b(20\d{2})[-/.](\d{2})[-/.](\d{2})\b")
+DMY_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})[/.](\d{1,2})[/.](20\d{2})(?!\d)")
 ROW_START_RE = re.compile(r"^\d+\s+\S+")
 TIANHUA_LINE_START_RE = re.compile(r"^\s*(?P<line_no>\d{1,4})\s+(?P<product_code>\d{8})\b")
 ITEM_RE = re.compile(
@@ -309,16 +312,10 @@ def _chinese_ratio(text: str) -> float:
 
 
 def should_use_ocr(text: str, parse_result: dict | None) -> bool:
-    """判断是否需要 OCR。"""
-    if not text or not text.strip():
-        return True
-    if _chinese_ratio(text) < 0.01:
-        return True
-    if parse_result is None:
-        return False
-    if not parse_result.get("items"):
-        return True
-    return False
+    """Compatibility wrapper around the shared PDF text-quality router."""
+    from app.services.pdf_ocr import should_use_ocr as shared_should_use_ocr
+
+    return shared_should_use_ocr(text, parse_result)
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +586,244 @@ def _parse_gaotai_items(text: str) -> list[dict]:
             }
         )
     return items
+
+
+SIMAIR_ITEM_ANCHOR_RE = re.compile(
+    r"\b(?P<product_code>CPN\d{6,})\s+"
+    r"(?P<quantity>\d+(?:\.\d+)?)\s+"
+    r"(?:(?P<interleaved_price>[\d,]+(?:\.\d+)?)\s+)?"
+    r"(?:CNY\s+)?Pcs\b",
+    re.IGNORECASE,
+)
+
+SIMAIR_OCR_DIMENSION_RE = re.compile(
+    r"(?<!\d)(\d[\d.sS]*\s*(?:cm|mm)?"
+    r"(?:\s*[脳xX*]\s*\d[\d.sS]*\s*(?:cm|mm)?){1,2})",
+    re.IGNORECASE,
+)
+
+
+def _normalize_simair_ocr_dimensions(value: str) -> str:
+    """Repair OCR's common 5/S confusion only inside dimension expressions."""
+    def _repair(match: re.Match) -> str:
+        return re.sub(
+            r"(?<=[\d.])[sS](?=(?:cm|mm|$))",
+            "5",
+            match.group(1),
+            flags=re.IGNORECASE,
+        )
+
+    return SIMAIR_OCR_DIMENSION_RE.sub(_repair, value)
+
+
+def _extract_simair_ocr_dimensions(value: str) -> str:
+    candidates = [
+        re.sub(r"\s+", "", match.group(1))
+        for match in SIMAIR_OCR_DIMENSION_RE.finditer(
+            _normalize_simair_ocr_dimensions(value)
+        )
+    ]
+    if not candidates:
+        return ""
+    three_dimensional = [
+        candidate
+        for candidate in candidates
+        if len(re.findall(r"[脳xX*]", candidate)) >= 2
+    ]
+    return three_dimensional[0] if three_dimensional else candidates[0]
+
+
+def _normalize_simair_date(raw: str | None) -> str | None:
+    match = DMY_DATE_RE.search(raw or "")
+    if not match:
+        return None
+    day, month, year = match.groups()
+    return f"{year}-{int(month):02d}-{int(day):02d}"
+
+
+def _simair_line_number(prefix: str, index: int) -> int:
+    match = re.search(r"(?<![\d.])(\d{1,3})\s*$", prefix)
+    return int(match.group(1)) if match and int(match.group(1)) > 0 else index * 10
+
+
+def _parse_simair_items(text: str) -> list[dict]:
+    """Parse Simair's stable CPN + quantity + Pcs anchors without collapsing rows."""
+    normalized = _clean_line(text)
+    anchors = list(SIMAIR_ITEM_ANCHOR_RE.finditer(normalized))
+    items: list[dict] = []
+    cny_value_re = re.compile(r"([\d,]+(?:\.\d+)?)\s*CNY\b", re.IGNORECASE)
+    for index, anchor in enumerate(anchors, start=1):
+        end = anchors[index].start() if index < len(anchors) else len(normalized)
+        trailing = re.split(r"付款期限|杩濈害璐ｄ换|浠樻鏈熼檺", normalized[anchor.end():end], maxsplit=1)[0]
+        date_match = DMY_DATE_RE.search(trailing)
+        if date_match:
+            before_date, after_date = trailing[:date_match.start()], trailing[date_match.end():]
+            price_match = cny_value_re.search(before_date)
+            amount_match = cny_value_re.search(after_date)
+            product_region = before_date
+        else:
+            values = list(cny_value_re.finditer(trailing))
+            price_match = values[0] if values else None
+            amount_match = values[-1] if len(values) >= 2 else None
+            product_region = trailing[:amount_match.start()] if amount_match else trailing
+        prefix = normalized[max(0, anchor.start() - 50):anchor.start()]
+        raw_unit_price = (
+            anchor.group("interleaved_price")
+            or (price_match.group(1) if price_match else None)
+            or (re.findall(r"\d+(?:\.\d+)?", prefix) or [""])[-1]
+        )
+        product_text = re.sub(
+            r"^\s*(?:\d+(?:\.\d+)?\s*)?CNY\s*(?:1\s+)?", "", product_region,
+            flags=re.IGNORECASE,
+        )
+        product_text = _normalize_simair_ocr_dimensions(_clean_line(product_text))
+        specification = (
+            _extract_simair_ocr_dimensions(product_text)
+            or _extract_spec_dimensions(product_text)
+        )
+        reference = re.match(r"^\s*(CPN\d{6,})(?=[\s\-_/]|$)", product_text, re.IGNORECASE)
+        raw_amount = amount_match.group(1) if amount_match else ""
+        code = anchor.group("product_code").upper()
+        items.append({
+            "line_no": _simair_line_number(prefix, index),
+            "raw_product_code": code,
+            "reference_product_code": reference.group(1).upper() if reference else None,
+            "raw_product_name": product_text,
+            "raw_spec_model": specification,
+            "product_code": code,
+            "product_name": product_text,
+            "specification": specification,
+            "unit": "Pcs",
+            "quantity": _quantity_value(anchor.group("quantity")),
+            "raw_quantity": anchor.group("quantity"),
+            "unit_price": _decimal_to_str(raw_unit_price, "0.0000") if raw_unit_price else "",
+            "amount": _decimal_to_str(raw_amount, "0.00") if raw_amount else "",
+            "delivery_date": _normalize_simair_date(date_match.group(0) if date_match else None),
+            "raw_lines": [product_text],
+            "production_notes": "",
+            "matched_product_id": None,
+            "matched_material_id": None,
+            "match_status": "unmatched",
+            "cost_status": "pending",
+            "product_candidates": [],
+            "material_candidates": [],
+        })
+    return items
+
+
+def _build_simair_integrity_check(text: str, items: list[dict]) -> dict:
+    normalized = _clean_line(text)
+    source_count = len(SIMAIR_ITEM_ANCHOR_RE.findall(normalized))
+    parsed_amount = sum((Decimal(str(item["amount"]).replace(",", "")) for item in items if item.get("amount")), Decimal("0"))
+    total_matches = list(re.finditer(r"未税金额.{0,160}?([\d,]+(?:\.\d+)?)\s*CNY\b", normalized, re.IGNORECASE))
+    source_amount = Decimal(total_matches[-1].group(1).replace(",", "")) if total_matches else None
+    if source_amount is None and items:
+        # Simair's custom font often corrupts the "未税金额" label while its
+        # numeric text layer remains exact.  Verify the parsed row sum against
+        # a CNY value appearing after the final item anchor before consulting
+        # OCR, whose small-font totals can drop a digit (13211 -> 1321).
+        anchors = list(SIMAIR_ITEM_ANCHOR_RE.finditer(normalized))
+        tail = normalized[anchors[-1].end():] if anchors else normalized
+        tail_amounts = [
+            Decimal(match.group(1).replace(",", ""))
+            for match in re.finditer(
+                r"([\d,]+(?:\.\d+)?)\s*CNY\b", tail, re.IGNORECASE
+            )
+        ]
+        source_amount = next(
+            (
+                amount
+                for amount in tail_amounts
+                if (amount - parsed_amount).copy_abs() <= Decimal("0.01")
+            ),
+            None,
+        )
+    missing_amount_rows = [str(item.get("line_no")) for item in items if not item.get("amount")]
+    errors: list[str] = []
+    warnings: list[str] = []
+    if source_count != len(items):
+        errors.append(f"PDF 明细行数 {source_count} 与识别结果 {len(items)} 不一致。")
+    if missing_amount_rows:
+        errors.append(f"以下明细金额缺失：{', '.join(missing_amount_rows)}")
+    amount_diff = (source_amount - parsed_amount).copy_abs() if source_amount is not None and not missing_amount_rows else None
+    if amount_diff is not None and amount_diff > Decimal("0.01"):
+        errors.append(f"PDF未税金额{_format_integrity_amount(source_amount)}，识别金额{_format_integrity_amount(parsed_amount)}，差异{_format_integrity_amount(amount_diff)}")
+    if source_amount is None:
+        warnings.append("未可靠提取 PDF 未税金额，请人工核对金额合计。")
+    return {
+        "source_detail_count": source_count,
+        "parsed_detail_count": len(items),
+        "source_line_numbers": [str(item["line_no"]) for item in items],
+        "parsed_line_numbers": [str(item["line_no"]) for item in items],
+        "missing_line_numbers": [],
+        "source_total_quantity": None,
+        "parsed_total_quantity": _format_integrity_decimal(sum((Decimal(str(item["quantity"])) for item in items), Decimal("0"))),
+        "quantity_total_diff": None,
+        "source_total_amount": _format_integrity_amount(source_amount),
+        "parsed_total_amount": _format_integrity_amount(parsed_amount),
+        "amount_total_diff": _format_integrity_amount(amount_diff),
+        "integrity_status": "failed" if errors else "passed",
+        "integrity_errors": errors,
+        "integrity_warnings": warnings,
+    }
+
+
+def _simair_item_signature(item: dict) -> tuple[str, str, str]:
+    return (str(item.get("product_code") or "").upper(), str(item.get("quantity") or ""), str(item.get("amount") or ""))
+
+
+def merge_simair_text_and_ocr_drafts(text_draft: dict, ocr_draft: dict) -> dict:
+    """Keep text-layer numbers/dates; OCR may only supplement labels and specs."""
+    output = json.loads(json.dumps(text_draft, ensure_ascii=False, default=str))
+    ocr_items = list(ocr_draft.get("items") or [])
+    used: set[int] = set()
+    warnings = list(output.get("warnings") or [])
+    for field in ("customer_po", "order_date", "delivery_date"):
+        if not output.get(field) and ocr_draft.get(field):
+            output[field] = ocr_draft[field]
+    for item in output.get("items") or []:
+        raw_name = str(item.get("product_name") or item.get("raw_product_name") or "").strip()
+        item["raw_text_product_name"] = raw_name
+        signature = _simair_item_signature(item)
+        match_index = next((i for i, candidate in enumerate(ocr_items) if i not in used and _simair_item_signature(candidate) == signature), None)
+        if match_index is None:
+            match_index = next((i for i, candidate in enumerate(ocr_items) if i not in used and candidate.get("line_no") == item.get("line_no") and str(candidate.get("product_code") or "").upper() == str(item.get("product_code") or "").upper()), None)
+        candidate = ocr_items[match_index] if match_index is not None else {}
+        if match_index is not None:
+            used.add(match_index)
+        ocr_name = _normalize_simair_ocr_dimensions(
+            str(candidate.get("product_name") or candidate.get("raw_product_name") or "").strip()
+        )
+        ocr_spec = (
+            _extract_simair_ocr_dimensions(ocr_name)
+            or str(candidate.get("raw_spec_model") or candidate.get("specification") or "").strip()
+        )
+        if ocr_name:
+            item["ocr_product_name"] = ocr_name
+            item["product_name"] = item["raw_product_name"] = ocr_name
+        else:
+            reference = re.match(r"(CPN\d{6,})", raw_name, re.IGNORECASE)
+            item["product_name"] = f"{reference.group(1).upper()}（名称待人工确认）" if reference else "名称待人工确认"
+            item["raw_product_name"] = raw_name
+            warnings.append(f"第{item.get('line_no', '?')}行：OCR 未识别到中文产品名称，请人工确认。")
+        if ocr_spec:
+            item["ocr_specification"] = ocr_spec
+            item["specification"] = item["raw_spec_model"] = ocr_spec
+    if len(used) != len(ocr_items):
+        warnings.append("OCR 存在无法与文本层数值对齐的明细，未自动并入，请人工核对。")
+    integrity = dict(output.get("integrity_check") or {})
+    ocr_integrity = ocr_draft.get("integrity_check") or {}
+    if not integrity.get("source_total_amount") and ocr_integrity.get("source_total_amount"):
+        source_amount = Decimal(str(ocr_integrity["source_total_amount"]))
+        parsed_amount = sum((Decimal(str(item.get("amount") or "0")) for item in output.get("items") or []), Decimal("0"))
+        diff = (source_amount - parsed_amount).copy_abs()
+        integrity.update(source_total_amount=_format_integrity_amount(source_amount), parsed_total_amount=_format_integrity_amount(parsed_amount), amount_total_diff=_format_integrity_amount(diff))
+        if diff > Decimal("0.01"):
+            integrity["integrity_status"] = "failed"
+            integrity.setdefault("integrity_errors", []).append(f"PDF未税金额{_format_integrity_amount(source_amount)}，识别金额{_format_integrity_amount(parsed_amount)}，差异{_format_integrity_amount(diff)}")
+    warnings.extend(integrity.get("integrity_errors") or [])
+    output.update(integrity_check=integrity, warnings=list(dict.fromkeys(warnings)), recognition_status="needs_confirmation", parse_status="needs_confirmation", message="思迈尔订单已合并文本层数值与 OCR 名称，请人工核对后保存。", extraction_strategy="text_structure_plus_ocr_labels")
+    return _apply_quantity_review_flags(output)
 
 
 def _find_spec_start_outside_parens(text: str) -> int | None:
@@ -1174,6 +1409,42 @@ def parse_purchase_order_text(
 
     # 思迈尔：识别到但无模板，明确返回状态
     if customer_type == "simair":
+        simair_items = _parse_simair_items(text)
+        if simair_items:
+            customer_name = "苏州思迈尔电子设备有限公司"
+            warnings: list[str] = []
+            for item in simair_items:
+                warnings.extend(_check_item_warnings(item))
+                if not item.get("unit_price"):
+                    warnings.append(f"第{item['line_no']}行：未识别到单价，请人工确认。")
+                if not item.get("product_name"):
+                    warnings.append(f"第{item['line_no']}行：未识别到产品名称，请人工确认。")
+                if not item.get("delivery_date"):
+                    warnings.append(f"第{item['line_no']}行：交货日期缺失，请人工确认。")
+            integrity_check = _build_simair_integrity_check(text, simair_items)
+            warnings.extend(integrity_check["integrity_errors"])
+            order_date_match = DMY_DATE_RE.search(text[order_match.end():order_match.end() + 100])
+            status = "recognized" if not warnings and integrity_check["integrity_status"] == "passed" else "needs_confirmation"
+            return _apply_quantity_review_flags({
+                "source_name": source_name or "uploaded.pdf",
+                "source_type": "purchase_order_pdf",
+                "customer_name_raw": customer_name,
+                "customer_name": customer_name,
+                "customer_type": customer_type,
+                "customer_po": customer_po,
+                "order_date": _normalize_simair_date(order_date_match.group(0) if order_date_match else None),
+                "delivery_date": next((item["delivery_date"] for item in simair_items if item.get("delivery_date")), None),
+                "recognition_status": status,
+                "parse_status": status,
+                "message": "思迈尔采购订单已生成结构化草稿，请核对后保存。",
+                "duplicate_status": None,
+                "duplicate_reason": None,
+                "item_count": len(simair_items),
+                "items": simair_items,
+                "warnings": warnings,
+                "integrity_check": integrity_check,
+                "is_tianhua": False,
+            })
         return {
             "source_name": source_name or "uploaded.pdf",
             "source_type": "purchase_order_pdf",
@@ -1351,7 +1622,7 @@ def _product_candidate(product: Product) -> dict:
 def _product_spec(product: Product) -> str | None:
     values = (product.length_mm, product.width_mm, product.height_mm)
     if any(value is None for value in values):
-        return None
+        return _extract_spec_dimensions(product.product_name or product.product_code or "") or None
     return "×".join(format(value, "f").rstrip("0").rstrip(".") for value in values) + "mm"
 
 
@@ -1364,26 +1635,54 @@ def _preferred_item_product_code(item: dict) -> str:
     )
 
 
+def _leading_cpn_code(value: str | None) -> str:
+    match = re.match(r"^\s*(CPN\d{6,})(?=[^A-Z0-9]|$)", value or "", re.IGNORECASE)
+    return match.group(1).casefold() if match else ""
+
+
+def _code_match_score(product: Product, item_code: str, *, strong: int) -> int:
+    if not item_code:
+        return 0
+    code = _normalized_text(item_code)
+    if code in {_normalized_text(product.product_code), _normalized_text(product.customer_material_code)}:
+        return strong
+    leading = _leading_cpn_code(item_code)
+    if leading and leading in {
+        _leading_cpn_code(product.product_code),
+        _leading_cpn_code(product.customer_material_code),
+    }:
+        return strong
+    return 0
+
+
 def _score_product(product: Product, item: dict) -> int:
-    code = _normalized_text(_preferred_item_product_code(item))
+    primary_code = _preferred_item_product_code(item)
+    reference_code = str(item.get("reference_product_code") or "").strip()
     name = _normalized_text(item.get("raw_product_name") or item.get("product_name"))
     spec = _normalized_text(item.get("raw_spec_model") or item.get("specification"))
     material = _normalized_text(item.get("raw_material"))
-    score = 0
-    if code and code == _normalized_text(product.product_code):
-        score = max(score, 100)
-    if code and code == _normalized_text(product.customer_material_code):
-        score = max(score, 95)
-    if name and name == _normalized_text(product.product_name):
-        score = max(score, 80)
+    score = _code_match_score(product, reference_code, strong=180)
+    score += _code_match_score(product, primary_code, strong=100)
+    product_name = _normalized_text(product.product_name)
+    if name and product_name:
+        if name == product_name:
+            score += 50
+        elif len(name) >= 5 and (name in product_name or product_name in name):
+            score += 25
     product_spec = _normalized_text(_product_spec(product))
     if spec and product_spec and (spec in product_spec or product_spec in spec):
-        score = max(score, 70)
+        score += 35
         product_material = _normalized_text(
             product.material.code if product.material else product.legacy_material_text
         )
         if material and product_material and material == product_material:
-            score = max(score, 75)
+            score += 5
+    if item.get("unit_price") not in (None, "") and product.sale_unit_price is not None:
+        try:
+            if (Decimal(str(item["unit_price"])) - product.sale_unit_price).copy_abs() <= Decimal("0.0001"):
+                score += 15
+        except (ValueError, TypeError, ArithmeticError):
+            pass
     return score
 
 
@@ -1560,7 +1859,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item["product_drawing_file"] = selected.drawings[0].image_path
         matched_items.append(item)
     # 合并相同存货编码（同单价/同交期/同常用箱）
-    merged_items = _merge_same_product_code(matched_items)
+    merged_items = matched_items if draft.get("customer_type") == "simair" else _merge_same_product_code(matched_items)
     return {**draft, "matched_customer_id": customer_id, "items": merged_items}
 
 
@@ -1706,9 +2005,12 @@ def match_import_draft(db: Session, draft: dict, customer_id: int | None = None)
     if any(not item.get("matched_product_id") for item in result["items"]):
         warnings.append("部分明细未唯一匹配产品，请逐行选择。")
     result["warnings"] = warnings
+    parser_status = draft.get("parse_status") or draft.get("recognition_status")
+    parser_is_confirmed = parser_status in {None, "recognized"}
     result["recognition_status"] = (
         "recognized"
-        if match_status == "matched"
+        if parser_is_confirmed
+        and match_status == "matched"
         and all(item.get("matched_product_id") for item in result["items"])
         else "needs_confirmation"
     )

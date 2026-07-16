@@ -70,11 +70,12 @@ from app.services.order_pdf_import import (
     calculate_draft_cost,
     extract_text_from_pdf_bytes,
     file_sha256,
+    merge_simair_text_and_ocr_drafts,
     match_import_draft,
     parse_purchase_order_text,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
-from app.services.pdf_ocr import ocr_pdf_bytes, should_use_ocr
+from app.services.pdf_ocr import analyze_pdf_text_quality, ocr_pdf_bytes, should_use_ocr
 from app.services.product_import import (
     NewProductError,
     NewProductInput,
@@ -1263,7 +1264,9 @@ def _parse_order_pdf_preview(
 ) -> dict:
     """Parse an order PDF for preview, using OCR only when text parsing needs it."""
     text = extract_text_from_pdf_bytes(content)
+    quality_status = str(analyze_pdf_text_quality(text)["status"])
     draft: dict | None = None
+    text_draft: dict | None = None
     parse_error: PdfParseError | None = None
 
     if text and text.strip():
@@ -1273,23 +1276,56 @@ def _parse_order_pdf_preview(
                 source_name=filename,
                 template_rules=template_rules,
             )
+            if quality_status == "garbled_text_layer" and draft.get("customer_type") == "simair":
+                text_draft = draft
+                draft = None
         except PdfParseError as error:
             parse_error = error
 
-    if should_use_ocr(text, draft):
-        ocr_text, ocr_method = ocr_pdf_bytes(content)
+    if quality_status == "garbled_text_layer" or should_use_ocr(text, draft):
+        ocr_text, ocr_method = (
+            ocr_pdf_bytes(content, dpi=300)
+            if text_draft is not None
+            and text_draft.get("customer_type") == "simair"
+            else ocr_pdf_bytes(content)
+        )
         if ocr_text and ocr_method not in {"ocr_unavailable", "ocr_failed"}:
             try:
-                return parse_purchase_order_text(
-                    ocr_text,
+                ocr_parse_text = ocr_text
+                exact_po = str((text_draft or {}).get("customer_po") or "").strip()
+                if exact_po and exact_po.casefold() not in ocr_text.casefold():
+                    # Custom-font Simair PDFs can retain the exact PO in the text
+                    # layer while OCR only reads the table.  Preserve that header.
+                    ocr_parse_text = f"{exact_po}\n{ocr_text}"
+                ocr_draft = parse_purchase_order_text(
+                    ocr_parse_text,
                     source_name=filename,
                     template_rules=template_rules,
                 )
+                result = (
+                    merge_simair_text_and_ocr_drafts(text_draft, ocr_draft)
+                    if text_draft is not None and ocr_draft.get("customer_type") == "simair"
+                    else ocr_draft
+                )
+                result["source_text_quality"] = quality_status
+                result["parse_method"] = "mixed" if text_draft else ocr_method
+                return result
             except PdfParseError as error:
                 parse_error = error
 
     if draft is not None:
+        draft["source_text_quality"] = quality_status
+        draft.setdefault("parse_method", "text")
         return draft
+    if text_draft is not None:
+        text_draft["source_text_quality"] = quality_status
+        text_draft["parse_method"] = ocr_method if "ocr_method" in locals() else "text_fallback"
+        text_draft["recognition_status"] = "needs_confirmation"
+        text_draft["parse_status"] = "needs_confirmation"
+        text_draft.setdefault("warnings", []).append(
+            "思迈尔 PDF 文本层异常，OCR 未能补全；已保留精确客户订单号，产品需人工确认。"
+        )
+        return text_draft
     if parse_error is not None:
         raise parse_error
     return parse_purchase_order_text(

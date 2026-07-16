@@ -48,11 +48,18 @@ from app.models.user import User
 from app.services.order_pdf_import import (
     extract_text_from_pdf_bytes,
     file_sha256,
+    merge_simair_text_and_ocr_drafts,
     parse_purchase_order_text,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
-from app.services.pdf_ocr import ocr_available, ocr_engine_name, ocr_pdf_bytes, should_use_ocr
-from app.services.pdf_scoring import compute_stats, score_sample
+from app.services.pdf_ocr import (
+    analyze_pdf_text_quality,
+    ocr_available,
+    ocr_engine_name,
+    ocr_pdf_bytes,
+    should_use_ocr,
+)
+from app.services.pdf_scoring import compute_stats, correction_candidates, score_sample
 
 router = APIRouter()
 
@@ -130,10 +137,13 @@ def _parse_pdf_sample_content(
     parser_result_json: str | None = None
     parse_result: dict | None = None
     parse_method = "failed"
+    text_quality = "image_only"
+    text_draft: dict | None = None
 
     try:
         extracted_text = extract_text_from_pdf_bytes(content)
         if extracted_text and extracted_text.strip():
+            text_quality = str(analyze_pdf_text_quality(extracted_text)["status"])
             try:
                 parse_result = parse_purchase_order_text(
                     extracted_text,
@@ -142,38 +152,68 @@ def _parse_pdf_sample_content(
                 )
                 parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
                 parse_method = "text"
+                if text_quality == "garbled_text_layer" and parse_result.get("customer_type") == "simair":
+                    text_draft = parse_result
+                    parse_result = None
             except ValueError:
                 parse_method = "failed"
     except Exception:
         parse_method = "failed"
 
     ocr_text_raw: str | None = None
-    if should_use_ocr(extracted_text, parse_result):
-        ocr_text, ocr_method = ocr_pdf_bytes(content)
+    if text_quality == "garbled_text_layer" or should_use_ocr(extracted_text, parse_result):
+        ocr_text, ocr_method = (
+            ocr_pdf_bytes(content, dpi=300)
+            if text_draft is not None
+            and text_draft.get("customer_type") == "simair"
+            else ocr_pdf_bytes(content)
+        )
         if ocr_text and ocr_method not in ("ocr_unavailable", "ocr_failed"):
             ocr_text_raw = ocr_text
-            if parse_result is None or not parse_result.get("items"):
+            if text_quality != "readable_text" or parse_result is None or not parse_result.get("items"):
                 try:
+                    ocr_parse_text = ocr_text
+                    if text_draft and text_draft.get("customer_po"):
+                        exact_po = str(text_draft["customer_po"]).strip()
+                        if exact_po and exact_po.casefold() not in ocr_text.casefold():
+                            ocr_parse_text = f"{exact_po}\n{ocr_text}"
                     ocr_parse = parse_purchase_order_text(
-                        ocr_text,
+                        ocr_parse_text,
                         source_name=source_name,
                         template_rules=template_rules,
                     )
-                    parser_result_json = json.dumps(ocr_parse, ensure_ascii=False, default=str)
-                    parse_result = ocr_parse
-                    parse_method = "mixed" if extracted_text and extracted_text.strip() else ocr_method
+                    parse_result = (
+                        merge_simair_text_and_ocr_drafts(text_draft, ocr_parse)
+                        if text_draft is not None and ocr_parse.get("customer_type") == "simair"
+                        else ocr_parse
+                    )
+                    parse_method = "mixed" if text_draft else ocr_method
                 except ValueError:
                     parse_method = ocr_method
             else:
                 parse_method = "mixed"
-        elif ocr_method == "ocr_unavailable" and parse_method == "failed":
-            parse_method = "ocr_unavailable"
+        elif ocr_method in {"ocr_unavailable", "ocr_failed"}:
+            if text_quality != "readable_text" or parse_method == "failed":
+                parse_method = ocr_method
+            if text_draft is not None:
+                parse_result = text_draft
+                parse_result["recognition_status"] = "needs_confirmation"
+                parse_result["parse_status"] = "needs_confirmation"
+                parse_result.setdefault("warnings", []).append(
+                    "PDF 文本层异常且 OCR 当前不可用；草稿仅供人工确认。"
+                )
+
+    if parse_result is not None:
+        parse_result["source_text_quality"] = text_quality
+        parse_result["parse_method"] = parse_method
+        parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
 
     return {
         "extracted_text": extracted_text,
         "ocr_text_raw": ocr_text_raw,
         "parser_result_json": parser_result_json,
         "parse_method": parse_method,
+        "text_quality": text_quality,
     }
 
 
@@ -505,6 +545,26 @@ def set_ground_truth(
     # 自动评分
     sr = score_sample(sample.parser_result_json, sample.ground_truth_json)
     sample.score = sr.overall_score
+    auto_note = "ground_truth_form_auto_diff"
+    db.query(PdfOrderCorrectionLog).filter(
+        PdfOrderCorrectionLog.sample_id == safe_sample_id,
+        PdfOrderCorrectionLog.note == auto_note,
+    ).delete(synchronize_session=False)
+    differences = correction_candidates(
+        sample.parser_result_json,
+        sample.ground_truth_json,
+    )
+    for difference in differences:
+        db.add(
+            PdfOrderCorrectionLog(
+                sample_id=safe_sample_id,
+                field_path=str(difference["field_path"]),
+                parser_value=difference["parser_value"],
+                corrected_value=difference["corrected_value"],
+                corrected_by=user.username,
+                note=auto_note,
+            )
+        )
 
     _log(
         db,

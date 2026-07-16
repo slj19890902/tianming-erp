@@ -30,7 +30,8 @@ class TestPdfScoringUnit:
 
     def setup_method(self):
         sys.path.insert(0, str(__file__.split("tests")[0]))
-        from app.services.pdf_scoring import score_sample
+        from app.services.pdf_scoring import correction_candidates, score_sample
+        self.correction_candidates = correction_candidates
         self.score_sample = score_sample
 
     def _truth(self, **extra) -> str:
@@ -133,6 +134,16 @@ class TestPdfScoringUnit:
         parsed = json.dumps({"garbage": "data"})
         r = self.score_sample(parsed, truth)
         assert 0.0 <= r.overall_score <= 1.0
+
+    def test_preview_schema_aliases_score_and_log_only_real_differences(self):
+        truth = self._truth()
+        parsed = json.loads(truth)
+        parsed["customer_po"] = parsed.pop("order_no")
+        parsed["items"][0]["specification"] = parsed["items"][0].pop("spec")
+        assert self.score_sample(json.dumps(parsed), truth).overall_score == 1.0
+        parsed["items"][0]["quantity"] = 101
+        differences = self.correction_candidates(json.dumps(parsed), truth)
+        assert {row["field_path"] for row in differences} == {"items[0].quantity"}
 
 
 # ---------------------------------------------------------------------------

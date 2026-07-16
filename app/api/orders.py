@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import date, datetime
@@ -517,8 +518,12 @@ def _apply_order_reservation_plans(
                 quantity=allocated_boxes,
                 expected_version=current_version,
                 operator_id=operator_id,
-                idempotency_key=(
-                    f"order-{order.id}-item-{item.id}-finished-{plan_index}"
+                idempotency_key=_order_inventory_reservation_key(
+                    order=order,
+                    item=item,
+                    item_payload=item_payload,
+                    inventory_type="finished",
+                    plan_index=plan_index,
                 ),
                 warning_acknowledged_codes=[],
             )
@@ -654,14 +659,41 @@ def _apply_order_reservation_plans(
                 requested_requirement_quantity=entry.requested_qty,
                 lots=[SemiFinishedLotVersion(lot.id, current_version)],
                 operator_id=operator_id,
-                idempotency_key=(
-                    f"order-{order.id}-item-{item.id}-semi-{plan_index}"
+                idempotency_key=_order_inventory_reservation_key(
+                    order=order,
+                    item=item,
+                    item_payload=item_payload,
+                    inventory_type="semi",
+                    plan_index=plan_index,
                 ),
                 confirmed=True,
                 override=entry.override,
                 warning_acknowledged_codes=entry.warning_acknowledged_codes,
             )
             _advance_plan_version(db, lot_id=lot.id, states=states)
+
+
+def _order_inventory_reservation_key(
+    *,
+    order: Order,
+    item: OrderItem,
+    item_payload: OrderItemCreate,
+    inventory_type: Literal["finished", "semi"],
+    plan_index: int,
+) -> str:
+    """Build a stable key that cannot collide when SQLite reuses deleted IDs."""
+    client_line_id = (item_payload.client_line_id or "").strip()
+    line_identity = client_line_id or str(item.item_sequence or item.id)
+    seed = "|".join(
+        (
+            order.order_number,
+            line_identity,
+            inventory_type,
+            str(plan_index),
+        )
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:48]
+    return f"order-create-{inventory_type}-{digest}"
 
 
 class OrderUpdate(BaseModel):

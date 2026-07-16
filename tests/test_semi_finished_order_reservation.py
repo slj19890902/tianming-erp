@@ -363,6 +363,111 @@ def test_finished_draft_candidates_are_product_customer_scoped(b1_app) -> None:
         assert db.get(InventoryLot, general_id).quantity_available == 2
 
 
+def test_new_order_finished_reservation_ignores_reused_deleted_order_ids(
+    b1_app,
+) -> None:
+    app, factory = b1_app
+    lot_id, version = add_finished_lot(
+        factory,
+        product_id=1,
+        quantity=5,
+        key="reused-id-finished-lot",
+    )
+    with factory() as db:
+        stale_order = Order(
+            order_number="TM-LEGACY-IDEMPOTENCY",
+            customer_id=1,
+            customer_po="LEGACY-IDEMPOTENCY",
+            order_date=date(2026, 7, 9),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("1"),
+        )
+        db.add(stale_order)
+        db.flush()
+        stale_item = OrderItem(
+            order_id=stale_order.id,
+            product_id=1,
+            item_sequence=1,
+            item_order_number="TM-LEGACY-IDEMPOTENCY-001",
+            quantity=1,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("1"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_code="B1-P1",
+            snapshot_product_name="legacy reservation owner",
+        )
+        db.add(stale_item)
+        db.flush()
+        stale_order_id = stale_order.id
+        stale_item_id = stale_item.id
+        legacy_key = (
+            f"order-{stale_order_id}-item-{stale_item_id}-finished-1"
+        )
+        db.add(
+            InventoryReservation(
+                reservation_number="RS-LEGACY-IDEMPOTENCY",
+                inventory_lot_id=lot_id,
+                reservation_type="finished_order",
+                order_id=stale_order_id,
+                order_item_id=stale_item_id,
+                reserved_stock_quantity=1,
+                credited_requirement_quantity=1,
+                yield_factor=1,
+                released_stock_quantity=1,
+                released_requirement_quantity=1,
+                status="released",
+                idempotency_key=legacy_key,
+            )
+        )
+        db.commit()
+        db.delete(stale_order)
+        db.commit()
+        historical = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.idempotency_key == legacy_key
+            )
+        )
+        assert historical is not None
+        assert historical.order_id is None
+        assert historical.order_item_id is None
+
+    with TestClient(app) as client:
+        login(client)
+        saved = post_order(
+            client,
+            [
+                order_item(
+                    1,
+                    2,
+                    {
+                        "finished": [
+                            finished_plan(lot_id, version, 2)
+                        ]
+                    },
+                    line="FRESH-CLIENT-LINE",
+                )
+            ],
+            "B1-REUSED-ID-FIRST-SAVE",
+        )
+
+    assert saved.status_code == 201, saved.text
+    assert saved.json()["id"] == stale_order_id
+    assert saved.json()["items"][0]["id"] == stale_item_id
+    with factory() as db:
+        reservations = db.scalars(
+            select(InventoryReservation).order_by(InventoryReservation.id)
+        ).all()
+        assert [row.status for row in reservations] == ["released", "active"]
+        assert reservations[0].idempotency_key == legacy_key
+        assert reservations[1].idempotency_key.startswith(
+            "order-create-finished-"
+        )
+        assert reservations[1].idempotency_key != legacy_key
+        assert reservations[1].order_item_id == stale_item_id
+
+
 def test_warehouse_assigns_one_semi_lot_signature_to_multiple_product_codes(
     b1_app,
 ) -> None:

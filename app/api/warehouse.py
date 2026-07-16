@@ -46,6 +46,7 @@ from app.services.floor3_locations import (
     Floor3LocationError,
     add_pallet_item,
     clear_pallet,
+    convert_snapshot_to_finished_lot,
     create_pallet,
     create_layout_slot,
     move_pallet,
@@ -135,6 +136,9 @@ class Floor3PalletItemPayload(BaseModel):
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=3)
     unit: str | None = Field(default=None, max_length=20)
     match_status: str = "matched"
+    create_finished_inventory: bool = False
+    stock_date: date | None = None
+    idempotency_key: str | None = Field(default=None, max_length=120)
     remarks: str | None = Field(default=None, max_length=500)
 
     @field_validator(
@@ -159,6 +163,35 @@ class Floor3PalletItemPayload(BaseModel):
             raise ValueError("产品匹配状态无效")
         return value
 
+    @model_validator(mode="after")
+    def validate_finished_inventory_request(self) -> "Floor3PalletItemPayload":
+        if self.create_finished_inventory:
+            if self.item_type != "finished" or self.match_status != "matched":
+                raise ValueError("正式成品入库只能用于已匹配的成品行")
+            if self.customer_id is None or self.product_id is None:
+                raise ValueError("正式成品入库必须选择客户和产品")
+            if self.quantity != self.quantity.to_integral_value():
+                raise ValueError("正式成品入库数量必须是正整数")
+            if self.stock_date is None:
+                raise ValueError("正式成品入库必须填写入库日期")
+            if not self.idempotency_key or not self.idempotency_key.strip():
+                raise ValueError("正式成品入库必须提供幂等键")
+        return self
+
+
+class Floor3PalletPromoteFinishedPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    stock_date: date
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_promote_idempotency_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("幂等键不能为空")
+        return value
+
 
 class Floor3PalletCreatePayload(BaseModel):
     location_id: int = Field(gt=0)
@@ -171,6 +204,14 @@ class Floor3PalletCreatePayload(BaseModel):
     def strip_floor3_pallet_text(cls, value: str | None) -> str | None:
         text = (value or "").strip()
         return text or None
+
+    @model_validator(mode="after")
+    def reject_mixed_finished_and_snapshot_rows(self) -> "Floor3PalletCreatePayload":
+        has_finished = any(item.create_finished_inventory for item in self.items)
+        has_snapshot = any(not item.create_finished_inventory for item in self.items)
+        if has_finished and has_snapshot:
+            raise ValueError("正式成品行与现场快照行不能混合，请分开保存")
+        return self
 
 
 class Floor3PalletAddItemPayload(BaseModel):
@@ -2395,13 +2436,49 @@ def add_floor3_pallet_item(
     _require_floor3_pallet_customer_access(db, current, user)
     _require_floor3_item_customer_access(db, payload.item, user)
     try:
-        row = add_pallet_item(
-            db,
-            pallet_id=pallet_id,
-            expected_version=payload.expected_version,
-            item=payload.item.model_dump(),
-            operator_id=user.id,
-        )
+        if payload.item.create_finished_inventory:
+            existing = db.scalar(
+                select(InventoryMovement).where(
+                    InventoryMovement.idempotency_key == payload.item.idempotency_key,
+                    InventoryMovement.movement_type == "manual_in",
+                )
+            )
+            if existing is not None:
+                existing_lot = db.get(InventoryLot, existing.inventory_lot_id)
+                if (
+                    existing_lot is None
+                    or existing_lot.pallet_item is None
+                    or existing_lot.pallet_item.pallet_id != pallet_id
+                ):
+                    raise Floor3LocationError(
+                        "幂等键已用于其它物理栈板，不能重复追加", status_code=409
+                    )
+            elif current.version != payload.expected_version:
+                raise Floor3LocationError(
+                    "栈板已被其他操作更新，请刷新后重试", status_code=409
+                )
+            row_lot = manual_finished_in(
+                db,
+                customer_id=payload.item.customer_id,
+                product_id=payload.item.product_id,
+                location_id=current.location_id,
+                quantity=int(payload.item.quantity),
+                stock_date=payload.item.stock_date,
+                source_type="manual",
+                remarks=payload.item.remarks,
+                operator_id=user.id,
+                idempotency_key=payload.item.idempotency_key,
+                pallet_id=pallet_id,
+            )
+            row = _floor3_get_pallet(db, pallet_id)
+        else:
+            row = add_pallet_item(
+                db,
+                pallet_id=pallet_id,
+                expected_version=payload.expected_version,
+                item=payload.item.model_dump(),
+                operator_id=user.id,
+            )
         _floor3_log(
             db,
             request=request,
@@ -2413,6 +2490,7 @@ def add_floor3_pallet_item(
                 "product_id": payload.item.product_id,
                 "quantity": payload.item.quantity,
                 "expected_version": payload.expected_version,
+                "create_finished_inventory": payload.item.create_finished_inventory,
             },
         )
         db.commit()
@@ -2423,6 +2501,60 @@ def add_floor3_pallet_item(
     except Floor3LocationError as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.post("/pallets/{pallet_id}/items/{item_id}/promote-finished")
+def promote_floor3_snapshot_to_finished(
+    pallet_id: int,
+    item_id: int,
+    payload: Floor3PalletPromoteFinishedPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    current = _floor3_get_pallet(db, pallet_id)
+    _require_floor3_pallet_customer_access(db, current, user)
+    try:
+        row, lot, replayed = convert_snapshot_to_finished_lot(
+            db,
+            pallet_id=pallet_id,
+            item_id=item_id,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            stock_date=payload.stock_date,
+            operator_id=user.id,
+        )
+        if not replayed:
+            _floor3_log(
+                db,
+                request=request,
+                user=user,
+                action="UPDATE",
+                pallet=row,
+                description="现场快照转正式成品库存",
+                details={
+                    "item_id": item_id,
+                    "inventory_lot_id": lot.id,
+                    "stock_date": payload.stock_date,
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return {
+            "message": "已转为正式成品库存",
+            "replayed": replayed,
+            "lot": _lot_dict(lot),
+            "pallet": _floor3_pallet_response(db, row, user),
+        }
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
     except IntegrityError as error:
         db.rollback()
         _handle_integrity(error)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -14,6 +14,7 @@ from app.models.customer import Customer
 from app.models.product import Product
 from app.models.warehouse_inventory import (
     InventoryLot,
+    InventoryMovement,
     InventoryLocationMovement,
     InventoryPallet,
     InventoryPalletItem,
@@ -547,6 +548,9 @@ def bind_finished_lot_to_floor3_pallet(
     *,
     lot: InventoryLot,
     operator_id: int | None,
+    pallet_id: int | None = None,
+    pallet_code: str | None = None,
+    require_empty_pallet: bool = False,
 ) -> InventoryPallet:
     """Bind one official finished-goods lot to its physical floor-three slot.
 
@@ -558,6 +562,26 @@ def bind_finished_lot_to_floor3_pallet(
     location = _location(db, lot.warehouse_location_id)
     if lot.pallet_item is not None:
         return _pallet(db, lot.pallet_item.pallet_id)
+    if pallet_id is not None:
+        pallet = _pallet(db, pallet_id)
+        if not pallet.is_current or pallet.location_id != location.id:
+            raise Floor3LocationError("指定栈板不在该三楼货位", status_code=409)
+        return add_pallet_item(
+            db,
+            pallet_id=pallet.id,
+            expected_version=pallet.version,
+            item={
+                "inventory_lot_id": lot.id,
+                "item_type": "finished",
+                "quantity": max(
+                    int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0),
+                    1,
+                ),
+                "unit": lot.unit,
+                "match_status": "matched",
+            },
+            operator_id=operator_id,
+        )
     item = {
         "inventory_lot_id": lot.id,
         "item_type": "finished",
@@ -568,11 +592,15 @@ def bind_finished_lot_to_floor3_pallet(
         "match_status": "matched",
     }
     pallet = _active_pallet_at(db, location.id)
+    if require_empty_pallet and pallet is not None:
+        raise Floor3LocationError(
+            "目标货位已有当前栈板，正式成品创建必须选择空闲货位", status_code=409
+        )
     if pallet is None:
         return create_pallet(
             db,
             location_id=location.id,
-            pallet_code=None,
+            pallet_code=pallet_code,
             items=[item],
             remarks="成品入库自动绑定",
             operator_id=operator_id,
@@ -623,6 +651,21 @@ def create_pallet(
     remarks: str | None,
     operator_id: int | None,
 ) -> InventoryPallet:
+    official_items = [
+        item for item in items if item.get("create_finished_inventory") is True
+    ]
+    if official_items:
+        return _create_pallet_with_official_items(
+            db,
+            location_id=location_id,
+            pallet_code=pallet_code,
+            official_items=official_items,
+            snapshot_items=[
+                item for item in items if item.get("create_finished_inventory") is not True
+            ],
+            remarks=remarks,
+            operator_id=operator_id,
+        )
     location = _location(db, location_id)
     try:
         _claim_empty_active_location(db, location)
@@ -667,6 +710,93 @@ def create_pallet(
     return row
 
 
+def _create_pallet_with_official_items(
+    db: Session,
+    *,
+    location_id: int,
+    pallet_code: str | None,
+    official_items: list[dict],
+    snapshot_items: list[dict],
+    remarks: str | None,
+    operator_id: int | None,
+) -> InventoryPallet:
+    from app.services.warehouse_inventory import manual_finished_in
+
+    pallet_id: int | None = None
+    for index, item in enumerate(official_items):
+        if (
+            item.get("item_type") != "finished"
+            or item.get("match_status") != "matched"
+            or item.get("customer_id") is None
+            or item.get("product_id") is None
+            or not item.get("idempotency_key")
+        ):
+            raise Floor3LocationError(
+                "正式成品入库必须提供客户、产品、匹配状态和幂等键", status_code=422
+            )
+        quantity = Decimal(str(item.get("quantity")))
+        if quantity != quantity.to_integral_value():
+            raise Floor3LocationError("正式成品入库数量必须是正整数", status_code=422)
+        existing_movement = db.scalar(
+            select(InventoryMovement).where(
+                InventoryMovement.idempotency_key == item["idempotency_key"],
+                InventoryMovement.movement_type == "manual_in",
+            )
+        )
+        if existing_movement is not None:
+            existing_lot = db.get(InventoryLot, existing_movement.inventory_lot_id)
+            existing_item = (
+                existing_lot.pallet_item
+                if existing_lot is not None
+                else None
+            )
+            if (
+                existing_item is None
+                or existing_item.pallet is None
+                or existing_item.pallet.location_id != location_id
+            ):
+                raise Floor3LocationError(
+                    "幂等键已用于其它物理栈板，不能重复创建", status_code=409
+                )
+            pallet_id = existing_item.pallet_id
+        lot = manual_finished_in(
+            db,
+            customer_id=int(item["customer_id"]),
+            product_id=int(item["product_id"]),
+            location_id=location_id,
+            quantity=int(quantity),
+            stock_date=item.get("stock_date") or date.today(),
+            source_type="manual",
+            remarks=item.get("remarks") or remarks,
+            operator_id=operator_id,
+            idempotency_key=item["idempotency_key"],
+            pallet_id=pallet_id,
+            pallet_code=pallet_code if index == 0 else None,
+            require_empty_pallet=pallet_id is None,
+        )
+        pallet_item = db.scalar(
+            select(InventoryPalletItem).where(
+                InventoryPalletItem.inventory_lot_id == lot.id
+            )
+        )
+        if pallet_item is None:
+            raise Floor3LocationError("正式成品批次未能绑定当前物理栈板", status_code=409)
+        pallet_id = pallet_item.pallet_id
+
+    pallet = _pallet(db, pallet_id) if pallet_id is not None else None
+    if pallet is None:
+        raise Floor3LocationError("正式成品栈板创建失败", status_code=409)
+    for item in snapshot_items:
+        pallet = add_pallet_item(
+            db,
+            pallet_id=pallet.id,
+            expected_version=pallet.version,
+            item=item,
+            operator_id=operator_id,
+        )
+    return _pallet(db, pallet.id, refresh=True)
+
+
 def add_pallet_item(
     db: Session,
     *,
@@ -698,6 +828,80 @@ def add_pallet_item(
     )
     db.flush()
     return row
+
+
+def convert_snapshot_to_finished_lot(
+    db: Session,
+    *,
+    pallet_id: int,
+    item_id: int,
+    expected_version: int,
+    idempotency_key: str,
+    stock_date: date,
+    operator_id: int | None,
+) -> tuple[InventoryPallet, InventoryLot, bool]:
+    """Promote one matched snapshot to one official finished-goods lot."""
+    existing_movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == idempotency_key,
+            InventoryMovement.movement_type == "manual_in",
+        )
+    )
+    if existing_movement is not None:
+        lot = db.get(InventoryLot, existing_movement.inventory_lot_id)
+        if lot is None or lot.pallet_item is None or lot.pallet_item.pallet_id != pallet_id:
+            raise Floor3LocationError("幂等键已用于不同的正式成品入库", status_code=409)
+        return _pallet(db, pallet_id, refresh=True), lot, True
+
+    pallet = _pallet(db, pallet_id)
+    if not pallet.is_current or pallet.location_id is None:
+        raise Floor3LocationError("栈板当前不在有效三楼货位", status_code=409)
+    if pallet.version != expected_version:
+        raise Floor3LocationError("栈板已被其他操作更新，请刷新后重试", status_code=409)
+    item = next((row for row in pallet.items if row.id == item_id), None)
+    if item is None:
+        raise Floor3LocationError("栈板内容不存在", status_code=404)
+    if item.inventory_lot_id is not None:
+        raise Floor3LocationError("该内容已经是正式成品库存", status_code=409)
+    if (
+        item.item_type != "finished"
+        or item.match_status != "matched"
+        or item.customer_id is None
+        or item.product_id is None
+    ):
+        raise Floor3LocationError(
+            "只能将客户、产品完整且已匹配的成品快照转为正式库存", status_code=422
+        )
+    quantity = Decimal(str(item.quantity))
+    if quantity <= 0 or quantity != quantity.to_integral_value():
+        raise Floor3LocationError("正式成品入库数量必须是正整数", status_code=422)
+
+    from app.services.warehouse_inventory import manual_finished_in
+
+    lot = manual_finished_in(
+        db,
+        customer_id=item.customer_id,
+        product_id=item.product_id,
+        location_id=pallet.location_id,
+        quantity=int(quantity),
+        stock_date=stock_date,
+        source_type="manual",
+        remarks="现场快照转正式成品库存",
+        operator_id=operator_id,
+        idempotency_key=idempotency_key,
+        pallet_id=pallet.id,
+    )
+    official_item = db.scalar(
+        select(InventoryPalletItem).where(
+            InventoryPalletItem.inventory_lot_id == lot.id,
+            InventoryPalletItem.pallet_id == pallet.id,
+        )
+    )
+    if official_item is None:
+        raise Floor3LocationError("正式成品批次未能绑定当前物理栈板", status_code=409)
+    db.delete(item)
+    db.flush()
+    return _pallet(db, pallet.id, refresh=True), lot, False
 
 
 def _idempotent_move_result(

@@ -1096,3 +1096,46 @@ def test_floor3_interactive_downgrade_blocks_non_seeded_layout_usage(
 
     with pytest.raises(RuntimeError, match="downgrade blocked"):
         _downgrade(monkeypatch, database_path, PREVIOUS_REVISION)
+SEMI_LOCATION_REVISION = "au48v8x9y0q38"
+
+
+def test_default_semi_finished_location_is_added_and_removed_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "default-semi-location.sqlite3"
+    _upgrade(monkeypatch, database_path, SEMI_LOCATION_REVISION)
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT location_name, warehouse_type, is_active, warehouse_floor, source_version
+            FROM warehouse_locations WHERE location_code = 'SF-TEMP'
+            """
+        ).fetchone()
+        assert row == ("半成品待定位区", "semi_finished", 1, None, None)
+
+    _downgrade(monkeypatch, database_path, "at47v7w8x9p37")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM warehouse_locations WHERE location_code = 'SF-TEMP'"
+        ).fetchone() == (0,)
+
+
+def test_default_semi_finished_location_downgrade_blocks_references(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "default-semi-location-referenced.sqlite3"
+    _upgrade(monkeypatch, database_path, SEMI_LOCATION_REVISION)
+    with sqlite3.connect(database_path) as connection:
+        location_id = connection.execute(
+            "SELECT id FROM warehouse_locations WHERE location_code = 'SF-TEMP'"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO inventory_pallets (pallet_code, location_id) VALUES (?, ?)",
+            ("SF-TEMP-REFERENCE", location_id),
+        )
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match="SF-TEMP"):
+        _downgrade(monkeypatch, database_path, "at47v7w8x9p37")

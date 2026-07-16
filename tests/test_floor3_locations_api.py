@@ -1840,3 +1840,274 @@ def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is
             "location_code": "A1-MAP-02",
         })
         assert forbidden.status_code == 403
+def test_floor3_explicit_finished_rows_create_lots_and_keep_snapshot_default(
+    floor3_app,
+) -> None:
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "PLT-EXPLICIT-FINISHED",
+                "items": [
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][0], "IGNORED"),
+                        "quantity": 4,
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "floor3-explicit-finished-1",
+                    },
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][1], "FORMAL-2"),
+                        "quantity": 2,
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "floor3-explicit-finished-2",
+                    },
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+        assert len(pallet["items"]) == 2
+        assert sum(item["official_inventory"] for item in pallet["items"]) == 2
+        assert {item["quantity"] for item in pallet["items"]} == {2, 4}
+        assert all(item["inventory_lot_id"] is not None for item in pallet["items"])
+
+        with factory() as db:
+            from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
+
+            assert db.scalar(select(func.count(InventoryLot.id))) == 2
+            assert db.scalar(select(func.count(InventoryPalletItem.id))) == 2
+
+
+def test_floor3_add_finished_inventory_is_idempotent_and_uses_expected_version(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "SNAPSHOT")],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+        payload = {
+            "expected_version": pallet["version"],
+            "item": {
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][1],
+                "quantity": 3,
+                "item_type": "finished",
+                "match_status": "matched",
+                "create_finished_inventory": True,
+                "stock_date": "2026-07-16",
+                "idempotency_key": "floor3-add-finished-1",
+            },
+        }
+        added = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items", json=payload
+        )
+        assert added.status_code == 200, added.text
+        replay = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items", json=payload
+        )
+        assert replay.status_code == 200, replay.text
+        assert len(replay.json()["pallet"]["items"]) == 2
+        assert sum(item["official_inventory"] for item in replay.json()["pallet"]["items"]) == 1
+
+
+def test_floor3_promote_snapshot_to_finished_deletes_snapshot_and_is_replayable(
+    floor3_app,
+) -> None:
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "PROMOTE-ME")],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+        item_id = pallet["items"][0]["id"]
+        payload = {
+            "expected_version": pallet["version"],
+            "stock_date": "2026-07-16",
+            "idempotency_key": "floor3-promote-1",
+        }
+        promoted = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items/{item_id}/promote-finished",
+            json=payload,
+        )
+        assert promoted.status_code == 200, promoted.text
+        assert promoted.json()["lot"]["stock_date"] == "2026-07-16"
+        assert len(promoted.json()["pallet"]["items"]) == 1
+        assert promoted.json()["pallet"]["items"][0]["official_inventory"] is True
+        replay = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items/{item_id}/promote-finished",
+            json=payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["replayed"] is True
+
+        with factory() as db:
+            from app.models.audit import OperationLog
+            from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
+
+            assert db.scalar(select(func.count(InventoryLot.id))) == 1
+            assert db.scalar(select(func.count(InventoryPalletItem.id))) == 1
+            assert db.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.description == "现场快照转正式成品库存"
+                )
+            ) == 1
+def test_floor3_create_rejects_mixed_finished_and_snapshot_rows(floor3_app) -> None:
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        response = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][0], "FORMAL"),
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "mixed-formal-1",
+                    },
+                    _matched_item(ids["tianhua"], ids["products"][1], "SNAPSHOT"),
+                ],
+            },
+        )
+        assert response.status_code == 422
+        assert "分开保存" in response.json()["detail"][0]["msg"]
+    with factory() as db:
+        from app.models.warehouse_inventory import InventoryLot, InventoryPallet
+
+        assert db.scalar(select(func.count(InventoryLot.id))) == 0
+        assert db.scalar(select(func.count(InventoryPallet.id))) == 0
+
+
+def test_floor3_add_finished_idempotency_key_cannot_cross_pallets(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        first = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][0], "FORMAL-1"),
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "cross-pallet-key-1",
+                    }
+                ],
+            },
+        )
+        assert first.status_code == 201, first.text
+        other = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][1],
+                "items": [_matched_item(ids["tianhua"], ids["products"][1], "SNAPSHOT-2")],
+            },
+        )
+        assert other.status_code == 201, other.text
+        pallet = other.json()["pallet"]
+        response = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items",
+            json={
+                "expected_version": pallet["version"],
+                "item": {
+                    **_matched_item(ids["tianhua"], ids["products"][1], "FORMAL-2"),
+                    "create_finished_inventory": True,
+                    "stock_date": "2026-07-16",
+                    "idempotency_key": "cross-pallet-key-1",
+                },
+            },
+        )
+        assert response.status_code == 409
+        assert "其它物理栈板" in response.json()["detail"]
+
+
+def test_floor3_official_create_requires_target_location_to_be_empty(floor3_app) -> None:
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        occupied = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "OCCUPIED")],
+            },
+        )
+        assert occupied.status_code == 201, occupied.text
+        response = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][1], "FORMAL"),
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "occupied-formal-1",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 409
+        assert "目标货位已有当前栈板" in response.json()["detail"]
+    with factory() as db:
+        from app.models.warehouse_inventory import InventoryLot
+
+        assert db.scalar(select(func.count(InventoryLot.id))) == 0
+def test_floor3_create_finished_idempotency_key_cannot_reuse_other_pallet(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        first = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][0], "FORMAL-1"),
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "create-cross-pallet-key-1",
+                    }
+                ],
+            },
+        )
+        assert first.status_code == 201, first.text
+        response = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][1],
+                "items": [
+                    {
+                        **_matched_item(ids["tianhua"], ids["products"][1], "FORMAL-2"),
+                        "create_finished_inventory": True,
+                        "stock_date": "2026-07-16",
+                        "idempotency_key": "create-cross-pallet-key-1",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 409
+        assert "其它物理栈板" in response.json()["detail"]

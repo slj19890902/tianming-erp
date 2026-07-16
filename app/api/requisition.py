@@ -49,7 +49,11 @@ from app.services.stock_replenishment import (
     stock_replenishment_order,
     validate_stock_policy,
 )
-from app.services.flute_mapping import validate_flute_consistency
+from app.services.flute_mapping import (
+    normalize_flute_type,
+    seven_layer_code_error,
+    validate_flute_for_write,
+)
 from app.services.report_crease import crease_width_error
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -86,7 +90,17 @@ CUTTING_MODE_FACTORS = {
 }
 DEFAULT_CUTTING_MODE = "一开一"
 SPECIAL_PROCESSES = {"无", "大做小", "双拼", "多拼"}
-SUPPLIER_MATERIAL_FLUTES = {"AB", "E", "BE", "B", "C", "A"}
+SUPPLIER_MATERIAL_FLUTES = {"AAA", "ABC", "AB", "E", "BE", "B", "C", "A"}
+
+
+def _business_flute_error(
+    layer_count: int | None,
+    flute_type: str | None,
+) -> tuple[str | None, str | None]:
+    """Return the normalized business flute and its write-time validation error."""
+    normalized_flute = normalize_flute_type(flute_type)
+    error = validate_flute_for_write(normalized_flute, layer_count)
+    return normalized_flute, error
 
 
 def _clean_supplier_material_code(value: str | None, layer_count: int | None) -> str:
@@ -102,7 +116,7 @@ def _clean_supplier_material_code(value: str | None, layer_count: int | None) ->
     if len(candidates) > 1 and all(token in SUPPLIER_MATERIAL_FLUTES for token in candidates):
         return ""
     code = candidates[0]
-    expected_length = 5 if layer_count == 5 else 3 if layer_count == 3 else None
+    expected_length = {3: 3, 5: 5, 7: 7}.get(layer_count)
     return code[:expected_length] if expected_length else code
 
 
@@ -2305,12 +2319,19 @@ def _create_supplier_order_for_pending_entries(
     first = entries[0]
     first_item: OrderItem = first["order_item"]
     material = db.get(Material, first_item.material_id) if first_item.material_id else None
+    layer_count = material.layer_count if material else first_item.layer_count
+    flute_type, flute_error = _business_flute_error(
+        layer_count,
+        first_item.flute_type,
+    )
+    if flute_error:
+        raise HTTPException(status_code=400, detail=flute_error)
     order = SupplierRequisitionOrder(
         order_number=_supplier_order_number(db),
         supplier_name=supplier_name,
         material_id=first_item.material_id,
-        layer_count=first_item.layer_count or (material.layer_count if material else None),
-        flute_type=first_item.flute_type,
+        layer_count=layer_count,
+        flute_type=flute_type,
         report_length_mm=int(first["cardboard_len"]),
         report_width_mm=int(first["cardboard_width"]),
         crease_type=first_item.snapshot_crease_type,
@@ -2567,8 +2588,15 @@ def update_pending_material(
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
-    layer_count = payload.layer_count or material.layer_count
-    flute_type = payload.flute_type or item.flute_type
+    if payload.layer_count is not None and payload.layer_count != material.layer_count:
+        raise HTTPException(status_code=400, detail="请求层数与所选材质真实层数不一致")
+    layer_count = material.layer_count
+    flute_type = (
+        payload.flute_type
+        if "flute_type" in payload.model_fields_set
+        else item.flute_type
+    )
+    flute_type, flute_error = _business_flute_error(layer_count, flute_type)
     if has_unconsumed_inventory_reservations(db, item.id) and (
         material.id != item.material_id
         or (flute_type or "").strip().upper()
@@ -2578,7 +2606,6 @@ def update_pending_material(
             status_code=409,
             detail="该订单明细已有未消耗库存预占，不能修改材质或楞型；请先释放库存预占。",
         )
-    flute_error = validate_flute_consistency(flute_type, layer_count)
     if flute_error:
         raise HTTPException(status_code=400, detail=flute_error)
     before = {
@@ -3352,6 +3379,7 @@ def _build_replenishment_item(
         policy.layer_count if policy else None,
     )
     flute_type = _coalesce(payload.flute_type, policy.flute_type if policy else None)
+    flute_type, flute_error = _business_flute_error(layer_count, flute_type)
     report_length = _coalesce(
         payload.report_length_mm,
         policy.report_length_mm if policy else None,
@@ -3387,9 +3415,13 @@ def _build_replenishment_item(
             raise StockReplenishmentError(
                 "半成品补库必须填写材质、层数、楞型和报料长宽。"
             )
-        valid_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
-        if layer_count not in valid_flutes or flute_type not in valid_flutes[layer_count]:
-            raise StockReplenishmentError("三层只允许A/B/E楞，五层只允许AB/BE楞。")
+        if layer_count not in {3, 5, 7}:
+            raise StockReplenishmentError("半成品补库层数只允许三层、五层或七层。")
+        code_error = seven_layer_code_error(material_code, layer_count)
+        if code_error:
+            raise StockReplenishmentError(code_error)
+        if flute_error:
+            raise StockReplenishmentError(flute_error)
         crease_error = crease_width_error(
             label="压线",
             crease_type=payload.crease_type,
@@ -3955,6 +3987,13 @@ def create_supplier_order_from_merge_group(
 
     first_req_item, first_order_item, *_ = current_rows[0]
     material = db.get(Material, first_order_item.material_id) if first_order_item.material_id else None
+    layer_count = material.layer_count if material else first_order_item.layer_count
+    flute_type, flute_error = _business_flute_error(
+        layer_count,
+        first_order_item.flute_type,
+    )
+    if flute_error:
+        raise HTTPException(status_code=400, detail=flute_error)
     total_quantity = sum(
         int(requirements["production_required_qty"])
         for *_, requirements in current_rows
@@ -3975,8 +4014,8 @@ def create_supplier_order_from_merge_group(
         order_number=_supplier_order_number(db),
         supplier_name=supplier_name,
         material_id=first_order_item.material_id,
-        layer_count=first_order_item.layer_count or (material.layer_count if material else None),
-        flute_type=first_order_item.flute_type,
+        layer_count=layer_count,
+        flute_type=flute_type,
         report_length_mm=int(first_req_item.cardboard_len),
         report_width_mm=int(first_req_item.cardboard_width),
         crease_type=first_order_item.snapshot_crease_type,
@@ -4667,6 +4706,19 @@ def create_supplier_order(
     if not payload.members:
         raise HTTPException(status_code=400, detail="至少需要一条明细")
 
+    material = db.get(Material, payload.material_id) if payload.material_id else None
+    effective_layer_count = (
+        material.layer_count
+        if material is not None
+        else payload.layer_count
+    )
+    normalized_flute, flute_error = _business_flute_error(
+        effective_layer_count,
+        payload.flute_type,
+    )
+    if flute_error:
+        raise HTTPException(status_code=400, detail=flute_error)
+
     validated_members: list[dict] = []
     for member in payload.members:
         if member.stock_deduction_qty:
@@ -4755,8 +4807,8 @@ def create_supplier_order(
         order_number=order_number,
         supplier_name=payload.supplier_name,
         material_id=payload.material_id,
-        layer_count=payload.layer_count,
-        flute_type=payload.flute_type,
+        layer_count=effective_layer_count,
+        flute_type=normalized_flute,
         report_length_mm=payload.report_length_mm,
         report_width_mm=payload.report_width_mm,
         crease_type=payload.crease_type,

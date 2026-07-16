@@ -35,7 +35,8 @@ from app.models.product_drawing import ProductDrawing
 from app.models.user import User
 from app.services.flute_mapping import (
     normalize_flute_type,
-    validate_flute_consistency,
+    seven_layer_code_error,
+    validate_flute_for_write,
 )
 from app.services.product_drawings import (
     DrawingValidationError,
@@ -252,9 +253,15 @@ class ProductPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
-        """拒绝非法楞型/层数组合（3层只能 A/B/E，5层只能 AB/BE）。"""
+        """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
         self.flute_type = normalize_flute_type(self.flute_type)
-        err = validate_flute_consistency(self.flute_type, self.layer_count)
+        # When a material is selected and layer_count is omitted, the endpoint
+        # validates against Material.layer_count after loading the real row.
+        err = (
+            None
+            if self.material_id is not None and self.layer_count is None
+            else validate_flute_for_write(self.flute_type, self.layer_count)
+        )
         if err:
             raise ValueError(err)
         self.box_style = (self.box_style or "").strip() or None
@@ -431,6 +438,32 @@ def _validate_references(
             raise HTTPException(status_code=400, detail="模具不存在")
         if not mold_tool.is_active:
             raise HTTPException(status_code=400, detail="所选模具已停用")
+
+
+def _validate_product_material_flute(db: Session, payload: ProductPayload) -> None:
+    """Validate and normalize a product snapshot against its selected material."""
+    material = db.get(Material, payload.material_id) if payload.material_id else None
+    if (
+        material is not None
+        and payload.layer_count is not None
+        and payload.layer_count != material.layer_count
+    ):
+        raise HTTPException(status_code=400, detail="请求层数与所选材质真实层数不一致")
+    effective_layer_count = (
+        material.layer_count if material is not None else payload.layer_count
+    )
+    code_error = seven_layer_code_error(
+        material.code if material is not None else payload.legacy_material_text,
+        effective_layer_count,
+    )
+    if code_error:
+        raise HTTPException(status_code=400, detail=code_error)
+    normalized_flute = normalize_flute_type(payload.flute_type)
+    error = validate_flute_for_write(normalized_flute, effective_layer_count)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    payload.layer_count = effective_layer_count
+    payload.flute_type = normalized_flute
 
 
 @router.get("")
@@ -740,6 +773,7 @@ def create_product(
         material_id=payload.material_id,
         mold_tool_id=payload.mold_tool_id,
     )
+    _validate_product_material_flute(db, payload)
     _validate_product_crease_widths(payload)
     data = _product_write_data(payload, user)
     data.update(
@@ -786,6 +820,7 @@ def update_product(
         material_id=payload.material_id,
         mold_tool_id=payload.mold_tool_id,
     )
+    _validate_product_material_flute(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     before = _product_payload_snapshot(product)
     write_data = _product_write_data(payload, user)
@@ -937,16 +972,51 @@ def sync_product_fields(
     if not has_permission(user, "cost.view"):
         for field in _COST_SENSITIVE_PRODUCT_FIELDS:
             payload.fields.pop(field, None)
-    prospective_layer = payload.fields.get("layer_count", product.layer_count)
+    requested_layer = payload.fields.get("layer_count", product.layer_count)
+    requested_flute = normalize_flute_type(
+        payload.fields.get("flute_type", product.flute_type)
+    )
+    if "layer_count" in payload.fields:
+        requested_error = validate_flute_for_write(requested_flute, requested_layer)
+        if requested_error:
+            raise HTTPException(status_code=400, detail=requested_error)
+    selected_material_id = payload.fields.get("material_id", product.material_id)
+    selected_material = (
+        db.get(Material, selected_material_id)
+        if selected_material_id is not None
+        else None
+    )
+    if selected_material_id is not None and selected_material is None:
+        raise HTTPException(status_code=400, detail="材质不存在")
+    if (
+        selected_material is not None
+        and "layer_count" in payload.fields
+        and payload.fields["layer_count"] is not None
+        and payload.fields["layer_count"] != selected_material.layer_count
+    ):
+        raise HTTPException(status_code=400, detail="请求层数与所选材质真实层数不一致")
+    prospective_layer = (
+        selected_material.layer_count
+        if selected_material is not None
+        else payload.fields.get("layer_count", product.layer_count)
+    )
+    code_error = seven_layer_code_error(
+        selected_material.code
+        if selected_material is not None
+        else product.legacy_material_text,
+        prospective_layer,
+    )
+    if code_error:
+        raise HTTPException(status_code=400, detail=code_error)
     prospective_flute = normalize_flute_type(
         payload.fields.get("flute_type", product.flute_type)
     )
-    if "layer_count" in payload.fields or "flute_type" in payload.fields:
-        flute_error = validate_flute_consistency(
-            prospective_flute, prospective_layer
-        )
-        if flute_error:
-            raise HTTPException(status_code=400, detail=flute_error)
+    flute_fields = {"material_id", "layer_count", "flute_type"}
+    flute_error = validate_flute_for_write(prospective_flute, prospective_layer)
+    if flute_error:
+        raise HTTPException(status_code=400, detail=flute_error)
+    if selected_material is not None and flute_fields.intersection(payload.fields):
+        payload.fields["layer_count"] = prospective_layer
     if "production_process" in payload.fields or "mold_tool_id" in payload.fields:
         prospective_process = payload.fields.get(
             "production_process", product.production_process

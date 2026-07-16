@@ -191,6 +191,78 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
         assert manual_preview.status_code == 200
         assert manual_preview.json()["message"] == "已手工填写平方价，可保存为可用材质"
 
+        seven_layer_without_flute = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 7,
+                "material_code": "JA616AJ",
+            },
+        )
+        assert seven_layer_without_flute.status_code == 422
+
+        seven_layer_with_invalid_flute = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 7,
+                "material_code": "JA616AJ",
+                "usage_flute_type": "AB",
+            },
+        )
+        assert seven_layer_with_invalid_flute.status_code == 422
+
+        seven_layer = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 7,
+                "material_code": "JA616AJ",
+                "usage_flute_type": "ABC",
+            },
+        )
+        assert seven_layer.status_code == 200
+        seven_result = seven_layer.json()
+        assert seven_result["valid"] is True
+        assert seven_result["layer_count"] == 7
+        assert [row["code_char"] for row in seven_result["layers"]] == list("JA616AJ")
+        assert len(seven_result["layers"]) == 7
+        assert seven_result["price_calculation"]["calculable"] is False
+        assert seven_result["current_suggested_price"] is None
+
+        seven_layer_no_price = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 7,
+                "material_code": "JA616AJ",
+                "usage_flute_type": "ABC",
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 7,
+                "parsed_material_code": "JA616AJ",
+                "price_source": "manual",
+            },
+        )
+        assert seven_layer_no_price.status_code == 400
+
+        seven_layer_saved = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 7,
+                "material_code": "JA616AJ",
+                "usage_flute_type": "ABC",
+                "quote_price": 3.58,
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 7,
+                "parsed_material_code": "JA616AJ",
+                "price_source": "manual",
+            },
+        )
+        assert seven_layer_saved.status_code == 200
+        assert seven_layer_saved.json()["material"]["flute_type"] is None
+        assert seven_layer_saved.json()["material"]["quote_price"] == "3.5800"
+
         for code, weight in [("6", 120), ("1", 45)]:
             assert client.post(
                 "/api/master/materials/paper-codes",

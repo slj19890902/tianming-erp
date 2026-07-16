@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
@@ -386,6 +387,207 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             json={"username": "quote-workshop", "password": "QuotePass123!"},
         ).status_code == 200
         assert client.get("/api/quotations").status_code == 403
+
+
+@pytest.mark.parametrize("flute_type", ["AAA", "ABC"])
+def test_seven_layer_quotation_converts_to_product_without_material_flute_backfill(
+    tmp_path,
+    flute_type,
+):
+    from datetime import date
+
+    from app.api.quotations import (
+        ConvertPayload,
+        QuotationItemPayload,
+        _replace_items,
+        convert_to_product,
+    )
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.material import Material
+    from app.models.product import Product
+    from app.models.quotation import QuotationOrder
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / f"quotation-seven-{flute_type}.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        customer = Customer(name=f"七层报价客户-{flute_type}", is_active=True)
+        user = User(
+            username=f"quote-seven-{flute_type.lower()}",
+            password_hash="test-only",
+            role="admin",
+            real_name="七层报价测试",
+            must_change_password=False,
+        )
+        material = Material(
+            code="A12345B",
+            layer_count=7,
+            flute_type=None,
+            quote_price=Decimal("5.0000"),
+            supplier_name="七层报价纸板厂",
+            is_active=True,
+        )
+        db.add_all([customer, user, material])
+        db.flush()
+        quotation = QuotationOrder(
+            quotation_no=f"QT-20260716-{1 if flute_type == 'AAA' else 2:03d}",
+            customer_id=customer.id,
+            customer_name=customer.name,
+            quotation_date=date(2026, 7, 16),
+            status="draft",
+            total_amount=Decimal("0"),
+            created_by=user.id,
+        )
+        db.add(quotation)
+        db.flush()
+        _replace_items(
+            db,
+            quotation,
+            [
+                QuotationItemPayload(
+                    product_name=f"七层纸箱-{flute_type}",
+                    box_type="A1/0201 普通开槽箱",
+                    length_mm=Decimal("300"),
+                    width_mm=Decimal("200"),
+                    height_mm=Decimal("150"),
+                    material_id=material.id,
+                    flute_type=flute_type.lower(),
+                    quantity=10,
+                    final_unit_price=Decimal("2.50"),
+                )
+            ],
+        )
+        quotation.status = "accepted"
+        db.commit()
+        item = quotation.items[0]
+        assert item.flute_type == flute_type
+
+        result = convert_to_product(
+            item.id,
+            ConvertPayload(product_code=f"Q7-{flute_type}"),
+            db=db,
+            user=user,
+            _product_creator=user,
+        )
+
+        product = db.get(Product, result["product_id"])
+        assert product is not None
+        assert product.layer_count == 7
+        assert product.flute_type == flute_type
+        assert product.material.code == "A12345B"
+        assert product.material.flute_type is None
+
+
+@pytest.mark.parametrize(
+    "flute_type",
+    [None, "", "A", "B", "E", "AB", "BE"],
+)
+def test_seven_layer_quotation_rejects_invalid_flute_on_save_and_conversion(
+    tmp_path,
+    flute_type,
+):
+    from datetime import date
+
+    from fastapi import HTTPException
+
+    from app.api.quotations import (
+        ConvertPayload,
+        QuotationItemPayload,
+        _replace_items,
+        convert_to_product,
+    )
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.material import Material
+    from app.models.product import Product
+    from app.models.quotation import QuotationItem, QuotationOrder
+    from app.models.user import User
+
+    suffix = "empty" if not flute_type else flute_type
+    engine = create_sqlite_engine(tmp_path / f"quotation-seven-invalid-{suffix}.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        customer = Customer(name=f"七层无效楞型客户-{suffix}", is_active=True)
+        user = User(
+            username=f"quote-seven-invalid-{suffix}",
+            password_hash="test-only",
+            role="admin",
+            real_name="七层报价测试",
+            must_change_password=False,
+        )
+        material = Material(
+            code="A12345B",
+            layer_count=7,
+            flute_type=None,
+            quote_price=Decimal("5.0000"),
+            supplier_name="七层报价纸板厂",
+            is_active=True,
+        )
+        db.add_all([customer, user, material])
+        db.flush()
+        quotation = QuotationOrder(
+            quotation_no="QT-20260716-099",
+            customer_id=customer.id,
+            customer_name=customer.name,
+            quotation_date=date(2026, 7, 16),
+            status="accepted",
+            total_amount=Decimal("25"),
+            created_by=user.id,
+        )
+        db.add(quotation)
+        db.flush()
+        quote_payload = QuotationItemPayload(
+            product_name="七层无效楞型纸箱",
+            box_type="A1/0201 普通开槽箱",
+            length_mm=Decimal("300"),
+            width_mm=Decimal("200"),
+            height_mm=Decimal("150"),
+            material_id=material.id,
+            flute_type=flute_type,
+            quantity=10,
+            final_unit_price=Decimal("2.50"),
+        )
+        with pytest.raises(HTTPException) as save_error:
+            _replace_items(db, quotation, [quote_payload])
+        assert save_error.value.status_code == 400
+        save_detail = str(save_error.value.detail)
+        assert "AAA" in save_detail and "ABC" in save_detail
+
+        item = QuotationItem(
+            quotation_id=quotation.id,
+            product_name="七层历史无效楞型纸箱",
+            box_type="A1/0201 普通开槽箱",
+            length_mm=Decimal("300"),
+            width_mm=Decimal("200"),
+            height_mm=Decimal("150"),
+            material_id=material.id,
+            material_supplier=material.supplier_name,
+            material_code=material.code,
+            flute_type=flute_type,
+            quantity=10,
+            margin_rate=Decimal("20"),
+            final_unit_price=Decimal("2.50"),
+        )
+        db.add(item)
+        db.commit()
+
+        with pytest.raises(HTTPException) as conversion_error:
+            convert_to_product(
+                item.id,
+                ConvertPayload(product_code=f"Q7-BAD-{suffix}"),
+                db=db,
+                user=user,
+                _product_creator=user,
+            )
+        assert conversion_error.value.status_code == 400
+        conversion_detail = str(conversion_error.value.detail)
+        assert "AAA" in conversion_detail and "ABC" in conversion_detail
+        assert db.query(Product).count() == 0
 
 
 def test_quotation_print_page_calls_api():

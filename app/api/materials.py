@@ -6,7 +6,7 @@ import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,7 +24,7 @@ from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services import material_price_adjust as price_adjust
 from app.services import material_pricing
 from app.services.corrugated_material_pricing import estimate_material_price
-from app.services.flute_mapping import validate_flute_consistency
+from app.services.flute_mapping import seven_layer_code_error, validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 
 
@@ -39,7 +39,7 @@ class MaterialPayload(BaseModel):
     code: str = Field(min_length=1, max_length=100)
     paper_composition: str | None = None
     layer_count: int | None = Field(default=None, ge=1)
-    flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
+    flute_type: Literal["AB", "BE", "A", "B", "E", "AAA", "ABC"] | None = None
     basis_weight_description: str | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
     rule_base_price: Decimal | None = Field(default=None, ge=0)
@@ -49,6 +49,13 @@ class MaterialPayload(BaseModel):
     quote_date: date | None = None
     remarks: str | None = None
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_seven_layer_code(self) -> "MaterialPayload":
+        error = seven_layer_code_error(self.code, self.layer_count)
+        if error:
+            raise ValueError(error)
+        return self
 
 
 def normalize_basis_weight(value: str | None) -> str | None:
@@ -101,9 +108,9 @@ class SupplierPaperCodePayload(BaseModel):
 
 class MaterialComposePreviewPayload(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=200)
-    material_code: str = Field(min_length=1, max_length=5)
-    layer_count: int | None = Field(default=None, ge=3, le=5)
-    usage_flute_type: Literal["AB", "BE", "A", "B", "E"] | None = None
+    material_code: str = Field(min_length=1, max_length=7)
+    layer_count: int | None = Field(default=None, ge=3, le=7)
+    usage_flute_type: Literal["AB", "BE", "A", "B", "E", "AAA", "ABC"] | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("supplier_name")
@@ -115,18 +122,24 @@ class MaterialComposePreviewPayload(BaseModel):
     @classmethod
     def normalize_material_code(cls, value: str) -> str:
         code = value.strip().upper()
-        if len(code) not in {3, 5}:
-            raise ValueError("材质代码需为3位或5位")
+        if len(code) not in {3, 5, 7}:
+            raise ValueError("材质代码需为3位、5位或7位")
         if not re.fullmatch(r"[A-Z0-9]+", code):
             raise ValueError("材质代码只能包含字母和数字")
         return code
+
+    @model_validator(mode="after")
+    def require_seven_layer_flute(self) -> "MaterialComposePreviewPayload":
+        if len(self.material_code) == 7 and self.usage_flute_type not in {"AAA", "ABC"}:
+            raise ValueError("七层材质必须人工选择楞型（AAA 或 ABC）")
+        return self
 
 
 class MaterialComposeSavePayload(MaterialComposePreviewPayload):
     remarks: str | None = None
     parsed_supplier_name: str = Field(min_length=1, max_length=200)
-    parsed_material_code: str = Field(min_length=1, max_length=5)
-    parsed_layer_count: int = Field(ge=3, le=5)
+    parsed_material_code: str = Field(min_length=1, max_length=7)
+    parsed_layer_count: int = Field(ge=3, le=7)
     price_source: Literal["manual", "suggested"]
 
 
@@ -219,14 +232,7 @@ def _sort_materials(materials: list[Material], sort: str) -> list[Material]:
 
 
 def _validate_layer_flute(layer_count: int | None, flute_type: str | None) -> None:
-    """v0.19.2-B B-5: 校验层数 × 楞型合法性。
-
-    复用 flute_mapping.validate_flute_consistency：
-      合法 3+A/B/E、5+AB/BE；非法 3+AB/BE、5+A/B/E。
-    七层暂无规则：拒绝并提示待维护（不允许乱填七层楞型组合）。
-    """
-    if layer_count == 7:
-        raise HTTPException(status_code=400, detail="七层楞型规则待维护，暂不支持新增/编辑七层材质。")
+    """校验层数与楞型组合，且保留历史空楞型的读取兼容性。"""
     error = validate_flute_consistency(flute_type, layer_count)
     if error:
         raise HTTPException(status_code=400, detail=error)
@@ -687,6 +693,9 @@ def _compose_preview(
             detail=f"当前选择{requested_layer_count}层，但材质代码为{layer_count}位，请检查后重新解析",
         )
     roles = (
+        ["面纸", "第一楞纸", "第一芯纸", "第二楞纸", "第二芯纸", "第三楞纸", "里纸"]
+        if layer_count == 7
+        else
         ["面纸", "瓦楞纸", "里纸"]
         if layer_count == 3
         else ["面纸", "B楞瓦纸", "芯纸", "A楞瓦纸", "里纸"]
@@ -736,9 +745,11 @@ def _compose_preview(
             material_code=material_code,
             usage_flute_type=usage_flute_type,
         )
-        if valid
+        if valid and layer_count in {3, 5}
         else {"calculable": False}
     )
+    if valid and layer_count == 7:
+        pricing["message"] = "七层材质暂无自动报价公式，请使用人工价格"
     if missing_codes:
         message = f"该供应商下不存在基础代码：{'、'.join(missing_codes)}"
     elif existing is not None:
@@ -904,7 +915,7 @@ def save_material_composition(
     if (
         payload.parsed_supplier_name.strip() != payload.supplier_name
         or payload.parsed_material_code.strip().upper() != payload.material_code
-        or payload.parsed_layer_count != payload.layer_count
+        or payload.parsed_layer_count != preview["layer_count"]
     ):
         raise HTTPException(
             status_code=409,
@@ -915,7 +926,7 @@ def save_material_composition(
     existing = _find_dictionary_duplicate(
         db,
         supplier_name=payload.supplier_name,
-        layer_count=payload.layer_count,
+        layer_count=preview["layer_count"],
         material_code=payload.material_code,
     )
     if existing is not None:

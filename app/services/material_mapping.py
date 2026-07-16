@@ -36,7 +36,12 @@ def classify_confidence(
     if "无法解码" in c or "需人工" in c:
         return "低可信"
     if "7层板" in c:
-        return "低可信"
+        normalized_new_code = str(new_code or "").strip().upper()
+        if (
+            len(normalized_new_code) != 7
+            or re.fullmatch(r"[A-Z0-9]{7}", normalized_new_code) is None
+        ):
+            return "低可信"
 
     # 差值抽取
     diff_match = re.search(r"差(\d+)g", c)
@@ -442,6 +447,30 @@ class MaterialMappingResult:
     changes: list[dict] = field(default_factory=list)
 
 
+_MATERIAL_DICTIONARY_LAYER_COUNTS = frozenset({3, 5, 7})
+
+
+def _validated_material_code_and_layer(
+    new_code: str | None,
+    layer_value: str | None,
+) -> tuple[str, int] | None:
+    """Validate a dictionary code without introducing a business flute dimension."""
+    code = str(new_code or "").strip().upper()
+    if (
+        len(code) not in _MATERIAL_DICTIONARY_LAYER_COUNTS
+        or re.fullmatch(r"[A-Z0-9]+", code) is None
+    ):
+        return None
+
+    layer_match = re.search(r"(\d+)", str(layer_value or ""))
+    layer_count = int(layer_match.group(1)) if layer_match else len(code)
+    if layer_count not in _MATERIAL_DICTIONARY_LAYER_COUNTS:
+        return None
+    if len(code) != layer_count:
+        return None
+    return code, layer_count
+
+
 def apply_high_confidence_material_mapping(
     db: "Session",
     csv_path: Path,
@@ -477,18 +506,32 @@ def apply_high_confidence_material_mapping(
     for c in candidates:
         code_to_candidates[c.old_code].append(c)
     # 过滤冲突（同旧代码多个不同新代码）
-    unique_mapping: dict[str, MaterialCodeMappingCandidate] = {}
+    unique_mapping: dict[
+        str, tuple[MaterialCodeMappingCandidate, str, int]
+    ] = {}
     for old_code, cands in code_to_candidates.items():
-        new_codes = {c.new_code for c in cands if c.new_code}
+        valid_candidates = [
+            (candidate, validated)
+            for candidate in cands
+            if (
+                validated := _validated_material_code_and_layer(
+                    candidate.new_code,
+                    candidate.layer_count,
+                )
+            )
+            is not None
+        ]
+        new_codes = {validated for _, validated in valid_candidates}
         if len(new_codes) == 1:
-            unique_mapping[old_code] = cands[0]
+            candidate, (new_code, layer_count) = valid_candidates[0]
+            unique_mapping[old_code] = (candidate, new_code, layer_count)
 
     if not unique_mapping:
         return result
 
     # 预加载 materials 字典
     existing_materials: dict[str, Material] = {
-        m.code: m for m in db.scalars(select(Material)).all()
+        m.code.strip().upper(): m for m in db.scalars(select(Material)).all()
     }
 
     # 遍历需要更新的产品
@@ -502,38 +545,31 @@ def apply_high_confidence_material_mapping(
 
     for p in products:
         candidates_for_product = _clean_legacy_to_code(p.legacy_material_text or "")
-        matched_cand: MaterialCodeMappingCandidate | None = None
+        matched_mapping: tuple[MaterialCodeMappingCandidate, str, int] | None = None
         for code_cand in candidates_for_product:
             if code_cand in unique_mapping:
-                matched_cand = unique_mapping[code_cand]
+                matched_mapping = unique_mapping[code_cand]
                 break
 
-        if matched_cand is None:
+        if matched_mapping is None:
             result.skipped_no_match += 1
             continue
+        matched_cand, new_code, layer_count_int = matched_mapping
 
         # product.material_id 已经设置 → 跳过
         if p.material_id is not None:
             result.skipped_already_set += 1
             continue
 
-        new_code = matched_cand.new_code
         # 找或创建材质记录
         mat = existing_materials.get(new_code)
         if mat is None:
             # 创建新材质记录
-            layer_str = matched_cand.layer_count or ""
-            layer_count_int: int | None = None
-            m = re.search(r"(\d+)", layer_str)
-            if m:
-                layer_count_int = int(m.group(1))
-            flute_default = "AB" if (layer_count_int or 0) >= 5 else "B"
-
             mat = Material(
                 code=new_code,
                 supplier_name="嘉林亿",
                 layer_count=layer_count_int,
-                flute_type=flute_default,
+                flute_type=None,
                 basis_weight_description=matched_cand.weight_structure,
                 quote_price=matched_cand.new_price,
                 price_unit="元/㎡",
@@ -550,6 +586,11 @@ def apply_high_confidence_material_mapping(
             existing_materials[new_code] = mat
             result.materials_created += 1
         else:
+            if mat.layer_count not in (None, layer_count_int):
+                result.skipped_no_match += 1
+                continue
+            mat.layer_count = layer_count_int
+            mat.flute_type = None
             result.materials_reused += 1
 
         p.material_id = mat.id

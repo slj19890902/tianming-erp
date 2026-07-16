@@ -675,26 +675,24 @@ def test_order_item_sync_rejects_invalid_common_box_flute_without_partial_save(
         created = client.post("/api/orders", json=_payload())
         assert created.status_code == 201, created.text
         item_id = created.json()["items"][0]["id"]
+        with session_factory() as session:
+            item = session.get(OrderItem, item_id)
+            product = session.get(Product, item.product_id)
+            original_item_state = (item.quantity, item.layer_count, item.flute_type)
+            original_product_state = (product.layer_count, product.flute_type)
 
         rejected = client.put(
             f"/api/orders/items/{item_id}",
             json={**base_payload, "quantity": 199, "flute_type": "AB"},
         )
         assert rejected.status_code == 400, rejected.text
-        assert "三层瓦楞只能是 A / B / E" in rejected.json()["detail"]
-
-        accepted = client.put(
-            f"/api/orders/items/{item_id}",
-            json={**base_payload, "flute_type": "A"},
-        )
-        assert accepted.status_code == 200, accepted.text
+        assert "请求层数与所选材质真实层数不一致" in rejected.json()["detail"]
 
     with session_factory() as session:
         item = session.get(OrderItem, item_id)
-        product = session.get(Product, 1)
-        assert item.quantity == 200
-        assert (item.layer_count, item.flute_type) == (3, "A")
-        assert (product.layer_count, product.flute_type) == (3, "A")
+        product = session.get(Product, item.product_id)
+        assert (item.quantity, item.layer_count, item.flute_type) == original_item_state
+        assert (product.layer_count, product.flute_type) == original_product_state
 
 
 def test_order_models_use_new_tables_and_leave_legacy_name_free() -> None:

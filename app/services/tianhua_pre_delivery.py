@@ -14,7 +14,9 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.production import ProductionTask
 from app.models.tianhua_pre_delivery import TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryImportBatch, TianhuaPreDeliveryImportItem
+from app.services.production_workflow import production_ready_quantity
 
 STATUS_LABELS = {"ok":"可送货","duplicate_warning":"疑似重复","qty_mismatch":"数量不一致","stock_shortage":"库存不足","not_matched":"未匹配","ocr_failed":"识别失败"}
 GENERATABLE = {"ok","duplicate_warning","qty_mismatch","stock_shortage"}
@@ -93,6 +95,27 @@ VALID_ORDER_STATUSES = {
 }
 
 
+def _available_delivery_quantity(db: Session, order_item: OrderItem) -> int:
+    task = db.scalar(
+        select(ProductionTask).where(
+            ProductionTask.order_item_id == order_item.id,
+        )
+    )
+    if task is None:
+        pending = max(
+            int(order_item.quantity or 0) - int(order_item.delivered_quantity or 0),
+            0,
+        )
+        return pending if order_item.material_status == "received" else 0
+    if task.status not in {"completed", "not_required"}:
+        return 0
+    return max(
+        min(int(order_item.quantity or 0), production_ready_quantity(db, order_item))
+        - int(order_item.delivered_quantity or 0),
+        0,
+    )
+
+
 def _image_order_no(row: RecognizedRow) -> str | None:
     if row.image_order_no:
         return row.image_order_no.strip()
@@ -152,7 +175,7 @@ def preprocess_row(
             or "RUIDA" in o.order_number.upper()
         ):
             continue
-        pending=int(oi.quantity-oi.delivered_quantity); available=pending if oi.material_status=="received" else 0
+        pending=int(oi.quantity-oi.delivered_quantity); available=_available_delivery_quantity(db,oi)
         score,distance,order_match,quantity_match=_candidate_score(oi,o,image_qty=row.image_qty,image_order_no=image_order_no,pre_delivery_date=target_date)
         candidates.append((score,distance,oi,o,p,pending,available,order_match,quantity_match))
     candidates.sort(key=lambda x:(-x[0],x[1],x[3].delivery_date or x[3].order_date,-x[2].id))
@@ -171,7 +194,7 @@ def preprocess_row(
         reason=f"数量差 {abs(pending-row.image_qty)}，按综合评分匹配"
     if ruida_excluded:
         reason += "；已排除 RUIDA 历史订单"
-    data.update(product_id=p.id,product_name=p.product_name,order_item_id=oi.id,order_id=o.id,order_number=o.order_number,customer_order_no=o.customer_po,match_reason=reason,match_score=score,candidate_count=candidate_count,system_pending_qty=pending,available_qty=available)
+    data.update(product_id=p.id,product_name=p.product_name,order_item_id=oi.id,order_id=o.id,order_number=o.order_number,customer_order_no=o.customer_po,match_reason=reason,match_score=score,candidate_count=candidate_count,system_pending_qty=available,available_qty=available)
     dup=db.execute(select(Delivery.delivery_number,Delivery.delivery_date).join(DeliveryItem,DeliveryItem.delivery_id==Delivery.id).join(OrderItem,OrderItem.id==DeliveryItem.order_item_id).where(Delivery.customer_id==o.customer_id,Delivery.status=="dispatched",Delivery.delivery_date>=date.today()-timedelta(days=7),OrderItem.product_id==p.id,DeliveryItem.delivered_quantity==row.image_qty).limit(1)).one_or_none()
     multi_warning=f"该存货编码存在 {candidate_count} 个未送订单，请核对匹配订单号。" if candidate_count>1 else ""
     if available<row.image_qty: data.update(status="stock_shortage",warning=f"当前可送数量 {available}，小于图片数量 {row.image_qty}；订单可能尚未入库或库存不足。")
@@ -313,7 +336,7 @@ def ensure_draft_delivery(
         order_item = db.get(OrderItem, row.order_item_id)
         if order_item is None or order_item.order_id != row.order_id:
             raise ValueError(f"第 {row.row_no} 行订单绑定无效")
-        remaining = int(order_item.quantity - order_item.delivered_quantity)
+        remaining = _available_delivery_quantity(db, order_item)
         if qty > remaining:
             raise ValueError(f"第 {row.row_no} 行数量超过系统未送数量")
         delivery_item = existing.get(row.order_item_id)
@@ -362,7 +385,8 @@ def _selection(db,batch_id,submitted,zero_allowed=None):
         bound_order_item=db.get(OrderItem,item.order_item_id)
         if bound_order_item is None or bound_order_item.order_id!=item.order_id:
             raise ValueError(f"第 {item.row_no} 行订单绑定无效")
-        if item.system_pending_qty is not None and qty>item.system_pending_qty: raise ValueError(f"第 {item.row_no} 行数量超过系统未送数量")
+        available=_available_delivery_quantity(db,bound_order_item)
+        if qty>available: raise ValueError(f"第 {item.row_no} 行数量超过系统可送数量")
         if qty>0 and item.order_item_id in selected_order_items:
             raise ValueError(f"第 {item.row_no} 行与其他行重复绑定同一订单明细，请只保留一行生成正式送货单")
         if qty>0:

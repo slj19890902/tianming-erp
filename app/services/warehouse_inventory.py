@@ -199,6 +199,7 @@ def manual_finished_in(
     pallet_id: int | None = None,
     pallet_code: str | None = None,
     require_empty_pallet: bool = False,
+    movement_reason: str = "手工成品入库",
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -266,7 +267,7 @@ def manual_finished_in(
         quantity=quantity,
         before={key: 0 for key in _balances(lot)},
         operator_id=operator_id,
-        reason="手工成品入库",
+        reason=movement_reason,
         remarks=remarks,
         idempotency_key=idempotency_key,
     )
@@ -338,6 +339,12 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
+    from app.services.production_workflow import has_production_completion_facts
+
+    if has_production_completion_facts(db, [item.id]):
+        raise WarehouseInventoryError(
+            "订单明细已完成生产，不能再新增成品库存抵扣", 409
+        )
     if item.requisition_status != "未报料":
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
     return db.scalars(
@@ -451,10 +458,52 @@ def reserve_finished_inventory(
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
+    # Use the same order-row lock as production completion and order terminal
+    # transitions, then re-read under that lock before creating a reservation.
+    from app.services.production_workflow import (
+        ProductionWorkflowError,
+        has_production_completion_facts,
+        lock_order_rows_for_production_transition,
+    )
+
+    try:
+        lock_order_rows_for_production_transition(db, [order.id])
+    except ProductionWorkflowError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
+    row = db.execute(
+        select(OrderItem, Order)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.id == order_item_id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if row is None:
+        raise WarehouseInventoryError("订单明细不存在或已被删除", 409)
+    item, order = row
+    if has_production_completion_facts(db, [item.id]):
+        raise WarehouseInventoryError(
+            "订单明细已完成生产，不能再新增成品库存抵扣", 409
+        )
     if item.requisition_status != "未报料":
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
     if item.material_status == "received" or item.delivered_quantity > 0:
         raise WarehouseInventoryError("订单明细已进入后续流程，不能新增成品库存抵扣", 409)
+    active_semi_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    )
+    if active_semi_reservation is not None:
+        raise WarehouseInventoryError(
+            "订单已有半成品库存预占，请先取消半成品抵扣后再改用成品库存",
+            409,
+        )
     lot = db.get(InventoryLot, inventory_lot_id)
     if lot is None or lot.finished_detail is None:
         raise WarehouseInventoryError("成品库存批次不存在", 404)
@@ -529,6 +578,139 @@ def reserve_finished_inventory(
         before=before,
         operator_id=operator_id,
         reason="成品库存抵扣订单",
+        idempotency_key=idempotency_key,
+        reservation_id=reservation.id,
+        related_order_id=order.id,
+        related_order_item_id=item.id,
+    )
+    db.flush()
+    # N029 tasks are optional for legacy orders.  Refresh only an existing
+    # task after the reservation write has succeeded.
+    from app.services.production_workflow import refresh_existing_production_task
+
+    refresh_existing_production_task(db, item.id)
+    return reservation
+
+
+def reserve_completed_finished_inventory(
+    db: Session,
+    *,
+    order_item_id: int,
+    inventory_lot_id: int,
+    quantity: int,
+    expected_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> InventoryReservation:
+    """Reserve a production-completion lot for its original order item.
+
+    This is intentionally separate from the operator-facing reservation flow:
+    production may complete after requisition or material receipt, but every
+    ownership, product, quantity, version and idempotency invariant still
+    applies.
+    """
+    existing = db.scalar(
+        select(InventoryReservation).where(
+            InventoryReservation.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        if (
+            existing.reservation_type != "finished_order"
+            or existing.order_item_id != order_item_id
+            or existing.inventory_lot_id != inventory_lot_id
+            or int(existing.reserved_stock_quantity or 0) != quantity
+            or int(existing.credited_requirement_quantity or 0) != quantity
+        ):
+            raise WarehouseInventoryError("该请求标识已用于其他库存预占", 409)
+        return existing
+    if quantity <= 0:
+        raise WarehouseInventoryError("生产完工预占数量必须大于0")
+    row = db.execute(
+        select(OrderItem, Order)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.id == order_item_id)
+    ).one_or_none()
+    if row is None:
+        raise WarehouseInventoryError("订单明细不存在", 404)
+    item, order = row
+    lot = db.get(InventoryLot, inventory_lot_id)
+    if lot is None or lot.finished_detail is None:
+        raise WarehouseInventoryError("生产完工成品库存批次不存在", 404)
+    detail = lot.finished_detail
+    if (
+        lot.inventory_type != "finished"
+        or lot.status != "active"
+        or lot.source_type != "production_surplus"
+        or lot.source_ref_type != "production_completion"
+        or lot.source_ref_id is None
+    ):
+        raise WarehouseInventoryError("该库存批次不是有效的生产完工入库", 409)
+    from app.models.production import ProductionCompletion
+
+    completion = db.get(ProductionCompletion, lot.source_ref_id)
+    if (
+        completion is None
+        or completion.order_item_id != item.id
+        or int(completion.quantity or 0) != quantity
+    ):
+        raise WarehouseInventoryError("完工库存与生产完工事实不一致", 409)
+    if detail.product_id != item.product_id:
+        raise WarehouseInventoryError("完工库存产品与订单产品不一致", 409)
+    if detail.is_general or detail.owner_customer_id != order.customer_id:
+        raise WarehouseInventoryError("完工库存客户与订单客户不一致", 409)
+    if lot.version != expected_version:
+        raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
+    if int(lot.quantity_available or 0) != quantity:
+        raise WarehouseInventoryError("完工库存数量与冻结生产数量不一致", 409)
+    before = _balances(lot)
+    now = utc_now()
+    result = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == lot.id,
+            InventoryLot.version == expected_version,
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.quantity_available == quantity,
+        )
+        .values(
+            quantity_available=InventoryLot.quantity_available - quantity,
+            quantity_reserved=InventoryLot.quantity_reserved + quantity,
+            version=InventoryLot.version + 1,
+            last_movement_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        raise WarehouseInventoryError("库存数量或版本已变化，请刷新后重试", 409)
+    reservation = InventoryReservation(
+        reservation_number=_number("PRS"),
+        inventory_lot_id=lot.id,
+        reservation_type="finished_order",
+        order_id=order.id,
+        order_item_id=item.id,
+        reserved_stock_quantity=quantity,
+        credited_requirement_quantity=quantity,
+        yield_factor=1,
+        status="active",
+        warning_codes="[]",
+        reserved_by=operator_id,
+        reserved_at=now,
+        idempotency_key=idempotency_key,
+    )
+    db.add(reservation)
+    db.flush()
+    db.expire(lot)
+    refreshed_lot = db.get(InventoryLot, lot.id)
+    assert refreshed_lot is not None
+    _movement(
+        db,
+        lot=refreshed_lot,
+        movement_type="reserve",
+        quantity=quantity,
+        before=before,
+        operator_id=operator_id,
+        reason="生产完工自动预占",
         idempotency_key=idempotency_key,
         reservation_id=reservation.id,
         related_order_id=order.id,
@@ -817,6 +999,21 @@ def release_finished_reservation(
         raise WarehouseInventoryError("库存预占记录不存在", 404)
     if reservation.reservation_type != "finished_order":
         raise WarehouseInventoryError("该记录不是成品订单预占")
+    lot = db.get(InventoryLot, reservation.inventory_lot_id)
+    if lot is None:
+        raise WarehouseInventoryError("关联库存批次不存在", 409)
+    if lot.source_ref_type == "production_completion":
+        raise WarehouseInventoryError(
+            "生产完工自动预占属于完工事实，当前不允许手工释放", 409
+        )
+    from app.services.production_workflow import has_production_completion_facts
+
+    if reservation.order_item_id is not None and has_production_completion_facts(
+        db, [reservation.order_item_id]
+    ):
+        raise WarehouseInventoryError(
+            "该订单明细已有生产完工事实，不能释放成品预占", 409
+        )
     remaining = (
         int(reservation.reserved_stock_quantity)
         - int(reservation.consumed_stock_quantity or 0)
@@ -837,9 +1034,6 @@ def release_finished_reservation(
             .limit(1)
         ):
             raise WarehouseInventoryError("订单已进入送货流程，不能取消成品库存抵扣", 409)
-    lot = db.get(InventoryLot, reservation.inventory_lot_id)
-    if lot is None:
-        raise WarehouseInventoryError("关联库存批次不存在", 409)
     quantity = remaining
     if lot.quantity_reserved < quantity:
         raise WarehouseInventoryError("库存预占余额异常，请联系管理员处理", 409)
@@ -885,6 +1079,9 @@ def release_finished_reservation(
         related_order_item_id=reservation.order_item_id,
     )
     db.flush()
+    from app.services.production_workflow import refresh_existing_production_task
+
+    refresh_existing_production_task(db, reservation.order_item_id)
     return reservation
 
 

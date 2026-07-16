@@ -25,6 +25,7 @@ from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
 from app.api.quotations import router as quotations_router
 from app.api.pdf_training import router as pdf_training_router
+from app.api.production import router as production_router
 from app.api.system import router as system_router
 from app.api.warehouse import router as warehouse_router
 from app.api.tianhua_pre_delivery import (
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
         "/products",
         "/orders",
         "/orders_legacy",
+        "/production",
         "/requisition",
         "/incoming",
         "/deliveries",
@@ -252,6 +254,12 @@ def create_app() -> FastAPI:
             incoming_router,
             prefix="/api/incoming",
             tags=["incoming"],
+        )
+    if not any(route.path == "/api/production/tasks" for route in application.routes):
+        application.include_router(
+            production_router,
+            prefix="/api/production",
+            tags=["production"],
         )
     if not any(route.path == "/api/requisition/pending" for route in application.routes):
         application.include_router(

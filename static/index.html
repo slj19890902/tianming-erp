@@ -1568,6 +1568,44 @@
               </div>
             </template>
 
+            <template v-else-if="activePage === 'production'">
+              <page-head title="生产确认" desc="材料齐套后在这里确认整单完工；每条明细必须人工选择直接待送货或转入三楼临时成品库。"></page-head>
+              <div class="toolbar">
+                <div class="toolbar-group">
+                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'">待生产 {{ productionPending.length }}</button>
+                  <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'">完工历史 {{ productionHistory.length }}</button>
+                  <button v-if="canProductionExecute && productionTab==='pending'" class="btn success" :disabled="productionBusy || !productionSelectedCount()" @click="batchConfirmProduction">{{ productionBusy ? '处理中…' : `批量确认完工（${productionSelectedCount()}）` }}</button>
+                  <span v-else-if="!canProductionExecute && productionTab==='pending'" class="muted">当前为只读查看；确认完工需“订单状态操作”权限。</span>
+                </div>
+                <button class="btn" :disabled="productionBusy" @click="loadProduction">刷新</button>
+              </div>
+              <div v-if="productionTab==='pending'" class="status blue" style="display:block;margin:8px 0">完工去向无默认值：请选择“直接待送货”或“入临时成品库”；入库时必须选择可用的三楼临放位。</div>
+              <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length">
+                <table class="production-table" style="table-layout:fixed;width:100%">
+                  <thead><tr><th v-if="canProductionExecute" style="width:64px"><input type="checkbox" :checked="allProductionSelected" :disabled="productionBusy" @change="toggleAllProduction($event.target.checked)" /> 全选</th><th style="width:16%">订单 / 客户</th><th style="width:22%">存货编码 / 产品 / 规格</th><th style="width:13%">订单 / 抵扣 / 应生产</th><th style="width:17%">工艺 / 模具位置</th><th style="width:90px">交期</th><th v-if="canProductionExecute" style="width:240px">完工去向</th></tr></thead>
+                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
+                    <td v-if="canProductionExecute"><input type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /></td>
+                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
+                    <td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td>
+                    <td style="white-space:normal"><div>订单 {{ row.order_quantity || 0 }}</div><div>抵扣 {{ row.finished_coverage_snapshot || 0 }}</div><strong>应生产 {{ row.planned_quantity || 0 }}</strong></td>
+                    <td style="white-space:normal">{{ row.special_process || row.production_notes || '-' }}<br><span class="muted">模具：{{ row.mold_location || '-' }}</span></td><td style="white-space:normal">{{ row.delivery_date || '-' }}</td>
+                    <td v-if="canProductionExecute" style="white-space:normal"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">直接待送货</option><option value="stock" :disabled="!canWarehouseExecute">入临时成品库</option></select><select v-if="row.completion_mode==='stock'" class="select" v-model.number="row.location_id" :disabled="productionBusy" style="margin-top:4px;width:100%"><option :value="null">请选择三楼临放位</option><option v-for="location in productionAvailableLocations" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }} {{ location.location_name }}{{ location.pallet_code ? `｜${location.pallet_code}` : '' }}</option></select></td>
+                  </tr></tbody>
+                </table>
+              </data-panel>
+              <data-panel v-else :empty="!productionHistory.length">
+                <table class="production-history-table" style="table-layout:fixed;width:100%">
+                  <thead><tr><th style="width:130px">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">去向 / 库位</th><th>操作</th></tr></thead>
+                  <tbody><tr v-for="row in productionHistory" :key="row.id">
+                    <td>{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
+                    <td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td><td><strong>{{ row.quantity || 0 }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
+                    <td style="white-space:normal"><span :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_code"><strong>{{ row.warehouse_location_code }}</strong></template><template v-else><span class="muted">已进入待送货</span></template></td>
+                    <td><div class="toolbar-group"><template v-if="row.can_transfer_to_stock && canWarehouseExecute"><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy" style="min-width:190px"><option :value="null">选择三楼临放位</option><option v-for="location in productionAvailableLocations" :key="location.id" :value="location.id">{{ location.location_code }} {{ location.location_name }}</option></select><button class="btn small success" :disabled="productionBusy" @click="transferProductionCompletionToStock(row)">转入临时成品库</button></template><button class="btn small" :disabled="productionBusy" @click="go(productionCompletionIsStock(row)?'warehouse':'deliveries')">{{ productionCompletionIsStock(row)?'查看库存':'去送货' }}</button></div></td>
+                  </tr></tbody>
+                </table>
+              </data-panel>
+            </template>
+
             <template v-else-if="activePage === 'deliveries'">
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
               <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
@@ -3565,16 +3603,16 @@
       };
       const month = () => today().slice(0, 7);
       const roleMenus = {
-        admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "warehouse", "deliveries", "finance", "system"],
+        admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse", "deliveries", "finance", "system"],
         finance: ["dashboard", "customers", "orders", "finance"],
         sales: ["dashboard", "customers", "products", "orders"],
-        workshop: ["dashboard", "orders", "incoming", "warehouse", "deliveries"],
-        boss: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "warehouse", "deliveries", "finance"],
+        workshop: ["dashboard", "orders", "incoming", "production", "warehouse", "deliveries"],
+        boss: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse", "deliveries", "finance"],
         delivery_picker: []
       };
       const menuPermissions = {
         dashboard: "dashboard.view", customers: "customers.view", products: "products.view", orders: "orders.view",
-        requisition: "requisition.view", incoming: "incoming.view", warehouse: "warehouse.view",
+        requisition: "requisition.view", incoming: "incoming.view", production: "orders.view", warehouse: "warehouse.view",
         deliveries: "deliveries.view", finance: "finance.view", system: "system.backup", permissions: "users.manage",
       };
       const blankCustomer = () => ({
@@ -3732,6 +3770,8 @@
             stockHistorySearch: { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0 },
             stockReplenishmentForm: { source_type:"manual_history", supplier_name:"", customer_id:null, remark:"", stock_now:true, items:[] },
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [], incomingLocations: [],
+            productionTab: "pending", productionPending: [], productionHistory: [], productionLocations: [], productionSelected: {}, productionBusy: false,
+            productionCompletionAttempt: null, productionTransferAttempts: {},
             productFormSnapshot: null,
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
@@ -3947,6 +3987,8 @@
           canCreateOrders() { return this.hasPermission("orders.create"); },
           canEditOrders() { return this.hasPermission("orders.edit"); },
           canStatusOrders() { return this.hasPermission("orders.status"); },
+          canWarehouseExecute() { return this.hasPermission("warehouse.execute"); },
+          canProductionExecute() { return this.canStatusOrders; },
           canDeleteOrders() { return this.hasPermission("orders.delete"); },
           canRollbackOrders() { return this.hasPermission("orders.rollback"); },
           productFluteLayerError() {
@@ -4076,6 +4118,7 @@
               { key: "orders", label: "订单管理", count: this.ordersUnfinishedTotal },
               { key: "requisition", label: "报料管理", count: this.requisitionPending.length },
               { key: "incoming", label: "仓库来料入库", count: this.incomingPending.length },
+              { key: "production", label: "生产确认", count: this.productionPending.length },
               { key: "warehouse", label: "仓库库存管理" },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
@@ -4216,6 +4259,17 @@
             const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row));
             return rows.length > 0 && rows.every(row => this.incomingSelected[row.item_id]);
           },
+          productionAvailableLocations() {
+            return (this.productionLocations || []).filter(location => location.is_empty);
+          },
+          productionSelectedCustomerId() {
+            const selected = this.productionPending.find(row => this.productionSelected[row.id]);
+            return selected ? Number(selected.customer_id) : null;
+          },
+          allProductionSelected() {
+            const rows = this.productionPending.filter(row => this.canConfirmProductionRow(row));
+            return rows.length > 0 && rows.every(row => this.productionSelected[row.id]);
+          },
           finishedInventoryRemainingRequirement() {
             return Math.max(
               Number(this.orderItemForm.quantity || 0)
@@ -4274,7 +4328,7 @@
             return (legacy[this.user?.role] || []).includes(code);
           },
           pagePermission(page) {
-            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
+            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
           },
           pageAllowed(page) { const permission = this.pagePermission(page); return !permission || this.hasPermission(permission); },
           firstAllowedPage() { return this.menus[0]?.key || "dashboard"; },
@@ -4288,6 +4342,7 @@
               orders_legacy: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>`,
               requisition: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3 3h18v4H3z"/><path d="M3 10h18v4H3z"/><path d="M3 17h12v4H3z"/></svg>`,
               incoming: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
+              production: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M4 20h16M6 20V9l6-5 6 5v11"/><path d="M9 13h6M9 16h6"/></svg>`,
               warehouse: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3 10l9-7 9 7v10H3z"/><path d="M8 20v-7h8v7M3 10h18"/></svg>`,
               deliveries: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`,
               finance: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>`,
@@ -5079,7 +5134,7 @@
             return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
           },
           initialPageFromLocation() {
-            const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","deliveries","finance","system"]);
+            const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","production","deliveries","finance","system"]);
             const queryPage = new URLSearchParams(window.location.search).get("page") || "";
             if (queryPage === "permissions") return "permissions";
             if (pages.has(queryPage)) return queryPage;
@@ -5162,6 +5217,7 @@
               if (page === "orders") await this.loadOrders();
               if (page === "requisition") await this.loadRequisition();
               if (page === "incoming") await this.loadIncoming();
+              if (page === "production") await this.loadProduction();
               if (page === "deliveries") await this.loadDeliveries();
               if (page === "finance") await this.loadFinance();
               if (page === "system") await this.loadSystem();
@@ -5926,6 +5982,164 @@
               const {data}=await axios.get("/api/requisition/stock-policies",{params:{warning_only:true}}); this.stockPolicyWarnings=data.items||[];
               this.showToast("库存预警模板已保存");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
+          async loadProduction() {
+            const [pending, history, locations] = await Promise.all([
+              axios.get("/api/production/tasks", { params: { status: "pending" } }),
+              axios.get("/api/production/completions"),
+              axios.get("/api/production/temporary-locations"),
+            ]);
+            const previous = new Map(this.productionPending.map(row => [String(row.id), row]));
+            this.productionPending = (pending.data.items || []).map(row => {
+              const old = previous.get(String(row.id));
+              const sourceOrder = this.orders.find(order => Number(order.id) === Number(row.order_id));
+              return {
+                ...row,
+                delivery_date: row.delivery_date || sourceOrder?.delivery_date || null,
+                completion_mode: old?.completion_mode || "",
+                location_id: old?.location_id || null,
+              };
+            });
+            this.productionHistory = (history.data.items || []).map(row => ({...row, transfer_location_id:null}));
+            this.productionLocations = locations.data.items || [];
+            const validIds = new Set(this.productionPending.map(row => String(row.id)));
+            Object.keys(this.productionSelected).forEach(taskId => {
+              if (!validIds.has(taskId)) delete this.productionSelected[taskId];
+            });
+          },
+          productionLocation(locationId) {
+            return this.productionAvailableLocations.find(location => Number(location.id) === Number(locationId));
+          },
+          canConfirmProductionRow(row) {
+            if (!this.canProductionExecute || row?.status !== "pending") return false;
+            if (this.productionSelectedCustomerId && Number(row.customer_id) !== this.productionSelectedCustomerId && !this.productionSelected[row.id]) return false;
+            if (row.completion_mode === "direct") return true;
+            return row.completion_mode === "stock" && this.canWarehouseExecute && !!this.productionLocation(row.location_id);
+          },
+          ensureProductionMode(row) {
+            if (row.completion_mode === "stock" && !this.canWarehouseExecute) row.completion_mode = "";
+            if (row.completion_mode !== "stock") row.location_id = null;
+            if (!this.canConfirmProductionRow(row)) this.productionSelected[row.id] = false;
+          },
+          productionSelectedCount() {
+            return this.productionPending.filter(row => this.productionSelected[row.id] && this.canConfirmProductionRow(row)).length;
+          },
+          onProductionSelectionChange(row, checked) {
+            if (this.productionBusy) return;
+            if (checked && this.productionSelectedCustomerId && Number(row.customer_id) !== this.productionSelectedCustomerId) {
+              this.productionSelected[row.id] = false;
+              this.showToast("一次只能确认同一客户", true);
+              return;
+            }
+            this.productionSelected[row.id] = checked && this.canConfirmProductionRow(row);
+          },
+          toggleAllProduction(checked) {
+            if (this.productionBusy) return;
+            if (!checked) {
+              this.productionPending.forEach(row => { this.productionSelected[row.id] = false; });
+              return;
+            }
+            const targetCustomerId = this.productionSelectedCustomerId || Number(
+              this.productionPending.find(row => {
+                if (!this.canProductionExecute || row?.status !== "pending") return false;
+                if (row.completion_mode === "direct") return true;
+                return row.completion_mode === "stock" && this.canWarehouseExecute && !!this.productionLocation(row.location_id);
+              })?.customer_id || 0
+            );
+            this.productionPending.forEach(row => {
+              this.productionSelected[row.id] = Number(row.customer_id) === targetCustomerId && this.canConfirmProductionRow(row);
+            });
+          },
+          productionLocationUsedByOther(locationId, currentRow) {
+            return this.productionPending.some(row =>
+              row.id !== currentRow.id
+              && this.productionSelected[row.id]
+              && row.completion_mode === "stock"
+              && Number(row.location_id) === Number(locationId)
+            );
+          },
+          productionCompletionIsStock(row) {
+            return row?.initial_disposition === "stock" || !!row?.stock_transfer_id;
+          },
+          productionDestinationLabel(row) {
+            return this.productionCompletionIsStock(row) ? "临时成品库" : "直接待送货";
+          },
+          productionCompletionRequestItems(rows) {
+            return rows.map(row => {
+              const location = row.completion_mode === "stock" ? this.productionLocation(row.location_id) : null;
+              return {
+                task_id: row.id,
+                expected_version: row.version,
+                disposition: row.completion_mode,
+                location_id: location ? Number(location.id) : null,
+                pallet_id: location?.pallet_id ? Number(location.pallet_id) : null,
+                pallet_code: location?.pallet_code || null,
+              };
+            });
+          },
+          async batchConfirmProduction() {
+            if (this.productionBusy) return;
+            const rows = this.productionPending.filter(row => this.productionSelected[row.id] && this.canConfirmProductionRow(row));
+            if (!rows.length) { this.showToast("请先选择完工去向并勾选至少一条待生产明细", true); return; }
+            if (new Set(rows.map(row => Number(row.customer_id))).size > 1) {
+              this.showToast("一次只能确认同一客户", true);
+              return;
+            }
+            const stockLocationIds = rows.filter(row => row.completion_mode === "stock").map(row => Number(row.location_id));
+            if (new Set(stockLocationIds).size !== stockLocationIds.length) {
+              this.showToast("同一批入临时成品库的明细不能选择同一临放位", true);
+              return;
+            }
+            if (!confirm(`确认将选中的 ${rows.length} 条生产任务标记为整单完工吗？`)) return;
+            const items = this.productionCompletionRequestItems(rows);
+            const signature = JSON.stringify(items);
+            if (!this.productionCompletionAttempt || this.productionCompletionAttempt.signature !== signature) {
+              this.productionCompletionAttempt = { signature, idempotency_key:createIdempotencyKey() };
+            }
+            const idempotencyKey = this.productionCompletionAttempt.idempotency_key;
+            this.productionBusy = true;
+            try {
+              const { data } = await axios.post("/api/production/completion-batches", {
+                idempotency_key: idempotencyKey,
+                items,
+              });
+              this.productionCompletionAttempt = null;
+              this.productionSelected = {};
+              await Promise.all([this.loadProduction(), this.loadOrders(), this.loadKpi()]);
+              if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              this.productionTab = "history";
+              this.showToast(`已确认 ${(data.items || []).length || rows.length} 条生产任务完工`);
+            } catch (error) {
+              this.showToast(`生产完工失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
+            } finally { this.productionBusy = false; }
+          },
+          async transferProductionCompletionToStock(row) {
+            if (this.productionBusy) return;
+            const location = this.productionLocation(row?.transfer_location_id);
+            if (!location) { this.showToast("请先选择可用的三楼临放位", true); return; }
+            if (!confirm(`确认将 ${row.item_order_number || row.order_number || "该完工记录"} 转入 ${location.location_code}？`)) return;
+            const signature = JSON.stringify({completion_id:row.id,location_id:location.id,pallet_id:location.pallet_id || null,pallet_code:location.pallet_code || null});
+            const old = this.productionTransferAttempts[row.id];
+            if (!old || old.signature !== signature) {
+              this.productionTransferAttempts[row.id] = { signature, idempotency_key:createIdempotencyKey() };
+            }
+            const idempotencyKey = this.productionTransferAttempts[row.id].idempotency_key;
+            this.productionBusy = true;
+            try {
+              await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
+                idempotency_key: idempotencyKey,
+                location_id: Number(location.id),
+                pallet_id: location.pallet_id ? Number(location.pallet_id) : null,
+                pallet_code: location.pallet_code || null,
+              });
+              delete this.productionTransferAttempts[row.id];
+              await Promise.all([this.loadProduction(), this.loadKpi(), this.loadDeliveries()]);
+              if (this.hasPermission("dashboard.view")) await this.loadOverview();
+              this.productionTab = "history";
+              this.showToast("已转入临时成品库");
+            } catch (error) {
+              this.showToast(`转库存失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
+            } finally { this.productionBusy = false; }
           },
           async loadIncoming() {
             const [pending,received,locations]=await Promise.all([

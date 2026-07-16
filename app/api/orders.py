@@ -48,7 +48,7 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportItem,
 )
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import DeliveryInventoryAllocation, InventoryLot
 from app.services.history_orders import (
     build_display_registry,
     filter_order_ids_for_display_search,
@@ -85,6 +85,14 @@ from app.services.product_import import (
     NewProductInput,
     parse_dimensions,
     resolve_or_create_product,
+)
+from app.services.production_workflow import (
+    ProductionWorkflowError,
+    create_or_refresh_production_task,
+    has_production_completion_facts,
+    lock_order_rows_for_production_transition,
+    refresh_order_production_status,
+    refresh_production_task,
 )
 from app.services.report_crease import crease_width_error, product_crease_width_error
 from app.services.warehouse_inventory import (
@@ -138,6 +146,8 @@ ORDER_STATUSES = {
     "delivered",
 }
 FINAL_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled", "delivered"}
+
+_PRODUCTION_FACT_CONFLICT = "订单明细已有生产完工或转库存事实，不能执行该操作。"
 
 
 _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
@@ -2016,16 +2026,124 @@ def _release_order_reservations(
         ) from error
 
 
+def _ensure_no_production_completion_facts(
+    db: Session,
+    order_item_ids: list[int],
+) -> None:
+    if order_item_ids and has_production_completion_facts(
+        db,
+        order_item_ids,
+    ):
+        raise HTTPException(status_code=409, detail=_PRODUCTION_FACT_CONFLICT)
+
+
+def _lock_orders_for_production_transition(
+    db: Session,
+    order_ids: list[int],
+) -> dict[int, Order]:
+    try:
+        return lock_order_rows_for_production_transition(db, order_ids)
+    except ProductionWorkflowError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _production_meaning_changes(
+    item: OrderItem,
+    payload: OrderItemUpdate,
+    product: Product | None,
+) -> list[str]:
+    changes: list[str] = []
+
+    def changed(label: str, before: object, after: object) -> None:
+        if after != before:
+            changes.append(label)
+
+    def clean(value: str | None) -> str:
+        return (value or "").strip()
+
+    changed("数量", int(item.quantity or 0), int(payload.quantity))
+    changed("存货编码", clean(item.snapshot_product_code), clean(payload.product_code))
+    changed("产品名称", clean(item.snapshot_product_name), clean(payload.product_name))
+    changed("规格", clean(item.snapshot_spec), clean(payload.specification))
+    changed("材质", clean(item.snapshot_material), clean(payload.material))
+    if payload.production_notes is not None:
+        changed(
+            "生产说明",
+            clean(item.snapshot_production_notes),
+            clean(payload.production_notes),
+        )
+    if payload.material_id is not None:
+        changed("材质", item.material_id, payload.material_id)
+    if payload.layer_count is not None:
+        changed("层数", item.layer_count, payload.layer_count)
+    if payload.flute_type is not None:
+        changed(
+            "楞型",
+            clean(item.flute_type).upper(),
+            clean(payload.flute_type).upper(),
+        )
+
+    snapshot_fields = (
+        "snapshot_report_length_mm",
+        "snapshot_report_width_mm",
+        "snapshot_crease_type",
+        "snapshot_crease_left_mm",
+        "snapshot_crease_middle_mm",
+        "snapshot_crease_right_mm",
+        "snapshot_report_notes",
+        "snapshot_base_report_length_mm",
+        "snapshot_base_report_width_mm",
+        "snapshot_base_crease_type",
+        "snapshot_base_crease_left_mm",
+        "snapshot_base_crease_middle_mm",
+        "snapshot_base_crease_right_mm",
+        "snapshot_base_report_notes",
+        "snapshot_splice_mode",
+        "snapshot_pieces_per_box",
+        "snapshot_flap_mm",
+    )
+    for field_name in snapshot_fields:
+        value = getattr(payload, field_name)
+        if value is not None:
+            changed("生产快照", getattr(item, field_name), value or None)
+
+    if payload.sync_product and product is not None:
+        for field_name in (
+            "box_style",
+            "length_mm",
+            "width_mm",
+            "height_mm",
+            "production_process",
+            "print_content",
+        ):
+            value = getattr(payload, field_name)
+            if value is not None:
+                changed("产品生产参数", getattr(product, field_name), value)
+    return list(dict.fromkeys(changes))
+
+
 def _delete_orders_in_transaction(
     db: Session,
     *,
     orders: list[Order],
     user: User,
 ) -> None:
+    order_ids = [order.id for order in orders]
+    _lock_orders_for_production_transition(db, order_ids)
+    orders = db.scalars(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id.in_(order_ids))
+        .order_by(Order.id)
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(orders) != len(order_ids):
+        raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    item_ids = [item.id for order in orders for item in order.items]
+    _ensure_no_production_completion_facts(db, item_ids)
     dependencies = _order_flow_dependencies(db, [order.id for order in orders])
     if dependencies:
         raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))
-    item_ids = [item.id for order in orders for item in order.items]
     _unlink_predelivery_order_bindings(
         db,
         order_ids=[order.id for order in orders],
@@ -2106,6 +2224,35 @@ def update_order_status(
         raise HTTPException(status_code=400, detail="订单状态无效")
     if target in {"dead", "closed", "archived", "cancelled"} and not remark:
         raise HTTPException(status_code=400, detail="标记死单、已结档、已归档或已作废时必须填写备注")
+    if target in {
+        "pending_confirmation",
+        "pending_production",
+        "production",
+        "dead",
+        "cancelled",
+        "closed",
+        "archived",
+    }:
+        _lock_orders_for_production_transition(db, [order.id])
+        order = db.scalar(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(Order.id == order_id)
+            .execution_options(populate_existing=True)
+        )
+        if order is None:
+            raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    if target in {
+        "pending_confirmation",
+        "pending_production",
+        "production",
+        "dead",
+        "cancelled",
+    }:
+        _ensure_no_production_completion_facts(
+            db,
+            [item.id for item in order.items],
+        )
     before = order.status
     order.status = target
     if remark:
@@ -2206,9 +2353,19 @@ def rollback_order_workflow(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
+    _lock_orders_for_production_transition(db, [order.id])
+    order = db.scalar(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+        .execution_options(populate_existing=True)
+    )
+    if order is None:
+        raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
     if order.order_number.startswith("RUIDA-"):
         raise HTTPException(status_code=409, detail="历史订单禁止执行流程撤回")
     item_ids = [item.id for item in order.items]
+    _ensure_no_production_completion_facts(db, item_ids)
     delivery_items = db.scalars(
         select(DeliveryItem).where(DeliveryItem.order_item_id.in_(item_ids))
     ).all()
@@ -2227,6 +2384,21 @@ def rollback_order_workflow(
                 status_code=409,
                 detail="该订单与其他订单共用送货单，不能自动撤回，请先拆分处理。",
             )
+    delivery_item_ids = [item.id for item in delivery_items]
+    if delivery_item_ids and db.scalar(
+        select(DeliveryInventoryAllocation.id)
+        .where(
+            DeliveryInventoryAllocation.delivery_item_id.in_(delivery_item_ids)
+        )
+        .limit(1)
+    ) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "送货单已产生库存出库记录，不能直接撤回订单流程。"
+                "请先在送货管理中撤销发货并恢复库存。"
+            ),
+        )
     receipts = (
         db.scalars(select(ReturnReceipt).where(ReturnReceipt.delivery_id.in_(delivery_ids))).all()
         if delivery_ids
@@ -2827,6 +2999,8 @@ def create_order(
             )
         )
         db.flush()  # 获取 item.id 以便处理图纸
+        for created_item in created_items:
+            create_or_refresh_production_task(db, created_item.id)
         # v0.19.2-B: 图纸保存到常用箱
         for i, item in enumerate(created_items):
             opt = payload.items[i].drawing_save_option if i < len(payload.items) else None
@@ -2850,6 +3024,9 @@ def create_order(
             states=reservation_plan_states,
             operator_id=user.id,
         )
+        for created_item in created_items:
+            refresh_production_task(db, created_item.id)
+        refresh_order_production_status(db, order.id)
         db.commit()
         db.refresh(order)
         response = _order_response(
@@ -2896,6 +3073,23 @@ def update_order_item(
     require_customer_access(
         order_for_scope.customer_id, current_user=user, db=db
     )
+    production_changes = _production_meaning_changes(
+        item,
+        payload,
+        db.get(Product, item.product_id),
+    )
+    if production_changes and has_production_completion_facts(
+        db,
+        [item.id],
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "该订单明细已有生产完工或转库存事实，不能修改"
+                + "、".join(production_changes)
+                + "。"
+            ),
+        )
     if item.delivered_quantity > 0:
         raise HTTPException(status_code=409, detail="已发货明细禁止修改")
     if item.material_status == "received":
@@ -3267,6 +3461,9 @@ def update_order_item(
             setattr(product, product_field, value)
         if payload.product_remark is not None:
             product.remark = payload.product_remark.strip() or None
+    db.flush()
+    if refresh_production_task(db, item.id) is not None:
+        refresh_order_production_status(db, item.order_id)
     _refresh_total(db, order)
     db.add(
         OperationLog(
@@ -3330,14 +3527,26 @@ def delete_order_item(
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
-    if item.delivered_quantity > 0 or item.material_status == "received":
-        raise HTTPException(status_code=409, detail="已流转明细禁止删除")
-    if item.requisition_status != "未报料":
-        raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
     order = db.get(Order, item.order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
+    _lock_orders_for_production_transition(db, [order.id])
+    item = db.scalar(
+        select(OrderItem)
+        .where(OrderItem.id == item_id)
+        .execution_options(populate_existing=True)
+    )
+    if item is None:
+        raise HTTPException(status_code=409, detail="订单明细已被删除，请刷新后重试")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    _ensure_no_production_completion_facts(db, [item.id])
+    if item.delivered_quantity > 0 or item.material_status == "received":
+        raise HTTPException(status_code=409, detail="已流转明细禁止删除")
+    if item.requisition_status != "未报料":
+        raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
     item_count = db.scalar(
         select(func.count()).select_from(OrderItem).where(
             OrderItem.order_id == order.id

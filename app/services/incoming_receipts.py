@@ -18,6 +18,13 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+from app.services.production_workflow import (
+    ProductionWorkflowError,
+    has_production_completion_facts,
+    lock_order_rows_for_production_transition,
+    refresh_order_production_status,
+    refresh_production_task,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     manual_semi_finished_in,
@@ -363,6 +370,13 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
         item.material_received_at = None
         item.material_received_by = None
     db.flush()
+    try:
+        production_task = refresh_production_task(db, item.id)
+    except ProductionWorkflowError as error:
+        raise IncomingReceiptError(str(error), error.status_code) from error
+    if production_task is not None:
+        refresh_order_production_status(db, item.order_id)
+        return
     remaining_items = int(
         db.scalar(
             select(func.count(OrderItem.id)).where(
@@ -781,9 +795,19 @@ def revert_receipt_item(
     receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
     if receipt_item is None:
         raise IncomingReceiptError("来料实收记录不存在", 404)
+    try:
+        locked_orders = lock_order_rows_for_production_transition(
+            db, [receipt_item.order_id]
+        )
+    except ProductionWorkflowError as error:
+        raise IncomingReceiptError(str(error), error.status_code) from error
+    db.expire(receipt_item)
+    receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
+    if receipt_item is None:
+        raise IncomingReceiptError("来料实收记录不存在", 409)
     if receipt_item.status != "posted":
         raise IncomingReceiptError("该来料实收记录已经撤销", 409)
-    order = db.get(Order, receipt_item.order_id)
+    order = locked_orders.get(receipt_item.order_id)
     if order is None:
         raise IncomingReceiptError("关联订单不存在", 409)
     if order.status in {"partially_delivered", "delivered"}:
@@ -795,6 +819,8 @@ def revert_receipt_item(
         else receipt_item.order_item_id,
         allow_closed=True,
     )
+    if has_production_completion_facts(db, [target.order_item.id]):
+        raise IncomingReceiptError("订单明细已有生产完工事实，不能撤销来料实收", 409)
     latest = db.scalar(
         select(IncomingReceiptItem)
         .where(_source_filter(target), IncomingReceiptItem.status == "posted")

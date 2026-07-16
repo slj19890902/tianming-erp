@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import and_, case, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
 from app.models.user import User
 from app.models.warehouse_inventory import (
@@ -34,6 +35,11 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.production_workflow import (
+    ProductionWorkflowError,
+    lock_order_rows_for_production_transition,
+    production_ready_quantity,
+)
 from app.services.semi_finished_inventory import (
     active_semi_requirement_credited_quantity,
     consume_delivery_item_inventory,
@@ -99,6 +105,20 @@ def _received_telescoping_capacity(db: Session, order_item_id: int) -> int | Non
 
 
 def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
+    task = db.scalar(
+        select(ProductionTask).where(
+            ProductionTask.order_item_id == order_item.id,
+        )
+    )
+    if task is not None:
+        if task.status not in {"completed", "not_required"}:
+            return 0
+        max_deliverable = min(
+            int(order_item.quantity or 0),
+            max(production_ready_quantity(db, order_item), 0),
+        )
+        return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
+
     max_deliverable = int(order_item.quantity or 0)
     inventory_covered = inventory_fully_covers_order_item(db, order_item.id)
     component_capacity = _received_telescoping_capacity(db, order_item.id)
@@ -107,6 +127,34 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     elif order_item.material_status != "received" and not inventory_covered:
         return 0
     return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
+
+
+def _has_production_task(db: Session, order_item_id: int) -> bool:
+    return db.scalar(
+        select(ProductionTask.id)
+        .where(ProductionTask.order_item_id == order_item_id)
+        .limit(1)
+    ) is not None
+
+
+def _has_active_production_stock_reservation(
+    db: Session,
+    order_item_id: int,
+) -> bool:
+    return db.scalar(
+        select(InventoryReservation.id)
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .where(
+            InventoryReservation.order_item_id == order_item_id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status.in_(("active", "partial")),
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+            InventoryLot.source_ref_type == "production_completion",
+        )
+        .limit(1)
+    ) is not None
 
 
 _DELIVERY_ROUTE_AREAS = (
@@ -244,6 +292,17 @@ def _pending_query(
     product_name_keyword: str | None = None,
     general_keyword: str | None = None,
 ):
+    production_task_exists = exists(
+        select(ProductionTask.id).where(
+            ProductionTask.order_item_id == OrderItem.id,
+        )
+    )
+    production_task_ready = exists(
+        select(ProductionTask.id).where(
+            ProductionTask.order_item_id == OrderItem.id,
+            ProductionTask.status.in_(["completed", "not_required"]),
+        )
+    )
     active_finished_reserved = (
         select(
             func.coalesce(
@@ -345,10 +404,16 @@ def _pending_query(
         .join(Product, Product.id == OrderItem.product_id)
         .where(
             or_(
-                OrderItem.material_status == "received",
-                active_finished_reserved >= OrderItem.quantity,
-                semi_fully_covered,
-                received_telescoping_components > 0,
+                production_task_ready,
+                and_(
+                    ~production_task_exists,
+                    or_(
+                        OrderItem.material_status == "received",
+                        active_finished_reserved >= OrderItem.quantity,
+                        semi_fully_covered,
+                        received_telescoping_components > 0,
+                    ),
+                ),
             ),
             OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
@@ -822,8 +887,13 @@ def _collect_delivery_lines(
                 detail=f"第{index}条订单明细不存在",
             )
         order_item, order = row
+        production_managed = _has_production_task(db, order_item.id)
         remaining = _delivery_remaining_quantity(db, order_item)
-        component_capacity = _received_telescoping_capacity(db, order_item.id)
+        component_capacity = (
+            None
+            if production_managed
+            else _received_telescoping_capacity(db, order_item.id)
+        )
         component_remaining = (
             max(component_capacity - int(order_item.delivered_quantity or 0), 0)
             if component_capacity is not None
@@ -834,8 +904,10 @@ def _collect_delivery_lines(
                 status_code=400,
                 detail=f"第{index}条订单明细不属于当前客户",
             )
-        full_inventory_coverage = inventory_fully_covers_order_item(
-            db, order_item.id
+        full_inventory_coverage = (
+            False
+            if production_managed
+            else inventory_fully_covers_order_item(db, order_item.id)
         )
         if (
             component_remaining is not None
@@ -848,13 +920,27 @@ def _collect_delivery_lines(
                     f"当前物理可送数量为 {component_remaining}"
                 ),
             )
+        if production_managed and (
+            order_item.is_force_closed
+            or remaining <= 0
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"第{index}条订单明细生产可送数量不足，"
+                    f"当前可送数量为 {remaining}"
+                ),
+            )
         if (
+            not production_managed
+            and (
             (
                 order_item.material_status != "received"
                 and not full_inventory_coverage
                 and _received_telescoping_capacity(db, order_item.id) is None
             )
             or order_item.is_force_closed
+            )
         ):
             raise HTTPException(
                 status_code=400,
@@ -1254,6 +1340,24 @@ def dispatch_delivery(
     _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
     try:
+        order_ids = list(
+            db.scalars(
+                select(OrderItem.order_id)
+                .join(DeliveryItem, DeliveryItem.order_item_id == OrderItem.id)
+                .where(DeliveryItem.delivery_id == delivery_id)
+                .distinct()
+                .order_by(OrderItem.order_id)
+            ).all()
+        )
+        try:
+            # Global transition order: Order -> Delivery -> OrderItem.  Workflow
+            # rollback also starts from Order before touching Delivery rows.
+            lock_order_rows_for_production_transition(db, order_ids)
+        except ProductionWorkflowError as error:
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
         claimed = db.execute(
             update(Delivery)
             .where(
@@ -1279,6 +1383,18 @@ def dispatch_delivery(
             .where(DeliveryItem.delivery_id == delivery_id)
             .order_by(DeliveryItem.id)
         ).all()
+        current_order_ids = set(
+            db.scalars(
+                select(OrderItem.order_id)
+                .where(OrderItem.id.in_([line.order_item_id for line in lines]))
+                .distinct()
+            ).all()
+        )
+        if not current_order_ids.issubset(set(order_ids)):
+            raise HTTPException(
+                status_code=409,
+                detail="送货单明细已变化，请刷新后重新确认发货",
+            )
         affected_order_ids: set[int] = set()
         for line in lines:
             order_item = db.get(OrderItem, line.order_item_id)
@@ -1287,8 +1403,49 @@ def dispatch_delivery(
                     status_code=409,
                     detail=f"订单明细{line.order_item_id}不存在",
                 )
+            production_managed = _has_production_task(db, order_item.id)
+            if production_managed:
+                delivered_before = int(order_item.delivered_quantity or 0)
+                locked = db.execute(
+                    update(OrderItem)
+                    .where(
+                        OrderItem.id == order_item.id,
+                        OrderItem.delivered_quantity == delivered_before,
+                    )
+                    .values(delivered_quantity=OrderItem.delivered_quantity)
+                    .execution_options(synchronize_session=False)
+                )
+                if locked.rowcount != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"订单明细{line.order_item_id}状态已变化，请刷新后重试",
+                    )
+                db.flush()
+                db.expire(order_item)
+                order_item = db.get(OrderItem, line.order_item_id)
+                if order_item is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"订单明细{line.order_item_id}不存在",
+                    )
+                production_managed = _has_production_task(db, order_item.id)
             remaining = _delivery_remaining_quantity(db, order_item)
-            component_capacity = _received_telescoping_capacity(db, order_item.id)
+            if production_managed and (
+                order_item.is_force_closed
+                or remaining <= 0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"订单明细{line.order_item_id}生产可送数量不足，"
+                        f"当前可送数量为 {remaining}"
+                    ),
+                )
+            component_capacity = (
+                None
+                if production_managed
+                else _received_telescoping_capacity(db, order_item.id)
+            )
             component_remaining = (
                 max(component_capacity - int(order_item.delivered_quantity or 0), 0)
                 if component_capacity is not None
@@ -1700,8 +1857,24 @@ def force_close_order_item(
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
     _require_order_item_customer_access(db, item.id, user)
+    try:
+        lock_order_rows_for_production_transition(db, [item.order_id])
+    except ProductionWorkflowError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    item = db.scalar(
+        select(OrderItem)
+        .where(OrderItem.id == item_id)
+        .execution_options(populate_existing=True)
+    )
+    if item is None:
+        raise HTTPException(status_code=409, detail="订单明细已被删除，请刷新后重试")
     if item.delivered_quantity >= item.quantity:
         raise HTTPException(status_code=409, detail="订单明细已全部发货")
+    if _has_active_production_stock_reservation(db, item.id):
+        raise HTTPException(
+            status_code=409,
+            detail="该明细仍有生产完工成品库存预占，请先完成送货或库存处理后再结案",
+        )
     try:
         result = db.execute(
             update(OrderItem)

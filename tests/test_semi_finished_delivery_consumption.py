@@ -319,6 +319,29 @@ def create_order(
     return response.json()["items"][0]["id"]
 
 
+def mark_as_legacy_order_without_production_task(factory, order_item_id: int) -> None:
+    """Model a pre-N029 migrated order that never had a production task."""
+    from app.models.production import ProductionCompletion, ProductionTask
+
+    # Historical orders without tasks keep the legacy delivery-time semi-finished
+    # consumption chain; new orders still pass through the N029 production gate.
+    with factory() as db:
+        completion_id = db.scalar(
+            select(ProductionCompletion.id).where(
+                ProductionCompletion.order_item_id == order_item_id
+            )
+        )
+        assert completion_id is None
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == order_item_id
+            )
+        )
+        assert task is not None
+        db.delete(task)
+        db.commit()
+
+
 def create_delivery(client: TestClient, order_item_id: int, quantity: int) -> dict:
     response = client.post(
         "/api/deliveries",
@@ -367,6 +390,7 @@ def test_finished_then_semi_multi_dispatch_cancel_and_desktop_sources(
             finished=[finished_plan(finished_id, finished_version, 4)],
             semi=[semi_plan(semi_id, semi_version, 6)],
         )
+        mark_as_legacy_order_without_production_task(factory, item_id)
         pending = client.get("/api/deliveries/pending_items")
         first = create_delivery(client, item_id, 5)
         first_detail = client.get(f"/api/deliveries/{first['id']}")
@@ -464,6 +488,7 @@ def test_inventory_sources_exclude_zero_quantity_later_reservations(
                 semi_plan(second_lot_id, second_version, 2),
             ],
         )
+        mark_as_legacy_order_without_production_task(factory, item_id)
         pending = create_delivery(client, item_id, 1)
         dispatched = client.put(f"/api/deliveries/{pending['id']}/dispatch")
         cancelled = client.put(f"/api/deliveries/{pending['id']}/cancel")
@@ -595,6 +620,7 @@ def test_double_and_a3_components_consume_exact_pieces(
             quantity=quantity,
             semi=plans,
         )
+        mark_as_legacy_order_without_production_task(factory, item_id)
         delivery = create_delivery(client, item_id, dispatch_quantity)
         dispatched = client.put(f"/api/deliveries/{delivery['id']}/dispatch")
     assert dispatched.status_code == 200, dispatched.text
@@ -636,6 +662,7 @@ def test_yield_whole_sheet_multi_delivery_cancel_preserves_remaining_need(
             quantity=5,
             semi=[semi_plan(lot_id, version, 5)],
         )
+        mark_as_legacy_order_without_production_task(factory, item_id)
         first = create_delivery(client, item_id, 1)
         assert client.put(f"/api/deliveries/{first['id']}/dispatch").status_code == 200
         second = create_delivery(client, item_id, 2)
@@ -697,6 +724,8 @@ def test_dispatch_inventory_failure_rolls_back_all_lines(
             quantity=2,
             semi=[semi_plan(second_lot_id, second_version, 2)],
         )
+        mark_as_legacy_order_without_production_task(factory, first_item)
+        mark_as_legacy_order_without_production_task(factory, second_item)
         created = client.post(
             "/api/deliveries",
             json={
@@ -748,6 +777,7 @@ def test_partial_semi_coverage_is_not_eligible_but_full_coverage_is(
             quantity=5,
             semi=[semi_plan(partial_id, partial_version, 2)],
         )
+        mark_as_legacy_order_without_production_task(factory, partial_item)
         rejected = client.post(
             "/api/deliveries",
             json={
@@ -764,6 +794,7 @@ def test_partial_semi_coverage_is_not_eligible_but_full_coverage_is(
             quantity=5,
             semi=[semi_plan(full_id, full_version, 5)],
         )
+        mark_as_legacy_order_without_production_task(factory, full_item)
         accepted = client.post(
             "/api/deliveries",
             json={

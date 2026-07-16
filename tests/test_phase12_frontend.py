@@ -14,6 +14,7 @@ SPA_PAGE_PATHS = (
     "/products",
     "/orders",
     "/orders_legacy",
+    "/production",
     "/requisition",
     "/incoming",
     "/deliveries",
@@ -108,6 +109,81 @@ def test_desktop_spa_preserves_deep_link_and_defaults_root_to_dashboard() -> Non
     assert 'return pages.has(pathPage) ? pathPage : "dashboard"' in INDEX
     assert "if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage()" in INDEX
     assert "await this.loadPage(this.activePage)" in INDEX
+
+
+def test_n029_production_page_deep_link_and_manual_destination_are_present() -> None:
+    assert "activePage === 'production'" in INDEX
+    assert 'key: "production", label: "生产确认"' in INDEX
+    assert 'production: "orders.view"' in INDEX
+    assert '<option value="">请选择完工去向</option>' in INDEX
+    assert '<option value="direct">直接待送货</option>' in INDEX
+    assert '<option value="stock" :disabled="!canWarehouseExecute">入临时成品库</option>' in INDEX
+    assert "productionAvailableLocations" in INDEX
+    assert ':checked="!!productionSelected[row.id]"' in INDEX
+    assert 'activePage === \'production\'' in INDEX
+
+    deep_link_start = INDEX.index("initialPageFromLocation()")
+    deep_link_end = INDEX.index("redirectAfterLogin()", deep_link_start)
+    assert '"production"' in INDEX[deep_link_start:deep_link_end]
+
+
+def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys() -> None:
+    start = INDEX.index("async loadProduction()")
+    end = INDEX.index("async loadIncoming()", start)
+    logic = INDEX[start:end]
+    assert 'axios.get("/api/production/tasks", { params: { status: "pending" } })' in logic
+    assert 'axios.get("/api/production/completions")' in logic
+    assert 'axios.get("/api/production/temporary-locations")' in logic
+    assert 'axios.post("/api/production/completion-batches"' in logic
+    assert 'axios.post(`/api/production/completions/${row.id}/stock-transfers`' in logic
+    assert "if (this.productionBusy) return" in logic
+    assert "this.productionBusy = true" in logic
+    assert "finally { this.productionBusy = false; }" in logic
+    assert "this.productionCompletionAttempt.signature !== signature" in logic
+    assert "const idempotencyKey = this.productionCompletionAttempt.idempotency_key" in logic
+    assert "this.productionTransferAttempts[row.id]" in logic
+    assert "重试将复用同一幂等键" in logic
+    assert ':disabled="productionBusy"' in INDEX
+
+
+def test_n029_production_menu_is_between_incoming_and_warehouse() -> None:
+    menu_start = INDEX.index("menus() {")
+    menu_end = INDEX.index("];", menu_start)
+    menu = INDEX[menu_start:menu_end]
+    assert menu.index('key: "incoming"') < menu.index('key: "production"')
+    assert menu.index('key: "production"') < menu.index('key: "warehouse"')
+
+
+def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll() -> None:
+    start = INDEX.index("activePage === 'production'")
+    end = INDEX.index("activePage === 'deliveries'", start)
+    page = INDEX[start:end]
+    assert 'table-layout:fixed;width:100%' in page
+    assert 'min-width:1320px' not in page
+    assert 'min-width:1160px' not in page
+    for merged_heading in (
+        "订单 / 客户",
+        "存货编码 / 产品 / 规格",
+        "订单 / 抵扣 / 应生产",
+        "工艺 / 模具位置",
+        "数量 / 操作人",
+        "去向 / 库位",
+    ):
+        assert merged_heading in page
+
+
+def test_n029_batch_completion_prevents_cross_customer_and_duplicate_locations() -> None:
+    start = INDEX.index("onProductionSelectionChange(row, checked)")
+    end = INDEX.index("async loadIncoming()", start)
+    logic = INDEX[start:end]
+    assert "一次只能确认同一客户" in logic
+    assert "productionSelectedCustomerId" in logic
+    assert "Number(row.customer_id) === targetCustomerId" in logic
+    assert "new Set(rows.map(row => Number(row.customer_id))).size > 1" in logic
+    assert "productionLocationUsedByOther(locationId, currentRow)" in logic
+    assert "new Set(stockLocationIds).size !== stockLocationIds.length" in logic
+    assert "同一批入临时成品库的明细不能选择同一临放位" in logic
+    assert ':disabled="productionLocationUsedByOther(location.id,row)"' in INDEX
 
 
 def test_root_address_still_returns_the_dashboard_shell() -> None:

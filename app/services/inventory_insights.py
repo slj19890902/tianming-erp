@@ -183,6 +183,7 @@ def build_inventory_insights(
         elif lot.semi_finished_detail is not None:
             row = lot.semi_finished_detail
             assigned_ids = semi_finished_lot_assigned_product_ids(db, lot.id)
+            is_general = row.owner_customer_id is None
             assigned_open_demand = sum(
                 demand.get(product_id, {}).get("open_demand", 0)
                 for product_id in assigned_ids
@@ -192,6 +193,16 @@ def build_inventory_insights(
                 "inventory_code": row.material_code_snapshot,
                 "name": f"{row.board_length_mm} × {row.board_width_mm} mm / {row.flute_type}",
                 "assigned_product_count": len(assigned_ids),
+                "binding_scope": "general" if is_general else "dedicated",
+                "deduction_eligibility": (
+                    "physical_signature_required"
+                    if is_general
+                    else (
+                        "allowed_products_required"
+                        if assigned_ids
+                        else "ineligible_no_product_binding"
+                    )
+                ),
             }
             demand_metrics["open_demand"] = assigned_open_demand
             if assigned_open_demand > 0:
@@ -202,11 +213,11 @@ def build_inventory_insights(
                     }
                 )
                 priority = min(priority, 1)
-            if not assigned_ids:
+            if not is_general and not assigned_ids:
                 reasons.append(
                     {
                         "code": "semi_product_assignment_missing",
-                        "text": "尚未分配适用成品款号，无法判断可复用需求。",
+                        "text": "专用半成品批次未绑定任何成品款号，当前明确不可抵扣。",
                     }
                 )
                 priority = min(priority, 3)

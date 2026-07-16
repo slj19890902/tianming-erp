@@ -8,7 +8,7 @@ import re
 import unicodedata
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
@@ -25,6 +25,7 @@ from app.models.warehouse_inventory import (
     InventoryPallet,
     InventoryReservation,
     SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
     WarehouseLocation,
 )
 from app.services.inventory_cost_snapshot import (
@@ -1058,6 +1059,140 @@ def _editable_semi_finished_lot(
     return lot
 
 
+def semi_finished_lot_allowed_product_ids(
+    db: Session, inventory_lot_id: int
+) -> tuple[int, ...]:
+    lot = db.get(InventoryLot, inventory_lot_id)
+    if lot is None or lot.inventory_type != "semi_finished":
+        raise WarehouseInventoryError("半成品库存批次不存在", 404)
+    return tuple(
+        db.scalars(
+            select(SemiFinishedLotAllowedProduct.product_id)
+            .where(SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id)
+            .order_by(SemiFinishedLotAllowedProduct.product_id)
+        ).all()
+    )
+
+
+def _lot_product_binding_has_blocking_usage(
+    db: Session,
+    *,
+    lot_id: int,
+    product_id: int | None = None,
+) -> bool:
+    filters = [InventoryReservation.inventory_lot_id == lot_id]
+    if product_id is not None:
+        filters.append(InventoryReservation.order_item_id == OrderItem.id)
+        filters.append(OrderItem.product_id == product_id)
+    return db.scalar(
+        select(InventoryReservation.id)
+        .select_from(InventoryReservation)
+        .join(
+            OrderItem,
+            OrderItem.id == InventoryReservation.order_item_id,
+            isouter=product_id is None,
+        )
+        .where(
+            *filters,
+            or_(
+                InventoryReservation.reserved_stock_quantity
+                > InventoryReservation.consumed_stock_quantity
+                + InventoryReservation.released_stock_quantity,
+                InventoryReservation.consumed_stock_quantity > 0,
+            ),
+        )
+        .limit(1)
+    ) is not None
+
+
+def replace_semi_finished_lot_allowed_products(
+    db: Session,
+    *,
+    inventory_lot_id: int,
+    product_ids: list[int],
+    expected_version: int,
+    operator_id: int | None,
+) -> InventoryLot:
+    """Replace one lot's hard bindings without changing shared match memory."""
+
+    lot = _editable_semi_finished_lot(db, inventory_lot_id, expected_version)
+    detail = lot.semi_finished_detail
+    assert detail is not None
+    if detail.owner_customer_id is None:
+        raise WarehouseInventoryError("请先为半成品库存指定归属客户", 409)
+
+    desired = set(dict.fromkeys(int(value) for value in product_ids))
+    products = (
+        db.scalars(
+            select(Product).where(
+                Product.id.in_(desired),
+                Product.customer_id == detail.owner_customer_id,
+                Product.is_active.is_(True),
+                Product.deleted_at.is_(None),
+            )
+        ).all()
+        if desired
+        else []
+    )
+    if len(products) != len(desired):
+        raise WarehouseInventoryError(
+            "半成品库存只能绑定同一客户的启用成品款号", 409
+        )
+
+    current = set(
+        db.scalars(
+            select(SemiFinishedLotAllowedProduct.product_id).where(
+                SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id
+            )
+        ).all()
+    )
+    removed = current - desired
+    for product_id in removed:
+        if _lot_product_binding_has_blocking_usage(
+            db, lot_id=lot.id, product_id=product_id
+        ):
+            raise WarehouseInventoryError(
+                "该款号已有活跃预占或净消耗，不能移除批次硬绑定", 409
+            )
+    if current == desired:
+        return lot
+
+    now = utc_now()
+    updated = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == lot.id,
+            InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.version == expected_version,
+        )
+        .values(version=expected_version + 1, last_movement_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if updated.rowcount != 1:
+        raise WarehouseInventoryError("库存批次已被其他操作更新，请刷新后重试", 409)
+    if removed:
+        db.execute(
+            delete(SemiFinishedLotAllowedProduct).where(
+                SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id,
+                SemiFinishedLotAllowedProduct.product_id.in_(removed),
+            )
+        )
+    for product_id in desired - current:
+        db.add(
+            SemiFinishedLotAllowedProduct(
+                inventory_lot_id=lot.id,
+                product_id=product_id,
+                confirmed_by=operator_id,
+                confirmed_at=now,
+            )
+        )
+    db.flush()
+    db.expire_all()
+    refreshed = db.get(InventoryLot, lot.id)
+    assert refreshed is not None
+    return refreshed
+
+
 def edit_semi_finished_lot_customer(
     db: Session, *, lot_id: int, customer_id: int | None,
     expected_version: int, operator_id: int | None,
@@ -1069,6 +1204,14 @@ def edit_semi_finished_lot_customer(
     if current_customer_id is None:
         if customer_id is None:
             raise WarehouseInventoryError("当前批次尚未指定客户，无需取消归属", 409)
+        if (
+            lot.quantity_reserved
+            or lot.quantity_consumed
+            or _lot_product_binding_has_blocking_usage(db, lot_id=lot.id)
+        ):
+            raise WarehouseInventoryError(
+                "批次已有预占或消耗记录，不能指定客户归属", 409
+            )
         customer = db.get(Customer, customer_id)
         if customer is None or not customer.is_active or customer.status != "active":
             raise WarehouseInventoryError("客户不存在或已停用", 404)
@@ -1080,10 +1223,11 @@ def edit_semi_finished_lot_customer(
             if customer_id == current_customer_id:
                 raise WarehouseInventoryError("半成品库存批次归属客户未变化", 409)
             raise WarehouseInventoryError("如需更换客户，请先取消当前归属，再重新指定客户", 409)
-        reservation_id = db.scalar(select(InventoryReservation.id).where(
-            InventoryReservation.inventory_lot_id == lot.id
-        ).limit(1))
-        if lot.quantity_reserved or lot.quantity_consumed or reservation_id is not None:
+        if (
+            lot.quantity_reserved
+            or lot.quantity_consumed
+            or _lot_product_binding_has_blocking_usage(db, lot_id=lot.id)
+        ):
             raise WarehouseInventoryError(
                 "批次已有预占或消耗记录，不能取消客户归属", 409
             )
@@ -1104,6 +1248,12 @@ def edit_semi_finished_lot_customer(
         raise WarehouseInventoryError("库存批次已被其他操作更新，请刷新后重试", 409)
     detail.owner_customer_id = next_customer_id
     detail.owner_customer_name_snapshot = next_customer_name
+    if next_customer_id is None:
+        db.execute(
+            delete(SemiFinishedLotAllowedProduct).where(
+                SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id
+            )
+        )
     db.flush()
     db.expire_all()
     refreshed = db.get(InventoryLot, lot_id)

@@ -393,6 +393,17 @@ def test_order_pdf_multi_candidate_picker_uses_full_width_subrow() -> None:
     assert '@change="selectImportProduct(item)"' not in main_row
 
 
+def test_order_and_pdf_general_semi_finished_candidates_keep_source_and_confirmation_gate() -> None:
+    assert "通用半成品，可跨客户，需人工确认" in INDEX
+    assert "general_confirmation" in INDEX
+    assert "明确确认并抵扣" in INDEX
+    assert 'const recommendationSource = candidate.recommendation_source || candidate.source || "manual"' in INDEX
+    assert 'source: recommendationSource === "general_signature" ? "general_signature" : "manual"' in INDEX
+    assert 'recommendation_source:recommendationSource' in INDEX
+    assert 'warning_acknowledged_codes:warningAcknowledgedCodes' in INDEX
+    assert 'confirmed:!general || part.general_confirmation' in INDEX
+
+
 def test_order_pdf_candidate_label_uses_confirmed_customer_for_simair_reference() -> None:
     customer_check_start = INDEX.index("isSimairImportCustomer(draft)")
     label_start = INDEX.index(

@@ -205,12 +205,14 @@
           <div class="lot-edit-head"><h2 id="semiLotEditTitle">编辑半成品库存批次</h2><button class="btn" type="button" onclick="closeSemiLotEditor()">关闭</button></div>
           <div id="semiLotEditSummary" class="notice info" style="margin-top:14px"></div>
           <div id="semiLotUnownedEditor" class="actions" style="margin-top:14px"><select id="semiLotCustomer"></select><button class="btn primary" type="button" onclick="assignSemiLotCustomer()">指定客户</button></div>
-          <div id="semiLotOwnedEditor" class="hidden" style="margin-top:14px"><div class="notice"><strong id="semiLotOwnerName"></strong>；如需换客户，请先取消归属。取消归属不会删除该客户共用的匹配记忆；如需取消某个成品款号，请先在款号分配中取消勾选并保存。</div><div class="actions"><button class="btn primary" type="button" onclick="openSemiLotProductAssignments()">分配 / 取消成品款号</button><button class="btn" type="button" onclick="cancelSemiLotCustomer()">取消客户归属</button></div></div>
+          <div id="semiLotOwnedEditor" class="hidden" style="margin-top:14px"><div class="notice"><strong id="semiLotOwnerName"></strong>；指定客户后，至少绑定 1 个款号才能参与抵扣；如需换客户，请先取消归属。</div><div class="actions"><button class="btn primary" type="button" onclick="openSemiLotProductAssignments()">分配 / 取消成品款号</button><button class="btn" type="button" onclick="cancelSemiLotCustomer()">取消客户归属</button></div></div>
+          <div id="semiLotCommonHint" class="notice warn hidden" style="margin-top:14px">通用批次：按物理规格人工确认。</div>
           <div class="lot-edit-actions"><button class="btn" type="button" onclick="closeSemiLotEditor()">取消</button><button id="semiLotVoid" class="btn danger" type="button" onclick="voidSemiLot()">删除误录批次</button></div>
         </div>
       </div>
       <div id="assignmentPanel" class="panel hidden">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2 id="assignmentTitle">分配适用成品款号</h2><div id="assignmentScope" class="muted"></div></div><button class="btn" onclick="$('assignmentPanel').classList.add('hidden')">关闭</button></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2 id="assignmentTitle">仅当前物理批次允许款号</h2><div id="assignmentScope" class="muted"></div></div><button class="btn" onclick="$('assignmentPanel').classList.add('hidden')">关闭</button></div>
+        <div id="assignmentNotice" class="notice warn hidden" style="margin-top:12px"></div>
         <div class="toolbar" style="margin:12px 0"><input id="assignmentKeyword" style="width:320px" placeholder="搜索存货编码 / 产品名称 / 规格 / 模具位置"><button class="btn" type="button" onclick="searchAssignmentProducts()">搜索</button><span id="assignmentCount" class="muted"></span></div>
         <div class="table-wrap"><table><thead><tr><th>选择</th><th>存货编码 / 产品</th><th>成品规格</th><th>报料规格</th><th>材质 / 楞型</th><th>模具 / 货架位置</th><th>匹配建议</th></tr></thead><tbody id="assignmentBody"></tbody></table></div>
         <div class="actions admin-only" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" type="button" onclick="saveProductAssignments()">保存款号分配</button></div>
@@ -694,7 +696,7 @@
       const row=state.semiLotEdit;if(!row)return;const detail=row.detail||{},owned=Boolean(detail.owner_customer_id);
       $("semiLotEditTitle").textContent=`编辑半成品库存批次 ${row.lot_number}`;
       $("semiLotEditSummary").textContent=`可用 ${row.quantity_available}｜预占 ${row.quantity_reserved}｜已消耗 ${row.quantity_consumed}｜报损 ${row.quantity_damaged}｜报废 ${row.quantity_scrapped}｜版本 ${row.version}`;
-      $("semiLotUnownedEditor").classList.toggle("hidden",owned);$("semiLotOwnedEditor").classList.toggle("hidden",!owned);
+      $("semiLotUnownedEditor").classList.toggle("hidden",owned);$("semiLotOwnedEditor").classList.toggle("hidden",!owned);$("semiLotCommonHint").classList.toggle("hidden",owned);
       if(owned){$("semiLotOwnerName").textContent=`当前归属：${detail.owner_customer_name||"已指定客户"}`}else{options($("semiLotCustomer"),state.customers.map(customer=>({id:customer.id,label:customer.name})),"请选择归属客户")}
     }
     function openSemiLotEditor(lotId){state.semiLotEdit=state.lots.find(item=>item.id===lotId)||null;if(!state.semiLotEdit){toast("半成品库存批次不存在",true);return}renderSemiLotEditor();$("semiLotEditMask").classList.remove("hidden")}
@@ -703,18 +705,22 @@
       const row=state.semiLotEdit,customerId=Number($("semiLotCustomer").value);if(!row||!customerId){toast("请先选择归属客户",true);return}try{state.semiLotEdit=await api(`/api/warehouse/lots/${row.id}/edit-semi-finished`,{method:"POST",body:JSON.stringify({customer_id:customerId,expected_version:row.version})});toast("已指定客户");renderSemiLotEditor();await loadLots()}catch(err){toast(err.message,true)}
     }
     async function cancelSemiLotCustomer(){
-      const row=state.semiLotEdit;if(!row||!confirm("确认取消当前批次的客户归属？"))return;try{state.semiLotEdit=await api(`/api/warehouse/lots/${row.id}/edit-semi-finished`,{method:"POST",body:JSON.stringify({customer_id:null,expected_version:row.version})});toast("已取消当前批次的客户归属");renderSemiLotEditor();await loadLots()}catch(err){toast(err.message,true)}
+      const row=state.semiLotEdit;if(!row||!confirm("确认取消当前批次的客户归属？这会清空当前批次允许款号，取消后需重新指定客户并绑定款号才能抵扣。"))return;try{state.semiLotEdit=await api(`/api/warehouse/lots/${row.id}/edit-semi-finished`,{method:"POST",body:JSON.stringify({customer_id:null,expected_version:row.version})});toast("已取消当前批次的客户归属，允许款号已清空");renderSemiLotEditor();await loadLots()}catch(err){toast(err.message,true)}
     }
-    async function openSemiLotProductAssignments(){const lotId=state.semiLotEdit?.id;if(!lotId)return;closeSemiLotEditor();await openProductAssignments(lotId)}
+    async function openSemiLotProductAssignments(){const lotId=state.semiLotEdit?.id,isDedicated=Boolean(state.semiLotEdit?.detail?.owner_customer_id);if(!lotId)return;closeSemiLotEditor();await openProductAssignments(lotId,isDedicated)}
     async function voidSemiLot(){
       const row=state.semiLotEdit,reason=prompt("请输入删除误录批次的原因（必填）","");if(!row||reason===null)return;if(!reason.trim()){toast("删除误录批次必须填写原因",true);return}if(!confirm(`确认将 ${row.lot_number} 作废关闭并保留原流水？`))return;try{await api(`/api/warehouse/lots/${row.id}/void-semi-finished`,{method:"POST",body:JSON.stringify({expected_version:row.version,reason:reason.trim()})});closeSemiLotEditor();toast("批次已作废关闭并保留流水");await loadLots()}catch(err){toast(err.message,true)}
     }
-    async function openProductAssignments(lotId){
+    async function openProductAssignments(lotId,isDedicated=null){
       try{
         const data=await api(`/api/warehouse/lots/${lotId}/product-assignments?limit=500`);
-        state.assignment={lotId,items:data.items||[],selected:new Set(data.assigned_product_ids||[])};
-        $("assignmentTitle").textContent=`${data.lot_number} 分配适用成品款号`;
-        $("assignmentScope").textContent=`${data.customer_name||"未指定客户"}｜${data.material_code||"-"} / ${data.flute_type||"-"}｜${data.board_length_mm} × ${data.board_width_mm} mm。${data.mapping_scope}`;
+        const allowedProductIds=data.allowed_product_ids||data.assigned_product_ids||[];
+        const dedicated=isDedicated===null?Boolean(data.customer_id||data.customer_name):isDedicated;
+        state.assignment={lotId,items:data.items||[],selected:new Set(allowedProductIds),version:data.version,bindingScope:data.binding_scope,isDedicated:dedicated};
+        $("assignmentTitle").textContent=`${data.lot_number||"当前批次"} 仅当前物理批次允许款号`;
+        $("assignmentScope").textContent=`${data.customer_name||"未指定客户"}｜${data.material_code||"-"} / ${data.flute_type||"-"}｜${data.board_length_mm} × ${data.board_width_mm} mm｜绑定范围：${data.binding_scope||"lot"}（仅当前物理批次）`;
+        $("assignmentNotice").classList.toggle("hidden",!(!dedicated&&data.binding_scope!=="lot")&&!(dedicated&&!allowedProductIds.length));
+        $("assignmentNotice").textContent=dedicated&&!allowedProductIds.length?"当前批次未绑定款号：当前不可抵扣。指定客户后，至少绑定 1 个款号才能参与抵扣。":"通用批次：按物理规格人工确认。";
         $("assignmentKeyword").value="";
         renderAssignmentProducts();
         $("assignmentPanel").classList.remove("hidden");
@@ -740,9 +746,10 @@
     async function saveProductAssignments(){
       if(!state.assignment.lotId)return;
       try{
-        const data=await api(`/api/warehouse/lots/${state.assignment.lotId}/product-assignments`,{method:"PUT",body:JSON.stringify({product_ids:[...state.assignment.selected]})});
-        state.assignment.items=data.items||[];state.assignment.selected=new Set(data.assigned_product_ids||[]);renderAssignmentProducts();toast(`已保存 ${state.assignment.selected.size} 个适用成品款号`)
-      }catch(err){toast(err.message,true)}
+        const data=await api(`/api/warehouse/lots/${state.assignment.lotId}/product-assignments`,{method:"PUT",body:JSON.stringify({product_ids:[...state.assignment.selected],expected_version:state.assignment.version})});
+        const allowedProductIds=data.allowed_product_ids||data.assigned_product_ids||[];
+        state.assignment.items=data.items||state.assignment.items;state.assignment.selected=new Set(allowedProductIds);state.assignment.version=data.version||state.assignment.version;$("assignmentNotice").classList.toggle("hidden",!(state.assignment.isDedicated&&!allowedProductIds.length));$("assignmentNotice").textContent="当前批次未绑定款号：当前不可抵扣。指定客户后，至少绑定 1 个款号才能参与抵扣。";renderAssignmentProducts();toast(`已保存 ${state.assignment.selected.size} 个适用成品款号`)
+      }catch(err){if(err.status===409){const lotId=state.assignment.lotId,isDedicated=state.assignment.isDedicated;await loadLots();await openProductAssignments(lotId,isDedicated);toast("批次版本已变化，已刷新批次和允许款号，请核对后再保存",true);return}toast(err.message,true)}
     }
     async function operate(id,operation,version){
       let body={expected_version:version,idempotency_key:createIdempotencyKey()},label=operation;

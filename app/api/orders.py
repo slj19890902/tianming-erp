@@ -91,14 +91,18 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
     has_unconsumed_inventory_reservations,
+    normalize_material_code,
     release_active_finished_reservations_for_items,
     reserve_finished_inventory,
 )
 from app.services.semi_finished_inventory import (
+    GENERAL_SEMI_FINISHED_STOCK,
     SIGNATURE_OVERRIDE_WARNING,
     SemiFinishedLotVersion,
+    SemiFinishedSignature,
     active_semi_coverage_by_order_item,
     browse_semi_finished_inventory,
+    ensure_semi_finished_lot_eligibility,
     release_active_semi_reservations_for_items,
     reserve_semi_finished_inventory,
     save_order_item_semi_requirement,
@@ -188,7 +192,9 @@ class SemiReservationPlanEntry(BaseModel):
         gt=0,
     )
     component_type: Literal["whole", "cover", "base"] = "whole"
-    recommendation_source: Literal["learned", "signature", "manual"]
+    recommendation_source: Literal[
+        "learned", "signature", "general_signature", "manual"
+    ]
     match_rule_id: int | None = None
     override: bool = False
     confirmed: bool = False
@@ -323,6 +329,57 @@ def _validated_order_quantity(value: int | float, index: int) -> int:
     return int(decimal_value)
 
 
+def _preflight_semi_signature(
+    *,
+    customer_id: int,
+    product: Product,
+    item_payload: OrderItemCreate,
+    component_type: str,
+    stock_yield_per_sheet: int,
+) -> SemiFinishedSignature:
+    is_base = component_type == "base"
+    board_length_mm = (
+        product.base_report_length_mm if is_base else product.report_length_mm
+    )
+    board_width_mm = (
+        product.base_report_width_mm if is_base else product.report_width_mm
+    )
+    material_code = (item_payload.material or "").strip() or (
+        product.material.code
+        if product.material is not None
+        else (product.legacy_material_text or "")
+    )
+    flute_type = (
+        (item_payload.flute_type or "").strip().upper()
+        or (product.flute_type or "").strip().upper()
+    )
+    if not (board_length_mm and board_width_mm and material_code and flute_type):
+        raise WarehouseInventoryError(
+            "订单明细缺少半成品长宽、材质或楞型，不能预校验库存抵扣", 409
+        )
+    pieces_per_box = (
+        1
+        if component_type in {"cover", "base"}
+        else max(
+            int(
+                product.pieces_per_box
+                or (2 if (product.splice_mode or "").lower() == "double" else 1)
+            ),
+            1,
+        )
+    )
+    return SemiFinishedSignature(
+        customer_id=customer_id,
+        board_length_mm=int(board_length_mm),
+        board_width_mm=int(board_width_mm),
+        normalized_material_code=normalize_material_code(material_code),
+        flute_type=flute_type,
+        component_type=component_type,
+        pieces_per_box=pieces_per_box,
+        stock_yield_per_sheet=stock_yield_per_sheet,
+    )
+
+
 def _preflight_reservation_plans(
     db: Session,
     *,
@@ -392,12 +449,37 @@ def _preflight_reservation_plans(
                 detail = lot.semi_finished_detail
                 if lot.inventory_type != "semi_finished" or detail is None:
                     raise WarehouseInventoryError("所选批次不是半成品库存", 409)
-                if detail.owner_customer_id != customer_id:
+                expected = _preflight_semi_signature(
+                    customer_id=customer_id,
+                    product=product,
+                    item_payload=item_payload,
+                    component_type=entry.component_type,
+                    stock_yield_per_sheet=detail.stock_yield_per_sheet,
+                )
+                scope = ensure_semi_finished_lot_eligibility(
+                    db,
+                    lot=lot,
+                    product_id=product.id,
+                    customer_id=customer_id,
+                    expected=expected,
+                )
+                if scope == "general":
+                    if entry.recommendation_source != "general_signature":
+                        raise WarehouseInventoryError(
+                            "通用半成品库存推荐来源已变化，请刷新", 409
+                        )
+                    if (
+                        GENERAL_SEMI_FINISHED_STOCK
+                        not in entry.warning_acknowledged_codes
+                    ):
+                        raise WarehouseInventoryError(
+                            "通用半成品库存抵扣必须确认通用库存警告", 409
+                        )
+                    continue
+                if entry.recommendation_source == "general_signature":
                     raise WarehouseInventoryError(
-                        "其他客户或未归属半成品库存不能用于当前订单", 409
+                        "专用半成品库存不能伪造为通用库存推荐", 409
                     )
-                if detail.component_type != entry.component_type:
-                    raise WarehouseInventoryError("半成品库存组件与计划不一致", 409)
                 if entry.recommendation_source == "learned" and entry.match_rule_id is None:
                     raise WarehouseInventoryError("learned 推荐缺少学习规则标识", 409)
                 if entry.recommendation_source == "manual":
@@ -624,7 +706,23 @@ def _apply_order_reservation_plans(
                 )
             }
             candidate = candidates.get(lot.id)
-            if entry.recommendation_source == "learned":
+            if entry.recommendation_source == "general_signature":
+                if (
+                    candidate is None
+                    or candidate.source != "general_signature"
+                    or candidate.signature_differences
+                ):
+                    raise WarehouseInventoryError(
+                        "general_signature 推荐签名已变化，请刷新", 409
+                    )
+                if (
+                    GENERAL_SEMI_FINISHED_STOCK
+                    not in entry.warning_acknowledged_codes
+                ):
+                    raise WarehouseInventoryError(
+                        "通用半成品库存抵扣必须确认通用库存警告", 409
+                    )
+            elif entry.recommendation_source == "learned":
                 if (
                     candidate is None
                     or candidate.source != "learned"

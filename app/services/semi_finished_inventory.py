@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from math import ceil
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
     SemiFinishedMatchRule,
     SemiFinishedMatchRuleProduct,
 )
@@ -29,7 +30,9 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     consume_finished_reservation,
     normalize_material_code,
+    replace_semi_finished_lot_allowed_products,
     reverse_finished_consumption,
+    semi_finished_lot_allowed_product_ids,
     utc_now,
 )
 
@@ -37,6 +40,7 @@ from app.services.warehouse_inventory import (
 VALID_COMPONENT_TYPES = {"whole", "cover", "base"}
 SIGNATURE_OVERRIDE_WARNING = "SEMI_SIGNATURE_OVERRIDE"
 MANUAL_CONFIRM_WARNING = "MANUAL_DEDUCTION_CONFIRM_REQUIRED"
+GENERAL_SEMI_FINISHED_STOCK = "GENERAL_SEMI_FINISHED_STOCK"
 
 
 @dataclass(frozen=True)
@@ -276,6 +280,17 @@ def _signature_differences_from_signature(
     return tuple(name for name, expected, actual in pairs if expected != actual)
 
 
+def _physical_signature_differences(
+    expected: SemiFinishedSignature,
+    detail: SemiFinishedInventoryDetail,
+) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in _signature_differences_from_signature(expected, detail)
+        if name != "customer"
+    )
+
+
 def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) -> int:
     item = db.get(OrderItem, requirement.order_item_id)
     product = db.get(Product, item.product_id) if item is not None else None
@@ -284,6 +299,77 @@ def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) 
     if product.customer_id != requirement.customer_id:
         raise WarehouseInventoryError("订单产品与半成品需求客户不一致", 409)
     return product.id
+
+
+def _allowed_lot_ids_for_product(db: Session, product_id: int) -> set[int]:
+    return set(
+        db.scalars(
+            select(SemiFinishedLotAllowedProduct.inventory_lot_id).where(
+                SemiFinishedLotAllowedProduct.product_id == product_id
+            )
+        ).all()
+    )
+
+
+def _lot_eligibility_scope(
+    lot: InventoryLot,
+    *,
+    customer_id: int,
+    expected: SemiFinishedSignature,
+    allowed_lot_ids: set[int],
+) -> str | None:
+    detail = lot.semi_finished_detail
+    if lot.inventory_type != "semi_finished" or detail is None:
+        return None
+    if detail.component_type != expected.component_type:
+        return None
+    if detail.owner_customer_id is None:
+        return (
+            "general"
+            if not _physical_signature_differences(expected, detail)
+            else None
+        )
+    if detail.owner_customer_id != customer_id or lot.id not in allowed_lot_ids:
+        return None
+    return "dedicated"
+
+
+def ensure_semi_finished_lot_eligibility(
+    db: Session,
+    *,
+    lot: InventoryLot,
+    product_id: int,
+    customer_id: int,
+    expected: SemiFinishedSignature,
+) -> str:
+    """Recheck the lot-level hard authorization independently of client data."""
+
+    product = db.get(Product, product_id)
+    if product is None or product.deleted_at is not None:
+        raise WarehouseInventoryError("订单产品不存在", 404)
+    if product.customer_id != customer_id or expected.customer_id != customer_id:
+        raise WarehouseInventoryError("订单产品、客户与半成品需求不一致", 409)
+    detail = lot.semi_finished_detail
+    if lot.inventory_type != "semi_finished" or detail is None:
+        raise WarehouseInventoryError("所选批次不是半成品库存", 409)
+    if detail.component_type != expected.component_type:
+        raise WarehouseInventoryError("半成品库存组件与订单需求不一致", 409)
+    if detail.owner_customer_id is None:
+        differences = _physical_signature_differences(expected, detail)
+        if differences:
+            raise WarehouseInventoryError(
+                "通用半成品库存物理规格与订单需求不一致："
+                + "、".join(differences),
+                409,
+            )
+        return "general"
+    if detail.owner_customer_id != customer_id:
+        raise WarehouseInventoryError("其他客户专用半成品库存不能用于当前订单", 409)
+    if lot.id not in _allowed_lot_ids_for_product(db, product_id):
+        raise WarehouseInventoryError(
+            "专用半成品库存批次未绑定当前成品款号，不能抵扣", 409
+        )
+    return "dedicated"
 
 
 def _learned_rules_for_product(
@@ -405,33 +491,59 @@ def browse_semi_finished_inventory_for_product(
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            SemiFinishedInventoryDetail.owner_customer_id == customer_id,
+            or_(
+                SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+                SemiFinishedInventoryDetail.owner_customer_id == customer_id,
+            ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
         .order_by(InventoryLot.stock_date, InventoryLot.id)
     ).all()
-    return [
-        SemiFinishedCandidate(
-            lot=lot,
-            source="manual",
-            match_rule_id=None,
-            available_stock_quantity=lot.quantity_available,
-            deductible_requirement_quantity=(
-                lot.quantity_available
-                * lot.semi_finished_detail.stock_yield_per_sheet
-            ),
-            signature_differences=_signature_differences_from_signature(
-                expected, lot.semi_finished_detail
-            ),
-            warning_codes=(MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING),
-            warning_messages=(
+    allowed_lot_ids = _allowed_lot_ids_for_product(db, product.id)
+    candidates: list[SemiFinishedCandidate] = []
+    for lot in rows:
+        detail = lot.semi_finished_detail
+        if detail is None:
+            continue
+        scope = _lot_eligibility_scope(
+            lot,
+            customer_id=customer_id,
+            expected=expected,
+            allowed_lot_ids=allowed_lot_ids,
+        )
+        if scope is None:
+            continue
+        if scope == "general":
+            source = "general_signature"
+            differences: tuple[str, ...] = ()
+            warning_codes = (MANUAL_CONFIRM_WARNING, GENERAL_SEMI_FINISHED_STOCK)
+            warning_messages = (
+                "每次半成品库存抵扣都必须人工确认。",
+                "该批次为通用半成品库存，可跨客户按物理规格抵扣，必须人工确认。",
+            )
+        else:
+            source = "manual"
+            differences = _signature_differences_from_signature(expected, detail)
+            warning_codes = (MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING)
+            warning_messages = (
                 "每次半成品库存抵扣都必须人工确认。",
                 "人工浏览候选必须核对差异并明确 override。",
-            ),
+            )
+        candidates.append(
+            SemiFinishedCandidate(
+                lot=lot,
+                source=source,
+                match_rule_id=None,
+                available_stock_quantity=lot.quantity_available,
+                deductible_requirement_quantity=(
+                    lot.quantity_available * detail.stock_yield_per_sheet
+                ),
+                signature_differences=differences,
+                warning_codes=warning_codes,
+                warning_messages=warning_messages,
+            )
         )
-        for lot in rows
-        if lot.semi_finished_detail is not None
-    ]
+    return candidates
 
 
 def _semi_finished_candidates_for_signature(
@@ -456,15 +568,50 @@ def _semi_finished_candidates_for_signature(
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            SemiFinishedInventoryDetail.owner_customer_id == expected.customer_id,
+            or_(
+                SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+                SemiFinishedInventoryDetail.owner_customer_id
+                == expected.customer_id,
+            ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
         .order_by(InventoryLot.stock_date, InventoryLot.id)
     ).all()
+    allowed_lot_ids = _allowed_lot_ids_for_product(db, product_id)
     candidates: list[SemiFinishedCandidate] = []
     for lot in rows:
         detail = lot.semi_finished_detail
         if detail is None:
+            continue
+        scope = _lot_eligibility_scope(
+            lot,
+            customer_id=expected.customer_id,
+            expected=expected,
+            allowed_lot_ids=allowed_lot_ids,
+        )
+        if scope is None:
+            continue
+        if scope == "general":
+            candidates.append(
+                SemiFinishedCandidate(
+                    lot=lot,
+                    source="general_signature",
+                    match_rule_id=None,
+                    available_stock_quantity=lot.quantity_available,
+                    deductible_requirement_quantity=(
+                        lot.quantity_available * detail.stock_yield_per_sheet
+                    ),
+                    signature_differences=(),
+                    warning_codes=(
+                        MANUAL_CONFIRM_WARNING,
+                        GENERAL_SEMI_FINISHED_STOCK,
+                    ),
+                    warning_messages=(
+                        "每次半成品库存抵扣都必须人工确认。",
+                        "该批次为通用半成品库存，可跨客户按物理规格抵扣，必须人工确认。",
+                    ),
+                )
+            )
             continue
         signature = lot_signature(detail)
         if signature is None:
@@ -522,7 +669,11 @@ def browse_semi_finished_inventory(
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            SemiFinishedInventoryDetail.owner_customer_id == requirement.customer_id,
+            or_(
+                SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+                SemiFinishedInventoryDetail.owner_customer_id
+                == requirement.customer_id,
+            ),
             SemiFinishedInventoryDetail.component_type == requirement.component_type,
         )
         .order_by(
@@ -530,28 +681,53 @@ def browse_semi_finished_inventory(
             InventoryLot.id,
         )
     ).all()
-    return [
-        SemiFinishedCandidate(
-            lot=lot,
-            source="manual",
-            match_rule_id=None,
-            available_stock_quantity=lot.quantity_available,
-            deductible_requirement_quantity=(
-                lot.quantity_available
-                * lot.semi_finished_detail.stock_yield_per_sheet
-            ),
-            signature_differences=_signature_differences(
-                requirement, lot.semi_finished_detail
-            ),
-            warning_codes=(MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING),
-            warning_messages=(
+    product_id = _requirement_product_id(db, requirement)
+    expected = requirement_signature(requirement)
+    allowed_lot_ids = _allowed_lot_ids_for_product(db, product_id)
+    candidates: list[SemiFinishedCandidate] = []
+    for lot in rows:
+        detail = lot.semi_finished_detail
+        if detail is None:
+            continue
+        scope = _lot_eligibility_scope(
+            lot,
+            customer_id=requirement.customer_id,
+            expected=expected,
+            allowed_lot_ids=allowed_lot_ids,
+        )
+        if scope is None:
+            continue
+        if scope == "general":
+            source = "general_signature"
+            differences: tuple[str, ...] = ()
+            warning_codes = (MANUAL_CONFIRM_WARNING, GENERAL_SEMI_FINISHED_STOCK)
+            warning_messages = (
+                "每次半成品库存抵扣都必须人工确认。",
+                "该批次为通用半成品库存，可跨客户按物理规格抵扣，必须人工确认。",
+            )
+        else:
+            source = "manual"
+            differences = _signature_differences(requirement, detail)
+            warning_codes = (MANUAL_CONFIRM_WARNING, SIGNATURE_OVERRIDE_WARNING)
+            warning_messages = (
                 "每次半成品库存抵扣都必须人工确认。",
                 "人工浏览候选必须核对差异并明确 override。",
-            ),
+            )
+        candidates.append(
+            SemiFinishedCandidate(
+                lot=lot,
+                source=source,
+                match_rule_id=None,
+                available_stock_quantity=lot.quantity_available,
+                deductible_requirement_quantity=(
+                    lot.quantity_available * detail.stock_yield_per_sheet
+                ),
+                signature_differences=differences,
+                warning_codes=warning_codes,
+                warning_messages=warning_messages,
+            )
         )
-        for lot in rows
-        if lot.semi_finished_detail is not None
-    ]
+    return candidates
 
 
 def _rule_for_signature(
@@ -617,22 +793,7 @@ def semi_finished_lot_assigned_product_ids(
     lot = db.get(InventoryLot, inventory_lot_id)
     if lot is None or lot.inventory_type != "semi_finished":
         raise WarehouseInventoryError("半成品库存批次不存在", 404)
-    detail = lot.semi_finished_detail
-    if detail is None or detail.owner_customer_id is None:
-        return ()
-    signature = lot_signature(detail)
-    if signature is None:
-        return ()
-    rule = _rule_for_signature(db, signature)
-    if rule is None:
-        return ()
-    return tuple(
-        db.scalars(
-            select(SemiFinishedMatchRuleProduct.product_id)
-            .where(SemiFinishedMatchRuleProduct.rule_id == rule.id)
-            .order_by(SemiFinishedMatchRuleProduct.product_id)
-        ).all()
-    )
+    return semi_finished_lot_allowed_product_ids(db, inventory_lot_id)
 
 
 def replace_semi_finished_lot_product_assignments(
@@ -648,10 +809,6 @@ def replace_semi_finished_lot_product_assignments(
     detail = lot.semi_finished_detail
     if detail is None or detail.owner_customer_id is None:
         raise WarehouseInventoryError("请先为半成品库存指定归属客户", 409)
-    signature = lot_signature(detail)
-    if signature is None:
-        raise WarehouseInventoryError("半成品库存缺少匹配签名", 409)
-
     unique_ids = tuple(dict.fromkeys(int(value) for value in product_ids))
     products = tuple(
         db.scalars(
@@ -669,37 +826,16 @@ def replace_semi_finished_lot_product_assignments(
         raise WarehouseInventoryError(
             "半成品库存只能分配给同一客户的有效成品款号", 409
         )
-
-    rule = _rule_for_signature(db, signature)
-    if rule is None and not unique_ids:
-        return None, products
-    rule = _ensure_rule_for_signature(db, signature, operator_id=operator_id)
-    current = {
-        row.product_id: row
-        for row in db.scalars(
-            select(SemiFinishedMatchRuleProduct).where(
-                SemiFinishedMatchRuleProduct.rule_id == rule.id
-            )
-        ).all()
-    }
-    desired = set(unique_ids)
-    for product_id, mapping in current.items():
-        if product_id not in desired:
-            db.delete(mapping)
-    now = utc_now()
-    for product_id in desired - set(current):
-        db.add(
-            SemiFinishedMatchRuleProduct(
-                rule_id=rule.id,
-                product_id=product_id,
-                confirmed_by=operator_id,
-                confirmed_at=now,
-            )
-        )
-    rule.updated_by = operator_id
-    rule.updated_at = now
-    db.flush()
-    return rule, products
+    refreshed = replace_semi_finished_lot_allowed_products(
+        db,
+        inventory_lot_id=lot.id,
+        product_ids=list(unique_ids),
+        expected_version=lot.version,
+        operator_id=operator_id,
+    )
+    refreshed_detail = refreshed.semi_finished_detail
+    signature = lot_signature(refreshed_detail) if refreshed_detail is not None else None
+    return (_rule_for_signature(db, signature) if signature is not None else None), products
 
 
 def confirm_semi_finished_match(
@@ -721,15 +857,26 @@ def confirm_semi_finished_match(
     if lot.inventory_type != "semi_finished" or lot.status != "active":
         raise WarehouseInventoryError("该半成品库存批次当前不可匹配", 409)
     detail = lot.semi_finished_detail
-    if detail.owner_customer_id is None:
+    scope = ensure_semi_finished_lot_eligibility(
+        db,
+        lot=lot,
+        product_id=product_id,
+        customer_id=requirement.customer_id,
+        expected=requirement_signature(requirement),
+    )
+    differences = (
+        _physical_signature_differences(requirement_signature(requirement), detail)
+        if scope == "general"
+        else _signature_differences(requirement, detail)
+    )
+    if (
+        scope == "general"
+        and GENERAL_SEMI_FINISHED_STOCK not in warning_acknowledged_codes
+    ):
         raise WarehouseInventoryError(
-            "该半成品库存未归属客户，请先在仓库明确归属客户", 409
+            "通用半成品库存跨客户抵扣必须确认 GENERAL_SEMI_FINISHED_STOCK 警告",
+            409,
         )
-    if detail.owner_customer_id != requirement.customer_id:
-        raise WarehouseInventoryError("其他客户专用半成品库存不能匹配当前订单", 409)
-    if detail.component_type != requirement.component_type:
-        raise WarehouseInventoryError("天地盖盖片、底片与整片库存必须严格隔离", 409)
-    differences = _signature_differences(requirement, detail)
     if differences:
         if not override:
             raise WarehouseInventoryError(
@@ -741,7 +888,11 @@ def confirm_semi_finished_match(
             raise WarehouseInventoryError(
                 "人工 override 必须确认半成品签名差异警告", 409
             )
-    signature = lot_signature(detail)
+    signature = (
+        requirement_signature(requirement)
+        if scope == "general"
+        else lot_signature(detail)
+    )
     if signature is None:
         raise WarehouseInventoryError("库存缺少客户签名，不能保存学习规则", 409)
     now = utc_now()
@@ -773,12 +924,16 @@ def confirm_semi_finished_match(
             if mapping is None:
                 raise WarehouseInventoryError("规则产品关联并发保存失败，请重试", 409)
     db.flush()
-    warning_codes = (SIGNATURE_OVERRIDE_WARNING,) if differences else ()
+    warning_codes: list[str] = []
+    if scope == "general":
+        warning_codes.append(GENERAL_SEMI_FINISHED_STOCK)
+    if differences:
+        warning_codes.append(SIGNATURE_OVERRIDE_WARNING)
     return SemiFinishedMatchConfirmation(
         rule=rule,
         mapping=mapping,
         signature_differences=differences,
-        warning_codes=warning_codes,
+        warning_codes=tuple(warning_codes),
     )
 
 
@@ -1677,14 +1832,16 @@ def consume_semi_finished_reservation(
             or order is None
             or detail is None
             or requirement.order_item_id != order_item.id
+            or order_item.product_id is None
         ):
             raise WarehouseInventoryError("半成品预占关联数据不完整", 409)
-        if detail.owner_customer_id != order.customer_id:
-            raise WarehouseInventoryError(
-                "其他客户或未归属半成品库存不能用于当前送货", 409
-            )
-        if detail.component_type != requirement.component_type:
-            raise WarehouseInventoryError("半成品库存组件与订单需求不一致", 409)
+        ensure_semi_finished_lot_eligibility(
+            db,
+            lot=lot,
+            product_id=order_item.product_id,
+            customer_id=order.customer_id,
+            expected=requirement_signature(requirement),
+        )
         if lot.version != expected_version:
             raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
         before = _balances(lot)

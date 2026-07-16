@@ -29,6 +29,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.semi_finished_inventory import (
+    GENERAL_SEMI_FINISHED_STOCK,
     SIGNATURE_OVERRIDE_WARNING,
     SemiFinishedLotVersion,
     active_semi_requirement_credited_quantity,
@@ -36,11 +37,9 @@ from app.services.semi_finished_inventory import (
     confirm_semi_finished_match,
     consume_semi_finished_reservation,
     release_semi_finished_reservation,
-    replace_semi_finished_lot_product_assignments,
     reserve_semi_finished_inventory,
     reverse_semi_finished_consumption,
     save_order_item_semi_requirement,
-    semi_finished_lot_assigned_product_ids,
     semi_finished_candidates_for_product,
     semi_finished_inventory_candidates,
 )
@@ -53,7 +52,9 @@ from app.services.warehouse_inventory import (
     finished_inventory_candidates,
     manual_finished_in,
     manual_semi_finished_in,
+    replace_semi_finished_lot_allowed_products,
     reserve_finished_inventory,
+    semi_finished_lot_allowed_product_ids,
     void_semi_finished_lot,
 )
 
@@ -212,8 +213,9 @@ def add_semi_lot(
     pieces_per_box: int = 1,
     stock_yield_per_sheet: int = 1,
     unowned: bool = False,
+    product_indices: tuple[int, ...] | None = (0,),
 ):
-    return manual_semi_finished_in(
+    lot = manual_semi_finished_in(
         db,
         location_id=data["semi_location"].id,
         quantity=quantity,
@@ -243,6 +245,15 @@ def add_semi_lot(
         operator_id=data["admin"].id,
         idempotency_key=key,
     )
+    if product_indices is None:
+        return lot
+    return replace_semi_finished_lot_allowed_products(
+        db,
+        inventory_lot_id=lot.id,
+        product_ids=[data["products"][index].id for index in product_indices],
+        expected_version=lot.version,
+        operator_id=data["admin"].id,
+    )
 
 
 def confirm(
@@ -252,6 +263,7 @@ def confirm(
     lot_id: int,
     *,
     override: bool = False,
+    warning_acknowledged_codes: list[str] | None = None,
 ):
     return confirm_semi_finished_match(
         db,
@@ -260,7 +272,9 @@ def confirm(
         operator_id=data["admin"].id,
         override=override,
         warning_acknowledged_codes=(
-            [SIGNATURE_OVERRIDE_WARNING] if override else []
+            warning_acknowledged_codes
+            if warning_acknowledged_codes is not None
+            else ([SIGNATURE_OVERRIDE_WARNING] if override else [])
         ),
     )
 
@@ -303,11 +317,13 @@ def _login_semi_api(client: TestClient, username: str, password: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def test_edit_semi_lot_assign_cancel_and_reassign_preserves_shared_mapping(
+def test_edit_semi_lot_assign_cancel_and_reassign_clears_lot_bindings(
     semi_db,
 ) -> None:
     db, data = semi_db
-    lot = add_semi_lot(db, data, key="edit-lifecycle", unowned=True)
+    lot = add_semi_lot(
+        db, data, key="edit-lifecycle", unowned=True, product_indices=None
+    )
     original_version = lot.version
     balances = (
         lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed,
@@ -317,20 +333,23 @@ def test_edit_semi_lot_assign_cancel_and_reassign_preserves_shared_mapping(
         db, lot_id=lot.id, customer_id=data["customer"].id,
         expected_version=original_version, operator_id=data["admin"].id,
     )
-    assigned_version = assigned.version
-    rule, _products = replace_semi_finished_lot_product_assignments(
+    bound = replace_semi_finished_lot_allowed_products(
         db,
         inventory_lot_id=lot.id,
         product_ids=[data["products"][0].id, data["products"][1].id],
+        expected_version=assigned.version,
         operator_id=data["admin"].id,
     )
-    assert rule is not None
+    assert semi_finished_lot_allowed_product_ids(db, lot.id) == (
+        data["products"][0].id,
+        data["products"][1].id,
+    )
     with pytest.raises(WarehouseInventoryError, match="先取消当前归属"):
         edit_semi_finished_lot_customer(
             db,
             lot_id=lot.id,
             customer_id=data["other_customer"].id,
-            expected_version=assigned_version,
+            expected_version=bound.version,
             operator_id=data["admin"].id,
         )
     with pytest.raises(WarehouseInventoryError, match="刷新后重试"):
@@ -338,23 +357,19 @@ def test_edit_semi_lot_assign_cancel_and_reassign_preserves_shared_mapping(
             db,
             lot_id=lot.id,
             customer_id=None,
-            expected_version=assigned_version + 1,
+            expected_version=bound.version + 1,
             operator_id=data["admin"].id,
         )
     unassigned = edit_semi_finished_lot_customer(
         db,
         lot_id=lot.id,
         customer_id=None,
-        expected_version=assigned_version,
+        expected_version=bound.version,
         operator_id=data["admin"].id,
     )
     unassigned_version = unassigned.version
     assert unassigned.semi_finished_detail.owner_customer_id is None
-    assert db.scalars(
-        select(SemiFinishedMatchRuleProduct).where(
-            SemiFinishedMatchRuleProduct.rule_id == rule.id
-        )
-    ).all()
+    assert semi_finished_lot_allowed_product_ids(db, unassigned.id) == ()
     reassigned = edit_semi_finished_lot_customer(
         db,
         lot_id=lot.id,
@@ -383,7 +398,9 @@ def test_edit_semi_lot_assign_cancel_and_reassign_preserves_shared_mapping(
 
 def test_edit_and_void_api_are_admin_only_and_versioned(semi_api) -> None:
     app, data, password, db = semi_api
-    lot = add_semi_lot(db, data, key="edit-api", unowned=True)
+    lot = add_semi_lot(
+        db, data, key="edit-api", unowned=True, product_indices=None
+    )
     version = lot.version
     db.commit()
     with TestClient(app) as client:
@@ -415,7 +432,9 @@ def test_edit_and_void_api_are_admin_only_and_versioned(semi_api) -> None:
 
 def test_void_semi_lot_closes_balance_and_keeps_audit(semi_db) -> None:
     db, data = semi_db
-    lot = add_semi_lot(db, data, key="void-safe", quantity=37, unowned=True)
+    lot = add_semi_lot(
+        db, data, key="void-safe", quantity=37, unowned=True, product_indices=None
+    )
     version = lot.version
     voided = void_semi_finished_lot(
         db,
@@ -452,7 +471,9 @@ def test_void_semi_lot_closes_balance_and_keeps_audit(semi_db) -> None:
 )
 def test_void_semi_lot_rejects_protected_balances(semi_db, field: str) -> None:
     db, data = semi_db
-    lot = add_semi_lot(db, data, key=f"void-{field}", unowned=True)
+    lot = add_semi_lot(
+        db, data, key=f"void-{field}", unowned=True, product_indices=None
+    )
     setattr(lot, field, 1)
     db.flush()
     with pytest.raises(WarehouseInventoryError, match="不能删除"):
@@ -467,7 +488,9 @@ def test_void_semi_lot_rejects_protected_balances(semi_db, field: str) -> None:
 
 def test_void_semi_lot_rejects_source_ref_and_any_reservation(semi_db) -> None:
     db, data = semi_db
-    sourced = add_semi_lot(db, data, key="void-source", unowned=True)
+    sourced = add_semi_lot(
+        db, data, key="void-source", unowned=True, product_indices=None
+    )
     sourced.source_ref_type = "incoming_receipt_item"
     sourced.source_ref_id = 1
     db.flush()
@@ -479,7 +502,9 @@ def test_void_semi_lot_rejects_source_ref_and_any_reservation(semi_db) -> None:
             reason="误录",
             operator_id=data["admin"].id,
         )
-    reserved = add_semi_lot(db, data, key="void-reservation", unowned=True)
+    reserved = add_semi_lot(
+        db, data, key="void-reservation", unowned=True, product_indices=None
+    )
     db.add(
         InventoryReservation(
             reservation_number="RS-VOID-HISTORY",
@@ -510,7 +535,9 @@ def test_signature_fallback_then_one_rule_maps_four_products_and_new_lots_learn(
 ) -> None:
     db, data = semi_db
     requirements = [add_requirement(db, data, item_index=index) for index in range(4)]
-    first_lot = add_semi_lot(db, data, key="four-products-first")
+    first_lot = add_semi_lot(
+        db, data, key="four-products-first", product_indices=(0, 1, 2, 3)
+    )
 
     initial = semi_finished_inventory_candidates(db, requirements[0].id)
     assert [(row.lot.id, row.source) for row in initial] == [
@@ -547,9 +574,15 @@ def test_signature_fallback_then_one_rule_maps_four_products_and_new_lots_learn(
         product.id for product in data["products"]
     }
 
-    second_lot = add_semi_lot(db, data, key="four-products-new-lot")
+    second_lot = add_semi_lot(
+        db, data, key="four-products-new-lot", product_indices=(3,)
+    )
+    unbound_lot = add_semi_lot(
+        db, data, key="four-products-unbound", product_indices=None
+    )
     learned = semi_finished_inventory_candidates(db, requirements[3].id)
     assert {row.lot.id for row in learned} == {first_lot.id, second_lot.id}
+    assert unbound_lot.id not in {row.lot.id for row in learned}
     assert {row.source for row in learned} == {"learned"}
     assert {row.match_rule_id for row in learned} == {rule_id}
     draft_learned = semi_finished_candidates_for_product(
@@ -567,13 +600,13 @@ def test_signature_fallback_then_one_rule_maps_four_products_and_new_lots_learn(
     assert {row.source for row in draft_learned} == {"learned"}
 
 
-def test_warehouse_can_assign_one_semi_signature_to_multiple_finished_products(
+def test_warehouse_can_bind_one_semi_lot_to_multiple_finished_products(
     semi_db,
 ) -> None:
     db, data = semi_db
     lot = add_semi_lot(db, data, key="warehouse-multi-product-assignment")
 
-    rule, products = replace_semi_finished_lot_product_assignments(
+    lot = replace_semi_finished_lot_allowed_products(
         db,
         inventory_lot_id=lot.id,
         product_ids=[
@@ -581,27 +614,22 @@ def test_warehouse_can_assign_one_semi_signature_to_multiple_finished_products(
             data["products"][1].id,
             data["products"][2].id,
         ],
+        expected_version=lot.version,
         operator_id=data["admin"].id,
     )
-    assert rule is not None
-    assert {row.id for row in products} == {
+    assert set(semi_finished_lot_allowed_product_ids(db, lot.id)) == {
         data["products"][0].id,
         data["products"][1].id,
         data["products"][2].id,
     }
-    assert set(semi_finished_lot_assigned_product_ids(db, lot.id)) == {
-        data["products"][0].id,
-        data["products"][1].id,
-        data["products"][2].id,
-    }
-
-    replace_semi_finished_lot_product_assignments(
+    lot = replace_semi_finished_lot_allowed_products(
         db,
         inventory_lot_id=lot.id,
         product_ids=[data["products"][1].id, data["products"][3].id],
+        expected_version=lot.version,
         operator_id=data["admin"].id,
     )
-    assert set(semi_finished_lot_assigned_product_ids(db, lot.id)) == {
+    assert set(semi_finished_lot_allowed_product_ids(db, lot.id)) == {
         data["products"][1].id,
         data["products"][3].id,
     }
@@ -618,10 +646,11 @@ def test_warehouse_can_assign_one_semi_signature_to_multiple_finished_products(
     db.add(other_product)
     db.flush()
     with pytest.raises(WarehouseInventoryError, match="同一客户"):
-        replace_semi_finished_lot_product_assignments(
+        replace_semi_finished_lot_allowed_products(
             db,
             inventory_lot_id=lot.id,
             product_ids=[other_product.id],
+            expected_version=lot.version,
             operator_id=data["admin"].id,
         )
 
@@ -648,7 +677,13 @@ def test_signature_fallback_rejects_any_key_difference(
     requirement = add_requirement(db, data)
     if lot_values.get("customer_id") == "other":
         lot_values["customer_id"] = data["other_customer"].id
-    lot = add_semi_lot(db, data, key=f"mismatch-{changed_field}", **lot_values)
+    lot = add_semi_lot(
+        db,
+        data,
+        key=f"mismatch-{changed_field}",
+        product_indices=(None if changed_field == "customer" else (0,)),
+        **lot_values,
+    )
 
     assert semi_finished_inventory_candidates(db, requirement.id) == []
     if changed_field == "component":
@@ -728,6 +763,7 @@ def test_customer_isolation_blocks_browse_learning_forged_mapping_and_reserve(
         key="customer-isolation-other",
         quantity=10,
         customer_id=data["other_customer"].id,
+        product_indices=None,
     )
     unowned_lot = add_semi_lot(
         db,
@@ -735,6 +771,7 @@ def test_customer_isolation_blocks_browse_learning_forged_mapping_and_reserve(
         key="customer-isolation-unowned",
         quantity=10,
         unowned=True,
+        product_indices=None,
     )
     forged_rule = SemiFinishedMatchRule(
         customer_id=data["other_customer"].id,
@@ -760,9 +797,14 @@ def test_customer_isolation_blocks_browse_learning_forged_mapping_and_reserve(
     )
     db.flush()
 
-    assert semi_finished_inventory_candidates(db, requirement.id) == []
-    assert browse_semi_finished_inventory(db, requirement.id) == []
-    assert semi_finished_candidates_for_product(
+    candidates = semi_finished_inventory_candidates(db, requirement.id)
+    assert [(row.lot.id, row.source) for row in candidates] == [
+        (unowned_lot.id, "general_signature")
+    ]
+    assert [(row.lot.id, row.source) for row in browse_semi_finished_inventory(db, requirement.id)] == [
+        (unowned_lot.id, "general_signature")
+    ]
+    product_candidates = semi_finished_candidates_for_product(
         db,
         product_id=data["products"][0].id,
         customer_id=data["customer"].id,
@@ -773,31 +815,61 @@ def test_customer_isolation_blocks_browse_learning_forged_mapping_and_reserve(
         component_type="whole",
         pieces_per_box=1,
         stock_yield_per_sheet=1,
-    ) == []
+    )
+    assert [(row.lot.id, row.source) for row in product_candidates] == [
+        (unowned_lot.id, "general_signature")
+    ]
 
     with pytest.raises(WarehouseInventoryError, match="其他客户专用"):
         confirm(db, data, requirement.id, other_customer_lot.id, override=True)
-    with pytest.raises(WarehouseInventoryError, match="未归属客户"):
-        confirm(db, data, requirement.id, unowned_lot.id, override=True)
+    with pytest.raises(WarehouseInventoryError, match="GENERAL_SEMI_FINISHED_STOCK"):
+        confirm(db, data, requirement.id, unowned_lot.id)
+    confirmation = confirm(
+        db,
+        data,
+        requirement.id,
+        unowned_lot.id,
+        warning_acknowledged_codes=[GENERAL_SEMI_FINISHED_STOCK],
+    )
+    assert GENERAL_SEMI_FINISHED_STOCK in confirmation.warning_codes
 
-    for lot, key, message in (
-        (other_customer_lot, "direct-reserve-other", "其他客户专用"),
-        (unowned_lot, "direct-reserve-unowned", "未归属客户"),
-    ):
-        with pytest.raises(WarehouseInventoryError, match=message):
-            reserve_semi_finished_inventory(
-                db,
-                requirement_id=requirement.id,
-                requested_requirement_quantity=1,
-                lots=[SemiFinishedLotVersion(lot.id, lot.version)],
-                operator_id=data["admin"].id,
-                idempotency_key=key,
-                confirmed=True,
-                override=True,
-                warning_acknowledged_codes=[SIGNATURE_OVERRIDE_WARNING],
-            )
-        db.refresh(lot)
-        assert (lot.quantity_available, lot.quantity_reserved) == (10, 0)
+    with pytest.raises(WarehouseInventoryError, match="其他客户专用"):
+        reserve_semi_finished_inventory(
+            db,
+            requirement_id=requirement.id,
+            requested_requirement_quantity=1,
+            lots=[SemiFinishedLotVersion(other_customer_lot.id, other_customer_lot.version)],
+            operator_id=data["admin"].id,
+            idempotency_key="direct-reserve-other",
+            confirmed=True,
+            override=True,
+            warning_acknowledged_codes=[SIGNATURE_OVERRIDE_WARNING],
+        )
+    with pytest.raises(WarehouseInventoryError, match="GENERAL_SEMI_FINISHED_STOCK"):
+        reserve_semi_finished_inventory(
+            db,
+            requirement_id=requirement.id,
+            requested_requirement_quantity=1,
+            lots=[SemiFinishedLotVersion(unowned_lot.id, unowned_lot.version)],
+            operator_id=data["admin"].id,
+            idempotency_key="direct-reserve-unowned",
+            confirmed=True,
+        )
+    reserved = reserve_semi_finished_inventory(
+        db,
+        requirement_id=requirement.id,
+        requested_requirement_quantity=1,
+        lots=[SemiFinishedLotVersion(unowned_lot.id, unowned_lot.version)],
+        operator_id=data["admin"].id,
+        idempotency_key="direct-reserve-general",
+        confirmed=True,
+        warning_acknowledged_codes=[GENERAL_SEMI_FINISHED_STOCK],
+    )
+    assert GENERAL_SEMI_FINISHED_STOCK in reserved.reservations[0].warning_codes
+    db.refresh(other_customer_lot)
+    db.refresh(unowned_lot)
+    assert (other_customer_lot.quantity_available, other_customer_lot.quantity_reserved) == (10, 0)
+    assert (unowned_lot.quantity_available, unowned_lot.quantity_reserved) == (9, 1)
     assert db.scalar(
         select(InventoryReservation.id).where(
             InventoryReservation.reservation_group_key.in_(
@@ -1098,6 +1170,7 @@ def test_ceil_credit_is_exact_for_consume_release_reverse_and_release_first(
         key="ceil-release-first-lot",
         quantity=2,
         stock_yield_per_sheet=3,
+        product_indices=(1,),
     )
     release_first = reserve_semi_finished_inventory(
         db,
@@ -1258,7 +1331,7 @@ def test_cover_base_are_isolated_and_double_splice_conversion_is_preserved(
     assert {row.lot.id for row in semi_finished_inventory_candidates(db, base.id)} == {
         base_lot.id
     }
-    with pytest.raises(WarehouseInventoryError, match="严格隔离"):
+    with pytest.raises(WarehouseInventoryError, match="组件与订单需求不一致"):
         confirm(db, data, cover.id, base_lot.id, override=True)
 
     double_requirement = add_requirement(
@@ -1276,6 +1349,7 @@ def test_cover_base_are_isolated_and_double_splice_conversion_is_preserved(
         quantity=10,
         pieces_per_box=2,
         stock_yield_per_sheet=3,
+        product_indices=(1,),
     )
     candidate = semi_finished_inventory_candidates(db, double_requirement.id)[0]
     assert double_requirement.pieces_per_box == 2

@@ -96,6 +96,7 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
     SemiFinishedMatchRule,
     SemiFinishedMatchRuleProduct,
     WarehouseLocation,

@@ -249,6 +249,93 @@ def test_pdf_direct_save_carries_the_same_reservation_plan() -> None:
     assert "reservation_plan: this.buildReservationPlan(item)" in source
 
 
+def test_new_and_pdf_order_quantity_cells_share_safe_inventory_confirmation() -> None:
+    assert INDEX.count('class="btn small success inventory-recommend-button"') == 2
+    assert INDEX.count('@click="confirmSafeOrderLineInventoryRecommendations(item)"') == 2
+    assert INDEX.count('v-if="hasSafeOrderLineInventoryRecommendation(item)"') == 2
+    assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
+    assert '@input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
+    confirm = INDEX.split("confirmOrderLineInventory(line, component", 1)[1].split(
+        "skipOrderLineInventory", 1
+    )[0]
+    assert "confirm(" not in confirm
+    assert "safeSystemInventoryCandidates(line, component)" in confirm
+    assert INDEX.count("inventoryLocation(candidate)") >= 4
+    assert INDEX.count("inventoryLocation(allocation.candidate)") >= 4
+
+
+def test_safe_inventory_recommendation_one_click_excludes_risky_candidates() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for safe inventory recommendation test"
+    script = next(
+        script
+        for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    )
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+  confirm() {{ throw new Error("browser confirm must not run"); }},
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const methods = sandbox.definition.methods;
+const part = candidates => ({{candidates,manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false,manual_override:false,unavailable_reason:""}});
+const dedicated = {{lot_id:1,quantity_available:5,warning_codes:[]}};
+const general = {{lot_id:2,quantity_available:5,is_general:true,warning_codes:[]}};
+const warningAlias = {{lot_id:7,quantity_available:5,warning_codes:[],warning_messages:[],warnings:["OWNER_REVIEW"]}};
+const safeSemi = {{lot_id:3,source:"signature",available_stock_quantity:20,signature_differences:[],warning_codes:[]}};
+const learnedDifference = {{lot_id:4,source:"learned",available_stock_quantity:20,signature_differences:["material_code"],warning_codes:["SEMI_SIGNATURE_OVERRIDE"]}};
+const accidentalManual = {{lot_id:5,source:"manual",available_stock_quantity:20,signature_differences:[],warning_codes:[]}};
+const line = {{product_id:99,quantity:10,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:10}},finished:part([dedicated,general,warningAlias]),semi:{{whole:part([safeSemi,learnedDifference,accidentalManual]),cover:part([]),base:part([])}}}}}};
+let reallocations = 0;
+const context = {{
+  inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true,
+  semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
+  inventoryCandidateWarnings:methods.inventoryCandidateWarnings,
+  isSafeSystemInventoryCandidate:methods.isSafeSystemInventoryCandidate,
+  safeSystemInventoryCandidates:methods.safeSystemInventoryCandidates,
+  hasSafeOrderLineInventoryRecommendation:methods.hasSafeOrderLineInventoryRecommendation,
+  reallocateAllDraftInventory() {{ reallocations += 1; }},
+  showToast(message, error) {{ throw new Error(`unexpected toast: ${{message}} / ${{error}}`); }},
+}};
+if (!methods.hasSafeOrderLineInventoryRecommendation.call(context,line)) throw new Error("safe recommendation button should be visible");
+methods.confirmSafeOrderLineInventoryRecommendations.call(context,line);
+const finishedIds = line._inventory.finished.selected_candidates.map(row => row.lot_id);
+const semiIds = line._inventory.semi.whole.selected_candidates.map(row => row.lot_id);
+if (JSON.stringify(finishedIds) !== JSON.stringify([1])) throw new Error(`unsafe finished candidate selected: ${{JSON.stringify(finishedIds)}}`);
+if (JSON.stringify(semiIds) !== JSON.stringify([3])) throw new Error(`unsafe semi candidate selected: ${{JSON.stringify(semiIds)}}`);
+if (reallocations !== 1) throw new Error(`expected one reallocation, got ${{reallocations}}`);
+line._inventory.semi.whole.manual_override = true;
+methods.confirmOrderLineInventory.call(context,line,"whole",{{lot_id:6,source:"manual",signature_differences:["尺寸"]}},true);
+if (line._inventory.semi.whole.selected_candidates[0].lot_id !== 6 || reallocations !== 2) throw new Error("manual override path was not preserved");
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_safe_inventory_gate_covers_general_warning_difference_and_manual_sources() -> None:
+    gate = INDEX.split("isSafeSystemInventoryCandidate(component, candidate)", 1)[1].split(
+        "safeSystemInventoryCandidates", 1
+    )[0]
+    for marker in (
+        'candidate.source === "manual"',
+        "candidate.requires_confirmation",
+        "inventoryCandidateWarnings(candidate)",
+        "candidate.is_general",
+        "candidate.signature_differences",
+        "semiCandidateNeedsOverride(candidate)",
+    ):
+        assert marker in gate
+
+
 def test_delivery_inventory_sources_are_screen_only() -> None:
     assert "inventory_sources" in INDEX
     print_method = re.search(r"printDelivery\(row\) \{(?P<body>[^}]*)\}", INDEX)

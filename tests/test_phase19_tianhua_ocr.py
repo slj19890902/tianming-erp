@@ -288,6 +288,11 @@ class TestPdfOcrUnit:
         garbled = "ABCDEFGHIJKLMNOP 1234567 ######## xyzxyz"
         assert self.should_use_ocr(garbled, None) is True
 
+    def test_should_use_ocr_custom_font_mojibake_even_if_parser_found_items(self):
+        garbled = "䈑㕁亾㔘慷峏㖍㛇䦶慹桅孉ẟ⋽ỵ" * 10
+        accidental_parse = {"items": [{"product_code": "CPN084557"}]}
+        assert self.should_use_ocr(garbled, accidental_parse) is True
+
     def test_ocr_pdf_bytes_graceful_no_crash(self):
         """用 4 bytes 的假 PDF 调用 ocr_pdf_bytes，不崩溃，返回合法 method 值。"""
         from app.services.pdf_ocr import ocr_pdf_bytes

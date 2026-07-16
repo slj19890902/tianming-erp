@@ -16,11 +16,41 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
+
+
+def analyze_pdf_text_quality(pdf_text: str | None) -> dict[str, int | float | str]:
+    """Classify PDF text layers that look long but are not usable text."""
+    text = pdf_text or ""
+    compact = re.sub(r"\s+", "", text)
+    basic_han = len(re.findall(r"[\u4e00-\u9fff]", text))
+    extension_a = len(re.findall(r"[\u3400-\u4dbf]", text))
+    unexpected_controls = sum(
+        ord(char) < 32 and char not in "\n\r\t" for char in text
+    )
+    han_total = basic_han + extension_a
+    extension_a_ratio = extension_a / max(han_total, 1)
+    if len(compact) < 50:
+        status = "image_only"
+    elif (
+        extension_a >= 10 and extension_a_ratio >= 0.15
+    ) or unexpected_controls >= 2:
+        status = "garbled_text_layer"
+    else:
+        status = "readable_text"
+    return {
+        "status": status,
+        "text_chars": len(compact),
+        "basic_han_chars": basic_han,
+        "extension_a_chars": extension_a,
+        "extension_a_ratio": round(extension_a_ratio, 4),
+        "unexpected_control_chars": unexpected_controls,
+    }
 
 # ---------------------------------------------------------------------------
 # 可用性探测（懒加载，不在模块导入时崩溃）
@@ -93,10 +123,10 @@ def _get_easyocr_reader():
     return _easyocr_reader
 
 
-def _pdf_to_images_bytes(pdf_content: bytes, dpi: int = 150) -> list[bytes]:
+def _pdf_to_images_bytes(pdf_content: bytes, dpi: int = 200) -> list[bytes]:
     """
     用 PyMuPDF 将 PDF 每页渲染为 PNG 字节串列表。
-    dpi=150 在速度和精度间取得平衡；扫描件可提高到 200。
+    dpi=200 保留采购明细中较小的名称、规格和供应商参考号。
     """
     fitz = _try_import_fitz()
     if fitz is None:
@@ -152,7 +182,11 @@ def _ocr_with_tesseract(image_bytes_list: list[bytes]) -> str:
 # 主接口
 # ---------------------------------------------------------------------------
 
-def ocr_pdf_bytes(pdf_content: bytes) -> tuple[str | None, str]:
+def ocr_pdf_bytes(
+    pdf_content: bytes,
+    *,
+    dpi: int = 200,
+) -> tuple[str | None, str]:
     """
     对 PDF 字节内容执行 OCR。
 
@@ -174,7 +208,7 @@ def ocr_pdf_bytes(pdf_content: bytes) -> tuple[str | None, str]:
         return None, "ocr_unavailable"
 
     try:
-        images = _pdf_to_images_bytes(pdf_content)
+        images = _pdf_to_images_bytes(pdf_content, dpi=dpi)
         if not images:
             return None, "ocr_failed"
 
@@ -204,7 +238,8 @@ def should_use_ocr(pdf_text: str | None, parse_result: dict | None) -> bool:
     2. PDF 文本存在但解析失败（parse_result 为 None 或 items 为空）→ 可能乱码
     3. PDF 文本中中文字符比例极低但文本不短 → 字体编码问题（思迈尔等）
     """
-    if not pdf_text or len(pdf_text.strip()) < 50:
+    quality = analyze_pdf_text_quality(pdf_text)
+    if quality["status"] != "readable_text":
         return True
 
     if parse_result is None:
@@ -212,13 +247,5 @@ def should_use_ocr(pdf_text: str | None, parse_result: dict | None) -> bool:
 
     if parse_result and not parse_result.get("items"):
         return True
-
-    # 中文字符比例检查：如果有文本但中文很少，说明可能是乱码字体
-    text = pdf_text.strip()
-    if len(text) > 100:
-        chinese_count = sum(1 for c in text if "一" <= c <= "鿿")
-        chinese_ratio = chinese_count / len(text)
-        if chinese_ratio < 0.01:  # 中文字符不到 1%
-            return True
 
     return False

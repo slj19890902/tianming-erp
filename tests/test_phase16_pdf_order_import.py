@@ -651,3 +651,47 @@ def test_batch_pdf_preview_uses_ocr_fallback_without_saving_order(
     assert len(drafts) == 1
     assert drafts[0]["customer_po"] == "0100-CG260624-02"
     assert len(drafts[0]["items"]) == 3
+
+
+def test_simair_merge_keeps_text_numbers_and_dates_while_ocr_supplies_labels() -> None:
+    from app.services.order_pdf_import import merge_simair_text_and_ocr_drafts
+
+    text_draft = {
+        "customer_type": "simair",
+        "customer_po": "P-0028338-2",
+        "order_date": "2026-07-13",
+        "delivery_date": "2026-07-20",
+        "items": [{
+            "line_no": 10,
+            "product_code": "CPN084557",
+            "quantity": 100,
+            "unit_price": "18.11",
+            "amount": "1811.00",
+            "delivery_date": "2026-07-20",
+            "raw_product_name": "CPN084557",
+        }],
+    }
+    ocr_draft = {
+        "customer_type": "simair",
+        "customer_po": "OCR-WRONG",
+        "items": [{
+            "line_no": 10,
+            "product_code": "CPN084557",
+            "quantity": 100,
+            "unit_price": "99.99",
+            "amount": "9999.00",
+            "raw_product_name": "纸板内衬",
+            "raw_spec_model": "73×35×24.5",
+        }],
+    }
+
+    merged = merge_simair_text_and_ocr_drafts(text_draft, ocr_draft)
+
+    assert merged["customer_po"] == "P-0028338-2"
+    assert merged["order_date"] == "2026-07-13"
+    assert merged["items"][0]["quantity"] == 100
+    assert merged["items"][0]["unit_price"] == "18.11"
+    assert merged["items"][0]["amount"] == "1811.00"
+    assert merged["items"][0]["delivery_date"] == "2026-07-20"
+    assert merged["items"][0]["raw_product_name"] == "纸板内衬"
+    assert merged["items"][0]["raw_spec_model"] == "73×35×24.5"

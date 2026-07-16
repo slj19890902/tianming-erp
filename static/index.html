@@ -2265,6 +2265,9 @@
                   <div class="field"><label>系统匹配客户</label><div :class="{'danger-text':!draft.matched_customer_id}">{{ importCustomerMatchText(draft) }}</div></div>
                   <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" @change="rematchImportDraft(draftIndex)"></search-select></div>
                   <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft.customer_po" /></div>
+                  <div v-if="draft.source_text_quality === 'garbled_text_layer'" class="field wide">
+                    <div class="notice danger" style="margin:0">思迈尔 PDF 已使用文本层与 OCR 合并；客户订单号已保留。未匹配或多候选明细必须人工确认后才能保存。</div>
+                  </div>
                   <div class="field"><label>下单日期</label><input class="input" type="date" v-model="draft.order_date" /></div>
                   <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" /></div>
                   <div class="field"><label>保存状态</label><span :class="['status',draft.confirmed ? 'green' : 'orange']">{{ draft.confirmed ? "已加入批量保存" : "待核对" }}</span></div>
@@ -2347,7 +2350,7 @@
                         <div v-if="!item.is_new_product && item.product_candidates && item.product_candidates.length > 1" style="margin-top:4px">
                           <select class="select" v-model="item.matched_product_id" @change="selectImportProduct(item)" style="font-size:12px">
                             <option :value="null">请选择候选产品</option>
-                            <option v-for="p in item.product_candidates" :key="p.id" :value="p.id">{{ p.product_code }} / {{ p.product_name }}</option>
+                            <option v-for="p in item.product_candidates" :key="p.id" :value="p.id">{{ p.product_code }} / 思迈尔变体参考号 {{ p.customer_material_code || '-' }} / {{ p.product_name }} / {{ p.specification || '-' }} / {{ p.sale_unit_price || '-' }}</option>
                           </select>
                         </div>
                         <!-- 无匹配时允许新建 -->

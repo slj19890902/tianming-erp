@@ -107,6 +107,23 @@ def _values_match(truth: Any, parsed: Any) -> bool:
     return False
 
 
+def _parsed_top_value(parsed: dict, field_name: str) -> Any:
+    """Keep the training schema tolerant of order-preview field names."""
+    if field_name == "order_no":
+        return parsed.get("order_no") or parsed.get("customer_po")
+    return parsed.get(field_name)
+
+
+def _parsed_item_value(parsed_row: dict, field_name: str) -> Any:
+    if field_name == "spec":
+        return (
+            parsed_row.get("spec")
+            or parsed_row.get("specification")
+            or parsed_row.get("raw_spec_model")
+        )
+    return parsed_row.get(field_name)
+
+
 # ---------------------------------------------------------------------------
 # 核心评分
 # ---------------------------------------------------------------------------
@@ -128,7 +145,7 @@ def _score_items(
         row_weighted_score = 0.0
         for fname, w in ITEM_WEIGHTS.items():
             tv = truth_row.get(fname)
-            pv = parsed_row.get(fname)
+            pv = _parsed_item_value(parsed_row, fname)
             matched = _values_match(tv, pv)
             ws = w if matched else 0.0
             scores.append(
@@ -194,7 +211,7 @@ def score_sample(
         if fname == "items":
             continue
         tv = truth.get(fname)
-        pv = parsed.get(fname)
+        pv = _parsed_top_value(parsed, fname)
         matched = _values_match(tv, pv)
         ws = w if matched else 0.0
         all_field_scores.append(
@@ -226,6 +243,60 @@ def score_sample(
         item_count_truth=len(truth_items),
         item_count_parsed=len(parsed_items),
     )
+
+
+def correction_candidates(
+    parser_result_json: str | None,
+    ground_truth_json: str,
+) -> list[dict[str, str | None]]:
+    """Return reviewed parser differences for the training library only.
+
+    This is deliberately a pure calculation: callers decide whether to persist
+    the resulting correction logs, and it never creates an Order.
+    """
+    result = score_sample(parser_result_json, ground_truth_json)
+    candidates = [
+        {
+            "field_path": field.field_path,
+            "parser_value": field.parsed_value,
+            "corrected_value": field.truth_value,
+        }
+        for field in result.field_scores
+        if not field.matched and _normalize(field.truth_value)
+    ]
+    try:
+        truth = json.loads(ground_truth_json)
+    except (json.JSONDecodeError, ValueError):
+        return candidates
+    try:
+        parsed = json.loads(parser_result_json or "{}")
+    except (json.JSONDecodeError, ValueError):
+        parsed = {}
+
+    truth_items = truth.get("items") or []
+    parsed_items = parsed.get("items") or []
+    if len(truth_items) != len(parsed_items):
+        candidates.append(
+            {
+                "field_path": "items.length",
+                "parser_value": str(len(parsed_items)),
+                "corrected_value": str(len(truth_items)),
+            }
+        )
+    for index, truth_item in enumerate(truth_items):
+        truth_unit = truth_item.get("unit")
+        if not _normalize(truth_unit):
+            continue
+        parsed_unit = parsed_items[index].get("unit") if index < len(parsed_items) else None
+        if not _values_match(truth_unit, parsed_unit):
+            candidates.append(
+                {
+                    "field_path": f"items[{index}].unit",
+                    "parser_value": str(parsed_unit) if parsed_unit is not None else None,
+                    "corrected_value": str(truth_unit),
+                }
+            )
+    return candidates
 
 
 # ---------------------------------------------------------------------------

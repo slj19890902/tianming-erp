@@ -360,6 +360,13 @@ def test_pdf_training_detail_supports_single_sample_reparse() -> None:
     assert "/api/pdf-training/samples/${safeSampleId}/reparse" in INDEX
 
 
+def test_order_pdf_preview_explains_simair_merge_and_candidate_evidence() -> None:
+    assert "source_text_quality === 'garbled_text_layer'" in INDEX
+    assert "思迈尔变体参考号" in INDEX
+    assert "p.specification || '-'" in INDEX
+    assert "p.sale_unit_price || '-'" in INDEX
+
+
 def test_quotation_conversion_uses_visible_report_and_crease_form() -> None:
     assert "modal.type === 'quotationConvert'" in INDEX
     assert "正式存货编码" in INDEX

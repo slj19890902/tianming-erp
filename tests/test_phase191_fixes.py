@@ -366,6 +366,129 @@ class TestOcrUnavailableNocrash(unittest.TestCase):
         self.assertIsInstance(result, bool)
 
 
+class TestSimairOcrOrderNumber(unittest.TestCase):
+    def test_non_ten_line_number_is_preserved(self):
+        from app.services.order_pdf_import import _simair_line_number
+
+        self.assertEqual(_simair_line_number("Manufacturer part number: 15 ", 2), 15)
+
+    def test_order_number_matches_when_touching_chinese_text(self):
+        match = ORDER_NO_RE.search("采购订单编号P-0028338-2于06/03/2026")
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "P-0028338-2")
+
+    def test_simair_ocr_text_keeps_duplicate_cpn_rows_and_amount_integrity(self):
+        from app.services.order_pdf_import import parse_purchase_order_text
+
+        text = """
+        采购订单编号P-0028338-2于06/03/2026
+        序号 物料编号 供应商参考号 采购数量 到货日期 Raw price 计价单位 未税金额
+        139.82 CPN084557 2.00 Pcs CNY
+        CPN126831-天地盖纸箱 盒子内径1884*300*200mm 盖子内径1904*320*200mm
+        10/03/2026 279.64 CNY
+        20 158.41 CPN084557 2.00 Pcs CNY
+        CPN126830-天地盖纸箱 盒子内径2924*300*200mm 盖子内径2944*320*175mm
+        10/03/2026 316.82 CNY
+        付款期限 开票后60天 未税金额 596.46 CNY 税金 77.54 CNY
+        """
+
+        result = parse_purchase_order_text(text, "P-0028338.pdf")
+
+        self.assertEqual(result["customer_type"], "simair")
+        self.assertEqual(result["customer_po"], "P-0028338-2")
+        self.assertEqual(result["order_date"], "2026-03-06")
+        self.assertEqual([item["line_no"] for item in result["items"]], [10, 20])
+        self.assertEqual([item["product_code"] for item in result["items"]], ["CPN084557", "CPN084557"])
+        self.assertEqual([item["reference_product_code"] for item in result["items"]], ["CPN126831", "CPN126830"])
+        self.assertEqual([item["unit_price"] for item in result["items"]], ["139.8200", "158.4100"])
+        self.assertEqual([item["amount"] for item in result["items"]], ["279.64", "316.82"])
+        self.assertEqual(result["integrity_check"]["integrity_status"], "passed")
+
+    def test_p0029425_ocr_keeps_first_label_and_complete_dimensions(self):
+        from app.services.order_pdf_import import parse_purchase_order_text
+
+        text = """
+        P-0029425-2
+        10 18.11 CPN084557 6.00 CNY Pcs
+        美卡纸箱 AB 瓦楞五层美卡纸 M616M 内径 73cm*3Scm*24.Scm
+        22/06/2026 108.66 CNY Manufacturer part number:
+        20 CPN110723 10.00 85.5 CNY Pcs
+        MK-WI Krypton AC 包材-纸围965*890*375MK-WI
+        06/07/2026 855 CNY Manufacturer part number:
+        30 92.15 CPN110725 10.00 Pcs CNY
+        MK-G1 Krypton AC 包材-纸盖995*920*90MK-G1
+        06/07/2026 921.5 CNY Manufacturer part number:
+        40 80.75 CPN110733 10.00 CNY Pcs
+        MK-W2 Krypton DC 包材-纸围1235*1130*33S-MK-W2
+        20/07/2026 807.5 CNY Manufacturer part number:
+        50 CPN110734 10.00 Pcs 95 CNY
+        Krypton DC 包材-纸盖1265*1160*90-MK-G2
+        20/07/2026 950 CNY
+        """
+
+        result = parse_purchase_order_text(text, "P-0029425.pdf")
+
+        self.assertEqual(len(result["items"]), 5)
+        first = result["items"][0]
+        self.assertEqual(first["line_no"], 10)
+        self.assertEqual(first["product_code"], "CPN084557")
+        self.assertIn("美卡纸箱", first["product_name"])
+        self.assertEqual(first["specification"], "73cm*35cm*24.5cm")
+        self.assertEqual(first["unit_price"], "18.1100")
+        self.assertEqual(first["amount"], "108.66")
+        self.assertEqual(
+            [item["line_no"] for item in result["items"]],
+            [10, 20, 30, 40, 50],
+        )
+        self.assertEqual(result["items"][3]["specification"], "1235*1130*335")
+
+    def test_hybrid_keeps_text_numbers_and_requires_confirmation(self):
+        from app.services.order_pdf_import import merge_simair_text_and_ocr_drafts
+
+        text_draft = {
+            "customer_type": "simair", "customer_po": "P-0028338-2", "order_date": None,
+            "delivery_date": "2026-03-10", "warnings": [],
+            "integrity_check": {"integrity_status": "passed", "integrity_errors": [], "source_total_amount": None},
+            "items": [
+                {"line_no": 10, "product_code": "CPN084557", "product_name": "CPN126831-乱码名称", "quantity": 2, "unit_price": "139.8200", "amount": "279.64"},
+                {"line_no": 20, "product_code": "CPN084557", "product_name": "CPN126830-乱码名称", "quantity": 2, "unit_price": "158.4100", "amount": "316.82"},
+            ],
+        }
+        ocr_draft = {
+            "order_date": "2026-03-06", "delivery_date": "2026-03-11",
+            "integrity_check": {"source_total_amount": "596.46"},
+            "items": [{"line_no": 10, "product_code": "CPN084557", "product_name": "CPN126831-天地盖纸箱", "specification": "1904*320*200mm", "quantity": 2, "amount": "279.64"}],
+        }
+
+        result = merge_simair_text_and_ocr_drafts(text_draft, ocr_draft)
+
+        self.assertEqual(result["items"][0]["product_name"], "CPN126831-天地盖纸箱")
+        self.assertEqual(result["items"][1]["product_name"], "CPN126830（名称待人工确认）")
+        self.assertEqual(result["items"][1]["unit_price"], "158.4100")
+        self.assertEqual(result["items"][0]["specification"], "1904*320*200mm")
+        self.assertEqual(result["order_date"], "2026-03-06")
+        self.assertEqual(result["delivery_date"], "2026-03-10")
+        self.assertEqual(result["recognition_status"], "needs_confirmation")
+
+    def test_garbled_subtotal_label_uses_exact_text_layer_cny_total(self):
+        from app.services.order_pdf_import import parse_purchase_order_text
+
+        text = """
+        P-0029254-1
+        10 CPN087070 250.00 Pcs 43.08 CNY 产品A 10770 CNY
+        20 CPN087059 100.00 Pcs 24.41 CNY 产品B 03/07/2026 2441 CNY
+        㛒䦶慹桅 13211 CNY 税金 1717.43 CNY 总金额 14928.43 CNY
+        """
+
+        result = parse_purchase_order_text(text, "P-0029254.pdf")
+
+        integrity = result["integrity_check"]
+        self.assertEqual(integrity["source_total_amount"], "13211.00")
+        self.assertEqual(integrity["parsed_total_amount"], "13211.00")
+        self.assertEqual(integrity["integrity_status"], "passed")
+
+
 class TestGaotaiTemplateRules(unittest.TestCase):
     def test_gaotai_generic_keyword_does_not_capture_tianhua_contract(self):
         from app.services.order_pdf_import import (

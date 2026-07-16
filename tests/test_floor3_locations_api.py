@@ -1,0 +1,1842 @@
+from __future__ import annotations
+
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+from decimal import Decimal
+from threading import Barrier
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
+
+
+@pytest.fixture()
+def floor3_app(tmp_path):
+    from app.api.auth import router as auth_router
+    from app.api.deps import get_db
+    from app.api.warehouse import router as warehouse_router
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.access_control import UserCustomerScope
+    from app.models.customer import Customer
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+    from app.models.warehouse_inventory import WarehouseLocation
+
+    engine = create_sqlite_engine(tmp_path / "floor3-api.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        admin = User(
+            username="floor3-admin",
+            password_hash=hash_password("123456"),
+            role="admin",
+            real_name="三楼测试管理员",
+            must_change_password=False,
+        )
+        scoped = User(
+            username="floor3-scoped",
+            password_hash=hash_password("123456"),
+            role="workshop",
+            real_name="三楼范围员工",
+            must_change_password=False,
+            customer_access_mode="selected",
+        )
+        tianhua = Customer(name="苏州天华超净科技股份有限公司")
+        other = Customer(name="其他客户")
+        db.add_all([admin, scoped, tianhua, other])
+        db.flush()
+        db.add(UserCustomerScope(user_id=scoped.id, customer_id=tianhua.id))
+
+        products = []
+        for number in range(1, 6):
+            products.append(
+                Product(
+                    customer_id=tianhua.id,
+                    product_code=f"2130101{number}",
+                    customer_material_code=f"2130101{number}",
+                    product_name="同名纸箱" if number <= 2 else f"纸箱{number}",
+                    length_mm=Decimal("100") + number,
+                    width_mm=Decimal("80"),
+                    height_mm=Decimal("50"),
+                )
+            )
+        other_product = Product(
+            customer_id=other.id,
+            product_code="OTHER-001",
+            customer_material_code="OTHER-001",
+            product_name="其他客户纸箱",
+        )
+        db.add_all([*products, other_product])
+        db.flush()
+        order = Order(
+            order_number="TM20260714001",
+            customer_id=tianhua.id,
+            customer_po="PO-FLOOR3-001",
+            order_date=date(2026, 7, 14),
+            total_amount=Decimal("10"),
+            created_by=admin.id,
+        )
+        db.add(order)
+        db.flush()
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                product_id=products[0].id,
+                item_order_number="TM20260714001-001",
+                quantity=10,
+                unit_price=Decimal("1"),
+                subtotal=Decimal("10"),
+                snapshot_product_name=products[0].product_name,
+                snapshot_product_code=products[0].product_code,
+            )
+        )
+        locations = [
+            WarehouseLocation(
+                location_code="A1-L01",
+                location_name="A1-L01",
+                warehouse_type="finished",
+                warehouse_floor=3,
+                area_code="A1",
+                storage_type="ground",
+                sort_order=1,
+                source_version="V11",
+            ),
+            WarehouseLocation(
+                location_code="A1-L02",
+                location_name="A1-L02",
+                warehouse_type="finished",
+                warehouse_floor=3,
+                area_code="A1",
+                storage_type="ground",
+                sort_order=2,
+                source_version="V11",
+            ),
+            WarehouseLocation(
+                location_code="F12-P01",
+                location_name="F12-P01",
+                warehouse_type="shared",
+                warehouse_floor=3,
+                area_code="F12",
+                storage_type="temporary_aisle",
+                sort_order=3,
+                is_temporary=True,
+                source_version="V11",
+            ),
+            WarehouseLocation(
+                location_code="FG-A01",
+                location_name="成品正式库存货位",
+                warehouse_type="finished",
+                warehouse_floor=1,
+                area_code="FG",
+                storage_type="rack",
+                sort_order=4,
+            ),
+            WarehouseLocation(
+                location_code="LEGACY-3F-01",
+                location_name="既有三楼正式库存货位",
+                warehouse_type="finished",
+                warehouse_floor=3,
+                area_code="LEGACY",
+                storage_type="rack",
+                sort_order=5,
+                source_version=None,
+            ),
+            WarehouseLocation(
+                location_code="V11-WRONG-FLOOR",
+                location_name="错误楼层的V11货位",
+                warehouse_type="finished",
+                warehouse_floor=2,
+                area_code="INVALID",
+                storage_type="rack",
+                sort_order=6,
+                source_version="V11",
+            ),
+            WarehouseLocation(
+                location_code="F34-P01",
+                location_name="F34-P01",
+                warehouse_type="shared",
+                warehouse_floor=3,
+                area_code="F34",
+                storage_type="temporary_aisle",
+                sort_order=7,
+                is_temporary=True,
+                source_version="V11",
+            ),
+            WarehouseLocation(
+                location_code="A1-R01",
+                location_name="A1-R01",
+                warehouse_type="finished",
+                warehouse_floor=3,
+                area_code="A1",
+                storage_type="rack",
+                sort_order=8,
+                source_version="V11",
+            ),
+        ]
+        db.add_all(locations)
+        db.commit()
+        ids = {
+            "admin": admin.id,
+            "scoped": scoped.id,
+            "tianhua": tianhua.id,
+            "other": other.id,
+            "products": [row.id for row in products],
+            "other_product": other_product.id,
+            "locations": [row.id for row in locations],
+            "formal_location": locations[3].id,
+            "legacy_floor3_location": locations[4].id,
+            "v11_wrong_floor_location": locations[5].id,
+            "f34_location": locations[6].id,
+            "rack_location": locations[7].id,
+        }
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(warehouse_router, prefix="/api/warehouse")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        yield app, ids, factory
+    finally:
+        engine.dispose()
+
+
+def _login(client: TestClient, username: str) -> None:
+    response = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": "123456"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def _matched_item(customer_id: int, product_id: int, code: str) -> dict:
+    return {
+        "customer_id": customer_id,
+        "product_id": product_id,
+        "inventory_code": code,
+        "item_type": "finished",
+        "quantity": 10,
+        "unit": "boxes",
+        "match_status": "matched",
+    }
+
+
+def test_floor3_locations_filter_by_customer_and_combine_with_existing_filters(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        pallet_specs = [
+            (
+                ids["locations"][0],
+                [
+                    _matched_item(
+                        ids["tianhua"],
+                        ids["products"][0],
+                        "FILTER-TIANHUA-A1",
+                    )
+                ],
+            ),
+            (
+                ids["locations"][1],
+                [
+                    _matched_item(
+                        ids["other"],
+                        ids["other_product"],
+                        "FILTER-OTHER-A1",
+                    )
+                ],
+            ),
+            (
+                ids["locations"][2],
+                [
+                    _matched_item(
+                        ids["tianhua"],
+                        ids["products"][1],
+                        "FILTER-TIANHUA-F12",
+                    ),
+                    _matched_item(
+                        ids["other"],
+                        ids["other_product"],
+                        "FILTER-OTHER-F12",
+                    ),
+                ],
+            ),
+        ]
+        for location_id, items in pallet_specs:
+            created = client.post(
+                "/api/warehouse/pallets",
+                json={"location_id": location_id, "items": items},
+            )
+            assert created.status_code == 201, created.text
+
+        tianhua = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"customer_id": ids["tianhua"]},
+        )
+        assert tianhua.status_code == 200, tianhua.text
+        assert [row["id"] for row in tianhua.json()["items"]] == [
+            ids["locations"][0],
+            ids["locations"][2],
+        ]
+        assert tianhua.json()["total"] == 2
+
+        other = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"customer_id": ids["other"]},
+        )
+        assert other.status_code == 200, other.text
+        assert [row["id"] for row in other.json()["items"]] == [
+            ids["locations"][1],
+            ids["locations"][2],
+        ]
+
+        combined = client.get(
+            "/api/warehouse/floor3/locations",
+            params={
+                "customer_id": ids["tianhua"],
+                "q": "21301011",
+                "area_code": "A1",
+                "occupancy": "occupied",
+            },
+        )
+        assert combined.status_code == 200, combined.text
+        assert [row["id"] for row in combined.json()["items"]] == [
+            ids["locations"][0]
+        ]
+
+        empty_intersection = client.get(
+            "/api/warehouse/floor3/locations",
+            params={
+                "customer_id": ids["tianhua"],
+                "area_code": "A1",
+                "occupancy": "empty",
+            },
+        )
+        assert empty_intersection.status_code == 200, empty_intersection.text
+        assert empty_intersection.json() == {"items": [], "total": 0}
+
+
+def test_floor3_locations_customer_filter_enforces_scope_and_positive_id(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        for location_id, customer_id, product_id, code in [
+            (
+                ids["locations"][0],
+                ids["tianhua"],
+                ids["products"][0],
+                "SCOPED-TIANHUA",
+            ),
+            (
+                ids["locations"][1],
+                ids["other"],
+                ids["other_product"],
+                "SCOPED-OTHER",
+            ),
+        ]:
+            created = client.post(
+                "/api/warehouse/pallets",
+                json={
+                    "location_id": location_id,
+                    "items": [_matched_item(customer_id, product_id, code)],
+                },
+            )
+            assert created.status_code == 201, created.text
+        client.post("/api/auth/logout")
+
+        _login(client, "floor3-scoped")
+        allowed = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"customer_id": ids["tianhua"]},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert [row["id"] for row in allowed.json()["items"]] == [
+            ids["locations"][0]
+        ]
+
+        denied = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"customer_id": ids["other"]},
+        )
+        assert denied.status_code == 403, denied.text
+
+        invalid = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"customer_id": 0},
+        )
+        assert invalid.status_code == 422, invalid.text
+
+
+def test_floor3_search_requires_explicit_candidate_choice(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        exact = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"customer_id": ids["tianhua"], "q": "21301011"},
+        )
+        assert exact.status_code == 200, exact.text
+        body = exact.json()
+        assert body["auto_bind_allowed"] is False
+        assert body["selection_required"] is True
+        assert body["items"][0]["product_id"] == ids["products"][0]
+        assert body["items"][0]["match_type"] == "customer_inventory_code_exact"
+
+        by_order = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"customer_id": ids["tianhua"], "q": "PO-FLOOR3-001"},
+        )
+        assert by_order.status_code == 200, by_order.text
+        assert by_order.json()["items"][0]["product_id"] == ids["products"][0]
+        assert by_order.json()["items"][0]["match_type"] == "customer_order_exact"
+
+        duplicate_name = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"customer_id": ids["tianhua"], "q": "同名纸箱"},
+        )
+        assert duplicate_name.status_code == 200, duplicate_name.text
+        assert {row["product_id"] for row in duplicate_name.json()["items"]} == set(
+            ids["products"][:2]
+        )
+        assert duplicate_name.json()["auto_bind_allowed"] is False
+
+        by_customer_name = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"q": "苏州天华超净科技股份有限公司"},
+        )
+        assert by_customer_name.status_code == 200, by_customer_name.text
+        assert {row["product_id"] for row in by_customer_name.json()["items"]} == set(
+            ids["products"]
+        )
+        assert by_customer_name.json()["auto_bind_allowed"] is False
+        assert by_customer_name.json()["selection_required"] is True
+
+
+def test_floor3_pallet_supports_five_items_move_clear_and_history(floor3_app) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryLot,
+        InventoryPallet,
+        InventoryPalletItem,
+    )
+
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        items = [
+            _matched_item(ids["tianhua"], product_id, f"CODE-{index}")
+            for index, product_id in enumerate(ids["products"], start=1)
+        ]
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "PLT-3F-TEST-001",
+                "items": items,
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet_id = created.json()["pallet"]["id"]
+        assert created.json()["pallet"]["item_count"] == 5
+
+        occupied = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "PLT-3F-TEST-OCCUPIED",
+                "items": [items[0]],
+            },
+        )
+        assert occupied.status_code == 409
+
+        moved = client.post(
+            f"/api/warehouse/pallets/{pallet_id}/move",
+            json={
+                "expected_version": created.json()["pallet"]["version"],
+                "to_location_id": ids["locations"][1],
+                "confirmed": True,
+                "idempotency_key": "move-basic-001",
+                "remarks": "现场移位",
+            },
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["pallet"]["location_id"] == ids["locations"][1]
+
+        first = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][0]}"
+        )
+        second = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][1]}"
+        )
+        assert first.json()["occupancy_status"] == "empty"
+        assert second.json()["occupancy_status"] == "occupied"
+        assert any(
+            row["movement_type"] == "move" for row in first.json()["movement_history"]
+        )
+
+        cleared = client.post(
+            f"/api/warehouse/pallets/{pallet_id}/clear",
+            json={
+                "expected_version": moved.json()["pallet"]["version"],
+                "remarks": "现场已清空",
+            },
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["pallet"]["is_current"] is False
+        assert client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][1]}"
+        ).json()["occupancy_status"] == "empty"
+
+    with factory() as db:
+        assert db.scalar(select(func.count(InventoryPalletItem.id))) == 5
+        assert db.scalar(select(func.count(InventoryLocationMovement.id))) == 3
+        assert db.scalar(select(func.count(InventoryLot.id))) == 0
+        pallet = db.scalar(select(InventoryPallet).where(InventoryPallet.id == pallet_id))
+        assert pallet is not None
+        assert pallet.status == "closed"
+        assert pallet.location_id is None
+
+
+def test_floor3_same_product_can_be_registered_at_multiple_locations(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        item = _matched_item(ids["tianhua"], ids["products"][0], "21301011")
+        first = client.post(
+            "/api/warehouse/pallets",
+            json={"location_id": ids["locations"][0], "items": [item]},
+        )
+        second = client.post(
+            "/api/warehouse/pallets",
+            json={"location_id": ids["locations"][1], "items": [item]},
+        )
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+
+
+def test_floor3_requires_both_floor_three_and_v11_source_boundary(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        listing = client.get("/api/warehouse/floor3/locations")
+        assert listing.status_code == 200, listing.text
+        assert {row["id"] for row in listing.json()["items"]} == set(
+            [*ids["locations"][:3], ids["f34_location"], ids["rack_location"]]
+        )
+
+        for location_id in (
+            ids["legacy_floor3_location"],
+            ids["v11_wrong_floor_location"],
+        ):
+            detail = client.get(f"/api/warehouse/floor3/locations/{location_id}")
+            assert detail.status_code == 404
+            created = client.post(
+                "/api/warehouse/pallets",
+                json={
+                    "location_id": location_id,
+                    "items": [
+                        _matched_item(
+                            ids["tianhua"], ids["products"][0], "BOUNDARY"
+                        )
+                    ],
+                },
+            )
+            assert created.status_code == 409, created.text
+            assert "三楼 V11 Phase A" in created.json()["detail"]
+
+        formal_locations = client.get("/api/warehouse/locations")
+        assert formal_locations.status_code == 200, formal_locations.text
+        assert ids["legacy_floor3_location"] in {
+            row["id"] for row in formal_locations.json()["items"]
+        }
+        assert ids["v11_wrong_floor_location"] not in {
+            row["id"] for row in formal_locations.json()["items"]
+        }
+
+        wrong_floor_v11_in = client.post(
+            "/api/warehouse/finished/manual-in",
+            json={
+                "customer_id": ids["tianhua"],
+                "product_id": ids["products"][0],
+                "location_id": ids["v11_wrong_floor_location"],
+                "quantity": 1,
+                "stock_date": "2026-07-15",
+            },
+        )
+        assert wrong_floor_v11_in.status_code == 409
+        assert "楼层无效" in wrong_floor_v11_in.json()["detail"]
+
+        formal_config_attempt = client.put(
+            f"/api/warehouse/locations/{ids['locations'][0]}/disable"
+        )
+        assert formal_config_attempt.status_code == 409
+        assert "三楼平面图" in formal_config_attempt.json()["detail"]
+
+
+def test_floor3_pallet_mutations_use_expected_version_cas(floor3_app) -> None:
+    from app.models.warehouse_inventory import InventoryPalletItem
+
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    _matched_item(ids["tianhua"], ids["products"][0], "CAS-1")
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+        assert pallet["version"] == 1
+
+        first_writer = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items",
+            json={
+                "expected_version": 1,
+                "item": _matched_item(
+                    ids["tianhua"], ids["products"][1], "CAS-2"
+                ),
+            },
+        )
+        assert first_writer.status_code == 200, first_writer.text
+        assert first_writer.json()["pallet"]["version"] == 2
+
+        stale_add = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items",
+            json={
+                "expected_version": 1,
+                "item": _matched_item(
+                    ids["tianhua"], ids["products"][2], "CAS-STALE"
+                ),
+            },
+        )
+        assert stale_add.status_code == 409
+        assert "其他操作更新" in stale_add.json()["detail"]
+
+        stale_move = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move",
+            json={
+                "expected_version": 1,
+                "to_location_id": ids["locations"][1],
+                "confirmed": True,
+                "idempotency_key": "move-stale-001",
+            },
+        )
+        assert stale_move.status_code == 409
+
+        moved = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move",
+            json={
+                "expected_version": 2,
+                "to_location_id": ids["locations"][1],
+                "confirmed": True,
+                "idempotency_key": "move-cas-001",
+            },
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["pallet"]["version"] == 3
+
+        stale_clear = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/clear",
+            json={"expected_version": 2, "remarks": "过期页面清空"},
+        )
+        assert stale_clear.status_code == 409
+
+        cleared = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/clear",
+            json={"expected_version": 3, "remarks": "当前版本清空"},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["pallet"]["version"] == 4
+
+    with factory() as db:
+        assert db.scalar(
+            select(func.count(InventoryPalletItem.id)).where(
+                InventoryPalletItem.pallet_id == pallet["id"]
+            )
+        ) == 2
+
+
+def test_floor3_competing_moves_return_conflict_without_claiming_loser_version(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        first = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "PLT-COMPETE-ONE",
+                "items": [
+                    _matched_item(ids["tianhua"], ids["products"][0], "COMPETE-1")
+                ],
+            },
+        )
+        second = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][1],
+                "pallet_code": "PLT-COMPETE-TWO",
+                "items": [
+                    _matched_item(ids["tianhua"], ids["products"][1], "COMPETE-2")
+                ],
+            },
+        )
+        assert first.status_code == second.status_code == 201
+
+        winner = client.post(
+            f"/api/warehouse/pallets/{first.json()['pallet']['id']}/move",
+            json={
+                "expected_version": first.json()["pallet"]["version"],
+                "to_location_id": ids["locations"][2],
+                "confirmed": True,
+                "idempotency_key": "move-winner-001",
+            },
+        )
+        assert winner.status_code == 200, winner.text
+
+        loser = client.post(
+            f"/api/warehouse/pallets/{second.json()['pallet']['id']}/move",
+            json={
+                "expected_version": second.json()["pallet"]["version"],
+                "to_location_id": ids["locations"][2],
+                "confirmed": True,
+                "idempotency_key": "move-loser-001",
+            },
+        )
+        assert loser.status_code == 409, loser.text
+        assert "目标货位已有当前栈板" in loser.json()["detail"]
+
+        second_location = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][1]}"
+        )
+        assert second_location.status_code == 200, second_location.text
+        assert second_location.json()["current_pallet"]["version"] == 1
+
+
+def test_floor3_pallet_item_validates_ddl_length_and_decimal_precision(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        too_long_order = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(
+                            ids["tianhua"], ids["products"][0], "DDL-ORDER"
+                        ),
+                        "order_no": "O" * 101,
+                    }
+                ],
+            },
+        )
+        assert too_long_order.status_code == 422
+
+        too_precise_quantity = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(
+                            ids["tianhua"], ids["products"][0], "DDL-QUANTITY"
+                        ),
+                        "quantity": "1.0001",
+                    }
+                ],
+            },
+        )
+        assert too_precise_quantity.status_code == 422
+
+        too_large_quantity = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    {
+                        **_matched_item(
+                            ids["tianhua"], ids["products"][0], "DDL-RANGE"
+                        ),
+                        "quantity": "100000000000.000",
+                    }
+                ],
+            },
+        )
+        assert too_large_quantity.status_code == 422
+
+
+def test_formal_inventory_service_binds_valid_v11_and_rejects_wrong_floor(
+    floor3_app,
+) -> None:
+    from app.services.warehouse_inventory import (
+        WarehouseInventoryError,
+        manual_finished_in,
+    )
+
+    _app, ids, factory = floor3_app
+    with factory() as db:
+        lot = manual_finished_in(
+            db,
+            customer_id=ids["tianhua"],
+            product_id=ids["products"][0],
+            location_id=ids["locations"][0],
+            quantity=1,
+            stock_date=date(2026, 7, 15),
+            source_type="manual",
+            remarks=None,
+            operator_id=ids["admin"],
+            idempotency_key="floor3-service-bind-001",
+        )
+        assert lot.pallet_item is not None
+        assert lot.pallet_item.pallet.location_id == ids["locations"][0]
+        with pytest.raises(WarehouseInventoryError, match="楼层无效"):
+            manual_finished_in(
+                db,
+                customer_id=ids["tianhua"],
+                product_id=ids["products"][0],
+                location_id=ids["v11_wrong_floor_location"],
+                quantity=1,
+                stock_date=date(2026, 7, 15),
+                source_type="manual",
+                remarks=None,
+                operator_id=ids["admin"],
+                idempotency_key=None,
+            )
+
+
+def test_floor3_scope_redacts_and_rejects_other_customer_content(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "SECRET-OTHER-PALLET",
+                "remarks": "其他客户秘密订单号 PO-SECRET-001",
+                "items": [
+                    _matched_item(
+                        ids["other"], ids["other_product"], "OTHER-001"
+                    )
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        client.post("/api/auth/logout")
+
+        _login(client, "floor3-scoped")
+        listing = client.get("/api/warehouse/floor3/locations")
+        assert listing.status_code == 200, listing.text
+        occupied = next(
+            row for row in listing.json()["items"] if row["occupancy_status"] == "occupied"
+        )
+        assert occupied["current_pallet"] == {"access_restricted": True}
+        assert "SECRET-OTHER-PALLET" not in listing.text
+        assert "PO-SECRET-001" not in listing.text
+
+        detail = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][0]}"
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["current_pallet"] == {"access_restricted": True}
+        assert "SECRET-OTHER-PALLET" not in detail.text
+        assert "PO-SECRET-001" not in detail.text
+
+        secret_search = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"q": "SECRET-OTHER-PALLET"},
+        )
+        assert secret_search.status_code == 200, secret_search.text
+        assert secret_search.json()["items"] == []
+
+        denied_search = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"customer_id": ids["other"], "q": "OTHER-001"},
+        )
+        assert denied_search.status_code == 403
+        unscoped_pending = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][1],
+                "items": [
+                    {
+                        "inventory_code": "UNKNOWN",
+                        "product_name": "待确认纸箱",
+                        "item_type": "finished",
+                        "quantity": 1,
+                        "match_status": "pending",
+                    }
+                ],
+            },
+        )
+        assert unscoped_pending.status_code == 403
+        denied_write = client.post(
+            f"/api/warehouse/pallets/{created.json()['pallet']['id']}/items",
+            json={
+                "expected_version": created.json()["pallet"]["version"],
+                "item": {
+                    "customer_id": ids["tianhua"],
+                    "product_id": ids["products"][0],
+                    "item_type": "finished",
+                    "quantity": 1,
+                    "match_status": "matched",
+                },
+            },
+        )
+        assert denied_write.status_code == 403
+
+        hidden_customer_name = client.get(
+            "/api/warehouse/floor3/product-candidates",
+            params={"q": "其他客户"},
+        )
+        assert hidden_customer_name.status_code == 200, hidden_customer_name.text
+        assert hidden_customer_name.json()["items"] == []
+
+
+def test_floor3_scope_treats_mixed_customer_pallet_as_restricted_occupancy(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][1],
+                "pallet_code": "SECRET-MIXED-PALLET",
+                "remarks": "混合客户秘密备注",
+                "items": [
+                    _matched_item(ids["tianhua"], ids["products"][0], "21301011"),
+                    _matched_item(ids["other"], ids["other_product"], "OTHER-001"),
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet_id = created.json()["pallet"]["id"]
+        client.post("/api/auth/logout")
+
+        _login(client, "floor3-scoped")
+        detail = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][1]}"
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["occupancy_status"] == "occupied"
+        assert detail.json()["current_pallet"] == {"access_restricted": True}
+        assert "SECRET-MIXED-PALLET" not in detail.text
+        assert "混合客户秘密备注" not in detail.text
+        assert "21301011" not in detail.text
+
+        write_attempts = [
+            client.post(
+                f"/api/warehouse/pallets/{pallet_id}/items",
+                json={
+                    "expected_version": created.json()["pallet"]["version"],
+                    "item": _matched_item(
+                        ids["tianhua"], ids["products"][1], "21301012"
+                    ),
+                },
+            ),
+            client.post(
+                f"/api/warehouse/pallets/{pallet_id}/move",
+                json={
+                    "expected_version": created.json()["pallet"]["version"],
+                    "to_location_id": ids["locations"][2],
+                    "confirmed": True,
+                    "idempotency_key": "move-scoped-001",
+                },
+            ),
+            client.post(
+                f"/api/warehouse/pallets/{pallet_id}/clear",
+                json={
+                    "expected_version": created.json()["pallet"]["version"],
+                    "remarks": "无权清空",
+                },
+            ),
+            client.post(
+                f"/api/warehouse/pallets/{pallet_id}/relocation-flag",
+                json={
+                    "expected_version": created.json()["pallet"]["version"],
+                    "needs_relocation": True,
+                    "remarks": "无权标记",
+                },
+            ),
+        ]
+        assert [response.status_code for response in write_attempts] == [403] * 4
+
+
+def test_floor3_finished_manual_in_is_one_ledger_and_moves_with_pallet(
+    floor3_app,
+) -> None:
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        locations = client.get("/api/warehouse/locations")
+        assert locations.status_code == 200, locations.text
+        location_ids = {row["id"] for row in locations.json()["items"]}
+        assert ids["formal_location"] in location_ids
+        assert ids["legacy_floor3_location"] in location_ids
+        assert ids["locations"][0] in location_ids
+        assert ids["v11_wrong_floor_location"] not in location_ids
+
+        payload = {
+            "customer_id": ids["tianhua"],
+            "product_id": ids["products"][0],
+            "location_id": ids["locations"][0],
+            "quantity": 10,
+            "stock_date": "2026-07-14",
+            "idempotency_key": "floor3-finished-in-001",
+        }
+        finished = client.post(
+            "/api/warehouse/finished/manual-in",
+            json=payload,
+        )
+        assert finished.status_code == 200, finished.text
+        lot = finished.json()
+        assert lot["quantity_available"] == 10
+        assert lot["location"]["id"] == ids["locations"][0]
+        assert lot["floor3_binding"]["pallet_id"]
+        replay = client.post("/api/warehouse/finished/manual-in", json=payload)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["id"] == lot["id"]
+
+        detail = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][0]}"
+        )
+        assert detail.status_code == 200, detail.text
+        pallet = detail.json()["current_pallet"]
+        assert pallet["items"][0]["inventory_lot_id"] == lot["id"]
+        assert pallet["items"][0]["official_inventory"] is True
+        assert pallet["items"][0]["quantity"] == 10
+
+        moved = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move",
+            json={
+                "expected_version": pallet["version"],
+                "to_location_id": ids["locations"][1],
+                "confirmed": True,
+                "idempotency_key": "floor3-finished-move-001",
+                "remarks": "成品转到相邻货位",
+            },
+        )
+        assert moved.status_code == 200, moved.text
+        lots = client.get("/api/warehouse/lots", params={"inventory_type": "finished"})
+        moved_lot = next(row for row in lots.json()["items"] if row["id"] == lot["id"])
+        assert moved_lot["location"]["id"] == ids["locations"][1]
+        assert moved_lot["quantity_available"] == 10
+
+        adjusted = client.post(
+            f"/api/warehouse/lots/{lot['id']}/adjust",
+            json={
+                "expected_version": moved_lot["version"],
+                "quantity_delta": 5,
+                "reason": "模拟盘点增加",
+            },
+        )
+        assert adjusted.status_code == 200, adjusted.text
+        moved_detail = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][1]}"
+        ).json()
+        assert moved_detail["current_pallet"]["items"][0]["quantity"] == 15
+        assert moved_detail["current_pallet"]["items"][0]["quantity_available"] == 15
+
+        blocked_clear = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/clear",
+            json={
+                "expected_version": moved.json()["pallet"]["version"],
+                "remarks": "不应允许清空仍有库存的栈板",
+            },
+        )
+        assert blocked_clear.status_code == 409
+        assert "正式成品库存" in blocked_clear.json()["detail"]
+
+        semi_finished = client.post(
+            "/api/warehouse/semi-finished/manual-in",
+            json={
+                "location_id": ids["locations"][0],
+                "quantity": 10,
+                "stock_date": "2026-07-14",
+                "material_code": "K616K",
+                "layer_count": 5,
+                "flute_type": "AB",
+                "board_length_mm": 1000,
+                "board_width_mm": 800,
+                "sheet_type": "raw",
+            },
+        )
+        assert semi_finished.status_code == 409, semi_finished.text
+        assert "目前只接入成品仓" in semi_finished.json()["detail"]
+
+    with factory() as db:
+        from app.models.warehouse_inventory import (
+            InventoryLot,
+            InventoryPallet,
+            InventoryPalletItem,
+        )
+
+        assert db.scalar(select(func.count(InventoryLot.id))) == 1
+        assert db.scalar(select(func.count(InventoryPallet.id))) == 1
+        assert db.scalar(select(func.count(InventoryPalletItem.id))) == 1
+
+
+def test_v11_inventory_lot_respects_customer_scope_and_admin_can_mutate(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, ids, factory = floor3_app
+    with factory() as db:
+        lot = manual_finished_in(
+            db,
+            customer_id=ids["other"],
+            product_id=ids["other_product"],
+            location_id=ids["locations"][0],
+            quantity=7,
+            stock_date=date(2026, 7, 15),
+            source_type="manual",
+            remarks=None,
+            operator_id=ids["admin"],
+            idempotency_key=None,
+        )
+        db.commit()
+        lot_id = lot.id
+
+    adjust_payload = {
+        "expected_version": 1,
+        "quantity_delta": 5,
+        "reason": "raw id must not bypass V11 isolation",
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-scoped")
+        scoped_attempt = client.post(
+            f"/api/warehouse/lots/{lot_id}/adjust",
+            json=adjust_payload,
+        )
+        assert scoped_attempt.status_code == 403, scoped_attempt.text
+
+        client.post("/api/auth/logout")
+        _login(client, "floor3-admin")
+        admin_attempt = client.post(
+            f"/api/warehouse/lots/{lot_id}/adjust",
+            json=adjust_payload,
+        )
+        assert admin_attempt.status_code == 200, admin_attempt.text
+
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None
+        assert lot.quantity_available == 12
+        assert lot.version == 2
+        assert db.scalar(
+            select(func.count(InventoryMovement.id)).where(
+                InventoryMovement.inventory_lot_id == lot_id,
+                InventoryMovement.movement_type == "adjust",
+            )
+        ) == 1
+
+
+def test_floor3_temporary_location_marks_pallet_for_relocation(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][2],
+                "items": [
+                    _matched_item(ids["tianhua"], ids["products"][0], "21301011")
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["pallet"]["needs_relocation"] is True
+        cannot_clear = client.post(
+            f"/api/warehouse/pallets/{created.json()['pallet']['id']}/relocation-flag",
+            json={
+                "expected_version": created.json()["pallet"]["version"],
+                "needs_relocation": False,
+                "remarks": "尝试取消",
+            },
+        )
+        assert cannot_clear.status_code == 409
+        location = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][2]}"
+        ).json()
+        assert location["is_temporary"] is True
+        assert location["area_code"] == "F12"
+
+
+def test_floor3_operator_can_mark_and_clear_manual_relocation_flag(floor3_app) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [
+                    _matched_item(ids["tianhua"], ids["products"][0], "21301011")
+                ],
+            },
+        )
+        pallet_id = created.json()["pallet"]["id"]
+        marked = client.post(
+            f"/api/warehouse/pallets/{pallet_id}/relocation-flag",
+            json={
+                "expected_version": created.json()["pallet"]["version"],
+                "needs_relocation": True,
+                "remarks": "现场要求重新归位",
+            },
+        )
+        assert marked.status_code == 200, marked.text
+        assert marked.json()["pallet"]["needs_relocation"] is True
+        cleared = client.post(
+            f"/api/warehouse/pallets/{pallet_id}/relocation-flag",
+            json={
+                "expected_version": marked.json()["pallet"]["version"],
+                "needs_relocation": False,
+                "remarks": "已核对固定货位",
+            },
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["pallet"]["needs_relocation"] is False
+
+
+def test_floor3_move_requires_confirmation_is_idempotent_and_supports_f12_f34(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryPalletItem,
+    )
+
+    app, ids, factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "MAP-MOVE")],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+
+        missing_confirmation = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move",
+            json={
+                "expected_version": pallet["version"],
+                "to_location_id": ids["locations"][2],
+                "idempotency_key": "confirm-required-001",
+            },
+        )
+        assert missing_confirmation.status_code == 422
+
+        move_to_f12_payload = {
+            "expected_version": pallet["version"],
+            "to_location_id": ids["locations"][2],
+            "confirmed": True,
+            "idempotency_key": "f12-move-001",
+        }
+        moved_to_f12 = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move", json=move_to_f12_payload
+        )
+        assert moved_to_f12.status_code == 200, moved_to_f12.text
+        assert moved_to_f12.json()["pallet"]["location_id"] == ids["locations"][2]
+        assert moved_to_f12.json()["pallet"]["total_quantity"] == 10.0
+
+        replay = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move", json=move_to_f12_payload
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+
+        reused_for_different_business = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move",
+            json={
+                **move_to_f12_payload,
+                "to_location_id": ids["f34_location"],
+            },
+        )
+        assert reused_for_different_business.status_code == 409
+
+        moved_to_f34 = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/move",
+            json={
+                "expected_version": moved_to_f12.json()["pallet"]["version"],
+                "to_location_id": ids["f34_location"],
+                "confirmed": True,
+                "idempotency_key": "f34-move-001",
+            },
+        )
+        assert moved_to_f34.status_code == 200, moved_to_f34.text
+        assert moved_to_f34.json()["pallet"]["location_id"] == ids["f34_location"]
+
+    with factory() as db:
+        moves = db.scalars(
+            select(InventoryLocationMovement)
+            .where(InventoryLocationMovement.pallet_id == pallet["id"])
+            .where(InventoryLocationMovement.movement_type == "move")
+            .order_by(InventoryLocationMovement.id)
+        ).all()
+        assert [(row.from_location_id, row.to_location_id) for row in moves] == [
+            (ids["locations"][0], ids["locations"][2]),
+            (ids["locations"][2], ids["f34_location"]),
+        ]
+        assert all(row.confirmed_at is not None for row in moves)
+        assert [(row.pallet_version_before, row.pallet_version_after) for row in moves] == [
+            (1, 2),
+            (2, 3),
+        ]
+        assert db.scalar(
+            select(func.sum(InventoryPalletItem.quantity)).where(
+                InventoryPalletItem.pallet_id == pallet["id"]
+            )
+        ) == Decimal("10.000")
+
+
+def test_floor3_move_service_rejects_rack_source_and_target(floor3_app) -> None:
+    from app.services.floor3_locations import (
+        Floor3LocationError,
+        create_pallet,
+        move_pallet,
+    )
+
+    _app, ids, factory = floor3_app
+    with factory() as db:
+        pallet_from_rack = create_pallet(
+            db,
+            location_id=ids["rack_location"],
+            pallet_code="PLT-RACK-SOURCE",
+            items=[_matched_item(ids["tianhua"], ids["products"][0], "RACK-SOURCE")],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        with pytest.raises(Floor3LocationError, match="不能从货架格移出"):
+            move_pallet(
+                db,
+                pallet_id=pallet_from_rack.id,
+                expected_version=pallet_from_rack.version,
+                to_location_id=ids["locations"][0],
+                remarks=None,
+                operator_id=ids["admin"],
+                idempotency_key="rack-source-service-001",
+            )
+        assert pallet_from_rack.location_id == ids["rack_location"]
+        assert pallet_from_rack.version == 1
+
+        pallet_from_ground = create_pallet(
+            db,
+            location_id=ids["locations"][0],
+            pallet_code="PLT-RACK-TARGET",
+            items=[_matched_item(ids["tianhua"], ids["products"][0], "RACK-TARGET")],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        with pytest.raises(Floor3LocationError, match="不能移入货架格"):
+            move_pallet(
+                db,
+                pallet_id=pallet_from_ground.id,
+                expected_version=pallet_from_ground.version,
+                to_location_id=ids["rack_location"],
+                remarks=None,
+                operator_id=ids["admin"],
+                idempotency_key="rack-target-service-001",
+            )
+        assert pallet_from_ground.location_id == ids["locations"][0]
+        assert pallet_from_ground.version == 1
+
+
+def test_floor3_move_api_rejects_racks_and_allows_ground_and_temporary_aisle(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+
+        rack_pallet = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["rack_location"],
+                "pallet_code": "PLT-RACK-SOURCE-API",
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "RACK-API")],
+            },
+        )
+        assert rack_pallet.status_code == 201, rack_pallet.text
+        rack_pallet_body = rack_pallet.json()["pallet"]
+        rack_source = client.post(
+            f"/api/warehouse/pallets/{rack_pallet_body['id']}/move",
+            json={
+                "expected_version": rack_pallet_body["version"],
+                "to_location_id": ids["locations"][0],
+                "confirmed": True,
+                "idempotency_key": "rack-source-api-001",
+            },
+        )
+        assert rack_source.status_code == 409, rack_source.text
+        assert "真实木栈板不能从货架格移出" in rack_source.json()["detail"]
+
+        ground_pallet = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "pallet_code": "PLT-GROUND-API",
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "GROUND-API")],
+            },
+        )
+        assert ground_pallet.status_code == 201, ground_pallet.text
+        ground_pallet_body = ground_pallet.json()["pallet"]
+        rack_target = client.post(
+            f"/api/warehouse/pallets/{ground_pallet_body['id']}/move",
+            json={
+                "expected_version": ground_pallet_body["version"],
+                "to_location_id": ids["rack_location"],
+                "confirmed": True,
+                "idempotency_key": "rack-target-api-001",
+            },
+        )
+        assert rack_target.status_code == 409, rack_target.text
+        assert "真实木栈板不能移入货架格" in rack_target.json()["detail"]
+
+        ground_to_ground = client.post(
+            f"/api/warehouse/pallets/{ground_pallet_body['id']}/move",
+            json={
+                "expected_version": ground_pallet_body["version"],
+                "to_location_id": ids["locations"][1],
+                "confirmed": True,
+                "idempotency_key": "ground-to-ground-api-001",
+            },
+        )
+        assert ground_to_ground.status_code == 200, ground_to_ground.text
+        moved_to_ground = ground_to_ground.json()["pallet"]
+        assert moved_to_ground["location_id"] == ids["locations"][1]
+        assert moved_to_ground["needs_relocation"] is False
+
+        ground_to_temporary = client.post(
+            f"/api/warehouse/pallets/{ground_pallet_body['id']}/move",
+            json={
+                "expected_version": moved_to_ground["version"],
+                "to_location_id": ids["locations"][2],
+                "confirmed": True,
+                "idempotency_key": "ground-to-temporary-api-001",
+            },
+        )
+        assert ground_to_temporary.status_code == 200, ground_to_temporary.text
+        moved_to_temporary = ground_to_temporary.json()["pallet"]
+        assert moved_to_temporary["location_id"] == ids["locations"][2]
+        assert moved_to_temporary["needs_relocation"] is True
+
+
+def test_floor3_layout_rejects_combined_overflow_and_requires_state_versions(
+    floor3_app,
+) -> None:
+    from app.services.floor3_locations import Floor3LocationError, create_layout_slot
+
+    app, ids, factory = floor3_app
+    invalid_slot = {
+        "location_code": "A1-OUTSIDE-RIGHT",
+        "location_name": "outside right edge",
+        "left_pct": 95,
+        "top_pct": 10,
+        "width_pct": 6,
+        "height_pct": 5,
+        "z_index": 1,
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        right_overflow = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/slots",
+            json=invalid_slot,
+        )
+        assert right_overflow.status_code == 422, right_overflow.text
+        assert "右边界" in right_overflow.text
+
+        created = client.post(
+            "/api/warehouse/floor3/layout/areas/A1/slots",
+            json={
+                **invalid_slot,
+                "location_code": "A1-STATE-CAS",
+                "location_name": "state cas slot",
+                "left_pct": 10,
+                "width_pct": 5,
+            },
+        )
+        assert created.status_code == 201, created.text
+        location_id = created.json()["location"]["id"]
+
+        bottom_overflow = client.patch(
+            "/api/warehouse/floor3/layout/areas/A1",
+            json={
+                "slots": [
+                    {
+                        "location_id": location_id,
+                        "expected_version": 1,
+                        "left_pct": 10,
+                        "top_pct": 96,
+                        "width_pct": 5,
+                        "height_pct": 5,
+                        "z_index": 1,
+                    }
+                ]
+            },
+        )
+        assert bottom_overflow.status_code == 422, bottom_overflow.text
+        assert "下边界" in bottom_overflow.text
+
+        missing_disable_version = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
+            json={},
+        )
+        assert missing_disable_version.status_code == 422
+        disabled = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
+            json={"expected_version": 1},
+        )
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json()["layout"]["version"] == 2
+
+        missing_enable_version = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/enable",
+            json={},
+        )
+        assert missing_enable_version.status_code == 422
+        enabled = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/enable",
+            json={"expected_version": 2},
+        )
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.json()["layout"]["version"] == 3
+
+        stale_disable = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
+            json={"expected_version": 2},
+        )
+        assert stale_disable.status_code == 409, stale_disable.text
+        detail = client.get(f"/api/warehouse/floor3/locations/{location_id}")
+        assert detail.json()["is_active"] is True
+        assert detail.json()["layout"]["version"] == 3
+
+    with factory() as db:
+        with pytest.raises(Floor3LocationError, match="右边界") as captured:
+            create_layout_slot(
+                db,
+                area_code="A1",
+                location_code="A1-SERVICE-OVERFLOW",
+                location_name="service overflow",
+                left_pct=Decimal("99"),
+                top_pct=Decimal("1"),
+                width_pct=Decimal("2"),
+                height_pct=Decimal("2"),
+                z_index=0,
+                operator_id=ids["admin"],
+            )
+        assert captured.value.status_code == 400
+
+
+def test_floor3_disable_and_occupy_race_never_leaves_disabled_occupancy(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        InventoryPallet,
+        WarehouseLocation,
+    )
+    from app.services.floor3_locations import (
+        Floor3LocationError,
+        create_layout_slot,
+        create_pallet,
+        set_layout_slot_active,
+    )
+
+    _app, ids, factory = floor3_app
+    with factory() as db:
+        location = create_layout_slot(
+            db,
+            area_code="A1",
+            location_code="A1-RACE-STATE",
+            location_name="disable occupy race",
+            left_pct=Decimal("20"),
+            top_pct=Decimal("20"),
+            width_pct=Decimal("5"),
+            height_pct=Decimal("5"),
+            z_index=0,
+            operator_id=ids["admin"],
+        )
+        db.commit()
+        location_id = location.id
+
+    start = Barrier(2)
+
+    def disable_slot() -> str:
+        with factory() as db:
+            start.wait()
+            try:
+                set_layout_slot_active(
+                    db,
+                    location_id=location_id,
+                    is_active=False,
+                    expected_version=1,
+                    operator_id=ids["admin"],
+                )
+                db.commit()
+                return "disabled"
+            except Floor3LocationError:
+                db.rollback()
+                return "disable_blocked"
+
+    def occupy_slot() -> str:
+        with factory() as db:
+            start.wait()
+            try:
+                create_pallet(
+                    db,
+                    location_id=location_id,
+                    pallet_code="PLT-DISABLE-OCCUPY-RACE",
+                    items=[
+                        _matched_item(
+                            ids["tianhua"], ids["products"][0], "RACE-OCCUPY"
+                        )
+                    ],
+                    remarks=None,
+                    operator_id=ids["admin"],
+                )
+                db.commit()
+                return "occupied"
+            except Floor3LocationError:
+                db.rollback()
+                return "occupy_blocked"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(disable_slot), executor.submit(occupy_slot)]
+        outcomes = {future.result() for future in futures}
+
+    assert outcomes in (
+        {"disabled", "occupy_blocked"},
+        {"occupied", "disable_blocked"},
+    )
+    with factory() as db:
+        location = db.get(WarehouseLocation, location_id)
+        layout = db.scalar(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id == location_id
+            )
+        )
+        pallet = db.scalar(
+            select(InventoryPallet).where(
+                InventoryPallet.location_id == location_id,
+                InventoryPallet.is_current.is_(True),
+            )
+        )
+        assert location is not None and layout is not None
+        assert not (location.is_active is False and pallet is not None)
+        if location.is_active:
+            assert pallet is not None
+            assert layout.version == 1
+        else:
+            assert pallet is None
+            assert layout.version == 2
+
+
+def test_floor3_concurrent_duplicate_move_is_a_single_idempotent_operation(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLocationMovement, InventoryPallet
+    from app.services.floor3_locations import (
+        Floor3LocationError,
+        create_pallet,
+        move_pallet,
+    )
+
+    _app, ids, factory = floor3_app
+    with factory() as db:
+        pallet = create_pallet(
+            db,
+            location_id=ids["locations"][0],
+            pallet_code="PLT-CONCURRENT-IDEMPOTENCY",
+            items=[
+                _matched_item(
+                    ids["tianhua"], ids["products"][0], "IDEMPOTENT-RACE"
+                )
+            ],
+            remarks=None,
+            operator_id=ids["admin"],
+        )
+        db.commit()
+        pallet_id = pallet.id
+
+    start = Barrier(2)
+
+    def move_once() -> tuple[bool, int | None, int]:
+        with factory() as db:
+            start.wait()
+            result = move_pallet(
+                db,
+                pallet_id=pallet_id,
+                expected_version=1,
+                to_location_id=ids["locations"][1],
+                remarks="same concurrent request",
+                operator_id=ids["admin"],
+                idempotency_key="move-concurrent-same-key",
+            )
+            outcome = (
+                result.replayed,
+                result.pallet.location_id,
+                result.pallet.version,
+            )
+            db.commit()
+            return outcome
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(move_once) for _ in range(2)]
+        outcomes = [future.result() for future in futures]
+
+    assert sorted(outcome[0] for outcome in outcomes) == [False, True]
+    assert {
+        (location_id, version) for _replayed, location_id, version in outcomes
+    } == {(ids["locations"][1], 2)}
+    with factory() as db:
+        pallet = db.get(InventoryPallet, pallet_id)
+        movements = db.scalars(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.idempotency_key
+                == "move-concurrent-same-key"
+            )
+        ).all()
+        assert pallet is not None
+        assert pallet.location_id == ids["locations"][1]
+        assert pallet.version == 2
+        assert len(movements) == 1
+
+        with pytest.raises(Floor3LocationError, match="不同的移位业务"):
+            move_pallet(
+                db,
+                pallet_id=pallet_id,
+                expected_version=2,
+                to_location_id=ids["locations"][1],
+                remarks="same concurrent request",
+                operator_id=ids["admin"],
+                idempotency_key="move-concurrent-same-key",
+            )
+
+
+def test_floor3_layout_admin_operations_do_not_change_inventory_and_non_admin_is_forbidden(
+    floor3_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryLot,
+        InventoryPallet,
+        InventoryPalletItem,
+    )
+
+    app, ids, factory = floor3_app
+    slot_payload = {
+        "location_code": "A1-MAP-01",
+        "location_name": "A1 map slot 01",
+        "left_pct": 10,
+        "top_pct": 20,
+        "width_pct": 5,
+        "height_pct": 6,
+        "z_index": 3,
+    }
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post("/api/warehouse/floor3/layout/areas/A1/slots", json=slot_payload)
+        assert created.status_code == 201, created.text
+        location_id = created.json()["location"]["id"]
+        assert created.json()["location"]["warehouse_type"] == "finished"
+        assert created.json()["layout"]["version"] == 1
+
+        detail = client.get(f"/api/warehouse/floor3/locations/{location_id}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["current_pallet"] is None
+        assert detail.json()["layout"]["left_pct"] == 10.0
+
+        patched = client.patch(
+            "/api/warehouse/floor3/layout/areas/A1",
+            json={
+                "slots": [
+                    {
+                        "location_id": location_id,
+                        "expected_version": 1,
+                        "left_pct": 11,
+                        "top_pct": 21,
+                        "width_pct": 5,
+                        "height_pct": 6,
+                        "z_index": 4,
+                    }
+                ]
+            },
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["items"][0]["version"] == 2
+
+        disabled = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
+            json={"expected_version": 2},
+        )
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json()["location"]["is_active"] is False
+        enabled = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/enable",
+            json={"expected_version": 3},
+        )
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.json()["location"]["is_active"] is True
+
+    with factory() as db:
+        assert db.scalar(select(func.count(InventoryLot.id))) == 0
+        assert db.scalar(select(func.count(InventoryPallet.id))) == 0
+        assert db.scalar(select(func.count(InventoryPalletItem.id))) == 0
+        assert db.scalar(select(func.count(InventoryLocationMovement.id))) == 0
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        pallet = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": location_id,
+                "items": [_matched_item(ids["tianhua"], ids["products"][0], "LAYOUT-KEEP")],
+            },
+        )
+        assert pallet.status_code == 201, pallet.text
+        before_items = pallet.json()["pallet"]["items"]
+        occupied_disable = client.post(
+            f"/api/warehouse/floor3/layout/slots/{location_id}/disable",
+            json={"expected_version": enabled.json()["layout"]["version"]},
+        )
+        assert occupied_disable.status_code == 409
+        assert client.get(f"/api/warehouse/floor3/locations/{location_id}").json()[
+            "current_pallet"
+        ]["items"] == before_items
+
+        client.post("/api/auth/logout")
+        _login(client, "floor3-scoped")
+        forbidden = client.post("/api/warehouse/floor3/layout/areas/A1/slots", json={
+            **slot_payload,
+            "location_code": "A1-MAP-02",
+        })
+        assert forbidden.status_code == 403

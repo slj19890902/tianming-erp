@@ -89,6 +89,15 @@ def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLo
     }[inventory_type]
     if location is None:
         raise WarehouseInventoryError("库位不存在", 404)
+    if getattr(location, "source_version", None) == "V11":
+        if inventory_type != "finished":
+            raise WarehouseInventoryError(
+                "三楼货位目前只接入成品仓；半成品请使用半成品库位", 409
+            )
+        if getattr(location, "warehouse_floor", None) != 3:
+            raise WarehouseInventoryError(
+                "V11 货位楼层无效，不能办理成品入库", 409
+            )
     if not location.is_active:
         raise WarehouseInventoryError("该库位已停用，不能入库")
     if location.warehouse_type not in allowed:
@@ -183,7 +192,7 @@ def manual_finished_in(
         return existing
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
-    _location(db, location_id, "finished")
+    location = _location(db, location_id, "finished")
     customer = db.get(Customer, customer_id)
     product = db.get(Product, product_id)
     if customer is None:
@@ -248,6 +257,16 @@ def manual_finished_in(
         remarks=remarks,
         idempotency_key=idempotency_key,
     )
+    if getattr(location, "source_version", None) == "V11":
+        # Local import avoids a module cycle while keeping the official lot and
+        # its physical-map projection in the same database transaction.
+        from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
+
+        bind_finished_lot_to_floor3_pallet(
+            db,
+            lot=lot,
+            operator_id=operator_id,
+        )
     db.flush()
     return lot
 

@@ -19,8 +19,15 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.22.2"
-    assert "\u6708\u7ed3\u6574\u5355\u5bf9\u8d26" in APP_VERSION_NAME
+    assert APP_VERSION == "v0.22.5"
+    assert "\u6210\u54c1\u5165\u4ed3" in APP_VERSION_NAME
+    assert any(
+        "\u53ea\u9700\u9009\u62e9\u5ba2\u6237" in item
+        and "\u4e09\u697c\u5177\u4f53\u8d27\u4f4d" in item
+        for item in APP_CHANGELOG
+    )
+    assert any("396" in item and "\u9884\u8bbe\u8d27\u4f4d" in item for item in APP_CHANGELOG)
+    assert any("F2" in item and "F3" in item and "F4" in item for item in APP_CHANGELOG)
     assert any(
         "\u6309\u6574\u5f20\u9001\u8d27\u5355\u9009\u62e9" in item
         and "\u5168\u90e8\u660e\u7ec6" in item

@@ -16,7 +16,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
+    text,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,6 +38,10 @@ class WarehouseLocation(Base):
             "warehouse_type IN ('finished','semi_finished','shared')",
             name="ck_warehouse_locations_type",
         ),
+        CheckConstraint(
+            "storage_type IS NULL OR storage_type IN ('ground','rack','temporary_aisle')",
+            name="ck_warehouse_locations_storage_type",
+        ),
         UniqueConstraint("location_code", name="uq_warehouse_locations_code"),
         Index("ix_warehouse_locations_type_active", "warehouse_type", "is_active"),
     )
@@ -45,12 +52,270 @@ class WarehouseLocation(Base):
     warehouse_type: Mapped[str] = mapped_column(String(30), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warehouse_floor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    area_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    storage_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    level_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    side_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    sort_order: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    is_temporary: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    source_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime, onupdate=func.current_timestamp(), nullable=True
     )
+    current_pallet: Mapped["InventoryPallet | None"] = relationship(
+        primaryjoin=lambda: (WarehouseLocation.id == InventoryPallet.location_id)
+        & InventoryPallet.is_current.is_(True),
+        viewonly=True,
+        uselist=False,
+    )
+    floor3_layout: Mapped["Floor3LocationLayout | None"] = relationship(
+        back_populates="location",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class Floor3LocationLayout(Base):
+    """Interactive-map placement for one physical floor-three pallet location."""
+
+    __tablename__ = "floor3_location_layouts"
+    __table_args__ = (
+        CheckConstraint(
+            "left_pct >= 0 AND left_pct <= 100",
+            name="ck_floor3_location_layouts_left_pct",
+        ),
+        CheckConstraint(
+            "top_pct >= 0 AND top_pct <= 100",
+            name="ck_floor3_location_layouts_top_pct",
+        ),
+        CheckConstraint(
+            "width_pct > 0 AND width_pct <= 100",
+            name="ck_floor3_location_layouts_width_pct",
+        ),
+        CheckConstraint(
+            "height_pct > 0 AND height_pct <= 100",
+            name="ck_floor3_location_layouts_height_pct",
+        ),
+        CheckConstraint(
+            "left_pct + width_pct <= 100",
+            name="ck_floor3_location_layouts_right_pct",
+        ),
+        CheckConstraint(
+            "top_pct + height_pct <= 100",
+            name="ck_floor3_location_layouts_bottom_pct",
+        ),
+        CheckConstraint("version > 0", name="ck_floor3_location_layouts_version"),
+        CheckConstraint(
+            "source_type IN ('seeded','manual')",
+            name="ck_floor3_location_layouts_source_type",
+        ),
+        UniqueConstraint("location_id", name="uq_floor3_location_layouts_location"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="CASCADE"), nullable=False
+    )
+    left_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    top_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    width_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    height_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    z_index: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default="manual", nullable=False
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+    location: Mapped["WarehouseLocation"] = relationship(back_populates="floor3_layout")
+
+
+class InventoryPallet(Base):
+    __tablename__ = "inventory_pallets"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','closed')", name="ck_inventory_pallets_status"
+        ),
+        CheckConstraint(
+            "is_current = 0 OR location_id IS NOT NULL",
+            name="ck_inventory_pallets_current_location",
+        ),
+        CheckConstraint("version > 0", name="ck_inventory_pallets_version"),
+        UniqueConstraint("pallet_code", name="uq_inventory_pallets_code"),
+        Index(
+            "uq_inventory_pallets_current_location",
+            "location_id",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+            postgresql_where=text("is_current = true"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    pallet_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
+    needs_relocation: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    location: Mapped["WarehouseLocation | None"] = relationship()
+    items: Mapped[list["InventoryPalletItem"]] = relationship(
+        back_populates="pallet", cascade="all, delete-orphan", order_by="InventoryPalletItem.id"
+    )
+    movements: Mapped[list["InventoryLocationMovement"]] = relationship(
+        back_populates="pallet", cascade="all, delete-orphan", order_by="InventoryLocationMovement.id"
+    )
+
+
+class InventoryPalletItem(Base):
+    __tablename__ = "inventory_pallet_items"
+    __table_args__ = (
+        CheckConstraint(
+            "item_type IN ('finished','semi_finished','raw_material')",
+            name="ck_inventory_pallet_items_type",
+        ),
+        CheckConstraint("quantity > 0", name="ck_inventory_pallet_items_quantity"),
+        CheckConstraint(
+            "match_status IN ('matched','pending')",
+            name="ck_inventory_pallet_items_match_status",
+        ),
+        UniqueConstraint(
+            "inventory_lot_id", name="uq_inventory_pallet_items_inventory_lot"
+        ),
+        Index("ix_inventory_pallet_items_pallet_id", "pallet_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    pallet_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_pallets.id", ondelete="CASCADE"), nullable=False
+    )
+    inventory_lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="CASCADE"), nullable=True
+    )
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
+    )
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    inventory_code: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    order_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    customer_name_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    product_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    item_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    unit: Mapped[str] = mapped_column(String(30), nullable=False)
+    match_status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending", nullable=False
+    )
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+    pallet: Mapped["InventoryPallet"] = relationship(back_populates="items")
+    inventory_lot: Mapped["InventoryLot | None"] = relationship(
+        back_populates="pallet_item"
+    )
+    customer: Mapped["Customer | None"] = relationship()
+    product: Mapped["Product | None"] = relationship()
+
+
+class InventoryLocationMovement(Base):
+    __tablename__ = "inventory_location_movements"
+    __table_args__ = (
+        CheckConstraint(
+            "movement_type IN ('create','add_item','move','clear')",
+            name="ck_inventory_location_movements_type",
+        ),
+        Index(
+            "uq_inventory_location_movements_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            sqlite_where=text("idempotency_key IS NOT NULL"),
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_inventory_location_movements_pallet_moved", "pallet_id", "moved_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    pallet_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_pallets.id", ondelete="CASCADE"), nullable=False
+    )
+    from_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="SET NULL"), nullable=True
+    )
+    to_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="SET NULL"), nullable=True
+    )
+    movement_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    moved_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pallet_version_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pallet_version_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    pallet: Mapped["InventoryPallet"] = relationship(back_populates="movements")
 
 
 class InventoryLot(Base):
@@ -134,6 +399,9 @@ class InventoryLot(Base):
     )
     movements: Mapped[list["InventoryMovement"]] = relationship(
         back_populates="lot", order_by="InventoryMovement.id"
+    )
+    pallet_item: Mapped["InventoryPalletItem | None"] = relationship(
+        back_populates="inventory_lot", uselist=False
     )
 
 

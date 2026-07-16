@@ -403,6 +403,9 @@ class InventoryLot(Base):
     pallet_item: Mapped["InventoryPalletItem | None"] = relationship(
         back_populates="inventory_lot", uselist=False
     )
+    allowed_products: Mapped[list["SemiFinishedLotAllowedProduct"]] = relationship(
+        back_populates="lot", cascade="all, delete-orphan", order_by="SemiFinishedLotAllowedProduct.id"
+    )
 
 
 class FinishedGoodsInventoryDetail(Base):
@@ -658,6 +661,8 @@ class SemiFinishedMatchRule(Base):
 
 
 class SemiFinishedMatchRuleProduct(Base):
+    """Shared recommendation memory; this is not a per-lot authorization."""
+
     __tablename__ = "semi_finished_match_rule_products"
     __table_args__ = (
         UniqueConstraint(
@@ -684,6 +689,39 @@ class SemiFinishedMatchRuleProduct(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class SemiFinishedLotAllowedProduct(Base):
+    """Hard product binding for one semi-finished inventory lot."""
+
+    __tablename__ = "semi_finished_lot_allowed_products"
+    __table_args__ = (
+        UniqueConstraint(
+            "inventory_lot_id",
+            "product_id",
+            name="uq_semi_finished_lot_allowed_products_lot_product",
+        ),
+        Index(
+            "ix_semi_finished_lot_allowed_products_product_lot",
+            "product_id",
+            "inventory_lot_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    inventory_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    )
+    confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    lot: Mapped["InventoryLot"] = relationship(back_populates="allowed_products")
+    product: Mapped["Product"] = relationship()
 
 
 class InventoryReservation(Base):

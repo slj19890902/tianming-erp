@@ -65,7 +65,9 @@ from app.services.semi_finished_inventory import (
     SemiFinishedLotVersion,
     active_semi_reserved_piece_qty,
     browse_semi_finished_inventory_for_product,
+    ensure_semi_finished_lot_eligibility,
     release_active_semi_reservations_for_items,
+    requirement_signature,
     reserve_semi_finished_inventory,
     save_order_item_semi_requirement,
     semi_finished_candidates_for_product,
@@ -4512,6 +4514,15 @@ def reserve_semi_inventory_from_pending(
             required_piece_quantity=int(current["required_piece_qty"]),
             operator_id=user.id,
         )
+        expected = requirement_signature(requirement)
+        for lot in inventory_lots:
+            ensure_semi_finished_lot_eligibility(
+                db,
+                lot=lot,
+                product_id=product.id,
+                customer_id=requirement.customer_id,
+                expected=expected,
+            )
         requested = min(payload.requested_requirement_quantity, remaining)
         result = reserve_semi_finished_inventory(
             db,

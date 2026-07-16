@@ -2496,8 +2496,18 @@
                       <td colspan="5" style="padding:2px 6px 6px">
                         <input class="input" style="width:100%" v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" />
                       </td>
-                    </tr>
-                    <tr v-if="item.matched_product_id && item._inventory"><td colspan="8" style="padding:3px 6px 7px"><div style="border:1px solid #bfdbfe;border-radius:6px;padding:6px;background:#f8fbff;font-size:12px"><div class="toolbar-group"><strong>共享库存抵扣</strong><span v-if="item._inventory.loading" class="muted">候选加载中…</span><span v-else-if="item._inventory.stale" class="status orange">候选已过期</span><button class="btn small" type="button" @click="loadOrderLineInventory(item,draft.matched_customer_id)">刷新候选</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div><div v-if="item._inventory.error" class="danger-text">{{ item._inventory.error }}</div><div v-if="item._inventory.finished.candidates.length">成品可用 / 建议抵扣：<span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><div v-for="allocation in item._inventory.finished.allocations" :key="`pdf-finished-plan-${allocation.candidate.lot_id}`" class="status green">实际计划 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 箱，{{ inventoryLocation(allocation.candidate) }}</div></div><div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:4px">半成品{{ componentLabel(component) }}可用 / 可抵片数：<span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button v-if="item._inventory.semi[component].candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">展开人工候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`pdf-manual-${candidate.lot_id}`">人工匹配 {{ candidate.lot_number }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 明确 override</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认抵扣</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`pdf-semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">实际计划 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div></div></td></tr>
+                     </tr>
+                     <tr v-if="item.matched_product_id && item._inventory && inventoryComponents(item).some(component => generalSemiFinishedCandidates(item._inventory.semi[component]).length)">
+                       <td colspan="8" style="padding:3px 6px 6px;background:#fffbeb;border:1px solid #f59e0b;color:#92400e;font-size:12px">
+                         <div v-for="component in inventoryComponents(item)" :key="`pdf-general-confirm-${component}`" v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" class="toolbar-group">
+                           <strong class="status orange">通用半成品，可跨客户，需人工确认</strong>
+                           <span>{{ generalSemiFinishedCandidates(item._inventory.semi[component]).map(candidate => candidate.lot_number).join('、') }}</span>
+                           <label><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" /> 我已明确确认可跨客户抵扣</label>
+                           <button class="btn small success" type="button" :disabled="!item._inventory.semi[component].general_confirmation" @click="confirmOrderLineInventory(item,component,generalSemiFinishedCandidates(item._inventory.semi[component])[0],true)">明确确认并抵扣</button>
+                         </div>
+                       </td>
+                     </tr>
+                     <tr v-if="item.matched_product_id && item._inventory"><td colspan="8" style="padding:3px 6px 7px"><div style="border:1px solid #bfdbfe;border-radius:6px;padding:6px;background:#f8fbff;font-size:12px"><div class="toolbar-group"><strong>共享库存抵扣</strong><span v-if="item._inventory.loading" class="muted">候选加载中…</span><span v-else-if="item._inventory.stale" class="status orange">候选已过期</span><button class="btn small" type="button" @click="loadOrderLineInventory(item,draft.matched_customer_id)">刷新候选</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div><div v-if="item._inventory.error" class="danger-text">{{ item._inventory.error }}</div><div v-if="item._inventory.finished.candidates.length">成品可用 / 建议抵扣：<span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><div v-for="allocation in item._inventory.finished.allocations" :key="`pdf-finished-plan-${allocation.candidate.lot_id}`" class="status green">实际计划 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 箱，{{ inventoryLocation(allocation.candidate) }}</div></div><div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:4px">半成品{{ componentLabel(component) }}可用 / 可抵片数：<span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button v-if="item._inventory.semi[component].candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">展开人工候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`pdf-manual-${candidate.lot_id}`">人工匹配 {{ candidate.lot_number }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 明确 override</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认抵扣</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`pdf-semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">实际计划 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div></div></td></tr>
                   </template>
                   </tbody>
                 </table>
@@ -2631,8 +2641,11 @@
                     <td colspan="7" style="padding:4px 6px 8px">
                       <div style="border:1px solid #bfdbfe;border-radius:6px;padding:7px;background:#f8fbff;font-size:12px">
                         <div class="toolbar-group"><strong>共享库存抵扣</strong><span v-if="item._inventory.loading" class="muted">候选加载中…</span><span v-else-if="item._inventory.stale" class="status orange">候选已过期，请重新获取并确认</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">刷新候选</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div>
-                        <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
-                        <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品可用 / 建议抵扣：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">实际计划：{{ allocation.candidate.lot_number }} 抵扣 {{ allocation.requested_qty }} 箱，{{ inventoryLocation(allocation.candidate) }}</div></div>
+                         <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
+                         <div v-for="component in inventoryComponents(item)" :key="`general-confirm-${component}`" v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" style="margin-top:5px;padding:5px;background:#fffbeb;border:1px solid #f59e0b;border-radius:5px;color:#92400e">
+                           <div class="toolbar-group"><strong>通用半成品，可跨客户，需人工确认</strong><span>{{ generalSemiFinishedCandidates(item._inventory.semi[component]).map(candidate => candidate.lot_number).join('、') }}</span><label><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" /> 我已明确确认可跨客户抵扣</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].general_confirmation" @click="confirmOrderLineInventory(item,component,generalSemiFinishedCandidates(item._inventory.semi[component])[0],true)">明确确认并抵扣</button></div>
+                         </div>
+                         <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品可用 / 建议抵扣：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">确认系统推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">实际计划：{{ allocation.candidate.lot_number }} 抵扣 {{ allocation.requested_qty }} 箱，{{ inventoryLocation(allocation.candidate) }}</div></div>
                         <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}可用 / 可抵片数：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">确认系统推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无系统推荐</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">展开人工候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 我已核对差异并明确 override</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认抵扣</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">实际计划：{{ allocation.candidate.lot_number }} 抵扣 {{ allocation.requested_qty }} 片 / 用 {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div>
                       </div>
                     </td>
@@ -4768,7 +4781,7 @@
             return "";
           },
           newOrderInventoryState() {
-            const part = () => ({ candidates:[], manual_candidates:[], selected:null, selected_candidates:[], allocations:[], skipped:false, manual_override:false, unavailable_reason:"" });
+            const part = () => ({ candidates:[], manual_candidates:[], selected:null, selected_candidates:[], allocations:[], skipped:false, manual_override:false, general_confirmation:false, unavailable_reason:"" });
             return { loading:false, stale:false, api_error:false, error:"", context:null, finished:part(), semi:{ whole:part(), cover:part(), base:part() } };
           },
           inventoryCustomerForLine(line) {
@@ -4787,10 +4800,20 @@
             return location.location_code || location.location_name || "库位未标注";
           },
           inventorySourceLabel(candidate) {
-            return ({learned:"系统推荐（已学习）",signature:"系统推荐（规格一致）",manual:"人工匹配"})[candidate?.source] || "系统推荐（规格一致）";
+            return ({learned:"系统推荐（已学习）",signature:"系统推荐（规格一致）",general_signature:"通用半成品（general_signature）",manual:"人工匹配"})[candidate?.source] || "系统推荐（规格一致）";
+          },
+          inventoryCandidateNeedsManualConfirmation(candidate) {
+            const warnings = this.inventoryCandidateWarnings(candidate);
+            return candidate?.source === "general_signature" || candidate?.recommendation_source === "general_signature" || candidate?.source_type === "general_signature" || warnings.includes("GENERAL_SEMI_FINISHED_STOCK");
+          },
+          isGeneralSemiFinishedCandidate(candidate) {
+            return candidate?.source === "general_signature" || candidate?.recommendation_source === "general_signature" || candidate?.source_type === "general_signature" || this.inventoryCandidateWarnings(candidate).includes("GENERAL_SEMI_FINISHED_STOCK");
+          },
+          generalSemiFinishedCandidates(part) {
+            return [...(part?.candidates || []), ...(part?.manual_candidates || [])].filter(candidate => this.isGeneralSemiFinishedCandidate(candidate));
           },
           semiCandidateNeedsOverride(candidate) {
-            return candidate?.source === "manual" || (candidate?.source === "learned" && (candidate.signature_differences || []).length > 0);
+            return candidate?.source === "general_signature" || candidate?.recommendation_source === "general_signature" || candidate?.source_type === "general_signature" || candidate?.source === "manual" || (candidate?.source === "learned" && (candidate.signature_differences || []).length > 0);
           },
           inventoryCandidateWarnings(candidate) {
             return [
@@ -4801,6 +4824,7 @@
           },
           isSafeSystemInventoryCandidate(component, candidate) {
             if (!candidate || candidate.source === "manual" || candidate.requires_confirmation === true || candidate.requires_override === true || candidate.override_required === true) return false;
+            if (candidate.source === "general_signature" || candidate.recommendation_source === "general_signature" || candidate.source_type === "general_signature" || (candidate.warning_codes || []).includes("GENERAL_SEMI_FINISHED_STOCK")) return false;
             if (this.inventoryCandidateWarnings(candidate).length) return false;
             if (component === "finished") return candidate.is_general !== true && candidate.ownership !== "general" && candidate.inventory_scope !== "general";
             return !this.semiCandidateNeedsOverride(candidate) && !(candidate.signature_differences || []).length;
@@ -4859,7 +4883,7 @@
           invalidateLineInventory(line) {
             const state = line._inventory || this.newOrderInventoryState();
             state.stale = true; state.error = ""; state.api_error = false;
-            [state.finished, ...Object.values(state.semi)].forEach(part => { part.selected = null; part.selected_candidates = []; part.allocations = []; part.skipped = false; part.manual_override = false; });
+            [state.finished, ...Object.values(state.semi)].forEach(part => { part.selected = null; part.selected_candidates = []; part.allocations = []; part.skipped = false; part.manual_override = false; part.general_confirmation = false; });
             line._inventory = state;
           },
           scheduleOrderLineInventoryRefresh(line, customerId) {
@@ -4922,22 +4946,30 @@
             if (reason) { line._inventory.semi[component].unavailable_reason = reason; return; }
             try {
               const { data } = await axios.post(`/api/warehouse/semi-finished/products/${productId}/inventory`, payload);
-              line._inventory.semi[component].manual_candidates = (data.items || []).map(candidate => ({...candidate, source:"manual"}));
+              line._inventory.semi[component].manual_candidates = (data.items || []).map(candidate => {
+                const recommendationSource = candidate.recommendation_source || candidate.source || "manual";
+                return {
+                  ...candidate,
+                  recommendation_source: recommendationSource,
+                  source: recommendationSource === "general_signature" ? "general_signature" : "manual",
+                };
+              });
               this.reallocateAllDraftInventory();
             } catch (error) { line._inventory.api_error = true; line._inventory.error = `人工候选加载失败：${this.errorMessage(error)}`; }
           },
           confirmOrderLineInventory(line, component, candidate=null, manual=false) {
-            if (manual && !line._inventory.semi[component].manual_override) return;
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
-            const candidates = manual ? [candidate].filter(Boolean) : this.safeSystemInventoryCandidates(line, component);
-            if (manual && candidate) candidate.source = "manual";
+            const general = this.isGeneralSemiFinishedCandidate(candidate);
+            if (general && !state.general_confirmation) return;
+            if (manual && !general && !state.manual_override) return;
+            const candidates = manual || general ? [candidate].filter(Boolean) : this.safeSystemInventoryCandidates(line, component);
             if (!candidates.length) { this.showToast("没有可一键确认的安全系统推荐；风险候选需人工核对或选择本次不用库存", true); return; }
             state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false;
             this.reallocateAllDraftInventory();
           },
           skipOrderLineInventory(line, component) {
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
-            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; this.reallocateAllDraftInventory();
+            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state.general_confirmation = false; this.reallocateAllDraftInventory();
           },
           rechooseOrderLineInventory(line, component, customerId) {
             this.invalidateLineInventory(line); this.loadOrderLineInventory(line, customerId || this.inventoryCustomerForLine(line));
@@ -4983,8 +5015,14 @@
             const finishedQty = finished.reduce((sum, entry) => sum + entry.requested_qty, 0);
             const semi = finishedQty >= Number(line.quantity || 0) ? [] : this.inventoryComponents(line).flatMap(component => {
               return state.semi[component].allocations.map(({candidate, requested_qty}) => {
+                const part = state.semi[component];
+                const general = this.isGeneralSemiFinishedCandidate(candidate);
                 const override = this.semiCandidateNeedsOverride(candidate);
-                return { lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, component_type:component, recommendation_source:candidate.source === "manual" ? "manual" : (candidate.source || "signature"), match_rule_id:candidate.match_rule_id || null, override, warning_acknowledged_codes:override ? ["SEMI_SIGNATURE_OVERRIDE"] : [], confirmed:true };
+                const warningAcknowledgedCodes = [];
+                if (override && !general) warningAcknowledgedCodes.push("SEMI_SIGNATURE_OVERRIDE");
+                if (general && part.general_confirmation) warningAcknowledgedCodes.push("GENERAL_SEMI_FINISHED_STOCK");
+                const recommendationSource = candidate.recommendation_source || candidate.source || "signature";
+                return { lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, component_type:component, recommendation_source:recommendationSource, match_rule_id:candidate.match_rule_id || null, override, warning_acknowledged_codes:warningAcknowledgedCodes, confirmed:!general || part.general_confirmation };
               });
             });
             return { finished, semi };
@@ -5002,6 +5040,8 @@
             for (const component of this.inventoryComponents(line)) {
               const part = state.semi[component];
               if (part.unavailable_reason && !part.skipped) return `${part.unavailable_reason}，请选择本次不用半成品库存。`;
+              if ((part.selected_candidates || []).some(candidate => this.isGeneralSemiFinishedCandidate(candidate)) && !part.general_confirmation && !part.skipped) return `存在通用半成品候选，请勾选“通用半成品，可跨客户，需人工确认”后再抵扣或选择本次不用库存。`;
+              if ((part.candidates || []).some(candidate => this.inventoryCandidateNeedsManualConfirmation(candidate)) && !part.skipped && !part.selected_candidates.length) return `存在通用半成品候选，请黄色人工确认（不自动扣）后再抵扣或选择本次不用库存。`;
               if ((part.candidates.length || part.manual_candidates.length) && !part.skipped && !part.selected_candidates.length) return `存在半成品${this.componentLabel(component)}候选，请确认抵扣或选择本次不用库存。`;
               if (part.selected_candidates.length && !part.allocations.length && !part.skipped) return `半成品${this.componentLabel(component)}推荐批次已无可分配库存，请刷新或选择本次不用库存。`;
             }

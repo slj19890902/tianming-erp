@@ -89,7 +89,7 @@ def test_warehouse_exposes_multi_product_assignment_and_mold_location() -> None:
     assert "保存款号分配" in WAREHOUSE
     assert "模具 / 货架位置" in WAREHOUSE
     assert "同一半成品规格的新旧批次共用此分配记忆" not in WAREHOUSE
-    assert "data.mapping_scope" in WAREHOUSE
+    assert "data.binding_scope" in WAREHOUSE
     assert "模具与位置查询" in WAREHOUSE
     assert "/api/warehouse/molds" in WAREHOUSE
     assert "保存模具" in WAREHOUSE
@@ -110,7 +110,8 @@ def test_semi_lot_uses_one_admin_batch_editor() -> None:
         "customer_id:customerId",
         "customer_id:null",
         "expected_version:row.version",
-        "取消归属不会删除该客户共用的匹配记忆",
+        "指定客户后，至少绑定 1 个款号才能参与抵扣",
+        "这会清空当前批次允许款号",
     ):
         assert marker in WAREHOUSE
 
@@ -126,6 +127,51 @@ def test_semi_lot_keeps_replace_checkbox_and_audited_void_path() -> None:
     )[0]
     for marker in ("/void-semi-finished", "expected_version:row.version", "reason:reason.trim()", "作废关闭并保留原流水"):
         assert marker in void
+
+
+def test_lot_binding_uses_physical_batch_contract_and_refreshes_conflicts() -> None:
+    assert "仅当前物理批次允许款号" in WAREHOUSE
+    assert "binding_scope" in WAREHOUSE
+    assert "allowed_product_ids" in WAREHOUSE
+    assert "expected_version:state.assignment.version" in WAREHOUSE
+    assert "err.status===409" in WAREHOUSE
+    assert "await openProductAssignments(lotId,isDedicated)" in WAREHOUSE
+    assert "同一半成品规格的新旧批次共用此分配记忆" not in WAREHOUSE
+    assert "取消归属不会删除该客户共用的匹配记忆" not in WAREHOUSE
+    assert "当前不可抵扣" in WAREHOUSE
+    assert "通用批次：按物理规格人工确认" in WAREHOUSE
+
+
+def test_general_semi_finished_source_is_manual_only_and_not_auto_selected() -> None:
+    assert "general_signature" in INDEX
+    assert "GENERAL_SEMI_FINISHED_STOCK" in INDEX
+    assert "通用半成品（general_signature）" in INDEX
+    assert "通用半成品，可跨客户，需人工确认" in INDEX
+    assert "general_confirmation" in INDEX
+    assert "明确确认并抵扣" in INDEX
+    assert "黄色人工确认" in INDEX
+    assert "不自动扣" in INDEX
+    assert 'candidate.source === "general_signature"' in INDEX
+    assert "inventoryCandidateNeedsManualConfirmation(candidate)" in INDEX
+
+
+def test_inline_javascript_is_syntax_valid() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for inline JavaScript syntax checks"
+    for html_path, html in ((ROOT / "static" / "index.html", INDEX), (ROOT / "static" / "warehouse.html", WAREHOUSE)):
+        scripts = [script for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, flags=re.DOTALL) if script.strip()]
+        assert scripts, f"{html_path} has no inline script"
+        for script in scripts:
+            result = subprocess.run(
+                [node, "--check"],
+                input=script,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                env=os.environ.copy(),
+                check=False,
+            )
+            assert result.returncode == 0, f"{html_path}: {result.stderr}"
 
 
 def test_finished_then_semi_requirement_and_yield_allocation_are_explicit() -> None:
@@ -155,7 +201,7 @@ function candidate(lotId, stock, yieldFactor=1, finished=false, source="signatur
 function part(candidates=[]) {{ return {{ candidates, manual_candidates:[], selected:candidates[0] || null, selected_candidates:candidates, allocations:[], skipped:false, unavailable_reason:"" }}; }}
 function line(quantity, semiCandidates=[], finishedCandidates=[]) {{ return {{ quantity, _inventory:{{ api_error:false, stale:false, finished:part(finishedCandidates), semi:{{ whole:part(semiCandidates), cover:part(), base:part() }} }} }}; }}
 const methods = sandbox.definition.methods;
-const context = {{ inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride }};
+const context = {{ inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride, inventoryCandidateWarnings:methods.inventoryCandidateWarnings, isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate }};
 const shared = [line(50,[candidate(7,100)]), line(30,[candidate(7,100)]), line(30,[candidate(7,100)])];
 method.call(context, shared);
 const yielded = [line(1,[candidate(8,2,3)]), line(5,[candidate(8,2,3)])];
@@ -255,8 +301,12 @@ def test_multi_lot_plans_and_zero_allocations_use_allocation_records() -> None:
 
 
 def test_semi_plan_warnings_and_line_removal_reallocation_are_explicit() -> None:
-    assert 'warning_acknowledged_codes:override ? ["SEMI_SIGNATURE_OVERRIDE"] : []' in INDEX
+    assert 'const warningAcknowledgedCodes = []' in INDEX
+    assert 'if (general && part.general_confirmation) warningAcknowledgedCodes.push("GENERAL_SEMI_FINISHED_STOCK")' in INDEX
+    assert 'confirmed:!general || part.general_confirmation' in INDEX
+    assert '"GENERAL_SEMI_FINISHED_STOCK"' in INDEX
     assert 'candidate?.source === "learned"' in INDEX
+    assert 'const recommendationSource = candidate.recommendation_source || candidate.source || "signature"' in INDEX
     assert "差异警告" in INDEX
     start = INDEX.index("removeOrderItem(index)")
     end = INDEX.index("async searchOrderProducts", start)
@@ -327,6 +377,7 @@ let reallocations = 0;
 const context = {{
   inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true,
   semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
+  isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,
   inventoryCandidateWarnings:methods.inventoryCandidateWarnings,
   isSafeSystemInventoryCandidate:methods.isSafeSystemInventoryCandidate,
   safeSystemInventoryCandidates:methods.safeSystemInventoryCandidates,
@@ -344,6 +395,56 @@ if (reallocations !== 1) throw new Error(`expected one reallocation, got ${{real
 line._inventory.semi.whole.manual_override = true;
 methods.confirmOrderLineInventory.call(context,line,"whole",{{lot_id:6,source:"manual",signature_differences:["尺寸"]}},true);
 if (line._inventory.semi.whole.selected_candidates[0].lot_id !== 6 || reallocations !== 2) throw new Error("manual override path was not preserved");
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_general_semi_finished_requires_explicit_confirmation_before_payload_warning() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for general semi-finished confirmation test"
+    script = next(
+        script
+        for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    )
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const methods = sandbox.definition.methods;
+const general = {{lot_id:11,version:3,source:"general_signature",recommendation_source:"general_signature",available_stock_quantity:20,warning_codes:["GENERAL_SEMI_FINISHED_STOCK"]}};
+const part = {{candidates:[general],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false,manual_override:false,general_confirmation:false,unavailable_reason:""}};
+const line = {{product_id:99,quantity:5,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:5}},finished:{{candidates:[],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false}},semi:{{whole:part,cover:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}},base:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}}}}}}}};
+let reallocations = 0;
+const context = {{
+  inventoryComponents:() => ["whole"],
+  inventoryCandidateWarnings:methods.inventoryCandidateWarnings,
+  isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,
+  semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
+  reallocateAllDraftInventory() {{ reallocations += 1; }},
+  showToast() {{ throw new Error("unexpected toast"); }},
+}};
+methods.confirmOrderLineInventory.call(context,line,"whole",general,true);
+if (part.selected_candidates.length || reallocations) throw new Error("general candidate was confirmed without acknowledgement");
+part.general_confirmation = true;
+methods.confirmOrderLineInventory.call(context,line,"whole",general,true);
+if (part.selected_candidates[0] !== general || reallocations !== 1) throw new Error("general candidate was not explicitly confirmed");
+part.allocations = [{{candidate:general,requested_qty:5,stock_quantity:1}}];
+const plan = methods.buildReservationPlan.call(context,line).semi[0];
+if (plan.recommendation_source !== "general_signature" || plan.confirmed !== true || JSON.stringify(plan.warning_acknowledged_codes) !== JSON.stringify(["GENERAL_SEMI_FINISHED_STOCK"])) throw new Error(JSON.stringify(plan));
+part.general_confirmation = false;
+const unconfirmed = methods.buildReservationPlan.call(context,line).semi[0];
+if (unconfirmed.confirmed !== false || unconfirmed.warning_acknowledged_codes.includes("GENERAL_SEMI_FINISHED_STOCK")) throw new Error(JSON.stringify(unconfirmed));
 """
     result = subprocess.run(
         [node], input=harness, text=True, encoding="utf-8", capture_output=True,

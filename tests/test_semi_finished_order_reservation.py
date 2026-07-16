@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
+from app.models.access_control import UserPermissionOverride
 from app.models import Base
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
@@ -29,7 +30,11 @@ from app.services.semi_finished_inventory import (
     SemiFinishedLotVersion,
     consume_semi_finished_reservation,
 )
-from app.services.warehouse_inventory import manual_finished_in, manual_semi_finished_in
+from app.services.warehouse_inventory import (
+    manual_finished_in,
+    manual_semi_finished_in,
+    replace_semi_finished_lot_allowed_products,
+)
 
 
 @pytest.fixture()
@@ -71,6 +76,19 @@ def b1_app(tmp_path: Path):
         )
         db.add_all([*users, customer, other_customer])
         db.flush()
+        sales = next(user for user in users if user.role == "sales")
+        db.add_all(
+            UserPermissionOverride(
+                user_id=sales.id,
+                permission_code=permission_code,
+                is_allowed=True,
+            )
+            for permission_code in (
+                "requisition.view",
+                "requisition.execute",
+                "warehouse.view",
+            )
+        )
         products = []
         for index in range(1, 4):
             products.append(
@@ -175,7 +193,9 @@ def add_semi_lot(
     length: int = 800,
     width: int = 600,
     pieces_per_box: int = 1,
-    customer_id: int = 1,
+    customer_id: int | None = 1,
+    allowed_product_ids: list[int] | None = None,
+    bind_product: bool = True,
 ):
     with factory() as db:
         location = db.scalar(
@@ -207,6 +227,19 @@ def add_semi_lot(
             operator_id=1,
             idempotency_key=key,
         )
+        if bind_product:
+            assert customer_id is not None, "通用批次必须显式 opt-out 硬绑定"
+            lot = replace_semi_finished_lot_allowed_products(
+                db,
+                inventory_lot_id=lot.id,
+                product_ids=(
+                    [product_index]
+                    if allowed_product_ids is None
+                    else allowed_product_ids
+                ),
+                expected_version=lot.version,
+                operator_id=1,
+            )
         db.commit()
         return lot.id, lot.version
 
@@ -498,7 +531,10 @@ def test_warehouse_assigns_one_semi_lot_signature_to_multiple_product_codes(
         )
         updated = client.put(
             f"/api/warehouse/lots/{lot_id}/product-assignments",
-            json={"product_ids": [1, 2, 3]},
+            json={
+                "expected_version": initial.json()["version"],
+                "product_ids": [1, 2, 3],
+            },
         )
         filtered = client.get(
             f"/api/warehouse/lots/{lot_id}/product-assignments",
@@ -506,7 +542,10 @@ def test_warehouse_assigns_one_semi_lot_signature_to_multiple_product_codes(
         )
         cross_customer = client.put(
             f"/api/warehouse/lots/{lot_id}/product-assignments",
-            json={"product_ids": [other_product_id]},
+            json={
+                "expected_version": updated.json()["version"],
+                "product_ids": [other_product_id],
+            },
         )
 
     assert initial.status_code == 200, initial.text
@@ -628,6 +667,7 @@ def test_draft_manual_inventory_browser_is_customer_and_component_scoped(
         customer_id=2,
         length=900,
         width=700,
+        bind_product=False,
     )
     add_semi_lot(
         factory,
@@ -636,6 +676,7 @@ def test_draft_manual_inventory_browser_is_customer_and_component_scoped(
         customer_id=None,
         length=900,
         width=700,
+        bind_product=False,
     )
     add_semi_lot(
         factory,
@@ -817,7 +858,10 @@ def test_learned_difference_requires_client_warning_acknowledgement(
 def test_shared_pool_allocates_in_payload_line_order_50_30_20(b1_app) -> None:
     app, factory = b1_app
     lot_id, version = add_semi_lot(
-        factory, quantity=100, key="shared-order-100"
+        factory,
+        quantity=100,
+        key="shared-order-100",
+        allowed_product_ids=[1, 2, 3],
     )
     items = [
         order_item(
@@ -941,6 +985,7 @@ def test_finished_then_semi_coverage_and_cutting_formulas_are_server_calculated(
         quantity=1,
         key="formula-semi-1",
         pieces_per_box=2,
+        allowed_product_ids=[4],
     )
     plan = {
         "finished": [
@@ -997,6 +1042,7 @@ def test_semi_full_coverage_is_excluded_from_pending_and_preview(b1_app) -> None
         quantity=2,
         key="formula-zero-semi",
         pieces_per_box=2,
+        allowed_product_ids=[5],
     )
     plan = {
         "finished": [{
@@ -1099,6 +1145,7 @@ def test_requisition_preview_rechecks_late_semi_stock_and_recalculates_purchase(
             quantity=30,
             key="late-semi-after-order",
             pieces_per_box=1,
+            allowed_product_ids=[4],
         )
         selection = {
             "selections": [
@@ -1198,6 +1245,7 @@ def test_telescoping_cover_and_base_are_deducted_separately(b1_app) -> None:
         component_type="cover",
         length=400,
         width=300,
+        allowed_product_ids=[6],
     )
     base_id, base_version = add_semi_lot(
         factory,
@@ -1206,6 +1254,7 @@ def test_telescoping_cover_and_base_are_deducted_separately(b1_app) -> None:
         component_type="base",
         length=375,
         width=275,
+        allowed_product_ids=[6],
     )
     plan = {
         "semi": [
@@ -1239,6 +1288,7 @@ def test_unconfirmed_and_cross_customer_plans_are_rejected_atomically(b1_app) ->
         quantity=5,
         key="cross-customer-plan",
         customer_id=2,
+        bind_product=False,
     )
     unconfirmed = semi_plan(lot_id, version, 5)
     unconfirmed["confirmed"] = False

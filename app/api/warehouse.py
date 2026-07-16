@@ -63,11 +63,9 @@ from app.services.semi_finished_inventory import (
     confirm_semi_finished_match,
     consume_semi_finished_reservation,
     release_semi_finished_reservation,
-    replace_semi_finished_lot_product_assignments,
     reserve_semi_finished_inventory,
     reverse_semi_finished_consumption,
     save_order_item_semi_requirement,
-    semi_finished_lot_assigned_product_ids,
     semi_finished_candidates_for_product,
     semi_finished_inventory_candidates,
 )
@@ -85,6 +83,8 @@ from app.services.warehouse_inventory import (
     normalize_material_code,
     release_finished_reservation,
     reserve_finished_inventory,
+    replace_semi_finished_lot_allowed_products,
+    semi_finished_lot_allowed_product_ids,
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
@@ -525,6 +525,7 @@ class SemiReleasePayload(BaseModel):
 
 
 class SemiProductAssignmentsPayload(BaseModel):
+    expected_version: int = Field(gt=0)
     product_ids: list[int] = Field(default_factory=list, max_length=500)
 
     @field_validator("product_ids")
@@ -1674,7 +1675,7 @@ def _semi_lot_assignment_response(
         raise WarehouseInventoryError("半成品库存批次缺少明细", 409)
     if detail.owner_customer_id is None:
         raise WarehouseInventoryError("请先为半成品库存指定归属客户", 409)
-    assigned_ids = set(semi_finished_lot_assigned_product_ids(db, lot.id))
+    allowed_ids = set(semi_finished_lot_allowed_product_ids(db, lot.id))
     query = (
         select(Product)
         .options(selectinload(Product.material))
@@ -1708,7 +1709,7 @@ def _semi_lot_assignment_response(
         )
         query = query.where(
             or_(
-                Product.id.in_(assigned_ids),
+                Product.id.in_(allowed_ids),
                 and_(
                     report_length_column == detail.board_length_mm,
                     report_width_column == detail.board_width_mm,
@@ -1759,7 +1760,7 @@ def _semi_lot_assignment_response(
                     if product.mold_tool is not None
                     else None
                 ),
-                "assigned": product.id in assigned_ids,
+                "assigned": product.id in allowed_ids,
                 "recommended": recommended,
             }
         )
@@ -1780,9 +1781,13 @@ def _semi_lot_assignment_response(
         "board_length_mm": detail.board_length_mm,
         "board_width_mm": detail.board_width_mm,
         "component_type": detail.component_type,
-        "assigned_product_ids": sorted(assigned_ids),
+        "binding_scope": "lot",
+        "allowed_product_ids": sorted(allowed_ids),
+        "version": lot.version,
+        # Compatibility alias for clients which have not switched field names yet.
+        "assigned_product_ids": sorted(allowed_ids),
         "items": items,
-        "mapping_scope": "同一客户、同一半成品规格的新旧批次共用此分配记忆",
+        "mapping_scope": "仅当前半成品库存批次",
     }
 
 
@@ -1811,10 +1816,11 @@ def update_semi_lot_product_assignments(
     user: User = Depends(admin_only),
 ) -> dict:
     try:
-        rule, products = replace_semi_finished_lot_product_assignments(
+        lot = replace_semi_finished_lot_allowed_products(
             db,
             inventory_lot_id=lot_id,
             product_ids=payload.product_ids,
+            expected_version=payload.expected_version,
             operator_id=user.id,
         )
         db.add(
@@ -1824,13 +1830,16 @@ def update_semi_lot_product_assignments(
                 role=user.role,
                 action="UPDATE",
                 resource=f"warehouse/semi-lot/{lot_id}/product-assignments",
-                entity_type="semi_finished_match_rule",
-                entity_id=rule.id if rule is not None else None,
-                description="更新半成品库存适用成品款号",
+                entity_type="semi_finished_lot_allowed_product",
+                entity_id=lot.id,
+                description="更新半成品批次级适用成品款号",
                 details=json.dumps(
                     {
                         "lot_id": lot_id,
-                        "product_ids": [row.id for row in products],
+                        "product_ids": payload.product_ids,
+                        "expected_version": payload.expected_version,
+                        "version": lot.version,
+                        "binding_scope": "lot",
                     },
                     ensure_ascii=False,
                 ),

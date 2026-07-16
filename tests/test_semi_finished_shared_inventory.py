@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -42,11 +45,16 @@ from app.services.semi_finished_inventory import (
     semi_finished_inventory_candidates,
 )
 from app.services.warehouse_inventory import (
+    SEMI_FINISHED_ASSIGN_CUSTOMER_REASON,
+    SEMI_FINISHED_UNASSIGN_CUSTOMER_REASON,
+    SEMI_FINISHED_VOID_REASON,
     WarehouseInventoryError,
+    edit_semi_finished_lot_customer,
     finished_inventory_candidates,
     manual_finished_in,
     manual_semi_finished_in,
     reserve_finished_inventory,
+    void_semi_finished_lot,
 )
 
 
@@ -255,6 +263,246 @@ def confirm(
             [SIGNATURE_OVERRIDE_WARNING] if override else []
         ),
     )
+
+
+@pytest.fixture()
+def semi_api(semi_db):
+    from app.api.auth import router as auth_router
+    from app.api.deps import get_db
+    from app.api.warehouse import router as warehouse_router
+    from app.core.security import hash_password
+
+    db, data = semi_db
+    password = "SemiApiTest123!"
+    data["admin"].password_hash = hash_password(password)
+    db.add(User(
+        username="semi-operator", password_hash=hash_password(password),
+        role="workshop", real_name="半成品操作员", must_change_password=False,
+    ))
+    db.commit()
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(warehouse_router, prefix="/api/warehouse")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as api_db:
+            yield api_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        yield app, data, password, db
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _login_semi_api(client: TestClient, username: str, password: str) -> None:
+    response = client.post("/api/auth/login", json={
+        "username": username, "password": password,
+    })
+    assert response.status_code == 200, response.text
+
+
+def test_edit_semi_lot_assign_cancel_and_reassign_preserves_shared_mapping(
+    semi_db,
+) -> None:
+    db, data = semi_db
+    lot = add_semi_lot(db, data, key="edit-lifecycle", unowned=True)
+    original_version = lot.version
+    balances = (
+        lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed,
+        lot.quantity_damaged, lot.quantity_scrapped,
+    )
+    assigned = edit_semi_finished_lot_customer(
+        db, lot_id=lot.id, customer_id=data["customer"].id,
+        expected_version=original_version, operator_id=data["admin"].id,
+    )
+    assigned_version = assigned.version
+    rule, _products = replace_semi_finished_lot_product_assignments(
+        db,
+        inventory_lot_id=lot.id,
+        product_ids=[data["products"][0].id, data["products"][1].id],
+        operator_id=data["admin"].id,
+    )
+    assert rule is not None
+    with pytest.raises(WarehouseInventoryError, match="先取消当前归属"):
+        edit_semi_finished_lot_customer(
+            db,
+            lot_id=lot.id,
+            customer_id=data["other_customer"].id,
+            expected_version=assigned_version,
+            operator_id=data["admin"].id,
+        )
+    with pytest.raises(WarehouseInventoryError, match="刷新后重试"):
+        edit_semi_finished_lot_customer(
+            db,
+            lot_id=lot.id,
+            customer_id=None,
+            expected_version=assigned_version + 1,
+            operator_id=data["admin"].id,
+        )
+    unassigned = edit_semi_finished_lot_customer(
+        db,
+        lot_id=lot.id,
+        customer_id=None,
+        expected_version=assigned_version,
+        operator_id=data["admin"].id,
+    )
+    unassigned_version = unassigned.version
+    assert unassigned.semi_finished_detail.owner_customer_id is None
+    assert db.scalars(
+        select(SemiFinishedMatchRuleProduct).where(
+            SemiFinishedMatchRuleProduct.rule_id == rule.id
+        )
+    ).all()
+    reassigned = edit_semi_finished_lot_customer(
+        db,
+        lot_id=lot.id,
+        customer_id=data["other_customer"].id,
+        expected_version=unassigned_version,
+        operator_id=data["admin"].id,
+    )
+    assert reassigned.semi_finished_detail.owner_customer_id == data["other_customer"].id
+    assert (
+        reassigned.quantity_available,
+        reassigned.quantity_reserved,
+        reassigned.quantity_consumed,
+        reassigned.quantity_damaged,
+        reassigned.quantity_scrapped,
+    ) == balances
+    movements = db.scalars(select(InventoryMovement).where(
+        InventoryMovement.inventory_lot_id == lot.id
+    ).order_by(InventoryMovement.id)).all()
+    assert [row.reason for row in movements[-3:]] == [
+        SEMI_FINISHED_ASSIGN_CUSTOMER_REASON,
+        SEMI_FINISHED_UNASSIGN_CUSTOMER_REASON,
+        SEMI_FINISHED_ASSIGN_CUSTOMER_REASON,
+    ]
+    assert all(row.quantity == 0 for row in movements[-3:])
+
+
+def test_edit_and_void_api_are_admin_only_and_versioned(semi_api) -> None:
+    app, data, password, db = semi_api
+    lot = add_semi_lot(db, data, key="edit-api", unowned=True)
+    version = lot.version
+    db.commit()
+    with TestClient(app) as client:
+        _login_semi_api(client, "semi-operator", password)
+        assert client.post(
+            f"/api/warehouse/lots/{lot.id}/edit-semi-finished",
+            json={"customer_id": data["customer"].id, "expected_version": version},
+        ).status_code == 403
+        assert client.post(
+            f"/api/warehouse/lots/{lot.id}/void-semi-finished",
+            json={"expected_version": version, "reason": "误录"},
+        ).status_code == 403
+        _login_semi_api(client, data["admin"].username, password)
+        stale = client.post(
+            f"/api/warehouse/lots/{lot.id}/edit-semi-finished",
+            json={
+                "customer_id": data["customer"].id,
+                "expected_version": version + 1,
+            },
+        )
+        assert stale.status_code == 409
+        saved = client.post(
+            f"/api/warehouse/lots/{lot.id}/edit-semi-finished",
+            json={"customer_id": data["customer"].id, "expected_version": version},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["version"] == version + 1
+
+
+def test_void_semi_lot_closes_balance_and_keeps_audit(semi_db) -> None:
+    db, data = semi_db
+    lot = add_semi_lot(db, data, key="void-safe", quantity=37, unowned=True)
+    version = lot.version
+    voided = void_semi_finished_lot(
+        db,
+        lot_id=lot.id,
+        expected_version=version,
+        reason="重复录入",
+        operator_id=data["admin"].id,
+    )
+    assert (voided.status, voided.version, voided.quantity_available) == (
+        "closed",
+        version + 1,
+        0,
+    )
+    movements = db.scalars(
+        select(InventoryMovement)
+        .where(InventoryMovement.inventory_lot_id == lot.id)
+        .order_by(InventoryMovement.id)
+    ).all()
+    assert len(movements) == 2
+    assert movements[-1].movement_type == "adjust"
+    assert (movements[-1].quantity, movements[-1].before_available) == (37, 37)
+    assert movements[-1].after_available == 0
+    assert movements[-1].reason == f"{SEMI_FINISHED_VOID_REASON}：重复录入"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "quantity_reserved",
+        "quantity_consumed",
+        "quantity_damaged",
+        "quantity_scrapped",
+    ],
+)
+def test_void_semi_lot_rejects_protected_balances(semi_db, field: str) -> None:
+    db, data = semi_db
+    lot = add_semi_lot(db, data, key=f"void-{field}", unowned=True)
+    setattr(lot, field, 1)
+    db.flush()
+    with pytest.raises(WarehouseInventoryError, match="不能删除"):
+        void_semi_finished_lot(
+            db,
+            lot_id=lot.id,
+            expected_version=lot.version,
+            reason="误录",
+            operator_id=data["admin"].id,
+        )
+
+
+def test_void_semi_lot_rejects_source_ref_and_any_reservation(semi_db) -> None:
+    db, data = semi_db
+    sourced = add_semi_lot(db, data, key="void-source", unowned=True)
+    sourced.source_ref_type = "incoming_receipt_item"
+    sourced.source_ref_id = 1
+    db.flush()
+    with pytest.raises(WarehouseInventoryError, match="关联来料或补库"):
+        void_semi_finished_lot(
+            db,
+            lot_id=sourced.id,
+            expected_version=sourced.version,
+            reason="误录",
+            operator_id=data["admin"].id,
+        )
+    reserved = add_semi_lot(db, data, key="void-reservation", unowned=True)
+    db.add(
+        InventoryReservation(
+            reservation_number="RS-VOID-HISTORY",
+            inventory_lot_id=reserved.id,
+            reservation_type="semi_order",
+            reserved_stock_quantity=1,
+            credited_requirement_quantity=1,
+            yield_factor=1,
+            released_stock_quantity=1,
+            released_requirement_quantity=1,
+            status="released",
+            idempotency_key="void-reservation-history",
+        )
+    )
+    db.flush()
+    with pytest.raises(WarehouseInventoryError, match="预占记录"):
+        void_semi_finished_lot(
+            db,
+            lot_id=reserved.id,
+            expected_version=reserved.version,
+            reason="误录",
+            operator_id=data["admin"].id,
+        )
 
 
 def test_signature_fallback_then_one_rule_maps_four_products_and_new_lots_learn(

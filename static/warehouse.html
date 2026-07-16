@@ -200,6 +200,15 @@
           <div class="lot-edit-actions"><button id="lotEditCancel" class="btn" type="button">取消</button><button id="lotEditSave" class="btn primary" type="submit">保存批次修改</button></div>
         </form>
       </div>
+      <div id="semiLotEditMask" class="lot-edit-mask hidden">
+        <div class="panel lot-edit-dialog admin-only" role="dialog" aria-modal="true" aria-labelledby="semiLotEditTitle">
+          <div class="lot-edit-head"><h2 id="semiLotEditTitle">编辑半成品库存批次</h2><button class="btn" type="button" onclick="closeSemiLotEditor()">关闭</button></div>
+          <div id="semiLotEditSummary" class="notice info" style="margin-top:14px"></div>
+          <div id="semiLotUnownedEditor" class="actions" style="margin-top:14px"><select id="semiLotCustomer"></select><button class="btn primary" type="button" onclick="assignSemiLotCustomer()">指定客户</button></div>
+          <div id="semiLotOwnedEditor" class="hidden" style="margin-top:14px"><div class="notice"><strong id="semiLotOwnerName"></strong>；如需换客户，请先取消归属。取消归属不会删除该客户共用的匹配记忆；如需取消某个成品款号，请先在款号分配中取消勾选并保存。</div><div class="actions"><button class="btn primary" type="button" onclick="openSemiLotProductAssignments()">分配 / 取消成品款号</button><button class="btn" type="button" onclick="cancelSemiLotCustomer()">取消客户归属</button></div></div>
+          <div class="lot-edit-actions"><button class="btn" type="button" onclick="closeSemiLotEditor()">取消</button><button id="semiLotVoid" class="btn danger" type="button" onclick="voidSemiLot()">删除误录批次</button></div>
+        </div>
+      </div>
       <div id="assignmentPanel" class="panel hidden">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2 id="assignmentTitle">分配适用成品款号</h2><div id="assignmentScope" class="muted"></div></div><button class="btn" onclick="$('assignmentPanel').classList.add('hidden')">关闭</button></div>
         <div class="toolbar" style="margin:12px 0"><input id="assignmentKeyword" style="width:320px" placeholder="搜索存货编码 / 产品名称 / 规格 / 模具位置"><button class="btn" type="button" onclick="searchAssignmentProducts()">搜索</button><span id="assignmentCount" class="muted"></span></div>
@@ -339,7 +348,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canOperate=()=>hasPermission("warehouse.execute");
@@ -678,8 +687,27 @@
       const adjust=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button>`:"";
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";
       const normal=row.status==="active"?`${adjust}<button class="btn danger" onclick="operate(${row.id},'damage',${row.version})">报损</button><button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">报废</button>`:"";
-      const assignment=state.user.role==="admin"&&row.inventory_type==="semi_finished"?`<button class="btn primary" onclick="openProductAssignments(${row.id})">分配成品款号</button>`:"";
-      return assignment+freeze+normal;
+      const editor=state.user.role==="admin"&&row.status!=="closed"?`<button class="btn primary" onclick="openSemiLotEditor(${row.id})">编辑批次</button>`:"";
+      return editor+freeze+normal;
+    }
+    function renderSemiLotEditor(){
+      const row=state.semiLotEdit;if(!row)return;const detail=row.detail||{},owned=Boolean(detail.owner_customer_id);
+      $("semiLotEditTitle").textContent=`编辑半成品库存批次 ${row.lot_number}`;
+      $("semiLotEditSummary").textContent=`可用 ${row.quantity_available}｜预占 ${row.quantity_reserved}｜已消耗 ${row.quantity_consumed}｜报损 ${row.quantity_damaged}｜报废 ${row.quantity_scrapped}｜版本 ${row.version}`;
+      $("semiLotUnownedEditor").classList.toggle("hidden",owned);$("semiLotOwnedEditor").classList.toggle("hidden",!owned);
+      if(owned){$("semiLotOwnerName").textContent=`当前归属：${detail.owner_customer_name||"已指定客户"}`}else{options($("semiLotCustomer"),state.customers.map(customer=>({id:customer.id,label:customer.name})),"请选择归属客户")}
+    }
+    function openSemiLotEditor(lotId){state.semiLotEdit=state.lots.find(item=>item.id===lotId)||null;if(!state.semiLotEdit){toast("半成品库存批次不存在",true);return}renderSemiLotEditor();$("semiLotEditMask").classList.remove("hidden")}
+    function closeSemiLotEditor(){$("semiLotEditMask").classList.add("hidden");state.semiLotEdit=null}
+    async function assignSemiLotCustomer(){
+      const row=state.semiLotEdit,customerId=Number($("semiLotCustomer").value);if(!row||!customerId){toast("请先选择归属客户",true);return}try{state.semiLotEdit=await api(`/api/warehouse/lots/${row.id}/edit-semi-finished`,{method:"POST",body:JSON.stringify({customer_id:customerId,expected_version:row.version})});toast("已指定客户");renderSemiLotEditor();await loadLots()}catch(err){toast(err.message,true)}
+    }
+    async function cancelSemiLotCustomer(){
+      const row=state.semiLotEdit;if(!row||!confirm("确认取消当前批次的客户归属？"))return;try{state.semiLotEdit=await api(`/api/warehouse/lots/${row.id}/edit-semi-finished`,{method:"POST",body:JSON.stringify({customer_id:null,expected_version:row.version})});toast("已取消当前批次的客户归属");renderSemiLotEditor();await loadLots()}catch(err){toast(err.message,true)}
+    }
+    async function openSemiLotProductAssignments(){const lotId=state.semiLotEdit?.id;if(!lotId)return;closeSemiLotEditor();await openProductAssignments(lotId)}
+    async function voidSemiLot(){
+      const row=state.semiLotEdit,reason=prompt("请输入删除误录批次的原因（必填）","");if(!row||reason===null)return;if(!reason.trim()){toast("删除误录批次必须填写原因",true);return}if(!confirm(`确认将 ${row.lot_number} 作废关闭并保留原流水？`))return;try{await api(`/api/warehouse/lots/${row.id}/void-semi-finished`,{method:"POST",body:JSON.stringify({expected_version:row.version,reason:reason.trim()})});closeSemiLotEditor();toast("批次已作废关闭并保留流水");await loadLots()}catch(err){toast(err.message,true)}
     }
     async function openProductAssignments(lotId){
       try{

@@ -822,6 +822,528 @@ def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
         assert session.get(Order, blocked_order["id"]) is not None
 
 
+def test_workflow_rollback_voids_single_source_supplier_order_before_group_delete(
+    order_api_app,
+) -> None:
+    from app.models.order import Order
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "ROLLBACK-SUPPLIER-SINGLE"
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload).json()
+        created_item = created["items"][0]
+        with session_factory() as session:
+            supplier_order = SupplierRequisitionOrder(
+                order_number="SR-ROLLBACK-SINGLE",
+                supplier_name="Regression Supplier",
+                total_quantity=200,
+                stock_deduction_qty=20,
+                requisition_qty=180,
+                required_piece_qty=400,
+                status="confirmed",
+            )
+            session.add(supplier_order)
+            session.flush()
+            supplier_order_id = supplier_order.id
+            session.add(
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=supplier_order.id,
+                    order_item_id=created_item["id"],
+                    order_number=created["order_number"],
+                    product_code=created_item["snapshot_product_code"],
+                    product_name=created_item["snapshot_product_name"],
+                    quantity=200,
+                    stock_deduction_qty=20,
+                    requisition_qty=180,
+                    required_piece_qty=400,
+                )
+            )
+            session.commit()
+
+        rolled_back = client.put(
+            f"/api/orders/{created['id']}/rollback-workflow",
+            json={"reason": "supplier source rollback regression"},
+        )
+
+        with session_factory() as session:
+            supplier_order = session.get(
+                SupplierRequisitionOrder,
+                supplier_order_id,
+            )
+            assert supplier_order is not None
+            assert supplier_order.status == "voided"
+            assert supplier_order.voided_at is not None
+
+        deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [created["id"]], "confirm": True},
+        )
+
+    assert rolled_back.status_code == 200, rolled_back.text
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_count"] == 1
+    with session_factory() as session:
+        assert session.get(Order, created["id"]) is None
+        supplier_order = session.get(SupplierRequisitionOrder, supplier_order_id)
+        assert supplier_order is not None
+        assert supplier_order.status == "voided"
+
+
+def test_workflow_rollback_removes_only_current_order_from_shared_supplier_order(
+    order_api_app,
+) -> None:
+    from app.models.order import Order
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = order_api_app
+    current_payload = _payload()
+    current_payload["customer_po"] = "ROLLBACK-SUPPLIER-CURRENT"
+    current_payload["items"] = [
+        {"product_id": 1, "quantity": 200, "unit_price": "3.60"}
+    ]
+    other_payload = _payload()
+    other_payload["customer_po"] = "ROLLBACK-SUPPLIER-OTHER"
+    other_payload["items"] = [
+        {"product_id": 2, "quantity": 120, "unit_price": "2.45"}
+    ]
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        current_order = client.post("/api/orders", json=current_payload).json()
+        other_order = client.post("/api/orders", json=other_payload).json()
+        current_item = current_order["items"][0]
+        other_item = other_order["items"][0]
+
+        with session_factory() as session:
+            supplier_order = SupplierRequisitionOrder(
+                order_number="SR-ROLLBACK-SHARED",
+                supplier_name="Regression Supplier",
+                total_quantity=320,
+                stock_deduction_qty=45,
+                requisition_qty=275,
+                required_piece_qty=640,
+                status="confirmed",
+            )
+            session.add(supplier_order)
+            session.flush()
+            supplier_order_id = supplier_order.id
+            current_source = SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=current_item["id"],
+                order_number=current_order["order_number"],
+                product_code=current_item["snapshot_product_code"],
+                product_name=current_item["snapshot_product_name"],
+                quantity=200,
+                stock_deduction_qty=20,
+                requisition_qty=180,
+                required_piece_qty=400,
+            )
+            other_source = SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=other_item["id"],
+                order_number=other_order["order_number"],
+                product_code=other_item["snapshot_product_code"],
+                product_name=other_item["snapshot_product_name"],
+                quantity=120,
+                stock_deduction_qty=25,
+                requisition_qty=95,
+                required_piece_qty=240,
+            )
+            session.add_all([current_source, other_source])
+            session.flush()
+            current_source_id = current_source.id
+            other_source_id = other_source.id
+            session.commit()
+
+        rolled_back = client.put(
+            f"/api/orders/{current_order['id']}/rollback-workflow",
+            json={"reason": "shared supplier source rollback regression"},
+        )
+
+        with session_factory() as session:
+            supplier_order = session.get(
+                SupplierRequisitionOrder,
+                supplier_order_id,
+            )
+            remaining_source = session.get(
+                SupplierRequisitionOrderItem,
+                other_source_id,
+            )
+            assert session.get(
+                SupplierRequisitionOrderItem,
+                current_source_id,
+            ) is None
+            assert remaining_source is not None
+            assert remaining_source.order_item_id == other_item["id"]
+            assert remaining_source.order_number == other_order["order_number"]
+            assert supplier_order is not None
+            assert supplier_order.status == "confirmed"
+            assert supplier_order.total_quantity == 120
+            assert supplier_order.stock_deduction_qty == 25
+            assert supplier_order.requisition_qty == 95
+            assert supplier_order.required_piece_qty == 240
+
+        current_deleted = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [current_order["id"]], "confirm": True},
+        )
+        other_protected = client.post(
+            "/api/orders/group-delete",
+            json={"order_ids": [other_order["id"]], "confirm": True},
+        )
+
+    assert rolled_back.status_code == 200, rolled_back.text
+    assert current_deleted.status_code == 200, current_deleted.text
+    assert current_deleted.json()["deleted_count"] == 1
+    assert other_protected.status_code == 409, other_protected.text
+    with session_factory() as session:
+        assert session.get(Order, current_order["id"]) is None
+        assert session.get(Order, other_order["id"]) is not None
+        remaining_source = session.get(
+            SupplierRequisitionOrderItem,
+            other_source_id,
+        )
+        assert remaining_source is not None
+        assert remaining_source.order_item_id == other_item["id"]
+
+
+def test_workflow_rollback_rejects_active_incoming_before_supplier_unlink(
+    order_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.order import Order, OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "ROLLBACK-SUPPLIER-INCOMING-GUARD"
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload).json()
+        created_item = created["items"][0]
+        with session_factory() as session:
+            order = session.get(Order, created["id"])
+            order_item = session.get(OrderItem, created_item["id"])
+            assert order is not None
+            assert order_item is not None
+            supplier_order = SupplierRequisitionOrder(
+                order_number="SR-ROLLBACK-INCOMING-GUARD",
+                supplier_name="Regression Supplier",
+                total_quantity=200,
+                stock_deduction_qty=20,
+                requisition_qty=180,
+                required_piece_qty=400,
+                status="confirmed",
+            )
+            session.add(supplier_order)
+            session.flush()
+            supplier_source = SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=order_item.id,
+                order_number=created["order_number"],
+                product_code=created_item["snapshot_product_code"],
+                product_name=created_item["snapshot_product_name"],
+                quantity=200,
+                stock_deduction_qty=20,
+                requisition_qty=180,
+                required_piece_qty=400,
+            )
+            session.add(supplier_source)
+            session.flush()
+            receipt = IncomingReceipt(
+                receipt_number="IR-ROLLBACK-INCOMING-GUARD",
+                status="posted",
+                received_at=datetime(2026, 7, 16, 9, 30),
+                idempotency_key="rollback-incoming-guard",
+            )
+            session.add(receipt)
+            session.flush()
+            receipt_item = IncomingReceiptItem(
+                receipt_id=receipt.id,
+                order_id=order.id,
+                order_item_id=order_item.id,
+                supplier_order_id=supplier_order.id,
+                supplier_order_item_id=supplier_source.id,
+                planned_quantity=180,
+                received_quantity=180,
+                cumulative_received_quantity=180,
+                variance_quantity=0,
+                variance_type="matched",
+                resolution_status="not_required",
+                status="posted",
+            )
+            session.add(receipt_item)
+            order.status = "production"
+            order_item.material_status = "received"
+            order_item.material_received_at = datetime(2026, 7, 16, 9, 30)
+            order_item.requisition_status = "供应商已排单"
+            order_item.requisition_qty = 180
+            order_item.inventory_deducted_qty = 20
+            order_item.supplier_order_number = supplier_order.order_number
+            session.flush()
+            supplier_order_id = supplier_order.id
+            supplier_source_id = supplier_source.id
+            receipt_item_id = receipt_item.id
+            session.commit()
+
+        rolled_back = client.put(
+            f"/api/orders/{created['id']}/rollback-workflow",
+            json={"reason": "active incoming must block supplier unlink"},
+        )
+
+    assert rolled_back.status_code == 409, rolled_back.text
+    assert "有效来料" in rolled_back.json()["detail"]
+    with session_factory() as session:
+        order = session.get(Order, created["id"])
+        order_item = session.get(OrderItem, created_item["id"])
+        supplier_order = session.get(SupplierRequisitionOrder, supplier_order_id)
+        supplier_source = session.get(
+            SupplierRequisitionOrderItem,
+            supplier_source_id,
+        )
+        receipt_item = session.get(IncomingReceiptItem, receipt_item_id)
+        assert order is not None
+        assert order.status == "production"
+        assert order_item is not None
+        assert order_item.material_status == "received"
+        assert order_item.requisition_status == "供应商已排单"
+        assert order_item.requisition_qty == 180
+        assert order_item.inventory_deducted_qty == 20
+        assert order_item.supplier_order_number == "SR-ROLLBACK-INCOMING-GUARD"
+        assert supplier_order is not None
+        assert supplier_order.status == "confirmed"
+        assert supplier_order.voided_at is None
+        assert supplier_source is not None
+        assert supplier_source.order_item_id == created_item["id"]
+        assert receipt_item is not None
+        assert receipt_item.status == "posted"
+        assert receipt_item.supplier_order_item_id == supplier_source_id
+
+
+def test_workflow_rollback_noneditable_supplier_status_is_atomic(
+    order_api_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "ROLLBACK-SUPPLIER-ATOMIC-STATUS"
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload).json()
+        with session_factory() as session:
+            order = session.get(Order, created["id"])
+            assert order is not None
+            order.status = "production"
+            editable_order = SupplierRequisitionOrder(
+                order_number="SR-ROLLBACK-ATOMIC-EDITABLE",
+                supplier_name="Regression Supplier",
+                total_quantity=200,
+                requisition_qty=200,
+                status="confirmed",
+            )
+            locked_order = SupplierRequisitionOrder(
+                order_number="SR-ROLLBACK-ATOMIC-LOCKED",
+                supplier_name="Regression Supplier",
+                total_quantity=100,
+                requisition_qty=100,
+                status="processing",
+            )
+            session.add_all([editable_order, locked_order])
+            session.flush()
+            editable_source = SupplierRequisitionOrderItem(
+                supplier_order_id=editable_order.id,
+                order_item_id=created["items"][0]["id"],
+                order_number=created["order_number"],
+                product_code=created["items"][0]["snapshot_product_code"],
+                product_name=created["items"][0]["snapshot_product_name"],
+                quantity=200,
+                requisition_qty=200,
+            )
+            locked_source = SupplierRequisitionOrderItem(
+                supplier_order_id=locked_order.id,
+                order_item_id=created["items"][1]["id"],
+                order_number=created["order_number"],
+                product_code=created["items"][1]["snapshot_product_code"],
+                product_name=created["items"][1]["snapshot_product_name"],
+                quantity=100,
+                requisition_qty=100,
+            )
+            session.add_all([editable_source, locked_source])
+            for item, supplier_number in zip(
+                order.items,
+                [editable_order.order_number, locked_order.order_number],
+                strict=True,
+            ):
+                item.requisition_status = "供应商已排单"
+                item.requisition_qty = item.quantity
+                item.supplier_order_number = supplier_number
+            session.flush()
+            editable_order_id = editable_order.id
+            locked_order_id = locked_order.id
+            editable_source_id = editable_source.id
+            locked_source_id = locked_source.id
+            session.commit()
+
+        rolled_back = client.put(
+            f"/api/orders/{created['id']}/rollback-workflow",
+            json={"reason": "noneditable supplier status must fail atomically"},
+        )
+
+    assert rolled_back.status_code == 409, rolled_back.text
+    assert "SR-ROLLBACK-ATOMIC-LOCKED" in rolled_back.json()["detail"]
+    assert "processing" in rolled_back.json()["detail"]
+    with session_factory() as session:
+        order = session.get(Order, created["id"])
+        editable_order = session.get(SupplierRequisitionOrder, editable_order_id)
+        locked_order = session.get(SupplierRequisitionOrder, locked_order_id)
+        assert order is not None
+        assert order.status == "production"
+        assert editable_order is not None
+        assert editable_order.status == "confirmed"
+        assert editable_order.voided_at is None
+        assert locked_order is not None
+        assert locked_order.status == "processing"
+        assert locked_order.voided_at is None
+        assert session.get(SupplierRequisitionOrderItem, editable_source_id) is not None
+        assert session.get(SupplierRequisitionOrderItem, locked_source_id) is not None
+        order_items = session.scalars(
+            select(OrderItem)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.id)
+        ).all()
+        assert [item.requisition_status for item in order_items] == [
+            "供应商已排单",
+            "供应商已排单",
+        ]
+        assert [item.supplier_order_number for item in order_items] == [
+            "SR-ROLLBACK-ATOMIC-EDITABLE",
+            "SR-ROLLBACK-ATOMIC-LOCKED",
+        ]
+
+
+def test_workflow_rollback_with_supplier_order_is_idempotent(
+    order_api_app,
+) -> None:
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "ROLLBACK-SUPPLIER-IDEMPOTENT"
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload).json()
+        created_item = created["items"][0]
+        with session_factory() as session:
+            supplier_order = SupplierRequisitionOrder(
+                order_number="SR-ROLLBACK-IDEMPOTENT",
+                supplier_name="Regression Supplier",
+                total_quantity=200,
+                stock_deduction_qty=20,
+                requisition_qty=180,
+                required_piece_qty=400,
+                status="confirmed",
+            )
+            session.add(supplier_order)
+            session.flush()
+            supplier_order_id = supplier_order.id
+            source_item = SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=created_item["id"],
+                order_number=created["order_number"],
+                product_code=created_item["snapshot_product_code"],
+                product_name=created_item["snapshot_product_name"],
+                quantity=200,
+                stock_deduction_qty=20,
+                requisition_qty=180,
+                required_piece_qty=400,
+            )
+            session.add(source_item)
+            session.flush()
+            source_item_id = source_item.id
+            session.commit()
+
+        first = client.put(
+            f"/api/orders/{created['id']}/rollback-workflow",
+            json={"reason": "first supplier rollback"},
+        )
+        with session_factory() as session:
+            supplier_order = session.get(
+                SupplierRequisitionOrder,
+                supplier_order_id,
+            )
+            source_item = session.get(
+                SupplierRequisitionOrderItem,
+                source_item_id,
+            )
+            assert supplier_order is not None
+            assert source_item is not None
+            first_state = (
+                supplier_order.status,
+                supplier_order.voided_at,
+                supplier_order.total_quantity,
+                supplier_order.stock_deduction_qty,
+                supplier_order.requisition_qty,
+                supplier_order.required_piece_qty,
+                source_item.order_item_id,
+                source_item.quantity,
+                source_item.stock_deduction_qty,
+                source_item.requisition_qty,
+                source_item.required_piece_qty,
+            )
+
+        second = client.put(
+            f"/api/orders/{created['id']}/rollback-workflow",
+            json={"reason": "second supplier rollback"},
+        )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["status"] == "pending_production"
+    assert second.json()["status"] == "pending_production"
+    with session_factory() as session:
+        supplier_order = session.get(SupplierRequisitionOrder, supplier_order_id)
+        source_item = session.get(SupplierRequisitionOrderItem, source_item_id)
+        assert supplier_order is not None
+        assert source_item is not None
+        second_state = (
+            supplier_order.status,
+            supplier_order.voided_at,
+            supplier_order.total_quantity,
+            supplier_order.stock_deduction_qty,
+            supplier_order.requisition_qty,
+            supplier_order.required_piece_qty,
+            source_item.order_item_id,
+            source_item.quantity,
+            source_item.stock_deduction_qty,
+            source_item.requisition_qty,
+            source_item.required_piece_qty,
+        )
+    assert first_state == second_state
+
+
 @pytest.mark.parametrize("supplier_status", ["voided", "cancelled", "withdrawn", "invalid"])
 def test_inactive_supplier_order_items_do_not_block_order_group_delete(
     order_api_app,

@@ -7,8 +7,10 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.api.deps import (
     ADMIN_ONLY_PERMISSIONS,
@@ -189,6 +191,251 @@ def _permission_catalog_payload(user: User) -> list[dict]:
             }
         )
     return rows
+
+
+def _permission_override_values(db: Session, user_id: int) -> list[tuple[str, bool]]:
+    return [
+        (row.permission_code, bool(row.is_allowed))
+        for row in db.scalars(
+            select(UserPermissionOverride)
+            .where(UserPermissionOverride.user_id == user_id)
+            .order_by(UserPermissionOverride.permission_code)
+        ).all()
+    ]
+
+
+def _effective_permission_values(
+    user: User,
+    overrides: list[tuple[str, bool]],
+) -> list[str]:
+    if user.role == "admin":
+        return sorted(PERMISSION_CATALOG)
+    permissions = set(ROLE_DEFAULT_PERMISSIONS.get(user.role, frozenset()))
+    for permission_code, is_allowed in overrides:
+        if permission_code not in PERMISSION_CATALOG:
+            continue
+        if is_allowed:
+            permissions.add(permission_code)
+        else:
+            permissions.discard(permission_code)
+    permissions.difference_update(ADMIN_ONLY_PERMISSIONS)
+    return sorted(permissions)
+
+
+def _access_audit_snapshot_from_values(
+    user: User,
+    *,
+    overrides: list[tuple[str, bool]],
+    access_mode: str,
+    customer_ids: list[int],
+) -> dict:
+    return {
+        "permission_overrides": [
+            {
+                "code": permission_code,
+                "decision": "allow" if is_allowed else "deny",
+            }
+            for permission_code, is_allowed in overrides
+        ],
+        "effective_permissions": _effective_permission_values(user, overrides),
+        "customer_access_mode": access_mode,
+        "customer_ids": sorted(customer_ids),
+    }
+
+
+def _current_access_values(
+    db: Session,
+    user: User,
+) -> tuple[list[tuple[str, bool]], str, list[int]]:
+    return (
+        _permission_override_values(db, user.id),
+        user.customer_access_mode,
+        sorted(customer_scope_ids(user, db)),
+    )
+
+
+def _access_audit_snapshot(db: Session, user: User) -> dict:
+    overrides, access_mode, customer_ids = _current_access_values(db, user)
+    return _access_audit_snapshot_from_values(
+        user,
+        overrides=overrides,
+        access_mode=access_mode,
+        customer_ids=customer_ids,
+    )
+
+
+def _desired_permission_override_values(
+    user: User,
+    overrides: dict[str, bool],
+) -> list[tuple[str, bool]]:
+    if user.role == "admin":
+        return []
+    return sorted(
+        (permission_code, bool(is_allowed))
+        for permission_code, is_allowed in overrides.items()
+    )
+
+
+def _desired_customer_scope_values(
+    user: User,
+    *,
+    mode: str,
+    customer_ids: set[int],
+) -> tuple[str, list[int]]:
+    desired_mode = "all" if user.role in {"admin", "boss"} else mode
+    desired_ids = sorted(customer_ids) if desired_mode == "selected" else []
+    return desired_mode, desired_ids
+
+
+def _replace_permission_overrides(
+    db: Session,
+    *,
+    user: User,
+    overrides: dict[str, bool],
+    actor_id: int,
+) -> None:
+    desired = _desired_permission_override_values(user, overrides)
+    if _permission_override_values(db, user.id) == desired:
+        return
+    db.execute(
+        delete(UserPermissionOverride).where(UserPermissionOverride.user_id == user.id)
+    )
+    db.add_all(
+        [
+            UserPermissionOverride(
+                user_id=user.id,
+                permission_code=permission_code,
+                is_allowed=is_allowed,
+                granted_by=actor_id,
+            )
+            for permission_code, is_allowed in desired
+        ]
+    )
+
+
+def _replace_customer_scopes(
+    db: Session,
+    *,
+    user: User,
+    mode: str,
+    customer_ids: set[int],
+    actor_id: int,
+) -> None:
+    desired_mode, desired_ids = _desired_customer_scope_values(
+        user,
+        mode=mode,
+        customer_ids=customer_ids,
+    )
+    current_ids = sorted(customer_scope_ids(user, db))
+    if user.customer_access_mode == desired_mode and current_ids == desired_ids:
+        return
+    db.execute(delete(UserCustomerScope).where(UserCustomerScope.user_id == user.id))
+    user.customer_access_mode = desired_mode
+    db.add_all(
+        [
+            UserCustomerScope(
+                user_id=user.id,
+                customer_id=customer_id,
+                assigned_by=actor_id,
+            )
+            for customer_id in desired_ids
+        ]
+    )
+
+
+def _claim_access_auth_version(
+    db: Session,
+    *,
+    target: User,
+    expected_auth_version: int,
+    increment: bool,
+) -> None:
+    claimed_auth_version = expected_auth_version + 1 if increment else expected_auth_version
+    try:
+        result = db.execute(
+            update(User)
+            .where(
+                User.id == target.id,
+                User.auth_version == expected_auth_version,
+            )
+            .values(auth_version=claimed_auth_version)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        if "locked" in str(error).lower():
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="用户访问配置已被其他管理员修改，请刷新后重试",
+            ) from error
+        raise
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="用户访问配置已被其他管理员修改，请刷新后重试",
+        )
+    set_committed_value(target, "auth_version", claimed_auth_version)
+
+
+def _commit_access_audit(
+    db: Session,
+    *,
+    actor: User,
+    target: User,
+    action: str,
+    description: str,
+    before: dict,
+    expected_after: dict,
+    before_auth_version: int,
+    changed: bool,
+    request: Request,
+) -> None:
+    try:
+        db.flush()
+        after = _access_audit_snapshot(db, target)
+        if after != expected_after:
+            raise RuntimeError("access configuration audit snapshot mismatch")
+        db.add(
+            OperationLog(
+                user_id=actor.id,
+                action=action,
+                resource="UserAccess",
+                details=json.dumps(
+                    {
+                        "action": action,
+                        "actor": {
+                            "user_id": actor.id,
+                            "username": actor.username,
+                            "role": actor.role,
+                        },
+                        "target_user_id": target.id,
+                        "target_username": target.username,
+                        "result": "changed" if changed else "no_change",
+                        "before": before,
+                        "after": after,
+                        "auth_version": {
+                            "before": before_auth_version,
+                            "after": target.auth_version,
+                        },
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                ip_address=request.client.host if request.client else None,
+                username=actor.username,
+                role=actor.role,
+                entity_type="user",
+                entity_id=target.id,
+                description=description,
+                user_agent=request.headers.get("user-agent"),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(target)
 
 
 def _get_user_or_404(db: Session, user_id: int) -> User:
@@ -765,6 +1012,7 @@ def get_permission_overrides(
 def save_permission_overrides(
     user_id: int,
     payload: PermissionOverridesRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -776,22 +1024,50 @@ def save_permission_overrides(
         payload.overrides.get(code) is True for code in ADMIN_ONLY_PERMISSIONS
     ):
         raise HTTPException(status_code=400, detail="仅管理员可以使用系统备份或用户权限管理权限")
-    db.execute(delete(UserPermissionOverride).where(UserPermissionOverride.user_id == user.id))
-    if user.role != "admin":
-        db.add_all(
-            [
-                UserPermissionOverride(
-                    user_id=user.id,
-                    permission_code=permission_code,
-                    is_allowed=is_allowed,
-                    granted_by=admin.id,
-                )
-                for permission_code, is_allowed in sorted(payload.overrides.items())
-            ]
+    current_overrides, current_mode, current_ids = _current_access_values(db, user)
+    desired_overrides = _desired_permission_override_values(user, payload.overrides)
+    before = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    expected_after = _access_audit_snapshot_from_values(
+        user,
+        overrides=desired_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    changed = before != expected_after
+    before_auth_version = user.auth_version
+    try:
+        _claim_access_auth_version(
+            db,
+            target=user,
+            expected_auth_version=before_auth_version,
+            increment=changed,
         )
-    user.auth_version += 1
-    db.commit()
-    db.refresh(user)
+        _replace_permission_overrides(
+            db,
+            user=user,
+            overrides=payload.overrides,
+            actor_id=admin.id,
+        )
+        _commit_access_audit(
+            db,
+            actor=admin,
+            target=user,
+            action="UPDATE_PERMISSION_OVERRIDES",
+            description="更新用户权限覆盖",
+            before=before,
+            expected_after=expected_after,
+            before_auth_version=before_auth_version,
+            changed=changed,
+            request=request,
+        )
+    except Exception:
+        db.rollback()
+        raise
     return get_permission_overrides(user.id, admin, db)
 
 
@@ -814,6 +1090,7 @@ def get_customer_scopes(
 def save_customer_scopes(
     user_id: int,
     payload: CustomerScopesRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -829,21 +1106,55 @@ def save_customer_scopes(
     missing_ids = sorted(customer_ids.difference(existing_ids))
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"客户不存在: {', '.join(map(str, missing_ids))}")
-    db.execute(delete(UserCustomerScope).where(UserCustomerScope.user_id == user.id))
-    user.customer_access_mode = "all" if user.role in {"admin", "boss"} else payload.mode
-    if user.customer_access_mode == "selected":
-        db.add_all(
-            [
-                UserCustomerScope(
-                    user_id=user.id,
-                    customer_id=customer_id,
-                    assigned_by=admin.id,
-                )
-                for customer_id in sorted(customer_ids)
-            ]
+    current_overrides, current_mode, current_ids = _current_access_values(db, user)
+    desired_mode, desired_ids = _desired_customer_scope_values(
+        user,
+        mode=payload.mode,
+        customer_ids=customer_ids,
+    )
+    before = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    expected_after = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=desired_mode,
+        customer_ids=desired_ids,
+    )
+    changed = before != expected_after
+    before_auth_version = user.auth_version
+    try:
+        _claim_access_auth_version(
+            db,
+            target=user,
+            expected_auth_version=before_auth_version,
+            increment=changed,
         )
-    user.auth_version += 1
-    db.commit()
+        _replace_customer_scopes(
+            db,
+            user=user,
+            mode=payload.mode,
+            customer_ids=customer_ids,
+            actor_id=admin.id,
+        )
+        _commit_access_audit(
+            db,
+            actor=admin,
+            target=user,
+            action="UPDATE_CUSTOMER_SCOPES",
+            description="更新用户客户范围",
+            before=before,
+            expected_after=expected_after,
+            before_auth_version=before_auth_version,
+            changed=changed,
+            request=request,
+        )
+    except Exception:
+        db.rollback()
+        raise
     return get_customer_scopes(user.id, admin, db)
 
 
@@ -851,6 +1162,7 @@ def save_customer_scopes(
 def save_user_access(
     user_id: int,
     payload: UserAccessRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -878,56 +1190,62 @@ def save_user_access(
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"客户不存在: {', '.join(map(str, missing_ids))}")
 
-    db.execute(delete(UserPermissionOverride).where(UserPermissionOverride.user_id == user.id))
-    if user.role != "admin":
-        db.add_all(
-            [
-                UserPermissionOverride(
-                    user_id=user.id,
-                    permission_code=permission_code,
-                    is_allowed=is_allowed,
-                    granted_by=admin.id,
-                )
-                for permission_code, is_allowed in sorted(payload.overrides.items())
-            ]
-        )
-    db.execute(delete(UserCustomerScope).where(UserCustomerScope.user_id == user.id))
-    user.customer_access_mode = "all" if user.role in {"admin", "boss"} else payload.mode
-    if user.customer_access_mode == "selected":
-        db.add_all(
-            [
-                UserCustomerScope(
-                    user_id=user.id,
-                    customer_id=customer_id,
-                    assigned_by=admin.id,
-                )
-                for customer_id in sorted(customer_ids)
-            ]
-        )
-    user.auth_version += 1
-    db.add(
-        OperationLog(
-            user_id=admin.id,
-            action="UPDATE_USER_ACCESS",
-            resource="User",
-            details=json.dumps(
-                {
-                    "target_user_id": user.id,
-                    "permission_count": len(payload.overrides),
-                    "customer_access_mode": user.customer_access_mode,
-                    "customer_scope_count": len(customer_ids),
-                },
-                ensure_ascii=False,
-            ),
-            username=admin.username,
-            role=admin.role,
-            entity_type="user",
-            entity_id=user.id,
-            description="更新用户权限与客户范围",
-        )
+    current_overrides, current_mode, current_ids = _current_access_values(db, user)
+    desired_overrides = _desired_permission_override_values(user, payload.overrides)
+    desired_mode, desired_ids = _desired_customer_scope_values(
+        user,
+        mode=payload.mode,
+        customer_ids=customer_ids,
     )
-    db.commit()
-    db.refresh(user)
+    before = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    expected_after = _access_audit_snapshot_from_values(
+        user,
+        overrides=desired_overrides,
+        access_mode=desired_mode,
+        customer_ids=desired_ids,
+    )
+    changed = before != expected_after
+    before_auth_version = user.auth_version
+    try:
+        _claim_access_auth_version(
+            db,
+            target=user,
+            expected_auth_version=before_auth_version,
+            increment=changed,
+        )
+        _replace_permission_overrides(
+            db,
+            user=user,
+            overrides=payload.overrides,
+            actor_id=admin.id,
+        )
+        _replace_customer_scopes(
+            db,
+            user=user,
+            mode=payload.mode,
+            customer_ids=customer_ids,
+            actor_id=admin.id,
+        )
+        _commit_access_audit(
+            db,
+            actor=admin,
+            target=user,
+            action="UPDATE_USER_ACCESS",
+            description="更新用户权限与客户范围",
+            before=before,
+            expected_after=expected_after,
+            before_auth_version=before_auth_version,
+            changed=changed,
+            request=request,
+        )
+    except Exception:
+        db.rollback()
+        raise
     return {
         "ok": True,
         "permission_access": get_permission_overrides(user.id, admin, db),

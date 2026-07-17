@@ -1,5 +1,15 @@
 # Codex 项目交接
 
+## 2026-07-17 N022 Phase C.2 | 模具码 + 位置码双码移动确认（本地完成，待人工 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-mold-location-movement-n022-c2`；分支：`feature/mold-location-movement-n022-c2`；基线 `5bf1540`。本轮未 commit、未 push，未连接、迁移或写入正式数据库。
+- 新迁移 `bb55v8x9z45` 线性接在 `ba54v8x9z44` 后：`mold_tools` 新增非空 `location_version` 和最后位置确认时间/人员；新增唯一幂等、记录 CAS 前后版本且由数据库触发器保护 UPDATE/DELETE 的 `mold_location_movements`。一旦存在移动事实或确认版本，downgrade 会 fail-closed。
+- 新增 `warehouse.view` 双码预览和 `warehouse.execute` 移动确认接口。目标仅接受合法平放/竖放 `3F-M` 位置码；旧自由文本、非法编码、停用模具、目标被其他启用模具占用、旧版本和异业务幂等键均拒绝。幂等键在去除首尾空白后必须至少 8 个字符；相同业务重放复用同一流水，换模具/目标/版本/来源/备注均返回 409。同位置确认没有状态变化，不生成移动业务事实，因而不占用幂等键；成功移动写 `OperationLog`。
+- 原 `MoldTool.rack_location` 显示、模具查询、二维码标签和关联产品保持兼容；旧档案编辑接口不再允许绕过流水直接改位置。`static/mobile_mold_lookup.html` 新增模具码、位置码、备注、预览和确认流程，支持手输、粘贴以及 `mold/location` URL 参数，没有引入新前端库。
+- 移动事务不查询或修改成品/半成品库存、订单、报料、库存流水或 `warehouse_locations`；专项非空保护基线验证这些表的行数和数量不变。`3F-M` 继续是独立模具位置体系，不映射三楼成品货位。
+- 隔离迁移副本 `C:\tmp\n022_c2_rehearsal_20260717_125745\carton_erp_uat_copy.sqlite3` 在升级前备份 SHA-256 校验一致后完成 `ba54 -> bb55 -> ba54 -> bb55`；三阶段均 `integrity_check=ok`、外键异常 0，两条模具基线保留且升级后版本为 1。备份 SHA-256：`97F792619E4E3D4B76885F59A843DDAB1C4A3677DBC05BDA164EF2E3EE149B5D`。
+- 自动验证：独立审计修正后的 N022 C.2 专项、迁移和原模具工作流定向运行 `19 passed`；N022/权限/仓库/订单/报料扩展回归此前为 `156 passed, 2 failed`。两项失败均来自本轮未修改文件中的旧前端断言（旧菜单连续字符串、禁止基线已有的 `time-utils.js`），未越界修改。人工清单：`docs/warehouse_reports/N022_PHASE_C2_UAT_CHECKLIST_20260717.md`。
+
 ## 2026-07-17 | Alembic 客户账期迁移回滚链修复
 
 - 修复 `aq44v7w8x9m34` 在最新 head 回退时无法删除 `customers.statement_cycle_start_day` 的问题。真实根因是后续 SQLite batch recreate 将列级 CHECK 提升为表级约束；旧版原生 `DROP COLUMN` 会留下引用已删除列的约束。

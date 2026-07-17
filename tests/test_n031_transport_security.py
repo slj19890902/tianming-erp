@@ -54,6 +54,12 @@ def test_production_enforces_https_hsts_and_trusted_host(monkeypatch, tmp_path):
     assert redirected.status_code in {301, 307, 308}
     assert redirected.headers["location"].startswith("https://")
     assert redirected.headers["strict-transport-security"] == "max-age=63072000"
+    assert redirected.headers["x-content-type-options"] == "nosniff"
+    assert redirected.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert redirected.headers["x-frame-options"] == "DENY"
+    assert redirected.headers["permissions-policy"] == (
+        "camera=(), microphone=(), geolocation=()"
+    )
     assert rejected.status_code == 400
     assert rejected_before_redirect.status_code == 400
     assert "location" not in rejected_before_redirect.headers
@@ -101,6 +107,44 @@ def test_production_cors_requires_explicit_origins_and_proxy_trust(monkeypatch, 
         assert "ERP_TRUSTED_PROXY_IPS" in str(error)
     else:
         raise AssertionError("wildcard proxy trust was accepted")
+
+
+def test_production_cookie_writes_require_an_allowed_origin(monkeypatch, tmp_path):
+    app = _production_app(monkeypatch, tmp_path)
+    with TestClient(app, base_url="https://testserver") as client:
+        client.cookies.set("erp_session", "invalid-session-token")
+        missing = client.post("/api/auth/logout")
+        blocked = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://attacker.example"},
+        )
+        null_origin = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "null"},
+        )
+        allowed = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://testserver"},
+        )
+        safe_read = client.get("/api/auth/me")
+
+    assert missing.status_code == 403
+    assert blocked.status_code == 403
+    assert null_origin.status_code == 403
+    assert missing.json()["detail"].startswith("安全校验失败")
+    assert allowed.status_code == 401
+    assert safe_read.status_code == 401
+
+
+def test_production_unauthenticated_write_is_not_treated_as_csrf(
+    monkeypatch,
+    tmp_path,
+):
+    app = _production_app(monkeypatch, tmp_path)
+    with TestClient(app, base_url="https://testserver") as client:
+        response = client.post("/api/n031-not-found")
+
+    assert response.status_code == 404
 
 
 def test_production_rejects_non_loopback_trusted_proxy(monkeypatch):
@@ -368,7 +412,8 @@ def test_root_main_exports_the_same_hardened_application(monkeypatch, tmp_path):
         "import main; "
         "names = {item.cls.__name__ for item in main.app.user_middleware}; "
         "assert {'CORSMiddleware', 'TrustedHostMiddleware', "
-        "'HTTPSRedirectMiddleware', 'HSTSMiddleware'} <= names"
+        "'HTTPSRedirectMiddleware', 'HSTSMiddleware', "
+        "'CookieOriginCSRFMiddleware'} <= names"
     )
 
     result = subprocess.run(

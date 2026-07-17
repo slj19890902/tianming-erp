@@ -139,6 +139,48 @@ def test_handoff_database_and_https_api_preflight_is_read_only(
     assert module.sha256_of(database_path) == before
 
 
+def test_verify_login_sends_same_origin_on_cookie_logout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+    monkeypatch.setattr(module, "open_api", lambda *_args, **_kwargs: object())
+
+    def fake_request_json(
+        _opener,
+        url,
+        *,
+        method="GET",
+        payload=None,
+        headers=None,
+    ):
+        del payload
+        calls.append((url, method, headers))
+        if url.endswith("/login"):
+            return 200, {"user": {"must_change_password": False}}
+        if url.endswith("/me"):
+            return 200, {"user": {"must_change_password": False}}
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(module, "request_json", fake_request_json)
+
+    result = module.verify_login(
+        "https://erp.example.com",
+        "admin",
+        "StrongPass!2026",
+    )
+
+    logout_calls = [call for call in calls if call[0].endswith("/logout")]
+    assert result.logout_status == 200
+    assert logout_calls == [
+        (
+            "https://erp.example.com/api/auth/logout",
+            "POST",
+            {"Origin": "https://erp.example.com"},
+        )
+    ]
+
+
 def test_handoff_rejects_corrupt_backup_before_password_write(tmp_path: Path) -> None:
     backup_path = tmp_path / "corrupt.sqlite3"
     backup_path.write_bytes(b"not a sqlite database")

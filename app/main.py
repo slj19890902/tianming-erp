@@ -73,7 +73,48 @@ class HSTSMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
         response.headers["Strict-Transport-Security"] = "max-age=63072000"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
         return response
+
+
+class CookieOriginCSRFMiddleware(BaseHTTPMiddleware):
+    """Reject cross-site production writes that carry the ERP session cookie."""
+
+    SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+    def __init__(
+        self,
+        app,
+        *,
+        allowed_origins: tuple[str, ...],
+        session_cookie_name: str,
+    ) -> None:
+        super().__init__(app)
+        self.allowed_origins = frozenset(
+            origin.rstrip("/") for origin in allowed_origins
+        )
+        self.session_cookie_name = session_cookie_name
+
+    async def dispatch(self, request, call_next):
+        if request.method in self.SAFE_METHODS:
+            return await call_next(request)
+        if request.cookies.get(self.session_cookie_name) is None:
+            # Login and other unauthenticated requests cannot use an existing
+            # browser session as a CSRF credential.
+            return await call_next(request)
+
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if origin not in self.allowed_origins:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "安全校验失败：请求来源无效，请刷新页面后重试。"},
+            )
+        return await call_next(request)
 
 
 class HTTPSRedirectMiddleware(StarletteHTTPSRedirectMiddleware):
@@ -131,6 +172,11 @@ def apply_transport_security(application: FastAPI, current) -> None:
     # Starlette wraps the last-added middleware outermost.  HTTPS redirect
     # therefore has to be registered before TrustedHost so an untrusted HTTP
     # Host is rejected instead of becoming the target of an open redirect.
+    application.add_middleware(
+        CookieOriginCSRFMiddleware,
+        allowed_origins=current.allowed_origins,
+        session_cookie_name=current.session_cookie_name,
+    )
     application.add_middleware(HTTPSRedirectMiddleware)
     application.add_middleware(
         TrustedHostMiddleware,
@@ -409,6 +455,7 @@ def create_app() -> FastAPI:
         TrustedHostMiddleware,
         HTTPSRedirectMiddleware,
         HSTSMiddleware,
+        CookieOriginCSRFMiddleware,
         ProxyHeadersMiddleware,
     }
     application.user_middleware = [
@@ -423,7 +470,7 @@ def create_app() -> FastAPI:
         allow_origins=list(current.allowed_origins),
         allow_origin_regex=current.allowed_origin_regex,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
     apply_production_security(application, current)

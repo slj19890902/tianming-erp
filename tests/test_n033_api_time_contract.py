@@ -153,6 +153,9 @@ def test_pdf_training_response_models_emit_explicit_utc_timestamps():
         parse_status="pending",
         parse_method="text",
         score=None,
+        gold_review_status="pending",
+        gold_reviewed_at=None,
+        gold_reviewed_by=None,
         created_at=datetime(2026, 7, 16, 16, 1, 2),
         labeled_at=None,
     )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import json
 import re
@@ -10,6 +10,7 @@ import unicodedata
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import utc_now_naive
 from app.models.material import Material
 from app.models.product import Product
 from app.models.warehouse_inventory import InventoryLot, SemiFinishedInventoryDetail
@@ -312,7 +313,7 @@ def apply_cost_snapshot(
     lot.cost_snapshot_detail_json = json.dumps(
         estimate.detail, ensure_ascii=False, sort_keys=True
     )
-    lot.cost_snapshot_at = captured_at or datetime.now(timezone.utc).replace(tzinfo=None)
+    lot.cost_snapshot_at = captured_at or utc_now_naive()
 
 
 def estimate_from_snapshot(lot: InventoryLot) -> InventoryCostEstimate | None:

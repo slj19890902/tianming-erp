@@ -23,12 +23,16 @@
     <table><thead><tr><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead><tbody id="rows"></tbody></table>
     <div id="company-footer" class="footer"></div>
   </main>
+  <script src="/static/assets/time-utils.js"></script>
   <script>
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[char]));
     const shortDate = value => {
-      const dateValue = new Date(`${value}T00:00:00`);
-      if (Number.isNaN(dateValue.getTime())) return String(value || "");
-      return `${String(dateValue.getFullYear()).slice(-2)}.${dateValue.getMonth()+1}.${dateValue.getDate()}`;
+      try {
+        const [year, month, day] = TmTime.formatBusinessDate(value).split("-");
+        return `${year.slice(-2)}.${Number(month)}.${Number(day)}`;
+      } catch (_) {
+        return String(value || "");
+      }
     };
 
     (async () => {

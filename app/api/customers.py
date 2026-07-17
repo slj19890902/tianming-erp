@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,6 +20,10 @@ from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
 from app.models.order import Order
 from app.models.user import User
+from app.services.master_data_versioning import (
+    apply_versioned_update,
+    record_versioned_create,
+)
 
 
 router = APIRouter()
@@ -54,10 +58,57 @@ class CustomerResponse(CustomerPayload):
 
     id: int
     is_active: bool
+    version: int
 
 
-class CustomerStatusPayload(BaseModel):
+class CustomerMutationPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
+
+
+class CustomerUpdatePayload(CustomerPayload):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
+
+
+class CustomerStatusPayload(CustomerMutationPayload):
     is_active: bool
+
+
+def _customer_write_data(payload: CustomerPayload) -> dict:
+    data = payload.model_dump(include=set(CustomerPayload.model_fields))
+    data.update(
+        customer_code=clean_code(payload.customer_code),
+        name=payload.name.strip(),
+        is_active=payload.status == "active",
+    )
+    return data
+
+
+def _changed_updates(customer: Customer, updates: dict) -> dict:
+    return {
+        key: value
+        for key, value in updates.items()
+        if getattr(customer, key) != value
+    }
 
 
 def _customer_or_404(db: Session, customer_id: int) -> Customer:
@@ -121,16 +172,19 @@ def create_customer(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> CustomerResponse:
-    data = payload.model_dump()
-    data.update(
-        customer_code=clean_code(payload.customer_code),
-        name=payload.name.strip(),
-        is_active=payload.status == "active",
-    )
+    data = _customer_write_data(payload)
     customer = Customer(**data)
     try:
         db.add(customer)
         db.flush()
+        record_versioned_create(
+            db,
+            object_type="customer",
+            entity=customer,
+            user=user,
+            reason="新增客户",
+            source="api.customers.create",
+        )
         audit_master_change(
             db,
             user=user,
@@ -143,6 +197,9 @@ def create_customer(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="客户编号、缩写或名称重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(customer)
     return CustomerResponse.model_validate(customer)
 
@@ -150,31 +207,43 @@ def create_customer(
 @router.put("/{customer_id}")
 def update_customer(
     customer_id: int,
-    payload: CustomerPayload,
+    payload: CustomerUpdatePayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> CustomerResponse:
     require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
     before = CustomerResponse.model_validate(customer).model_dump()
-    for key, value in payload.model_dump().items():
-        setattr(customer, key, value)
-    customer.customer_code = clean_code(payload.customer_code)
-    customer.name = payload.name.strip()
-    customer.is_active = payload.status == "active"
+    updates = _customer_write_data(payload)
+    changed = _changed_updates(customer, updates)
     try:
-        audit_master_change(
+        apply_versioned_update(
             db,
+            object_type="customer",
+            entity=customer,
+            updates=updates,
+            expected_version=payload.expected_version,
             user=user,
-            action="UPDATE",
-            resource="Customer",
-            resource_id=customer.id,
-            details={"before": before, "after": payload.model_dump()},
+            reason=payload.change_reason,
+            source="api.customers.update",
+            confirmation_token=payload.confirmation_token,
         )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="UPDATE",
+                resource="Customer",
+                resource_id=customer.id,
+                details={"before": before, "after": updates},
+            )
         db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="客户编号、缩写或名称重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(customer)
     return CustomerResponse.model_validate(customer)
 
@@ -211,17 +280,37 @@ def update_customer_status(
                 detail="客户存在未结案订单，不能停用",
             )
     before = customer.is_active
-    customer.is_active = payload.is_active
-    customer.status = "active" if payload.is_active else "inactive"
-    audit_master_change(
-        db,
-        user=user,
-        action="ENABLE" if payload.is_active else "DISABLE",
-        resource="Customer",
-        resource_id=customer.id,
-        details={"before": before, "after": payload.is_active},
-    )
-    db.commit()
+    updates = {
+        "is_active": payload.is_active,
+        "status": "active" if payload.is_active else "inactive",
+    }
+    changed = _changed_updates(customer, updates)
+    try:
+        apply_versioned_update(
+            db,
+            object_type="customer",
+            entity=customer,
+            updates=updates,
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.customers.status",
+            action="status_change",
+            confirmation_token=payload.confirmation_token,
+        )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="ENABLE" if payload.is_active else "DISABLE",
+                resource="Customer",
+                resource_id=customer.id,
+                details={"before": before, "after": payload.is_active},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(customer)
     return CustomerResponse.model_validate(customer)
 
@@ -229,6 +318,7 @@ def update_customer_status(
 @router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_customer(
     customer_id: int,
+    payload: CustomerMutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_delete),
 ) -> Response:
@@ -252,15 +342,35 @@ def delete_customer(
     )
     if open_order is not None:
         raise HTTPException(status_code=400, detail="客户存在未结案订单，不能删除")
-    audit_master_change(
-        db,
-        user=user,
-        action="DELETE",
-        resource="Customer",
-        resource_id=customer.id,
-        details={"name": customer.name, "customer_code": customer.customer_code},
-    )
-    customer.is_active = False
-    customer.status = "inactive"
-    db.commit()
+    updates = {"is_active": False, "status": "inactive"}
+    changed = _changed_updates(customer, updates)
+    try:
+        apply_versioned_update(
+            db,
+            object_type="customer",
+            entity=customer,
+            updates=updates,
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.customers.delete",
+            action="soft_delete",
+            confirmation_token=payload.confirmation_token,
+        )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="DELETE",
+                resource="Customer",
+                resource_id=customer.id,
+                details={
+                    "name": customer.name,
+                    "customer_code": customer.customer_code,
+                },
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return Response(status_code=status.HTTP_204_NO_CONTENT)

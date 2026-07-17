@@ -1042,6 +1042,8 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
         supplier_a_id = supplier_a.id
         supplier_a_alt_id = supplier_a_alt.id
         supplier_b_item_id = supplier_b_item.id
+        product_id = product.id
+        product_version = product.version
 
     with TestClient(app) as client:
         _login(client, "sales")
@@ -1052,14 +1054,29 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
             for row in pending.json()["supplier_counts"]
         }
         assert counts == {"嘉林亿": 10, "鸣朋": 1}
+        change_payload = {
+            "material_id": supplier_a_id,
+            "layer_count": 3,
+            "flute_type": "E",
+            "sync_product": True,
+            "product_expected_version": product_version,
+            "product_change_reason": "报料材质调整同步常用箱",
+        }
+        confirmation = client.put(
+            f"/api/requisition/pending/{supplier_b_item_id}/material",
+            json=change_payload,
+        )
+        assert confirmation.status_code == 409, confirmation.text
+        assert (
+            confirmation.json()["detail"]["code"]
+            == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+        )
+        change_payload["product_confirmation_token"] = confirmation.json()["detail"][
+            "confirmation_token"
+        ]
         changed = client.put(
             f"/api/requisition/pending/{supplier_b_item_id}/material",
-            json={
-                "material_id": supplier_a_id,
-                "layer_count": 3,
-                "flute_type": "E",
-                "sync_product": True,
-            },
+            json=change_payload,
         )
         assert changed.status_code == 200, changed.text
         assert changed.json()["supplier_name"] == "嘉林亿"
@@ -1079,14 +1096,31 @@ def test_pending_supplier_counts_and_material_change(requisition_app) -> None:
         assert changed_row["requisition_status"] == "未报料"
         assert changed_row["material_display"] == "A6A / E"
 
+        with session_factory() as session:
+            product_version = session.get(Product, product_id).version
+        same_supplier_payload = {
+            "material_id": supplier_a_alt_id,
+            "layer_count": 5,
+            "flute_type": "AB",
+            "sync_product": True,
+            "product_expected_version": product_version,
+            "product_change_reason": "报料材质调整同步常用箱",
+        }
+        confirmation = client.put(
+            f"/api/requisition/pending/{supplier_b_item_id}/material",
+            json=same_supplier_payload,
+        )
+        assert confirmation.status_code == 409, confirmation.text
+        assert (
+            confirmation.json()["detail"]["code"]
+            == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+        )
+        same_supplier_payload["product_confirmation_token"] = confirmation.json()[
+            "detail"
+        ]["confirmation_token"]
         same_supplier_change = client.put(
             f"/api/requisition/pending/{supplier_b_item_id}/material",
-            json={
-                "material_id": supplier_a_alt_id,
-                "layer_count": 5,
-                "flute_type": "AB",
-                "sync_product": True,
-            },
+            json=same_supplier_payload,
         )
         assert same_supplier_change.status_code == 200, same_supplier_change.text
         assert same_supplier_change.json()["supplier_name"] == "嘉林亿"

@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 from app.core.database import SessionLocal
 from app.models.material import Material
 from app.models.product import Product
+from scripts.master_data_write_guard import reject_legacy_master_data_write_if_versioned
 
 
 @dataclass
@@ -73,6 +74,11 @@ def split_product(
 def run(*, commit: bool) -> Stats:
     stats = Stats()
     with SessionLocal() as db:
+        if commit:
+            reject_legacy_master_data_write_if_versioned(
+                db,
+                script_name="scripts/clean_phase12_master_data.py",
+            )
         products = db.scalars(select(Product)).all()
         code_counts = Counter(
             (

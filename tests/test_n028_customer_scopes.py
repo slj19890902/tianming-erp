@@ -259,7 +259,11 @@ def test_sales_cost_payload_is_ignored_while_admin_and_boss_can_write_costs(
         assert created.status_code == 201
         updated = client.put(
             f"/api/master/products/{ids['product']}",
-            json=_product_payload(ids["customer"], code="N028-BASE", name="Renamed carton"),
+            json={
+                **_product_payload(ids["customer"], code="N028-BASE", name="Renamed carton"),
+                "expected_version": 1,
+                "change_reason": "业务员更新常用箱",
+            },
         )
         assert updated.status_code == 200
         synced = client.post(
@@ -270,7 +274,9 @@ def test_sales_cost_payload_is_ignored_while_admin_and_boss_can_write_costs(
                     "cost_unit_price": "99.00",
                     "board_price": "98.00",
                     "suggested_price": "97.00",
-                }
+                },
+                "expected_version": 2,
+                "change_reason": "业务员同步常用箱",
             },
         )
         assert synced.status_code == 200
@@ -290,7 +296,8 @@ def test_sales_cost_payload_is_ignored_while_admin_and_boss_can_write_costs(
         )
         boss_payload["cost_unit_price"] = "30.00"
         boss_updated = client.put(
-            f"/api/master/products/{admin_created.json()['id']}", json=boss_payload
+            f"/api/master/products/{admin_created.json()['id']}",
+            json={**boss_payload, "expected_version": 1, "change_reason": "老板更新常用箱"},
         )
         assert boss_updated.status_code == 200
 

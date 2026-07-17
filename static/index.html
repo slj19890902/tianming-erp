@@ -465,6 +465,18 @@
         background: #fafafa; border-radius: 16px 16px 0 0;
       }
       .modal-header h3 { margin: 0; font-size: 16px; }
+      .master-change-backdrop { z-index: 90; }
+      .version-history-backdrop { z-index: 80; }
+      .readonly-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+      .readonly-fieldset:disabled { opacity: .88; }
+      .readonly-hint { margin-bottom: 12px; }
+      .master-diff-list { display: grid; gap: 6px; margin: 8px 0; }
+      .master-diff-row { display: grid; grid-template-columns: minmax(120px,.7fr) minmax(0,1fr) 24px minmax(0,1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fafafa; font-size: 13px; }
+      .master-diff-value { overflow-wrap: anywhere; }
+      .master-warning-list { margin: 6px 0 0; padding-left: 20px; }
+      .version-history-list { display: grid; gap: 10px; }
+      .version-history-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
+      .version-history-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 13px; }
       .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 14px; }
       .form-grid .wide { grid-column: 1 / -1; }
       .product-edit-grid { display: grid; gap: 10px; }
@@ -913,7 +925,7 @@
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
@@ -1013,7 +1025,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -1113,7 +1125,7 @@
                   <td>{{ materialWeightStructure(row) }}</td>
                   <td v-if="canViewCosts" class="cost-sensitive">{{ money(row.quote_price) }}</td>
                   <td>{{ row.quote_date || "-" }}</td>
-                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
+                  <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
                 </tr></tbody></table>
               </data-panel>
 
@@ -1230,11 +1242,11 @@
                       <div class="field"><label>调价幅度（如 +5% / -10% / 5 / -3）</label>
                         <input class="input" v-model.trim="priceAdjustForm.adjust_percent" placeholder="+5% 或 -10% 或 5" /></div>
                       <div class="field"><label>生效日期</label><input class="input" type="date" v-model="priceAdjustForm.effective_date" /></div>
-                      <div class="field wide"><label>备注</label><input class="input" v-model.trim="priceAdjustForm.remark" /></div>
+                      <div class="field wide"><label>修改原因 *</label><input class="input" required v-model.trim="priceAdjustForm.change_reason" placeholder="请填写本次批量调价原因" /></div>
                     </div>
                     <div class="toolbar-group" style="margin:10px 0">
                       <button class="btn" :disabled="priceAdjustLoading" @click="previewPriceAdjust()">预览调价</button>
-                      <button class="btn success" :disabled="!priceAdjustPreview || priceAdjustLoading" @click="applyPriceAdjust()">确认应用调价</button>
+                      <button class="btn success" :disabled="!priceAdjustPreviewValid || priceAdjustLoading" @click="applyPriceAdjust()">确认应用调价</button>
                     </div>
                     <div v-if="priceAdjustError" style="color:#dc2626;font-size:13px">{{ priceAdjustError }}</div>
                     <div v-if="priceAdjustPreview" style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px">
@@ -2028,18 +2040,25 @@
         <div class="modal">
           <div class="modal-head"><strong>{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small" @click="closeModal">关闭</button></div>
           <div class="modal-body">
-            <div v-if="modal.type === 'customer'" class="form-grid">
-              <div class="field"><label>客户编号</label><input class="input" type="number" v-model.number="customerForm.customer_number" /></div>
-              <div class="field"><label>客户缩写</label><input class="input" v-model.trim="customerForm.customer_code" /></div>
-              <div class="field"><label>客户名称</label><input class="input" v-model.trim="customerForm.name" /></div>
-              <div class="field"><label>联系人</label><input class="input" v-model.trim="customerForm.contact_person" /></div>
-              <div class="field"><label>电话</label><input class="input" v-model.trim="customerForm.phone" /></div>
-              <div class="field"><label>账期天数</label><input class="input" type="number" v-model.number="customerForm.payment_term_days" /></div>
-              <div class="field"><label>对账结转日</label><input class="input" type="number" min="1" max="28" step="1" v-model.number="customerForm.statement_cycle_start_day" /><div class="muted" style="margin-top:4px">1～28；默认20。20表示上月20日至本月19日归本月。</div></div>
-              <div class="field"><label>送货方式</label><select class="select" v-model="customerForm.delivery_method"><option>自提</option><option>配送</option><option>物流</option></select></div>
-              <div class="field wide"><label>地址</label><input class="input" v-model.trim="customerForm.address" /></div>
-              <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
-              <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
+            <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
+              <strong>他人已修改，打开版本{{ masterVersionConflict.expectedVersion }} / 当前版本{{ masterVersionConflict.currentVersion }}</strong>
+              <div class="toolbar-group" style="margin-top:8px"><button class="btn small" @click="loadServerLatestMaster">加载服务器最新版</button><button class="btn small" @click="openConflictVersionHistory">查看版本历史</button></div>
+            </div>
+            <div v-if="modal.type === 'customer'">
+              <div v-if="customerForm.id && !canEditCustomers" class="notice readonly-hint">当前为只读查看；客户资料控件已禁用。</div>
+              <fieldset class="form-grid" :class="'readonly-fieldset'" :disabled="!!customerForm.id && !canEditCustomers">
+                <div class="field"><label>客户编号</label><input class="input" type="number" v-model.number="customerForm.customer_number" /></div>
+                <div class="field"><label>客户缩写</label><input class="input" v-model.trim="customerForm.customer_code" /></div>
+                <div class="field"><label>客户名称</label><input class="input" v-model.trim="customerForm.name" /></div>
+                <div class="field"><label>联系人</label><input class="input" v-model.trim="customerForm.contact_person" /></div>
+                <div class="field"><label>电话</label><input class="input" v-model.trim="customerForm.phone" /></div>
+                <div class="field"><label>账期天数</label><input class="input" type="number" v-model.number="customerForm.payment_term_days" /></div>
+                <div class="field"><label>对账结转日</label><input class="input" type="number" min="1" max="28" step="1" v-model.number="customerForm.statement_cycle_start_day" /><div class="muted" style="margin-top:4px">1～28；默认20。20表示上月20日至本月19日归本月。</div></div>
+                <div class="field"><label>送货方式</label><select class="select" v-model="customerForm.delivery_method"><option>自提</option><option>配送</option><option>物流</option></select></div>
+                <div class="field wide"><label>地址</label><input class="input" v-model.trim="customerForm.address" /></div>
+                <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+                <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
+              </fieldset>
             </div>
             <div v-else-if="modal.type === 'quotationConvert'" class="product-edit-grid">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
@@ -2074,7 +2093,9 @@
               <div v-if="quotationConvertForm._recommendation_message" class="muted" style="margin-top:8px">{{ quotationConvertForm._recommendation_message }}</div>
               <div v-if="quotationConvertCreaseMismatch" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ quotationConvertCreaseMismatch }}</div>
             </div>
-            <div v-else-if="modal.type === 'product'" class="product-edit-grid">
+            <div v-else-if="modal.type === 'product'">
+              <div v-if="productForm.id && !canEditProducts" class="notice readonly-hint">当前为只读查看；常用箱资料控件已禁用。</div>
+              <fieldset class="product-edit-grid" :class="'readonly-fieldset'" :disabled="!!productForm.id && !canEditProducts">
               <div class="product-form-row product-core-row">
                 <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户"></search-select></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
@@ -2275,6 +2296,7 @@
                 <div v-if="productUsesMold(productForm)" class="field"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="false"></search-select><div class="muted" style="font-size:11px">仅模切工艺使用；请先在“仓库库存管理 → 模具位置”登记并绑定。</div><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
                 <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
+              </fieldset>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
@@ -2816,7 +2838,16 @@
                   <tbody><tr v-for="reservation in finishedInventoryReservations" :key="reservation.id"><td>{{ reservation.lot_number }}</td><td>{{ reservation.reserved_stock_quantity }}</td><td>{{ reservation.status }}</td><td>{{ formatDateTime(reservation.reserved_at) }}</td><td><button v-if="reservation.status==='active' && canSales && orderItemForm.requisition_status==='未报料'" type="button" class="btn small danger" @click="releaseFinishedInventoryReservation(reservation)">取消抵扣</button></td></tr></tbody>
                 </table>
               </div>
-              <div :class="['status',orderItemForm.product_id?'blue':'orange']">{{ orderItemForm.product_id ? "保存后将同步更新该常用箱资料。" : "当前明细未关联常用箱，本次只保存订单明细。" }}</div>
+              <div v-if="orderItemForm.product_id" class="panel" style="margin-top:10px;padding:10px">
+                <label class="remember-line"><input type="checkbox" v-model="orderItemForm.sync_product" /> 同步更新关联常用箱资料</label>
+                <div v-if="orderItemForm.sync_product" class="field" style="margin-top:8px"><label>同步原因 *</label><input class="input" v-model.trim="orderItemForm.product_change_reason" placeholder="例如：订单确认后同步最新材质和报料尺寸" /></div>
+                <div v-if="orderItemForm._product_error" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ orderItemForm._product_error }}</div>
+                <div v-if="orderItemForm._product_warnings?.length" class="status orange" style="display:block;white-space:normal;margin-top:8px">
+                  <div v-for="warning in orderItemForm._product_warnings" :key="warning.code || warning.message">{{ masterWarningText(warning) }}</div>
+                  <label class="remember-line" style="margin-top:6px"><input type="checkbox" v-model="orderItemForm._product_confirmed" /> 我已核对上述异常修改</label>
+                </div>
+              </div>
+              <div v-else class="status orange">当前明细未关联常用箱，本次只保存订单明细。</div>
               <div v-if="canDeleteOrders" class="danger-zone">
                 <div class="danger-zone-head" @click="showOrderItemDanger=!showOrderItemDanger">
                   <strong>⚠ 危险操作</strong>
@@ -2949,6 +2980,12 @@
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
                 <label class="remember-line"><input type="checkbox" v-model="requisitionMaterialForm.sync_product" /> 同步回订单关联的常用箱，避免下次报料恢复旧材质</label>
+                <div v-if="requisitionMaterialForm.sync_product" class="field wide"><label>同步原因 *</label><input class="input" v-model.trim="requisitionMaterialForm.product_change_reason" placeholder="例如：报料确认后同步最新材质和楞型" /></div>
+                <div v-if="requisitionMaterialForm._product_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm._product_error }}</div>
+                <div v-if="requisitionMaterialForm._product_warnings?.length" class="status orange" style="display:block;white-space:normal">
+                  <div v-for="warning in requisitionMaterialForm._product_warnings" :key="warning.code || warning.message">{{ masterWarningText(warning) }}</div>
+                  <label class="remember-line"><input type="checkbox" v-model="requisitionMaterialForm._product_confirmed" /> 我已核对上述异常修改</label>
+                </div>
               </div>
             </div>
             <div v-else-if="modal.type === 'mobileEntry'" style="text-align:center">
@@ -3537,6 +3574,85 @@
           </div>
         </div>
       </div>
+
+      <div v-if="masterChangeConfirm.visible" class="modal-backdrop master-change-backdrop" @click.self="closeMasterChangeConfirm">
+        <div class="modal" style="max-width:820px;max-height:90vh;overflow-y:auto">
+          <div class="modal-header">
+            <h3>{{ masterChangeConfirm.mode === 'restore' ? '确认恢复主数据版本' : '确认主数据变更' }}</h3>
+            <button class="btn small" :disabled="masterChangeConfirm.loading" @click="closeMasterChangeConfirm">关闭</button>
+          </div>
+          <div style="padding:16px">
+            <div v-if="masterChangeConfirm.conflict" class="notice danger" style="margin-bottom:12px">
+              <strong>他人已修改，打开版本{{ masterChangeConfirm.conflict.expectedVersion }} / 当前版本{{ masterChangeConfirm.conflict.currentVersion }}</strong>
+              <div>本地输入仍保留，不能强行覆盖服务器版本。</div>
+              <div class="toolbar-group" style="margin-top:8px"><button class="btn small" @click="loadServerLatestMaster">加载服务器最新版</button><button class="btn small" @click="openConflictVersionHistory">查看版本历史</button></div>
+            </div>
+            <div v-if="masterChangeConfirm.warnings.length" class="notice danger" style="margin-bottom:12px">
+              <strong>后端检测到异常修改，请逐项核对：</strong>
+              <ul class="master-warning-list"><li v-for="(warning,index) in masterChangeConfirm.warnings" :key="index">{{ masterWarningText(warning) }}</li></ul>
+            </div>
+            <div v-if="masterChangeConfirm.mode === 'restore'" class="notice" style="margin-bottom:12px">将从版本 {{ masterChangeConfirm.currentVersion }} 恢复到版本 {{ masterChangeConfirm.targetVersion }} 的数据内容；成功后会新增一个版本，不会删除历史。</div>
+            <strong>{{ masterChangeConfirm.mode === 'restore' ? '恢复反向差异' : '用户可读差异摘要' }}</strong>
+            <div v-if="masterChangeConfirm.changes.length" class="master-diff-list">
+              <div v-for="(change,index) in masterChangeConfirm.changes" :key="`${change.field || index}-${index}`" class="master-diff-row">
+                <strong>{{ change.label || masterFieldLabel(masterChangeConfirm.entity,change.field) }}</strong>
+                <span class="master-diff-value">{{ change.old_display ?? change.old_value ?? '（空）' }}</span><span>→</span>
+                <span class="master-diff-value">{{ change.new_display ?? change.new_value ?? '（空）' }}</span>
+              </div>
+            </div>
+            <div v-else class="muted" style="padding:8px 0">后端未返回逐字段差异，请依据警告和版本信息核对。</div>
+            <template v-if="masterChangeConfirm.backendChanges.length">
+              <strong>后端复核字段</strong>
+              <div class="master-diff-list">
+                <div v-for="(change,index) in masterChangeConfirm.backendChanges" :key="`backend-${change.field || index}-${index}`" class="master-diff-row">
+                  <strong>{{ change.label || masterFieldLabel(masterChangeConfirm.entity,change.field) }}</strong>
+                  <span class="master-diff-value">{{ change.old_display ?? change.old_value ?? '（未提供）' }}</span><span>→</span>
+                  <span class="master-diff-value">{{ change.new_display ?? change.new_value ?? '已变更' }}</span>
+                </div>
+              </div>
+            </template>
+            <div class="field" style="margin-top:12px"><label>{{ masterChangeConfirm.mode === 'restore' ? '恢复原因 *' : '修改原因 *' }}</label><textarea class="textarea" rows="3" v-model.trim="masterChangeConfirm.reason" placeholder="请填写可追溯的业务原因"></textarea></div>
+            <label v-if="masterChangeConfirm.requireAcknowledgement" style="display:flex;align-items:flex-start;gap:8px;margin-top:12px"><input type="checkbox" v-model="masterChangeConfirm.acknowledged" /><span>{{ masterChangeConfirm.mode === 'restore' ? '我已核对恢复差异' : '我已核对异常修改' }}</span></label>
+            <div v-if="masterChangeConfirm.error" class="notice danger" style="margin-top:12px">{{ masterChangeConfirm.error }}</div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn" :disabled="masterChangeConfirm.loading" @click="closeMasterChangeConfirm">返回编辑</button>
+            <button class="btn primary" :disabled="!masterChangeCanSubmit" @click="confirmMasterChange">{{ masterChangeConfirm.loading ? '提交中…' : (masterChangeConfirm.mode === 'restore' ? '确认恢复' : '确认并保存') }}</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="masterVersionHistory.visible" class="modal-backdrop version-history-backdrop" @click.self="closeMasterVersionHistory">
+        <div class="modal" style="max-width:980px;max-height:90vh;overflow-y:auto">
+          <div class="modal-header"><h3>版本历史 · {{ masterVersionHistory.title }}</h3><button class="btn small" @click="closeMasterVersionHistory">关闭</button></div>
+          <div style="padding:16px">
+            <div class="toolbar" style="margin-bottom:10px"><span class="muted">按版本从新到旧显示；当前版本 {{ masterVersionHistory.currentVersion || '-' }}</span><button class="btn small" :disabled="masterVersionHistory.loading" @click="loadMasterVersionHistory">刷新</button></div>
+            <div v-if="masterVersionHistory.error" class="notice danger">版本历史加载失败：{{ masterVersionHistory.error }}</div>
+            <div v-else-if="masterVersionHistory.loading" class="muted" style="padding:24px;text-align:center">版本历史加载中…</div>
+            <div v-else-if="!masterVersionHistory.items.length" class="empty">暂无版本记录</div>
+            <div v-else class="version-history-list">
+              <div v-for="item in masterVersionHistory.items" :key="item.version" class="version-history-card">
+                <div class="version-history-meta">
+                  <span :class="['status',Number(item.version) === Number(masterVersionHistory.currentVersion) ? 'green' : 'gray']">版本 {{ item.version }}</span>
+                  <span>{{ formatDateTime(item.created_at || item.changed_at || item.timestamp) }}</span>
+                  <span>操作人：{{ masterVersionOperator(item) }}</span>
+                  <span>动作：{{ masterActionLabel(item.action || item.operation) }}</span>
+                  <span style="flex:1">原因：{{ item.change_reason || item.reason || '-' }}</span>
+                  <button v-if="canAdmin && Number(item.version) < Number(masterVersionHistory.currentVersion)" class="btn small" @click="previewMasterRestore(item)">恢复预览</button>
+                </div>
+                <div v-if="masterVersionChanges(item).length" class="master-diff-list">
+                  <div v-for="(change,index) in masterVersionChanges(item)" :key="`${item.version}-${change.field || index}-${index}`" class="master-diff-row">
+                    <strong>{{ change.label || masterFieldLabel(masterVersionHistory.entity,change.field) }}</strong>
+                    <span class="master-diff-value">{{ change.old_display ?? change.old_value ?? '（空）' }}</span><span>→</span>
+                    <span class="master-diff-value">{{ change.new_display ?? change.new_value ?? '（空）' }}</span>
+                  </div>
+                </div>
+                <div v-else class="muted">该版本未记录字段差异。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div v-if="toast.message" :class="['toast', {error: toast.error}]">{{ toast.message }}</div>
     </div>
 
@@ -3616,14 +3732,14 @@
         deliveries: "deliveries.view", finance: "finance.view", system: "system.backup", permissions: "users.manage",
       };
       const blankCustomer = () => ({
-        id: null, customer_number: 1, customer_code: "", name: "",
+        id: null, version: null, customer_number: 1, customer_code: "", name: "",
         payment_term_days: 30, delivery_method: "配送", contact_person: "",
         statement_cycle_start_day: 20,
         phone: "", address: "", default_tax_rate: "0.13", invoice_title: "",
         tax_no: "", bank_account: "", remark: "", status: "active"
       });
       const blankProduct = () => ({
-        id: null, customer_id: null, product_code: "", customer_material_code: "",
+        id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
         box_style: "", print_content: "无印刷", printing_colors: "",
@@ -3645,7 +3761,7 @@
         _recommendation_message: "",
       });
       const blankMaterial = () => ({
-        id:null, code:"", paper_composition:"", layer_count:5,
+        id:null, version:null, code:"", paper_composition:"", layer_count:5,
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
         supplier_name:"", quote_date:null, remarks:"", is_active:true
       });
@@ -3656,6 +3772,17 @@
       const blankMaterialComposer = () => ({
         supplier_name:"", layer_count:5, material_code:"", usage_flute_type:"",
         quote_price:"", remarks:""
+      });
+      const blankMasterChangeConfirm = () => ({
+        visible:false, loading:false, mode:"update", entity:null, entityId:null,
+        expectedVersion:null, currentVersion:null, targetVersion:null,
+        changes:[], backendChanges:[], warnings:[], reason:"",
+        confirmationToken:null, requireAcknowledgement:false, acknowledged:false,
+        conflict:null, error:""
+      });
+      const blankMasterVersionHistory = () => ({
+        visible:false, loading:false, entity:null, entityId:null, title:"",
+        currentVersion:null, items:[], error:"", returnToConfirmation:false
       });
       let quotationLineKey = 0;
       const blankQuotationLine = () => ({
@@ -3742,8 +3869,8 @@
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
-            priceAdjustForm: { supplier_name: "苏州嘉林亿", adjust_percent: "", effective_date: "", remark: "" },
-            priceAdjustPreview: null,
+            priceAdjustForm: { supplier_name: "苏州嘉林亿", adjust_percent: "", effective_date: "", change_reason: "" },
+            priceAdjustPreview: null, priceAdjustPreviewKey: "",
             showPriceHistoryModal: false, priceHistory: { material_code: "", items: [] },
             productBoardCost: null,
             productBoardCostDetail: null,
@@ -3781,6 +3908,11 @@
             statementsTotal: 0, invoicesTotal: 0, pageSize: 25,
             pages: { customers: 1, products: 1, orders: 1, deliveries: 1, statements: 1, invoices: 1 },
             productTab: "products", modal: null,
+            masterEditBaseline: { customer:null, product:null, material:null },
+            masterChangeConfirm: blankMasterChangeConfirm(),
+            masterPendingSaveOptions: null,
+            masterVersionConflict: null,
+            masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [],
@@ -4091,6 +4223,18 @@
             if (!this.modal || this.modal.type !== "delivery") return "";
             return this.validateDeliveryForm();
           },
+          masterChangeCanSubmit() {
+            const state = this.masterChangeConfirm;
+            if (!state.visible || state.loading || state.conflict || !String(state.reason || "").trim()) return false;
+            if (state.requireAcknowledgement && !state.acknowledged) return false;
+            if ((state.mode === "restore" || state.requireAcknowledgement) && !state.confirmationToken) return false;
+            return true;
+          },
+          priceAdjustPreviewValid() {
+            return !!this.priceAdjustPreview
+              && !!this.priceAdjustPreviewKey
+              && this.priceAdjustPreviewKey === this.priceAdjustFormKey();
+          },
           canSaveModal() {
             if (!this.modal) return false;
             if (this.modal.type === "customer") return this.customerForm.id ? this.canEditCustomers : this.canCreateCustomers;
@@ -4294,7 +4438,15 @@
           "productForm.flap_mm"() { this.autoApplyProductRecommendations(); },
           "productForm.layer_count"() { this.refreshProductBoardCost(); },
           "productForm.flute_type"() { this.refreshProductBoardCost(); },
-          "productForm.crease_type"() { this.autoApplyProductRecommendations(); }
+          "productForm.crease_type"() { this.autoApplyProductRecommendations(); },
+          priceAdjustForm: {
+            deep: true,
+            handler() {
+              if (this.priceAdjustPreview && this.priceAdjustPreviewKey !== this.priceAdjustFormKey()) {
+                this.invalidatePriceAdjustPreview();
+              }
+            }
+          }
         },
         async mounted() {
           window.erpAuthRequired = () => {
@@ -4353,6 +4505,440 @@
           money(value) { return Number(value || 0).toFixed(2); },
           formatDateTime(value) { return value ? new Date(value).toLocaleString("zh-CN", { hour12:false }) : "-"; },
           fileSize(value) { return `${(Number(value || 0) / 1024 / 1024).toFixed(2)} MB`; },
+          masterEntityConfig(entity) {
+            const configs = {
+              customer: {
+                label:"客户", api:"customers", formKey:"customerForm", collection:"customers",
+                fields:[
+                  ["customer_number","客户编号"], ["customer_code","客户缩写"], ["name","客户名称"],
+                  ["contact_person","联系人"], ["phone","电话"], ["payment_term_days","账期天数"],
+                  ["statement_cycle_start_day","对账结转日"], ["delivery_method","送货方式"],
+                  ["address","地址"], ["status","状态"], ["remark","备注"]
+                ]
+              },
+              product: {
+                label:"常用箱", api:"products", formKey:"productForm", collection:"products",
+                fields:[
+                  ["customer_id","客户"], ["product_code","存货编码"], ["customer_material_code","客户料号"],
+                  ["product_name","产品名称"], ["box_style","箱型"], ["length_mm","长(mm)"],
+                  ["width_mm","宽(mm)"], ["height_mm","高(mm)"], ["splice_mode","拼箱方式"],
+                  ["pieces_per_box","每箱片数"], ["flap_mm","舌头(mm)"], ["report_length_mm","报料长(mm)"],
+                  ["report_width_mm","报料宽(mm)"], ["crease_type","压线类型"], ["crease_left_mm","左压线(mm)"],
+                  ["crease_middle_mm","中压线(mm)"], ["crease_right_mm","右压线(mm)"],
+                  ["base_report_length_mm","底报料长(mm)"], ["base_report_width_mm","底报料宽(mm)"],
+                  ["base_crease_type","底压线类型"], ["base_crease_left_mm","底左压线(mm)"],
+                  ["base_crease_middle_mm","底中压线(mm)"], ["base_crease_right_mm","底右压线(mm)"],
+                  ["base_report_notes","底料备注"], ["_material_supplier","材质供应商"], ["layer_count","层数"],
+                  ["flute_type","楞型"], ["material_id","材质"], ["_production_processes","生产工艺"],
+                  ["print_content","印刷内容"], ["report_notes","报料备注"], ["sale_unit_price","默认单价"],
+                  ["mold_tool_id","生产模具"], ["remark","备注"]
+                ]
+              },
+              material: {
+                label:"材质", api:"materials", formKey:"materialForm", collection:"materials",
+                fields:[
+                  ["code","材质代码"], ["layer_count","层数"], ["basis_weight_description","克重组合"],
+                  ["paper_composition","配纸"], ["quote_price","平方报价"], ["price_unit","计价单位"],
+                  ["supplier_name","供应商"], ["quote_date","报价日期"], ["remarks","备注"], ["is_active","状态"]
+                ]
+              }
+            };
+            return configs[entity] || null;
+          },
+          masterFieldLabel(entity, field) {
+            const config = this.masterEntityConfig(entity);
+            return config?.fields.find(([key]) => key === field)?.[1] || field || "字段";
+          },
+          masterCurrentForm(entity) {
+            const config = this.masterEntityConfig(entity);
+            return config ? this[config.formKey] : null;
+          },
+          cloneMasterRecord(value) {
+            return value == null ? value : JSON.parse(JSON.stringify(value));
+          },
+          beginMasterEdit(entity, form) {
+            this.masterEditBaseline[entity] = this.cloneMasterRecord(form);
+            this.masterVersionConflict = null;
+            this.masterChangeConfirm = blankMasterChangeConfirm();
+          },
+          masterComparableValue(entity, field, value) {
+            if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean).sort();
+            if (value === null || value === undefined || value === "") return "";
+            if (typeof value === "boolean") return value;
+            const numericFields = new Set([
+              "customer_number","payment_term_days","statement_cycle_start_day","customer_id","length_mm","width_mm",
+              "height_mm","pieces_per_box","flap_mm","report_length_mm","report_width_mm","crease_left_mm",
+              "crease_middle_mm","crease_right_mm","base_report_length_mm","base_report_width_mm","base_crease_left_mm",
+              "base_crease_middle_mm","base_crease_right_mm","layer_count","material_id","sale_unit_price","mold_tool_id","quote_price"
+            ]);
+            if (numericFields.has(field) && Number.isFinite(Number(value))) return Number(value);
+            return String(value).trim();
+          },
+          masterDisplayValue(entity, field, value) {
+            if (value === null || value === undefined || value === "") return "（空）";
+            if (Array.isArray(value)) return value.length ? value.join("、") : "（空）";
+            if (field === "customer_id") return this.customerName(Number(value));
+            if (field === "material_id") {
+              const rows = this.allMaterials.length ? this.allMaterials : this.materials;
+              const row = rows.find(item => Number(item.id) === Number(value));
+              return row ? `${row.code || "-"}｜${row.supplier_name || "-"}` : `材质#${value}`;
+            }
+            if (field === "mold_tool_id") {
+              const row = this.moldTools.find(item => Number(item.id) === Number(value));
+              return row ? (row.tool_code || row.name || `模具#${value}`) : `模具#${value}`;
+            }
+            if (field === "status") return value === "active" ? "启用" : value === "inactive" ? "停用" : String(value);
+            if (field === "is_active" || typeof value === "boolean") return value ? "启用" : "停用";
+            return String(value);
+          },
+          masterLocalChanges(entity) {
+            const config = this.masterEntityConfig(entity);
+            const original = this.masterEditBaseline[entity];
+            const current = this.masterCurrentForm(entity);
+            if (!config || !original || !current) return [];
+            const changes = [];
+            for (const [field,label] of config.fields) {
+              const oldValue = original[field];
+              const newValue = current[field];
+              const oldComparable = this.masterComparableValue(entity, field, oldValue);
+              const newComparable = this.masterComparableValue(entity, field, newValue);
+              if (JSON.stringify(oldComparable) === JSON.stringify(newComparable)) continue;
+              changes.push({
+                field, label, old_value:oldValue, new_value:newValue,
+                old_display:this.masterDisplayValue(entity, field, oldValue),
+                new_display:this.masterDisplayValue(entity, field, newValue)
+              });
+            }
+            if (entity === "product" && this.drawingFile) {
+              changes.push({field:"drawing_file",label:"新图纸版本",old_display:"（无新文件）",new_display:this.drawingFile.name || "已选择文件"});
+            }
+            return changes;
+          },
+          masterCurrentVersion(entity) {
+            const form = this.masterCurrentForm(entity);
+            const baseline = this.masterEditBaseline[entity];
+            return baseline?.version ?? form?.version ?? null;
+          },
+          openMasterChangeConfirmation(entity, changes) {
+            const form = this.masterCurrentForm(entity);
+            const previous = this.masterChangeConfirm;
+            const keepReason = previous.entity === entity && Number(previous.entityId) === Number(form?.id);
+            this.masterVersionConflict = null;
+            this.masterChangeConfirm = {
+              ...blankMasterChangeConfirm(), visible:true, entity, entityId:form?.id,
+              expectedVersion:this.masterCurrentVersion(entity), currentVersion:this.masterCurrentVersion(entity),
+              changes:this.cloneMasterRecord(changes), reason:keepReason ? previous.reason : ""
+            };
+          },
+          attachMasterUpdateMetadata(entity, payload, options = null) {
+            delete payload.version;
+            delete payload.expected_version;
+            delete payload.change_reason;
+            delete payload.confirmation_token;
+            const form = this.masterCurrentForm(entity);
+            if (!form?.id) return payload;
+            const expectedVersion = options?.expected_version ?? this.masterCurrentVersion(entity);
+            if (expectedVersion !== null && expectedVersion !== undefined) payload.expected_version = expectedVersion;
+            if (options?.change_reason) payload.change_reason = options.change_reason;
+            if (options?.confirmation_token) payload.confirmation_token = options.confirmation_token;
+            return payload;
+          },
+          normalizeMasterChanges(source, entity) {
+            if (!source) return [];
+            if (Array.isArray(source)) {
+              return source.map(item => {
+                if (typeof item === "string") return {field:item,label:this.masterFieldLabel(entity,item)};
+                if (!item || typeof item !== "object") return null;
+                const field = item.field || item.field_name || item.name || item.key || "";
+                const oldValue = item.old_value ?? item.old ?? item.before ?? item.from;
+                const newValue = item.new_value ?? item.new ?? item.after ?? item.to;
+                return {
+                  field, label:item.label || this.masterFieldLabel(entity,field), old_value:oldValue, new_value:newValue,
+                  old_display:oldValue === undefined ? undefined : this.masterDisplayValue(entity,field,oldValue),
+                  new_display:newValue === undefined ? undefined : this.masterDisplayValue(entity,field,newValue)
+                };
+              }).filter(Boolean);
+            }
+            if (typeof source === "string") return [{field:source,label:this.masterFieldLabel(entity,source)}];
+            if (typeof source !== "object") return [];
+            if (source.field || source.field_name) return this.normalizeMasterChanges([source], entity);
+            return Object.entries(source).map(([field,value]) => {
+              if (["code","warnings","confirmation_token","current_version","expected_version"].includes(field)) return null;
+              let oldValue;
+              let newValue;
+              if (Array.isArray(value)) [oldValue,newValue] = value;
+              else if (value && typeof value === "object") {
+                oldValue = value.old_value ?? value.old ?? value.before ?? value.from;
+                newValue = value.new_value ?? value.new ?? value.after ?? value.to;
+              } else newValue = value;
+              return {
+                field, label:this.masterFieldLabel(entity,field), old_value:oldValue, new_value:newValue,
+                old_display:oldValue === undefined ? undefined : this.masterDisplayValue(entity,field,oldValue),
+                new_display:newValue === undefined ? undefined : this.masterDisplayValue(entity,field,newValue)
+              };
+            }).filter(Boolean);
+          },
+          masterErrorDetail(error) {
+            const responseData = error?.response?.data;
+            const detail = responseData?.detail ?? responseData;
+            return detail && typeof detail === "object" ? detail : null;
+          },
+          handleMaster409(error, entity, context = {}) {
+            if (Number(error?.response?.status) !== 409) return false;
+            const detail = this.masterErrorDetail(error);
+            if (!detail?.code) return false;
+            const form = this.masterCurrentForm(entity);
+            const entityId = context.entityId ?? form?.id ?? this.masterChangeConfirm.entityId;
+            if (detail.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED") {
+              const current = this.masterChangeConfirm.entity === entity
+                ? this.masterChangeConfirm
+                : {...blankMasterChangeConfirm(), entity, entityId};
+              const warnings = Array.isArray(detail.warnings) ? detail.warnings : (detail.warnings ? [detail.warnings] : []);
+              this.masterVersionConflict = null;
+              this.masterChangeConfirm = {
+                ...current, visible:true, loading:false, mode:"update", entity, entityId,
+                expectedVersion:context.expectedVersion ?? current.expectedVersion ?? this.masterCurrentVersion(entity),
+                currentVersion:detail.current_version ?? current.currentVersion ?? this.masterCurrentVersion(entity),
+                changes:current.changes.length ? current.changes : this.masterLocalChanges(entity),
+                backendChanges:this.normalizeMasterChanges(detail.changed_fields || detail.diff || detail.changes, entity),
+                warnings, confirmationToken:detail.confirmation_token || detail.preview_token || detail.token || null,
+                requireAcknowledgement:true, acknowledged:false, conflict:null, error:""
+              };
+              return true;
+            }
+            if (detail.code === "MASTER_VERSION_CONFLICT") {
+              const conflict = {
+                entity, entityId,
+                expectedVersion:detail.expected_version ?? context.expectedVersion ?? this.masterCurrentVersion(entity),
+                currentVersion:detail.current_version
+              };
+              this.masterVersionConflict = conflict;
+              if (this.masterChangeConfirm.entity === entity && Number(this.masterChangeConfirm.entityId) === Number(entityId)) {
+                this.masterChangeConfirm = {...this.masterChangeConfirm,visible:true,loading:false,conflict,error:""};
+              }
+              return true;
+            }
+            return false;
+          },
+          handleIndirectProduct409(error, form) {
+            if (Number(error?.response?.status) !== 409 || !form) return false;
+            const detail = this.masterErrorDetail(error);
+            if (detail?.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED") {
+              form.product_confirmation_token = detail.confirmation_token || null;
+              form._product_warnings = Array.isArray(detail.warnings) ? detail.warnings : [];
+              form._product_confirmed = false;
+              form._product_error = "检测到常用箱关键字段异常变化，请核对并勾选确认后再次保存。";
+              return true;
+            }
+            if (detail?.code === "MASTER_VERSION_CONFLICT") {
+              form._product_error = `常用箱已被其他人修改（打开版本 ${detail.expected_version || "-"}，当前版本 ${detail.current_version || "-"}），请关闭并重新打开后再保存。`;
+              return true;
+            }
+            return false;
+          },
+          closeMasterChangeConfirm() {
+            if (this.masterChangeConfirm.loading) return;
+            this.masterChangeConfirm.visible = false;
+          },
+          async confirmMasterChange() {
+            if (!this.masterChangeCanSubmit) return;
+            if (this.masterChangeConfirm.mode === "restore") {
+              await this.restoreMasterVersion();
+              return;
+            }
+            const state = this.masterChangeConfirm;
+            const options = {
+              expected_version:state.currentVersion ?? state.expectedVersion,
+              change_reason:String(state.reason || "").trim(),
+              confirmation_token:state.confirmationToken || undefined
+            };
+            this.masterChangeConfirm.loading = true;
+            this.masterChangeConfirm.error = "";
+            this.masterPendingSaveOptions = options;
+            try { await this.saveModal(); }
+            finally { this.masterChangeConfirm.loading = false; }
+          },
+          masterVersionBase(entity, entityId) {
+            return `/api/master-data/${encodeURIComponent(entity)}/${encodeURIComponent(entityId)}`;
+          },
+          masterEntityTitle(entity, row) {
+            if (entity === "customer") return row.name || row.customer_code || `客户#${row.id}`;
+            if (entity === "product") return row.product_name || row.product_code || `常用箱#${row.id}`;
+            return row.code || `材质#${row.id}`;
+          },
+          async openMasterVersionHistory(entity, row, returnToConfirmation = false) {
+            if (!row?.id) return;
+            this.masterVersionHistory = {
+              ...blankMasterVersionHistory(), visible:true, entity, entityId:row.id,
+              title:this.masterEntityTitle(entity,row), currentVersion:row.version || null,
+              returnToConfirmation
+            };
+            if (returnToConfirmation) this.masterChangeConfirm.visible = false;
+            await this.loadMasterVersionHistory();
+          },
+          async loadMasterVersionHistory() {
+            const state = this.masterVersionHistory;
+            if (!state.visible || !state.entity || !state.entityId) return;
+            state.loading = true;
+            state.error = "";
+            try {
+              const {data} = await axios.get(`${this.masterVersionBase(state.entity,state.entityId)}/versions`);
+              const rows = Array.isArray(data) ? data : (data.items || data.versions || data.history || []);
+              state.items = rows.map(item => ({...item,version:item.version ?? item.version_number})).sort((a,b) => Number(b.version || 0) - Number(a.version || 0));
+              state.currentVersion = data?.current_version ?? data?.version ?? state.currentVersion ?? state.items[0]?.version ?? null;
+            } catch (error) {
+              state.items = [];
+              state.error = this.errorMessage(error) || "未知错误";
+            } finally { state.loading = false; }
+          },
+          closeMasterVersionHistory() {
+            const returnToConfirmation = this.masterVersionHistory.returnToConfirmation;
+            this.masterVersionHistory.visible = false;
+            if (returnToConfirmation && this.masterChangeConfirm.entity) this.masterChangeConfirm.visible = true;
+          },
+          openConflictVersionHistory() {
+            const conflict = this.masterVersionConflict || this.masterChangeConfirm.conflict;
+            if (!conflict?.entityId) return;
+            const form = this.masterCurrentForm(conflict.entity) || {id:conflict.entityId};
+            this.openMasterVersionHistory(conflict.entity,{...form,id:conflict.entityId,version:conflict.currentVersion},true);
+          },
+          masterVersionOperator(item) {
+            return item.actor_username || item.operator_name || item.operator || item.changed_by_name || item.changed_by || item.username || "-";
+          },
+          masterActionLabel(action) {
+            const value = String(action || "").toUpperCase();
+            return ({CREATE:"创建",UPDATE:"修改",RESTORE:"恢复",DELETE:"删除"})[value] || action || "-";
+          },
+          masterVersionChanges(item) {
+            return this.normalizeMasterChanges(item.changed_fields || item.field_changes || item.diff || item.changes || item.reverse_diff, this.masterVersionHistory.entity);
+          },
+          masterWarningText(warning) {
+            if (typeof warning === "string") return warning;
+            return warning?.message || warning?.text || warning?.warning || JSON.stringify(warning);
+          },
+          extractMasterVersionSnapshot(payload, entity) {
+            if (!payload || typeof payload !== "object") return null;
+            const candidates = [payload.snapshot,payload.object_data,payload.data,payload.state,payload.values,payload.payload,payload.entity,payload.current];
+            for (const candidate of candidates) {
+              if (!candidate || typeof candidate !== "object" || candidate === payload) continue;
+              const nested = this.extractMasterVersionSnapshot(candidate,entity);
+              if (nested) {
+                if (nested.version == null && payload.version != null) nested.version = payload.version;
+                return nested;
+              }
+            }
+            const config = this.masterEntityConfig(entity);
+            if (config?.fields.some(([field]) => Object.prototype.hasOwnProperty.call(payload,field))) return this.cloneMasterRecord(payload);
+            return null;
+          },
+          applyMasterSnapshot(entity, snapshot, entityId, version) {
+            const data = {...this.cloneMasterRecord(snapshot),id:entityId,version:version ?? snapshot.version};
+            if (entity === "customer") {
+              if (!data.status && data.is_active !== undefined) data.status = data.is_active ? "active" : "inactive";
+              this.customerForm = {...blankCustomer(),...data};
+              this.beginMasterEdit(entity,this.customerForm);
+              if (this.modal?.type === entity) this.modal.title = this.canEditCustomers ? "编辑客户" : "查看客户";
+            } else if (entity === "product") {
+              this.productForm = this.hydrateProductForm(data);
+              this.drawingFile = null;
+              this.beginMasterEdit(entity,this.productForm);
+              this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+              if (this.modal?.type === entity) this.modal.title = this.canEditProducts ? "编辑产品" : "查看产品";
+            } else if (entity === "material") {
+              this.materialForm = {...blankMaterial(),...data};
+              this.beginMasterEdit(entity,this.materialForm);
+            }
+          },
+          async loadServerLatestMaster() {
+            const conflict = this.masterVersionConflict || this.masterChangeConfirm.conflict;
+            if (!conflict?.entityId || !conflict.currentVersion) return;
+            this.masterChangeConfirm.error = "";
+            try {
+              const {data} = await axios.get(`${this.masterVersionBase(conflict.entity,conflict.entityId)}/versions/${encodeURIComponent(conflict.currentVersion)}`);
+              const snapshot = this.extractMasterVersionSnapshot(data,conflict.entity);
+              if (this.modal?.type === conflict.entity) {
+                if (!snapshot) throw new Error("服务器最新版缺少可加载的数据快照");
+                this.applyMasterSnapshot(conflict.entity,snapshot,conflict.entityId,conflict.currentVersion);
+              }
+              await this.refreshMasterEntity(conflict.entity);
+              if (this.masterVersionHistory.visible) await this.loadMasterVersionHistory();
+              this.masterVersionConflict = null;
+              this.masterChangeConfirm = blankMasterChangeConfirm();
+              this.showToast("已加载服务器最新版");
+            } catch (error) {
+              const message = this.errorMessage(error);
+              if (this.masterChangeConfirm.entity) this.masterChangeConfirm.error = message;
+              else this.showToast(message,true);
+            }
+          },
+          async refreshMasterEntity(entity) {
+            if (entity === "customer") await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
+            else if (entity === "product") await this.loadProducts();
+            else if (entity === "material") {
+              this.allMaterials = [];
+              this.materialSuppliers = [];
+              await this.loadMaterials();
+            }
+          },
+          async reloadOpenMasterDetail(entity, entityId) {
+            if (this.modal?.type !== entity || Number(this.masterCurrentForm(entity)?.id) !== Number(entityId)) return;
+            const config = this.masterEntityConfig(entity);
+            const {data} = await axios.get(`/api/master/${config.api}/${encodeURIComponent(entityId)}`);
+            this.applyMasterSnapshot(entity,data,entityId,data.version);
+          },
+          async previewMasterRestore(item) {
+            if (!this.canAdmin || !item?.version) return;
+            const history = this.masterVersionHistory;
+            this.loading = true;
+            try {
+              const expectedVersion = history.currentVersion;
+              const {data} = await axios.post(
+                `${this.masterVersionBase(history.entity,history.entityId)}/versions/${encodeURIComponent(item.version)}/restore-preview`,
+                {expected_version:expectedVersion}
+              );
+              const token = data.confirmation_token || data.preview_token || data.token || null;
+              this.masterChangeConfirm = {
+                ...blankMasterChangeConfirm(), visible:true, mode:"restore", entity:history.entity, entityId:history.entityId,
+                expectedVersion, currentVersion:data.current_version ?? expectedVersion, targetVersion:item.version,
+                changes:this.normalizeMasterChanges(data.reverse_diff || data.changes || data.diff || data.changed_fields,history.entity),
+                backendChanges:[], warnings:Array.isArray(data.warnings) ? data.warnings : (data.warnings ? [data.warnings] : []),
+                confirmationToken:token, requireAcknowledgement:true,
+                error:token ? "" : "恢复预览未返回确认令牌，不能执行恢复。"
+              };
+            } catch (error) {
+              if (!this.handleMaster409(error,history.entity,{entityId:history.entityId,expectedVersion:history.currentVersion})) {
+                this.showToast(`恢复预览失败：${this.errorMessage(error)}`,true);
+              }
+            } finally { this.loading = false; }
+          },
+          async restoreMasterVersion() {
+            const state = this.masterChangeConfirm;
+            if (!this.canAdmin || state.mode !== "restore" || !this.masterChangeCanSubmit) return;
+            state.loading = true;
+            state.error = "";
+            try {
+              await axios.post(
+                `${this.masterVersionBase(state.entity,state.entityId)}/versions/${encodeURIComponent(state.targetVersion)}/restore`,
+                {
+                  expected_version:state.currentVersion ?? state.expectedVersion,
+                  reason:String(state.reason || "").trim(),
+                  confirmation_token:state.confirmationToken
+                }
+              );
+              const entity = state.entity;
+              const entityId = state.entityId;
+              this.masterChangeConfirm = blankMasterChangeConfirm();
+              this.masterVersionConflict = null;
+              await this.refreshMasterEntity(entity);
+              await this.reloadOpenMasterDetail(entity,entityId);
+              if (this.masterVersionHistory.visible) await this.loadMasterVersionHistory();
+              this.showToast("旧版本已恢复，并已生成新的主数据版本");
+            } catch (error) {
+              if (!this.handleMaster409(error,state.entity,{entityId:state.entityId,expectedVersion:state.currentVersion ?? state.expectedVersion})) {
+                this.masterChangeConfirm.error = this.errorMessage(error);
+              }
+            } finally { this.masterChangeConfirm.loading = false; }
+          },
           sum(items, key) { return (items || []).reduce((total, item) => total + Number(item[key] || 0), 0); },
           customerName(id) { return this.customerOptions.find(row => row.id === id)?.name || this.customers.find(row => row.id === id)?.name || `客户#${id}`; },
           materialName(id, fallback) {
@@ -5459,33 +6045,76 @@
             return materialId != null && source.some(m => m.id === materialId);
           },
           // ===== v0.19.2-B 供应商调价 =====
+          priceAdjustFormKey() {
+            const form = this.priceAdjustForm || {};
+            return JSON.stringify({
+              supplier_name:String(form.supplier_name || "").trim(),
+              adjust_percent:String(form.adjust_percent || "").trim(),
+              effective_date:String(form.effective_date || ""),
+              change_reason:String(form.change_reason || "").trim()
+            });
+          },
+          invalidatePriceAdjustPreview() {
+            this.priceAdjustPreview = null;
+            this.priceAdjustPreviewKey = "";
+            if (this.showPriceAdjustModal) this.priceAdjustError = "调价条件已变化，请重新预览。";
+          },
+          priceAdjustRequestBody(includePreviewContract = false) {
+            const form = this.priceAdjustForm || {};
+            const reason = String(form.change_reason || "").trim();
+            const body = {
+              supplier_name:String(form.supplier_name || "").trim(),
+              adjust_percent:String(form.adjust_percent || "").trim(),
+              effective_date:form.effective_date || undefined,
+              remark:reason,
+              change_reason:reason
+            };
+            if (!body.effective_date) delete body.effective_date;
+            if (includePreviewContract && this.priceAdjustPreview) {
+              const preview = this.priceAdjustPreview;
+              const expectedVersions = preview.expected_versions ?? preview.expectedVersions ?? preview.apply_payload?.expected_versions;
+              const previewToken = preview.preview_token ?? preview.confirmation_token ?? preview.token ?? preview.apply_payload?.preview_token;
+              const confirmationTokens = preview.confirmation_tokens ?? preview.apply_payload?.confirmation_tokens;
+              if (expectedVersions !== undefined) body.expected_versions = expectedVersions;
+              if (confirmationTokens !== undefined) body.confirmation_tokens = confirmationTokens;
+              if (previewToken) {
+                body.preview_token = previewToken;
+                body.confirmation_token = previewToken;
+              }
+            }
+            return body;
+          },
           openPriceAdjust() {
             this.priceAdjustError = "";
             this.priceAdjustPreview = null;
+            this.priceAdjustPreviewKey = "";
             this.priceAdjustForm = {
               supplier_name: this.materialSupplierFilter || this.priceAdjustSuppliers[0] || "苏州嘉林亿",
-              adjust_percent: "", effective_date: new Date().toISOString().slice(0, 10), remark: ""
+              adjust_percent: "", effective_date: new Date().toISOString().slice(0, 10), change_reason: ""
             };
             this.showPriceAdjustModal = true;
           },
           async previewPriceAdjust() {
             this.priceAdjustError = ""; this.priceAdjustPreview = null; this.priceAdjustLoading = true;
             try {
-              const body = { ...this.priceAdjustForm };
-              if (!body.effective_date) delete body.effective_date;
+              if (!String(this.priceAdjustForm.change_reason || "").trim()) throw new Error("请填写修改原因");
+              const body = this.priceAdjustRequestBody(false);
               const { data } = await axios.post("/api/master/materials/price-adjustments/preview", body);
               this.priceAdjustPreview = data;
+              this.priceAdjustPreviewKey = this.priceAdjustFormKey();
             } catch (e) {
-              this.priceAdjustError = e.response?.data?.detail || "预览失败";
+              this.priceAdjustError = e.response?.data?.detail || e.message || "预览失败";
             } finally { this.priceAdjustLoading = false; }
           },
           async applyPriceAdjust() {
-            if (!this.priceAdjustPreview) return;
+            if (!this.priceAdjustPreviewValid) {
+              this.priceAdjustError = "调价条件已变化，请重新预览。";
+              return;
+            }
             if (!confirm(`确认对 ${this.priceAdjustForm.supplier_name} 应用调价 ${this.priceAdjustForm.adjust_percent}？将先备份数据库并写入价格历史。`)) return;
             this.priceAdjustError = ""; this.priceAdjustLoading = true;
             try {
-              const body = { ...this.priceAdjustForm };
-              if (!body.effective_date) delete body.effective_date;
+              const body = this.priceAdjustRequestBody(true);
               const { data } = await axios.post("/api/master/materials/price-adjustments/apply", body);
               alert(`调价完成：影响 ${data.affected_count} 条，批次 #${data.batch_id}。`);
               this.showPriceAdjustModal = false;
@@ -6439,7 +7068,9 @@
             const next = row ? JSON.parse(JSON.stringify(row)) : blankCustomer();
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
             if (!Number.isInteger(Number(next.statement_cycle_start_day)) || Number(next.statement_cycle_start_day) < 1 || Number(next.statement_cycle_start_day) > 28) next.statement_cycle_start_day = 20;
-            this.customerForm = next; this.modal = { type:"customer", title: row ? "编辑客户" : "新增客户" };
+            this.customerForm = next;
+            this.beginMasterEdit("customer",this.customerForm);
+            this.modal = { type:"customer", title: row ? (this.canEditCustomers ? "编辑客户" : "查看客户") : "新增客户" };
           },
           async openCustomerQuotations(row) {
             this.quotationCustomer = { id:row.id, name:row.name };
@@ -6757,7 +7388,8 @@
             this.drawingFile = null;
             // 拍快照用于检测未保存更改
             this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
-            this.modal = { type:"product", title: row ? "编辑产品" : "新增产品" };
+            this.beginMasterEdit("product",this.productForm);
+            this.modal = { type:"product", title: row ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
             this.$nextTick(() => this.autoApplyProductRecommendations());
           },
           normalizeProductDimensions(form) {
@@ -6941,6 +7573,7 @@
           },
           openMaterial(row=null) {
             this.materialForm = row ? {...blankMaterial(),...JSON.parse(JSON.stringify(row))} : blankMaterial();
+            this.beginMasterEdit("material",this.materialForm);
             this.modal={type:"material",title:row ? "编辑材质" : "新增材质"};
           },
           async togglePaperCodePanel() {
@@ -7151,8 +7784,16 @@
             this.mergeSuggestionsDeduction = {};
             this.modal = { type: 'mergeSuggestions', title: `报料合并建议 (${this.mergeSuggestions.length} 组)` };
           },
-          openRequisitionMaterialChange(row) {
+          async openRequisitionMaterialChange(row) {
             if (!this.canRequisition) return;
+            let productVersion = row.product_version || null;
+            if (row.product_id && !productVersion) {
+              try {
+                productVersion = (await axios.get(`/api/master/products/${row.product_id}`)).data.version || null;
+              } catch (error) {
+                this.showToast("常用箱版本读取失败，本次只能修改订单报料快照", true);
+              }
+            }
             this.requisitionMaterialForm = {
               item_id: row.item_id,
               customer_name: row.customer_name || "",
@@ -7162,7 +7803,14 @@
               material_id: row.material_id || null,
               layer_count: row.layer_count || null,
               flute_type: row.flute_type || null,
-              sync_product: true,
+              product_id: row.product_id || null,
+              product_version: productVersion,
+              sync_product: false,
+              product_change_reason: "",
+              product_confirmation_token: null,
+              _product_warnings: [],
+              _product_confirmed: false,
+              _product_error: "",
             };
             this.modal = { type:"requisitionMaterial", title:"更换供应商 / 材质" };
           },
@@ -7693,18 +8341,10 @@
             this.loading = true;
             try {
               const edit = item._edit;
-              const prodResp = await axios.get(`/api/master/products/${item.matched_product_id}`);
-              const prod = prodResp.data;
-              const payload = {
-                customer_id: prod.customer_id,
-                product_code: prod.product_code,
-                customer_material_code: prod.customer_material_code || prod.product_code,
+              const prod = (await axios.get(`/api/master/products/${item.matched_product_id}`)).data;
+              const fields = {
                 product_name: edit.product_name || prod.product_name,
                 material_id: edit.matched_material_id || prod.material_id,
-                length_mm: prod.length_mm,
-                width_mm: prod.width_mm,
-                height_mm: prod.height_mm,
-                box_category: prod.box_category || 'normal',
                 layer_count: edit.layer_count || prod.layer_count,
                 flute_type: edit.flute_type || prod.flute_type,
                 sale_unit_price: edit.unit_price || prod.sale_unit_price,
@@ -7715,9 +8355,9 @@
                 crease_left_mm: edit.crease_left_mm || null,
                 crease_middle_mm: edit.crease_middle_mm || null,
                 crease_right_mm: edit.crease_right_mm || null,
-                remark: prod.remark,
               };
-              await axios.put(`/api/master/products/${item.matched_product_id}`, payload);
+              const synced = await this.syncProductFieldsVersioned(item.matched_product_id,fields,"PDF 草稿人工确认后同步常用箱");
+              if (!synced) return;
               item.product_name = edit.product_name;
               item.specification = edit.specification;
               item.unit_price = edit.unit_price;
@@ -7752,23 +8392,91 @@
           toggleStatementDeliveryExpanded(row) {
             this.expandedStatementDeliveries[row.delivery_id] = !this.expandedStatementDeliveries[row.delivery_id];
           },
+          askMasterMutationReason(label, defaultReason = "") {
+            const value = window.prompt(`${label}\n请填写本次修改原因：`, defaultReason);
+            if (value === null) return null;
+            const reason = String(value).trim();
+            if (!reason) {
+              this.showToast("修改原因不能为空", true);
+              return null;
+            }
+            return reason;
+          },
+          async sendVersionedMasterMutation({method,url,row,body={},reasonLabel,defaultReason=""}) {
+            const reason = this.askMasterMutationReason(reasonLabel, defaultReason);
+            if (!reason) return null;
+            const expectedVersion = Number(row.version);
+            let confirmationToken = null;
+            while (true) {
+              try {
+                return await axios.request({
+                  method, url,
+                  data:{...body,expected_version:expectedVersion,change_reason:reason,confirmation_token:confirmationToken}
+                });
+              } catch (error) {
+                const detail = this.masterErrorDetail(error);
+                if (Number(error?.response?.status) === 409 && detail?.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED" && !confirmationToken) {
+                  const warnings = (detail.warnings || []).map(item => this.masterWarningText(item)).join("\n");
+                  if (!confirm(`检测到异常修改：\n${warnings || "关键主数据发生变化"}\n\n确认继续吗？`)) return null;
+                  confirmationToken = detail.confirmation_token || null;
+                  if (!confirmationToken) throw new Error("服务器未返回变更确认令牌，已终止提交，请刷新后重试。");
+                  continue;
+                }
+                if (detail?.code === "MASTER_VERSION_CONFLICT") {
+                  throw new Error(`数据版本冲突（期望版本 ${detail.expected_version ?? expectedVersion ?? "-"}，当前版本 ${detail.current_version ?? "-"}），已终止提交，请刷新后重试。`);
+                }
+                throw error;
+              }
+            }
+          },
+          async syncProductFieldsVersioned(productId, fields, defaultReason, expectedVersion = null) {
+            const product = (await axios.get(`/api/master/products/${productId}`)).data;
+            const reason = this.askMasterMutationReason("同步更新常用箱", defaultReason);
+            if (!reason) return null;
+            const requestedVersion = Number(expectedVersion ?? product.version);
+            let confirmationToken = null;
+            while (true) {
+              try {
+                return await axios.post(`/api/master/products/${productId}/sync-fields`, {
+                  fields,
+                  expected_version:requestedVersion,
+                  change_reason:reason,
+                  confirmation_token:confirmationToken,
+                });
+              } catch (error) {
+                const detail = this.masterErrorDetail(error);
+                if (Number(error?.response?.status) === 409 && detail?.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED" && !confirmationToken) {
+                  const warnings = (detail.warnings || []).map(item => this.masterWarningText(item)).join("\n");
+                  if (!confirm(`检测到异常修改：\n${warnings || "常用箱关键字段发生变化"}\n\n确认继续吗？`)) return null;
+                  confirmationToken = detail.confirmation_token || null;
+                  if (!confirmationToken) throw new Error("服务器未返回变更确认令牌，已终止同步，请刷新后重试。");
+                  continue;
+                }
+                if (detail?.code === "MASTER_VERSION_CONFLICT") {
+                  throw new Error(`常用箱版本冲突（期望版本 ${detail.expected_version ?? requestedVersion ?? "-"}，当前版本 ${detail.current_version ?? "-"}），已终止同步，请刷新后重试。`);
+                }
+                throw error;
+              }
+            }
+          },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { await axios.delete(`/api/master/customers/${row.id}`); await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row,reasonLabel:`停用客户“${row.name}”`,defaultReason:"停用客户"}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleCustomerStatus(row) {
             const action = row.is_active ? "停用" : "启用";
             if (!confirm(`确认${action}客户“${row.name}”吗？`)) return;
             try {
-              await axios.put(`/api/master/customers/${row.id}/status`, {is_active:!row.is_active});
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active},reasonLabel:`${action}客户“${row.name}”`,defaultReason:`${action}客户`});
+              if(!result)return;
               await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
               this.showToast(`客户已${action}`);
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
           async deleteProduct(row) {
             if (!confirm(`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`)) return;
-            try { await axios.delete(`/api/master/products/${row.id}`); await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row,reasonLabel:`将“${row.product_name}”移入垃圾站`,defaultReason:"常用箱移入垃圾站"}); if(!result)return; await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleProductTrash() {
@@ -7782,7 +8490,8 @@
           async restoreProduct(row) {
             if (!confirm(`确认恢复“${row.product_name}”吗？`)) return;
             try {
-              await axios.put(`/api/master/products/${row.id}/restore`);
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row,reasonLabel:`恢复“${row.product_name}”`,defaultReason:"从垃圾站恢复常用箱"});
+              if(!result)return;
               await Promise.all([this.loadProductTrash(), this.loadProducts()]);
               this.showToast("产品已恢复并重新启用");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
@@ -7790,7 +8499,8 @@
           async purgeProduct(row) {
             if (!confirm(`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`)) return;
             try {
-              await axios.delete(`/api/master/products/${row.id}/purge`);
+              const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row,reasonLabel:`彻底清理“${row.product_name}”`,defaultReason:"彻底清理无历史常用箱"});
+              if(!result)return;
               await this.loadProductTrash();
               this.showToast("产品已清理");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
@@ -7798,7 +8508,10 @@
           async emptyProductTrash() {
             if (!confirm("确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。")) return;
             try {
-              const { data } = await axios.post("/api/master/products/trash/empty");
+              const reason=this.askMasterMutationReason("清空产品垃圾站","清理无业务历史且无版本历史的常用箱");
+              if(!reason)return;
+              const expected_versions=Object.fromEntries((this.productTrashItems||[]).map(row=>[row.id,Number(row.version)]));
+              const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions,change_reason:reason});
               await this.loadProductTrash();
               this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
             } catch(error) { this.showToast(this.errorMessage(error), true); }
@@ -7807,14 +8520,15 @@
             const action = row.is_active ? "停用" : "启用";
             if (!confirm(`确认${action}纸箱“${row.product_name}”吗？`)) return;
             try {
-              await axios.put(`/api/master/products/${row.id}/status`, {is_active:!row.is_active});
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active},reasonLabel:`${action}纸箱“${row.product_name}”`,defaultReason:`${action}常用箱`});
+              if(!result)return;
               await this.loadProducts();
               this.showToast(`纸箱已${action}`);
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
           async deleteMaterial(row) {
-            if (!confirm(`确认删除材质“${row.code}”吗？`)) return;
-            try { await axios.delete(`/api/master/materials/${row.id}`); await this.loadMaterials(); this.showToast("材质已删除"); }
+            if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row,reasonLabel:`停用材质“${row.code}”`,defaultReason:"停用材质"}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           openOrder() {
@@ -8192,14 +8906,24 @@
                   `以下产品的 PDF 单价与常用箱默认价不同，是否将常用箱默认价更新为 PDF 单价？\n\n${lines}\n\n点击"确定"同步，"取消"保留常用箱原有默认价。`
                 );
                 if (doSync) {
+                  const syncSummary = { succeeded:[], cancelled:[], conflicted:[], failed:[] };
                   for (const c of uniqueConflicts) {
                     try {
-                      await axios.post(`/api/master/products/${c.product_id}/sync-fields`, {
-                        fields: { sale_unit_price: c.pdf_price }
-                      });
-                    } catch(e) { console.warn("sync price failed", c.product_id, e); }
+                      const synced = await this.syncProductFieldsVersioned(c.product_id,{sale_unit_price:c.pdf_price},"PDF 单价人工确认后同步常用箱");
+                      if (synced) syncSummary.succeeded.push(c.product_name);
+                      else syncSummary.cancelled.push(c.product_name);
+                    } catch(e) {
+                      const detail = this.masterErrorDetail(e);
+                      const message = this.errorMessage(e);
+                      if (detail?.code === "MASTER_VERSION_CONFLICT" || message.includes("版本冲突")) syncSummary.conflicted.push(c.product_name);
+                      else syncSummary.failed.push(c.product_name);
+                      console.warn("sync price failed", c.product_id, e);
+                    }
                   }
-                  this.showToast(`已同步 ${uniqueConflicts.length} 个产品默认价`);
+                  const summary = `PDF 默认价批量同步：成功 ${syncSummary.succeeded.length} 项；取消 ${syncSummary.cancelled.length} 项；版本冲突 ${syncSummary.conflicted.length} 项；失败 ${syncSummary.failed.length} 项。`;
+                  this.showToast(summary, syncSummary.conflicted.length > 0 || syncSummary.failed.length > 0);
+                } else {
+                  this.showToast(`PDF 默认价批量同步：成功 0 项；取消 ${uniqueConflicts.length} 项。`);
                 }
               }
             } finally { this.loading=false; }
@@ -8344,7 +9068,7 @@
             item._product_drawings = data.drawings || [];
             item._inventory_product = data;
             // 保存原始常用箱字段，用于提交时比对是否需要同步
-            item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type };
+            item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
             await this.recalculateOrderCost(index);
             this.refreshOrderLineInventory(item, this.orderForm.customer_id);
           },
@@ -8371,8 +9095,8 @@
               const ok = confirm(`订单明细「${item.product_name || item.product_code}」以下字段与常用箱不同：${fieldNames}\n\n是否同步更新到常用箱？`);
               if (ok) {
                 try {
-                  await axios.post(`/api/master/products/${item.product_id}/sync-fields`, { fields: changed });
-                  this.showToast("已同步到常用箱");
+                  const synced=await this.syncProductFieldsVersioned(item.product_id,changed,"新订单人工修改后同步常用箱",orig.version);
+                  if(synced)this.showToast("已同步到常用箱");
                 } catch (err) {
                   this.showToast("同步常用箱失败：" + this.errorMessage(err), true);
                 }
@@ -8504,7 +9228,13 @@
               print_content:product.print_content || "无印刷",
               product_remark:product.remark || "",
               drawing_file:item.drawing_file || item.product_drawing_file || product.drawings?.[0]?.image_path || null,
-              sync_product:!!item.product_id,
+              product_version:product.version || null,
+              sync_product:false,
+              product_change_reason:"",
+              product_confirmation_token:null,
+              _product_warnings:[],
+              _product_confirmed:false,
+              _product_error:"",
               _material_supplier: mat?.supplier_name || item.snapshot_supplier_name || product.material_supplier_name || "",
               _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
               _report_crease_touched:false,
@@ -9465,8 +10195,26 @@
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };
             this.productFormSnapshot = null;
+            this.masterEditBaseline = { customer:null, product:null, material:null };
+            this.masterVersionConflict = null;
+            this.masterChangeConfirm = blankMasterChangeConfirm();
+            this.masterPendingSaveOptions = null;
           },
           async saveModal() {
+            const masterOptions = this.masterPendingSaveOptions;
+            this.masterPendingSaveOptions = null;
+            const masterEntity = ["customer","product","material"].includes(this.modal?.type) ? this.modal.type : null;
+            const masterForm = masterEntity ? this.masterCurrentForm(masterEntity) : null;
+            if (masterEntity && masterForm?.id && !masterOptions) {
+              const changes = this.masterLocalChanges(masterEntity);
+              if (changes.length) {
+                this.openMasterChangeConfirmation(masterEntity,changes);
+                return false;
+              }
+              this.closeModal();
+              this.showToast("未检测到可保存的变化");
+              return true;
+            }
             this.loading = true;
             let successMessage = "保存成功";
             try {
@@ -9476,6 +10224,7 @@
                 const payload = { ...this.customerForm };
                 payload.statement_cycle_start_day = statementCycleStartDay;
                 delete payload.id; delete payload.is_active;
+                this.attachMasterUpdateMetadata("customer",payload,masterOptions);
                 if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
                 else await axios.post("/api/master/customers", payload);
                 await this.loadCustomers();
@@ -9519,6 +10268,7 @@
                 });
                 if (payload.sale_unit_price === "") payload.sale_unit_price = null;
                 payload.print_content = payload.print_content || "无印刷";
+                this.attachMasterUpdateMetadata("product",payload,masterOptions);
                 let saved;
                 if (this.productForm.id) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
                 else saved=(await axios.post("/api/master/products", payload)).data;
@@ -9534,6 +10284,7 @@
                 const payload={...this.materialForm}; delete payload.id;
                 delete payload.flute_type;
                 if (payload.quote_price==="") payload.quote_price=null;
+                this.attachMasterUpdateMetadata("material",payload,masterOptions);
                 if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
                 else await axios.post("/api/master/materials",payload);
                 await this.loadMaterials();
@@ -9593,7 +10344,19 @@
                 payload.material_id = this.orderItemForm.material_id || null;
                 payload.layer_count = this.orderItemForm.layer_count || null;
                 payload.flute_type = this.orderItemForm.flute_type || null;
-                payload.sync_product = !!this.orderItemForm.product_id;
+                payload.sync_product = !!this.orderItemForm.product_id && !!this.orderItemForm.sync_product;
+                if (payload.sync_product) {
+                  if (!this.orderItemForm.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开明细");
+                  if (!String(this.orderItemForm.product_change_reason || "").trim()) throw new Error("同步常用箱必须填写原因");
+                  if (this.orderItemForm.product_confirmation_token && !this.orderItemForm._product_confirmed) throw new Error("请先勾选已核对异常修改");
+                  payload.product_expected_version = Number(this.orderItemForm.product_version);
+                  payload.product_change_reason = String(this.orderItemForm.product_change_reason).trim();
+                  payload.product_confirmation_token = this.orderItemForm._product_confirmed ? this.orderItemForm.product_confirmation_token : null;
+                }
+                delete payload.product_version;
+                delete payload._product_warnings;
+                delete payload._product_confirmed;
+                delete payload._product_error;
                 await axios.put(`/api/orders/items/${this.orderItemForm.id}`, payload);
                 await Promise.all([this.loadOrders(), this.loadProducts()]);
                 successMessage = payload.sync_product ? "订单明细已保存，并同步更新常用箱资料" : "订单明细已保存";
@@ -9602,11 +10365,17 @@
                 const form = this.requisitionMaterialForm;
                 if (!form.material_id) throw new Error("请选择材质代码");
                 if (!form.flute_type) throw new Error("请选择楞型");
+                if (form.sync_product && !form.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开");
+                if (form.sync_product && !String(form.product_change_reason || "").trim()) throw new Error("同步常用箱必须填写原因");
+                if (form.sync_product && form.product_confirmation_token && !form._product_confirmed) throw new Error("请先勾选已核对异常修改");
                 const { data } = await axios.put(`/api/requisition/pending/${form.item_id}/material`, {
                   material_id:form.material_id,
                   layer_count:form.layer_count || null,
                   flute_type:form.flute_type || null,
                   sync_product:!!form.sync_product,
+                  product_expected_version:form.sync_product ? Number(form.product_version) : null,
+                  product_change_reason:form.sync_product ? String(form.product_change_reason || "").trim() : null,
+                  product_confirmation_token:form.sync_product && form._product_confirmed ? form.product_confirmation_token : null,
                 });
                 await Promise.all([this.loadRequisition(), this.loadProducts()]);
                 successMessage = data.message || "供应商和材质已更新";
@@ -9718,7 +10487,14 @@
                 return;
               }
               this.closeModal(); this.showToast(successMessage);
+              return true;
             } catch (error) {
+              if (masterEntity && masterForm?.id && this.handleMaster409(error,masterEntity,{
+                entityId:masterForm.id,
+                expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion(masterEntity)
+              })) return false;
+              if (this.modal?.type === "orderItem" && this.handleIndirectProduct409(error,this.orderItemForm)) return false;
+              if (this.modal?.type === "requisitionMaterial" && this.handleIndirectProduct409(error,this.requisitionMaterialForm)) return false;
               const message = this.modal?.type === "order"
                 ? this.normalizeOrderSaveError(error)
                 : this.modal?.type === "requisition"
@@ -9731,7 +10507,9 @@
                       cardboard_width: "纸板宽"
                     }) || this.errorMessage(error))
                   : this.errorMessage(error);
+              if (masterEntity && this.masterChangeConfirm.entity === masterEntity) this.masterChangeConfirm.error = message;
               this.showToast(message, true);
+              return false;
             }
             finally { this.loading = false; }
           },
@@ -9912,24 +10690,79 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
-          async applyHighConfidence() {
-            if (!confirm('对高可信候选自动写入 products.material_id（仅 material_id 为空的产品），确认？')) return;
+          systemBatchPreviewObjectSummary(preview, limit = 12) {
+            const rows = Array.isArray(preview.changes) ? preview.changes
+              : Array.isArray(preview.rows) ? preview.rows
+              : Array.isArray(preview.samples_update) ? preview.samples_update : [];
+            if (!rows.length) return '本次没有需要写入的对象。';
+            const lines = rows.slice(0, limit).map((row) => {
+              const object = row.product_name || row.product_code || row.key
+                || `${row.object_type || '对象'} #${row.object_id ?? row.id ?? '?'}`;
+              const updates = row.updates && typeof row.updates === 'object'
+                ? Object.entries(row.updates).map(([field, value]) => `${field}=${value ?? '空'}`).join('，')
+                : row.create && typeof row.create === 'object'
+                  ? `新建 ${Object.entries(row.create).map(([field, value]) => `${field}=${value ?? '空'}`).join('，')}`
+                  : row.proposed_flute_type || row.proposed_layer_count
+                    ? `楞型 ${row.current_flute_type || '空'}→${row.proposed_flute_type || '空'}，层数→${row.proposed_layer_count || '空'}`
+                    : row.new_cmc !== undefined
+                      ? `客户料号 ${row.old_cmc || '空'}→${row.new_cmc || '空'}`
+                      : row.fix || '将按预览执行变更';
+              return `• ${object}：${updates}`;
+            });
+            if (rows.length > limit) lines.push(`……其余 ${rows.length - limit} 个对象详见本次预览。`);
+            return lines.join('\n');
+          },
+          systemBatchPreviewError(error) {
+            if (Number(error?.response?.status) !== 409) return null;
+            const detail = error.response?.data?.detail;
+            const code = detail?.code;
+            if (code === 'SYSTEM_BATCH_PREVIEW_STALE' || code === 'SYSTEM_BATCH_OBJECT_CONFIRMATION_REQUIRED') {
+              return `批量预览已过期或对象/版本已变化，请重新预览并逐项确认后再执行。${detail?.message ? `（${detail.message}）` : ''}`;
+            }
+            return null;
+          },
+          async previewAndApplySystemBatch({ previewUrl, applyUrl, title, summary, onSuccess }) {
             this.loading = true;
             try {
-              const { data } = await axios.post('/api/system/material-mapping/apply-high-confidence');
-              this.showToast(`已更新 ${data.products_updated} 个产品，新建材质 ${data.materials_created} 个，复用 ${data.materials_reused} 个`);
-              await this.loadMaterialMapping(1);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+              const { data: preview } = await axios.get(previewUrl);
+              const previewToken = preview?.preview_token;
+              const confirmationTokens = preview?.confirmation_tokens;
+              if (!previewToken || !confirmationTokens || typeof confirmationTokens !== 'object') {
+                throw new Error('批量预览未返回完整确认凭据，不能执行写入。');
+              }
+              const message = `${title}预览\n${summary(preview)}\n\n对象/变更摘要：\n${this.systemBatchPreviewObjectSummary(preview)}\n\n预览确认仅在短时间内有效。请人工核对以上对象和变更后，确认执行？`;
+              if (!confirm(message)) return false;
+              const { data } = await axios.post(applyUrl, {
+                preview_token: previewToken,
+                confirmation_tokens: confirmationTokens,
+              });
+              await onSuccess(data);
+              return true;
+            } catch (error) {
+              this.showToast(this.systemBatchPreviewError(error) || this.errorMessage(error), true);
+              return false;
+            } finally { this.loading = false; }
+          },
+          async applyHighConfidence() {
+            await this.previewAndApplySystemBatch({
+              previewUrl: '/api/system/material-mapping/preview-high-confidence',
+              applyUrl: '/api/system/material-mapping/apply-high-confidence',
+              title: '高可信材质映射写入',
+              summary: data => `将更新产品 ${data.products_updated || 0} 个，新建材质 ${data.materials_created || 0} 个，复用 ${data.materials_reused || 0} 个；跳过无匹配 ${data.skipped_no_match || 0} 个、已有材质 ${data.skipped_already_set || 0} 个。`,
+              onSuccess: async data => {
+                this.showToast(`已更新 ${data.products_updated} 个产品，新建材质 ${data.materials_created} 个，复用 ${data.materials_reused} 个`);
+                await this.loadMaterialMapping(1);
+              },
+            });
           },
           async applyCustomerCodes() {
-            if (!confirm('批量规范客户料号：从品名中提取并写入 customer_material_code，旧值存入 legacy 字段，确认？')) return;
-            this.loading = true;
-            try {
-              const { data } = await axios.post('/api/system/material-mapping/apply-customer-codes');
-              this.showToast(`已更新 ${data.updated} 个产品料号，跳过 ${data.skipped} 个`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+            await this.previewAndApplySystemBatch({
+              previewUrl: '/api/system/material-mapping/preview-customer-codes',
+              applyUrl: '/api/system/material-mapping/apply-customer-codes',
+              title: '客户料号规范化',
+              summary: data => `将更新客户料号 ${data.will_update || 0} 个，跳过 ${data.skipped || 0} 个（共检查 ${data.total || 0} 个产品）。`,
+              onSuccess: async data => { this.showToast(`已更新 ${data.updated} 个产品料号，跳过 ${data.skipped} 个`); },
+            });
           },
           onProductFluteChange() {
             // 当选择楞型时自动推断层数（防止非法组合）
@@ -9965,22 +10798,22 @@
             finally { this.loading = false; }
           },
           async applyFluteMapping() {
-            if (!confirm('批量写入楞型：根据关联材质或材质文本识别楞型，写入 products.flute_type / layer_count。\n仅更新尚未设置楞型的产品，已有值不覆盖。\n\n请确认已提前完成数据库备份！')) return;
-            this.loading = true;
-            try {
-              const { data } = await axios.post('/api/system/flute-mapping/apply');
-              this.showToast(`楞型写入完成：已更新 ${data.updated} 个，跳过已有 ${data.skipped_already_set} 个，无法识别 ${data.skipped_unrecognized} 个`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+            await this.previewAndApplySystemBatch({
+              previewUrl: '/api/system/flute-mapping/preview',
+              applyUrl: '/api/system/flute-mapping/apply',
+              title: '楞型批量写入',
+              summary: data => `将更新 ${data.will_update || 0} 个产品，跳过已有楞型 ${data.already_set || 0} 个、无法识别 ${data.unrecognized || 0} 个（共 ${data.total_products || 0} 个产品）。`,
+              onSuccess: async data => { this.showToast(`楞型写入完成：已更新 ${data.updated} 个，跳过已有 ${data.skipped_already_set} 个，无法识别 ${data.skipped_unrecognized} 个`); },
+            });
           },
           async fixFluteConsistency() {
-            if (!confirm('修复非法楞型/层数组合：\n• 5层+单楞(A/B/E) → 层数改为3\n• 3层+双楞(AB/BE) → 楞型置空留人工确认\n\n请确认已提前完成数据库备份！')) return;
-            this.loading = true;
-            try {
-              const { data } = await axios.post('/api/system/flute-mapping/fix-consistency');
-              this.showToast(`一致性修复完成：5层→3层 ${data.fixed_5layer_to_3} 个，3层双楞置空 ${data.fixed_3layer_to_null} 个`);
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.loading = false; }
+            await this.previewAndApplySystemBatch({
+              previewUrl: '/api/system/flute-mapping/preview-consistency',
+              applyUrl: '/api/system/flute-mapping/fix-consistency',
+              title: '楞型/层数一致性修复',
+              summary: data => `5层单楞改为3层 ${data.fixed_5layer_to_3 || 0} 个，3层双楞置空 ${data.fixed_3layer_to_null || 0} 个。`,
+              onSuccess: async data => { this.showToast(`一致性修复完成：5层→3层 ${data.fixed_5layer_to_3} 个，3层双楞置空 ${data.fixed_3layer_to_null} 个`); },
+            });
           },
 
           // ── Phase 18: PDF 训练库 ──

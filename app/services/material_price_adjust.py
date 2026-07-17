@@ -18,6 +18,7 @@ import datetime as dt
 import re
 import shutil
 import sqlite3
+from collections.abc import Mapping
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
@@ -31,11 +32,17 @@ from app.models.material_price_history import (
     MaterialPriceHistory,
 )
 from app.models.product import Product
+from app.models.user import User
+from app.services.master_data_versioning import apply_versioned_update
 
 TWO_PLACES = Decimal("0.01")
 
 
 class PriceAdjustError(ValueError):
+    pass
+
+
+class PriceAdjustConflictError(PriceAdjustError):
     pass
 
 
@@ -96,6 +103,7 @@ def _detail_row(m: Material, new_price: Decimal | None, eff: dt.date | None) -> 
     return {
         "material_id": m.id,
         "material_code": m.code,
+        "version": m.version,
         "old_price": None if old is None else float(old),
         "new_price": None if new_price is None else float(new_price),
         "delta": None if delta is None else float(delta),
@@ -128,6 +136,7 @@ def preview(
         "old_max": float(max(old_vals)) if old_vals else None,
         "new_min": float(min(new_vals)) if new_vals else None,
         "new_max": float(max(new_vals)) if new_vals else None,
+        "expected_versions": {m.id: m.version for m in affected},
         "details": details,
     }
 
@@ -160,14 +169,48 @@ def apply(
     supplier_name: str,
     adjust_percent_raw: object,
     effective_date: dt.date | None,
-    remark: str | None,
+    expected_versions: Mapping[int, int],
+    change_reason: str,
+    confirmation_tokens: Mapping[int, str] | None,
+    user: User,
     operator: str | None,
 ) -> dict:
     """执行调价：先备份，再写 materials + 批次 + 历史。"""
+    reason = change_reason.strip()
+    if not reason:
+        raise PriceAdjustError("修改原因不能为空")
     percent = parse_adjust_percent(adjust_percent_raw)
     affected = select_affected_materials(session, supplier_name)
     if not affected:
         raise PriceAdjustError("没有符合条件的材质可调价")
+
+    current_ids = {material.id for material in affected}
+    preview_ids = {int(material_id) for material_id in expected_versions}
+    if preview_ids != current_ids:
+        raise PriceAdjustConflictError(
+            "预览后的材质范围已发生变化，请重新预览后再应用"
+        )
+    for material in affected:
+        expected_version = int(expected_versions[material.id])
+        if material.version != expected_version:
+            raise PriceAdjustConflictError(
+                f"材质 {material.code} 已从 v{expected_version} 变为 "
+                f"v{material.version}，请重新预览后再应用"
+            )
+
+    plans: list[tuple[Material, Decimal | None, Decimal | None, dict]] = []
+    for material in affected:
+        old_price = (
+            None if material.quote_price is None else Decimal(material.quote_price)
+        )
+        new_price = compute_new_price(material.quote_price, percent)
+        updates = {"quote_price": new_price}
+        if effective_date is not None:
+            updates["quote_date"] = effective_date
+        if any(getattr(material, key) != value for key, value in updates.items()):
+            plans.append((material, old_price, new_price, updates))
+    if not plans:
+        raise PriceAdjustError("本次调价没有实际字段变化")
 
     backup_path = backup_database()
 
@@ -175,17 +218,16 @@ def apply(
         supplier_name=supplier_name,
         adjust_percent=percent,
         effective_date=effective_date,
-        affected_count=len(affected),
-        remark=remark,
+        affected_count=len(plans),
+        remark=reason,
         operator=operator,
         backup_path=str(backup_path),
     )
     session.add(batch)
     session.flush()  # batch.id
 
-    for m in affected:
-        old_price = None if m.quote_price is None else Decimal(m.quote_price)
-        new_price = compute_new_price(m.quote_price, percent)
+    tokens = confirmation_tokens or {}
+    for m, old_price, new_price, updates in plans:
         session.add(
             MaterialPriceHistory(
                 material_id=m.id,
@@ -195,21 +237,29 @@ def apply(
                 new_price=new_price,
                 adjust_percent=percent,
                 effective_date=effective_date,
-                adjust_reason=remark,
+                adjust_reason=reason,
                 operator=operator,
                 batch_id=batch.id,
             )
         )
-        m.quote_price = new_price
-        if effective_date is not None:
-            m.quote_date = effective_date
+        apply_versioned_update(
+            session,
+            object_type="material",
+            entity=m,
+            updates=updates,
+            expected_version=int(expected_versions[m.id]),
+            user=user,
+            reason=reason,
+            source="api.materials.price_adjustment",
+            action="price_adjustment",
+            confirmation_token=tokens.get(m.id),
+        )
 
-    session.commit()
     return {
         "batch_id": batch.id,
         "supplier_name": supplier_name,
         "adjust_percent": float(percent),
-        "affected_count": len(affected),
+        "affected_count": len(plans),
         "backup_path": str(backup_path),
         "effective_date": effective_date.isoformat() if effective_date else None,
     }

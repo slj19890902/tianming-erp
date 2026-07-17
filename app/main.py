@@ -18,6 +18,7 @@ from app.api.deliveries import (
 from app.api.dashboard import router as dashboard_router
 from app.api.finance import router as finance_router
 from app.api.incoming import router as incoming_router
+from app.api.master_data_versions import router as master_data_versions_router
 from app.api.materials import router as materials_router
 from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
@@ -226,6 +227,15 @@ def create_app() -> FastAPI:
     for prefix, router, tag in router_specs:
         if prefix not in existing_paths:
             application.include_router(router, prefix=prefix, tags=[tag])
+    if not any(
+        route.path == "/api/master-data/{object_type}/{object_id}/versions"
+        for route in application.routes
+    ):
+        application.include_router(
+            master_data_versions_router,
+            prefix="/api/master-data",
+            tags=["master-data-versions"],
+        )
 
     application.add_api_route(
         "/api/health",

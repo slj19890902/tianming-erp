@@ -148,6 +148,8 @@ def test_sales_can_edit_assigned_customer_but_cannot_create_customer(
                 "name": "苏州天华超净科技股份有限公司",
                 "payment_term_days": 60,
                 "credit_limit": 80000,
+                "expected_version": 1,
+                "change_reason": "更新客户账期",
             },
         )
 
@@ -275,7 +277,7 @@ def test_product_status_toggle_hides_inactive_from_default_search(
         _login(client, "admin")
         disabled = client.put(
             "/api/master/products/1/status",
-            json={"is_active": False},
+            json={"is_active": False, "expected_version": 1, "change_reason": "停用测试产品"},
         )
         default_list = client.get("/api/master/products")
         full_list = client.get(
@@ -297,7 +299,11 @@ def test_admin_can_move_new_product_to_trash(master_data_app: FastAPI) -> None:
 
     with TestClient(master_data_app) as client:
         _login(client, "admin")
-        response = client.delete("/api/master/products/1")
+        response = client.request(
+            "DELETE",
+            "/api/master/products/1",
+            json={"expected_version": 1, "change_reason": "移入测试垃圾站"},
+        )
         default_list = client.get("/api/master/products")
 
     assert response.status_code == 200
@@ -343,7 +349,11 @@ def test_delete_used_product_moves_to_trash_and_preserves_order(
         raise_server_exceptions=False,
     ) as client:
         _login(client, "admin")
-        response = client.delete("/api/master/products/1")
+        response = client.request(
+            "DELETE",
+            "/api/master/products/1",
+            json={"expected_version": 1, "change_reason": "保留订单并移入垃圾站"},
+        )
 
     assert response.status_code == 200
     assert response.json()["deleted_at"] is not None

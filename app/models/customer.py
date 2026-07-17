@@ -29,6 +29,7 @@ class Customer(Base):
             "statement_cycle_start_day BETWEEN 1 AND 28",
             name="ck_customers_statement_cycle_start_day",
         ),
+        CheckConstraint("version >= 1", name="ck_customers_version"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -78,6 +79,12 @@ class Customer(Base):
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),

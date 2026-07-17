@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import PermissionChecker, get_db
+from app.api.deps import PermissionChecker, get_db, has_permission
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -185,7 +185,10 @@ class PendingMaterialUpdate(BaseModel):
     material_id: int
     layer_count: int | None = None
     flute_type: str | None = None
-    sync_product: bool = True
+    sync_product: bool = False
+    product_expected_version: int | None = Field(default=None, ge=1)
+    product_change_reason: str | None = Field(default=None, max_length=500)
+    product_confirmation_token: str | None = Field(default=None, max_length=2000)
 
     @field_validator("flute_type")
     @classmethod
@@ -2480,6 +2483,7 @@ def pending_requisitions(
                 "customer_id": customer.id,
                 "customer_name": customer.name,
                 "product_id": product.id,
+                "product_version": product.version,
                 "product_code": item.snapshot_product_code or product.product_code,
                 "product_name": item.snapshot_product_name,
                 "specification": item.snapshot_spec,
@@ -2585,6 +2589,23 @@ def update_pending_material(
         raise HTTPException(status_code=409, detail="已生成报料单的明细不能更换供应商或材质")
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细不能更换供应商或材质")
+    product_change_reason: str | None = None
+    if payload.sync_product:
+        if not has_permission(user, "products.edit"):
+            raise HTTPException(status_code=403, detail="缺少 products.edit 权限")
+        if not item.product_id:
+            raise HTTPException(status_code=409, detail="当前报料明细未关联常用箱")
+        if payload.product_expected_version is None:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须提供 product_expected_version",
+            )
+        product_change_reason = (payload.product_change_reason or "").strip()
+        if not product_change_reason:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须填写 product_change_reason",
+            )
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
@@ -2622,10 +2643,30 @@ def update_pending_material(
     item.flute_type = flute_type
     if payload.sync_product and item.product_id:
         product = db.get(Product, item.product_id)
-        if product is not None:
-            product.material_id = material.id
-            product.layer_count = layer_count
-            product.flute_type = flute_type
+        if product is None:
+            raise HTTPException(status_code=409, detail="关联常用箱不存在，报料明细未保存")
+        product_updates = {
+            field_name: value
+            for field_name, value in {
+                "material_id": material.id,
+                "layer_count": layer_count,
+                "flute_type": flute_type,
+            }.items()
+            if getattr(product, field_name) != value
+        }
+        from app.services.master_data_versioning import apply_versioned_update
+
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=product_updates,
+            expected_version=payload.product_expected_version,
+            user=user,
+            reason=product_change_reason,
+            source="requisition.pending-material.sync-product",
+            confirmation_token=payload.product_confirmation_token,
+        )
     _audit(
         db,
         user=user,

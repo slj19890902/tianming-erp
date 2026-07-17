@@ -26,6 +26,7 @@ from app.models.customer import Customer
 from app.models.material import Material
 from app.models.migration import MigrationEntityMap
 from app.models.product import Product
+from scripts.master_data_write_guard import reject_legacy_master_data_write_if_versioned
 
 
 DEFAULT_BOXERP_DATABASE = Path(r"Z:\sata1-18015598002\BoxERP\erp.db")
@@ -427,6 +428,11 @@ def migrate_phase3_data(
     messages: list[str] = []
     with closing(_source_connection(source_path)) as source, session_factory() as session:
         try:
+            if not dry_run:
+                reject_legacy_master_data_write_if_versioned(
+                    session,
+                    script_name="scripts/migrate_phase3_data.py",
+                )
             _update_customers(session, source, stats, messages)
             materials_by_code = _import_materials(session, source, stats)
             _import_products(session, materials_by_code, stats, messages)

@@ -102,13 +102,25 @@ def test_customer_api_reads_and_writes_statement_cycle_start_day(
             },
         )
         customer_id = created_custom.json()["id"]
+        update_payload = {
+            "customer_number": 2,
+            "customer_code": "CUSTOM",
+            "name": "Custom Cycle Customer",
+            "statement_cycle_start_day": 1,
+            "expected_version": 1,
+            "change_reason": "调整客户对账周期起始日",
+        }
+        update_preview = client.put(
+            f"/api/master/customers/{customer_id}",
+            json=update_payload,
+        )
         updated = client.put(
             f"/api/master/customers/{customer_id}",
             json={
-                "customer_number": 2,
-                "customer_code": "CUSTOM",
-                "name": "Custom Cycle Customer",
-                "statement_cycle_start_day": 1,
+                **update_payload,
+                "confirmation_token": update_preview.json()["detail"][
+                    "confirmation_token"
+                ],
             },
         )
         invalid = client.post(

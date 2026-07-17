@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from phase1_postgres.database import SessionLocal
 from phase1_postgres.models import Customer, Product
+from scripts.master_data_write_guard import reject_legacy_master_data_write_if_versioned
 
 
 DEFAULT_CSV_NAME = "2025年采购单.xlsx - 2020.1-2025.csv"
@@ -247,6 +248,11 @@ def upsert_record(session: Session, record: ExcelHistoryRecord) -> str:
 
 
 def import_csv_to_products(csv_path: Path | str, session: Session, *, commit: bool = False) -> dict[str, Any]:
+    if commit:
+        reject_legacy_master_data_write_if_versioned(
+            session,
+            script_name="scripts/import_excel_history.py",
+        )
     path = Path(csv_path)
     records = parse_csv(path)
     summary: dict[str, Any] = {"total_records": len(records), "created": 0, "updated": 0, "preview": []}

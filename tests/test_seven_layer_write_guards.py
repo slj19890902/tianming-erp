@@ -119,6 +119,12 @@ def _order_item(db, *, customer_id: int, user_id: int, product, material):
     return order, item
 
 
+def _confirmation_token(exc: HTTPException) -> str:
+    assert exc.status_code == 409
+    assert exc.detail["code"] == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+    return exc.detail["confirmation_token"]
+
+
 @pytest.mark.parametrize(
     ("layer_count", "flute_type"),
     [(3, "A"), (3, "B"), (3, "E"), (5, "AB"), (5, "BE"), (7, "AAA"), (7, "ABC")],
@@ -184,7 +190,12 @@ def test_product_post_put_schema_rejects_empty_seven_layer_flute(flute_type):
 
 
 def test_product_post_put_cannot_spoof_selected_material_layer(db):
-    from app.api.products import ProductPayload, create_product, update_product
+    from app.api.products import (
+        ProductPayload,
+        ProductUpdatePayload,
+        create_product,
+        update_product,
+    )
     from app.models.product import Product
 
     customer, user = _customer_and_user(db)
@@ -220,7 +231,7 @@ def test_product_post_put_cannot_spoof_selected_material_layer(db):
     product = db.get(Product, created["id"])
     assert (product.layer_count, product.flute_type) == (7, "AAA")
 
-    spoofed_update = ProductPayload(
+    spoofed_update = ProductUpdatePayload(
         customer_id=customer.id,
         product_code=product.product_code,
         customer_material_code=product.customer_material_code,
@@ -229,13 +240,15 @@ def test_product_post_put_cannot_spoof_selected_material_layer(db):
         box_category="normal",
         layer_count=3,
         flute_type=None,
+        expected_version=product.version,
+        change_reason="验证材质层数不可伪造",
     )
     with pytest.raises(HTTPException) as exc_info:
         update_product(product.id, spoofed_update, db=db, user=user)
     assert exc_info.value.status_code == 400
     assert (product.layer_count, product.flute_type) == (7, "AAA")
 
-    valid_update = ProductPayload(
+    valid_update = ProductUpdatePayload(
         customer_id=customer.id,
         product_code=product.product_code,
         customer_material_code=product.customer_material_code,
@@ -244,6 +257,13 @@ def test_product_post_put_cannot_spoof_selected_material_layer(db):
         box_category="normal",
         layer_count=None,
         flute_type="ABC",
+        expected_version=product.version,
+        change_reason="修正七层产品楞型",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        update_product(product.id, valid_update, db=db, user=user)
+    valid_update = valid_update.model_copy(
+        update={"confirmation_token": _confirmation_token(exc_info.value)}
     )
     update_product(product.id, valid_update, db=db, user=user)
     assert (product.layer_count, product.flute_type) == (7, "ABC")
@@ -266,7 +286,11 @@ def test_product_sync_fields_uses_selected_material_layer(db):
     with pytest.raises(HTTPException) as exc_info:
         sync_product_fields(
             product.id,
-            SyncFieldsPayload(fields={"remark": "不能绕过七层空楞型"}),
+            SyncFieldsPayload(
+                fields={"remark": "不能绕过七层空楞型"},
+                expected_version=product.version,
+                change_reason="验证七层楞型校验",
+            ),
             db=db,
             user=user,
         )
@@ -280,21 +304,30 @@ def test_product_sync_fields_uses_selected_material_layer(db):
                     "material_id": material.id,
                     "layer_count": 3,
                     "flute_type": "ABC",
-                }
+                },
+                expected_version=product.version,
+                change_reason="验证材质层数不可伪造",
             ),
             db=db,
             user=user,
         )
     assert exc_info.value.status_code == 400
 
+    sync_payload = SyncFieldsPayload(
+        fields={
+            "material_id": material.id,
+            "layer_count": 7,
+            "flute_type": "ABC",
+        },
+        expected_version=product.version,
+        change_reason="同步订单确认的七层楞型",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        sync_product_fields(product.id, sync_payload, db=db, user=user)
     sync_product_fields(
         product.id,
-        SyncFieldsPayload(
-            fields={
-                "material_id": material.id,
-                "layer_count": 7,
-                "flute_type": "ABC",
-            }
+        sync_payload.model_copy(
+            update={"confirmation_token": _confirmation_token(exc_info.value)}
         ),
         db=db,
         user=user,
@@ -455,6 +488,8 @@ def test_requisition_material_replacement_rejects_empty_or_spoofed_flute(
                 layer_count=7,
                 flute_type=flute_type,
                 sync_product=True,
+                product_expected_version=product.version,
+                product_change_reason="验证七层楞型校验",
             ),
             db=db,
             user=user,
@@ -497,19 +532,28 @@ def test_requisition_material_replacement_stores_snapshot_not_dictionary_flute(d
                 layer_count=3,
                 flute_type="AAA",
                 sync_product=True,
+                product_expected_version=product.version,
+                product_change_reason="验证材质层数不可伪造",
             ),
             db=db,
             user=user,
         )
     assert exc_info.value.status_code == 400
 
+    sync_payload = PendingMaterialUpdate(
+        material_id=seven_layer.id,
+        layer_count=7,
+        flute_type="AAA",
+        sync_product=True,
+        product_expected_version=product.version,
+        product_change_reason="报料材质调整同步常用箱",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        update_pending_material(item.id, sync_payload, db=db, user=user)
     update_pending_material(
         item.id,
-        PendingMaterialUpdate(
-            material_id=seven_layer.id,
-            layer_count=7,
-            flute_type="AAA",
-            sync_product=True,
+        sync_payload.model_copy(
+            update={"product_confirmation_token": _confirmation_token(exc_info.value)}
         ),
         db=db,
         user=user,
@@ -599,7 +643,7 @@ def test_order_free_text_cannot_disguise_seven_layer_code(db):
 def test_bulk_flute_mapping_never_downgrades_linked_seven_layer_material(db):
     from app.services.flute_mapping import apply_flute_mapping, preview_flute_mapping
 
-    customer, _ = _customer_and_user(db)
+    customer, user = _customer_and_user(db)
     material = _material(db, layer_count=7, code="JA616AJ")
     product = _product(
         db,
@@ -613,7 +657,7 @@ def test_bulk_flute_mapping_never_downgrades_linked_seven_layer_material(db):
     db.commit()
 
     preview = preview_flute_mapping(db)
-    result = apply_flute_mapping(db)
+    result = apply_flute_mapping(db, user=user)
 
     assert all(row.product_id != product.id for row in preview.rows)
     assert result.updated == 0

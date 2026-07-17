@@ -44,6 +44,22 @@ def _mat(session, code, supplier, price, *, active=True, layer=3, flute="B"):
     return m
 
 
+def _admin(session):
+    from app.models.user import User
+
+    user = User(
+        username="price-adjust-admin",
+        password_hash="not-used",
+        role="admin",
+        real_name="调价测试管理员",
+        is_active=True,
+        must_change_password=False,
+    )
+    session.add(user)
+    session.flush()
+    return user
+
+
 class TestParsePercent:
     def test_plus_percent(self):
         assert pa.parse_adjust_percent("+5%") == Decimal("5")
@@ -126,12 +142,26 @@ class TestApply:
         monkeypatch.setattr(pa, "backup_database", fake_backup)
         _mat(db, "C1", "苏州嘉林亿", "1.00")
         _mat(db, "C2", "苏州嘉林亿", "2.00")
+        admin = _admin(db)
         db.commit()
         eff = dt.date(2026, 7, 1)
+        preview = pa.preview(
+            db,
+            supplier_name="苏州嘉林亿",
+            adjust_percent_raw="5",
+            effective_date=eff,
+        )
         result = pa.apply(
             db, supplier_name="苏州嘉林亿", adjust_percent_raw="5",
-            effective_date=eff, remark="季度调价", operator="admin",
+            effective_date=eff,
+            expected_versions=preview["expected_versions"],
+            change_reason="季度调价",
+            confirmation_tokens={},
+            user=admin,
+            operator="admin",
         )
+        assert db.in_transaction()
+        db.commit()
         assert marker["backed_up"] is True
         assert result["affected_count"] == 2
         from app.models.material import Material
@@ -147,9 +177,12 @@ class TestApply:
 
     def test_apply_empty_raises(self, db, monkeypatch):
         monkeypatch.setattr(pa, "backup_database", lambda: Path("nope"))
+        admin = _admin(db)
         with pytest.raises(pa.PriceAdjustError):
             pa.apply(db, supplier_name="不存在", adjust_percent_raw="5",
-                     effective_date=None, remark=None, operator="admin")
+                     effective_date=None, expected_versions={},
+                     change_reason="季度调价", confirmation_tokens={},
+                     user=admin, operator="admin")
 
 
 class TestBoardCostReuse:

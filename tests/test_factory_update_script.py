@@ -19,8 +19,43 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.22.6"
-    assert "\u601d\u8fc8\u5c14" in APP_VERSION_NAME
+    assert APP_VERSION == "v0.22.8"
+    assert "\u4e3b\u6570\u636e\u7248\u672c\u8ffd\u6eaf" in APP_VERSION_NAME
+    assert "\u5e76\u53d1\u4fdd\u62a4" in APP_VERSION_NAME
+    assert any(
+        "\u5ba2\u6237" in item
+        and "\u5e38\u7528\u7bb1" in item
+        and "\u6750\u8d28" in item
+        and "\u7248\u672c\u5386\u53f2" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        "\u4fee\u6539\u539f\u56e0" in item
+        and "\u64cd\u4f5c\u8005" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        "\u5e76\u53d1\u51b2\u7a81" in item
+        and "409" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        "\u5f02\u5e38\u53d8\u66f4" in item
+        and "\u4e8c\u6b21\u786e\u8ba4" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        "\u7ba1\u7406\u5458\u6062\u590d" in item
+        and "\u65b0\u7248\u672c" in item
+        and "\u6062\u590d\u539f\u56e0" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        "\u654f\u611f\u4ef7\u683c" in item
+        and "\u6743\u9650" in item
+        and "\u8131\u654f" in item
+        for item in APP_CHANGELOG
+    )
     assert any(
         "\u6587\u672c\u5c42" in item
         and "OCR" in item

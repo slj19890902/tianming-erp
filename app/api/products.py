@@ -13,8 +13,8 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import String, cast, func, or_, select
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from app.api.deps import (
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
 from app.models.material import Material
+from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.mold_tool import MoldTool
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
@@ -44,12 +45,14 @@ from app.services.product_drawings import (
     save_product_drawing_files,
 )
 from app.services.product_lifecycle import (
-    archive_purged_product,
     has_historical_references,
-    move_to_trash,
-    restore_from_trash,
 )
 from app.services.report_crease import crease_width_error
+from app.services.master_data_versioning import (
+    apply_versioned_update,
+    record_versioned_create,
+    serialize_versioned_entity,
+)
 
 
 router = APIRouter()
@@ -314,11 +317,61 @@ class ProductResponse(ProductPayload):
     deleted_at: datetime | None = None
     deleted_by: int | None = None
     purged_at: datetime | None = None
+    version: int
     drawings: list[ProductDrawingResponse] = Field(default_factory=list)
 
 
-class ProductStatusPayload(BaseModel):
+class ProductMutationPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
+
+
+class ProductUpdatePayload(ProductPayload):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
+
+
+class ProductStatusPayload(ProductMutationPayload):
     is_active: bool
+
+
+class ProductTrashEmptyPayload(BaseModel):
+    expected_versions: dict[int, int]
+    change_reason: str = Field(min_length=1)
+    confirmation_tokens: dict[int, str] = Field(default_factory=dict)
+
+    @field_validator("expected_versions")
+    @classmethod
+    def validate_expected_versions(cls, value: dict[int, int]) -> dict[int, int]:
+        if any(version < 1 for version in value.values()):
+            raise ValueError("预期版本必须大于等于1")
+        return value
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
 
 
 PRICE_FIELDS = {
@@ -354,7 +407,7 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     cost.view permission.  On updates their stored values are consequently
     retained; on creates they keep the model defaults.
     """
-    data = payload.model_dump()
+    data = payload.model_dump(include=set(ProductPayload.model_fields))
     if not has_permission(user, "cost.view"):
         for field in _COST_SENSITIVE_PRODUCT_FIELDS:
             data.pop(field, None)
@@ -377,6 +430,7 @@ def _response(product: Product, user: User) -> dict:
         "deleted_at": product.deleted_at,
         "deleted_by": product.deleted_by,
         "purged_at": product.purged_at,
+        "version": product.version,
         "drawings": [
             ProductDrawingResponse.model_validate(drawing).model_dump()
             for drawing in product.drawings
@@ -419,6 +473,77 @@ def _response(product: Product, user: User) -> dict:
         for field in PRICE_FIELDS:
             data.pop(field, None)
     return data
+
+
+def _changed_updates(product: Product, updates: dict) -> dict:
+    return {
+        key: value
+        for key, value in updates.items()
+        if getattr(product, key, None) != value
+    }
+
+
+def _has_version_history(db: Session, product_id: int) -> bool:
+    return db.scalar(
+        select(MasterDataObjectVersion.id)
+        .where(
+            MasterDataObjectVersion.object_type == "product",
+            MasterDataObjectVersion.object_id == product_id,
+        )
+        .limit(1)
+    ) is not None
+
+
+def _raise_product_version_conflict(product: Product, expected_version: int) -> None:
+    if product.version != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MASTER_VERSION_CONFLICT",
+                "expected_version": expected_version,
+                "current_version": product.version,
+            },
+        )
+
+
+def _cas_delete_product(
+    db: Session,
+    *,
+    product_id: int,
+    expected_version: int,
+) -> None:
+    version_history_exists = select(MasterDataObjectVersion.id).where(
+        MasterDataObjectVersion.object_type == "product",
+        MasterDataObjectVersion.object_id == product_id,
+    ).exists()
+    result = db.execute(
+        delete(Product)
+        .where(
+            Product.id == product_id,
+            Product.version == expected_version,
+            ~version_history_exists,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 1:
+        return
+
+    if _has_version_history(db, product_id):
+        raise HTTPException(
+            status_code=409,
+            detail="该常用箱已有版本历史，禁止物理删除；请保留归档记录",
+        )
+    current_version = db.scalar(
+        select(Product.version).where(Product.id == product_id)
+    )
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "MASTER_VERSION_CONFLICT",
+            "expected_version": expected_version,
+            "current_version": current_version,
+        },
+    )
 
 
 def _validate_references(
@@ -553,35 +678,6 @@ def list_product_trash(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    expired = db.scalars(
-        select(Product).where(
-            Product.deleted_at.is_not(None),
-            Product.purged_at.is_(None),
-            Product.deleted_at <= datetime.now() - timedelta(days=30),
-        )
-    ).all()
-    for product in expired:
-        details = {
-            "customer_id": product.customer_id,
-            "product_code": product.product_code,
-            "reason": "30_day_expired",
-        }
-        if has_historical_references(db, product.id):
-            archive_purged_product(product, user)
-            mode = "archive"
-        else:
-            db.delete(product)
-            mode = "physical_delete"
-        audit_master_change(
-            db,
-            user=user,
-            action="PURGE",
-            resource="Product",
-            resource_id=product.id,
-            details={**details, "mode": mode},
-        )
-    if expired:
-        db.commit()
     query = (
         select(Product)
         .where(
@@ -604,6 +700,7 @@ def list_product_trash(
 
 @router.post("/trash/empty")
 def empty_product_trash(
+    payload: ProductTrashEmptyPayload,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
@@ -613,30 +710,51 @@ def empty_product_trash(
             Product.purged_at.is_(None),
         )
     ).all()
+    for product in products:
+        expected_version = payload.expected_versions.get(product.id)
+        if expected_version is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"常用箱 {product.product_code} 缺少预期版本，请刷新垃圾站后重试",
+            )
+        _raise_product_version_conflict(product, expected_version)
+        if has_historical_references(db, product.id):
+            raise HTTPException(
+                status_code=409,
+                detail="该常用箱已有业务历史引用，必须保留垃圾站记录",
+            )
+        if _has_version_history(db, product.id):
+            raise HTTPException(
+                status_code=409,
+                detail="该常用箱已有版本历史，禁止物理删除；请保留归档记录",
+            )
     deleted_count = 0
     archived_count = 0
-    for product in products:
-        details = {
-            "customer_id": product.customer_id,
-            "product_code": product.product_code,
-        }
-        if has_historical_references(db, product.id):
-            archive_purged_product(product, user)
-            archived_count += 1
-            action = "PURGE_ARCHIVE"
-        else:
-            db.delete(product)
+    try:
+        for product in products:
+            details = {
+                "customer_id": product.customer_id,
+                "product_code": product.product_code,
+            }
+            _cas_delete_product(
+                db,
+                product_id=product.id,
+                expected_version=payload.expected_versions[product.id],
+            )
             deleted_count += 1
             action = "PURGE"
-        audit_master_change(
-            db,
-            user=user,
-            action=action,
-            resource="Product",
-            resource_id=product.id,
-            details=details,
-        )
-    db.commit()
+            audit_master_change(
+                db,
+                user=user,
+                action=action,
+                resource="Product",
+                resource_id=product.id,
+                details={**details, "reason": payload.change_reason},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {
         "deleted_count": deleted_count,
         "archived_count": archived_count,
@@ -787,6 +905,14 @@ def create_product(
     try:
         db.add(product)
         db.flush()
+        record_versioned_create(
+            db,
+            object_type="product",
+            entity=product,
+            user=user,
+            reason="新增常用箱",
+            source="api.products.create",
+        )
         audit_master_change(
             db,
             user=user,
@@ -799,6 +925,9 @@ def create_product(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="同客户产品编码或客户料号重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(product)
     return _response(product, user)
 
@@ -806,7 +935,7 @@ def create_product(
 @router.put("/{product_id}")
 def update_product(
     product_id: int,
-    payload: ProductPayload,
+    payload: ProductUpdatePayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
@@ -823,27 +952,47 @@ def update_product(
     _validate_product_material_flute(db, payload)
     _validate_changed_product_crease_widths(payload, product)
     before = _product_payload_snapshot(product)
-    write_data = _product_write_data(payload, user)
-    for key, value in write_data.items():
-        setattr(product, key, value)
-    product.product_code = clean_code(payload.product_code)
-    product.customer_material_code = clean_code(payload.customer_material_code)
-    product.product_name = payload.product_name.strip()
-    product.manual_modified = True
-    product.manual_modified_at = datetime.now()
+    updates = _product_write_data(payload, user)
+    versioned_fields = set(serialize_versioned_entity("product", product))
+    updates = {
+        key: value for key, value in updates.items() if key in versioned_fields
+    }
+    updates.update(
+        product_code=clean_code(payload.product_code),
+        customer_material_code=clean_code(payload.customer_material_code),
+        product_name=payload.product_name.strip(),
+    )
+    changed = _changed_updates(product, updates)
     try:
-        audit_master_change(
+        apply_versioned_update(
             db,
+            object_type="product",
+            entity=product,
+            updates=updates,
+            expected_version=payload.expected_version,
             user=user,
-            action="UPDATE",
-            resource="Product",
-            resource_id=product.id,
-            details={"before": before, "after": _product_payload_snapshot(product)},
+            reason=payload.change_reason,
+            source="api.products.update",
+            confirmation_token=payload.confirmation_token,
         )
+        product.manual_modified = True
+        product.manual_modified_at = datetime.now()
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="UPDATE",
+                resource="Product",
+                resource_id=product.id,
+                details={"before": before, "after": updates},
+            )
         db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="同客户产品编码或客户料号重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(product)
     return _response(product, user)
 
@@ -860,16 +1009,34 @@ def update_product_status(
     if product.deleted_at is not None:
         raise HTTPException(status_code=400, detail="请先从垃圾站恢复该纸箱")
     before = product.is_active
-    product.is_active = payload.is_active
-    audit_master_change(
-        db,
-        user=user,
-        action="ENABLE" if payload.is_active else "DISABLE",
-        resource="Product",
-        resource_id=product.id,
-        details={"before": before, "after": payload.is_active},
-    )
-    db.commit()
+    updates = {"is_active": payload.is_active}
+    changed = _changed_updates(product, updates)
+    try:
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=updates,
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.products.status",
+            action="status_change",
+            confirmation_token=payload.confirmation_token,
+        )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="ENABLE" if payload.is_active else "DISABLE",
+                resource="Product",
+                resource_id=product.id,
+                details={"before": before, "after": payload.is_active},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(product)
     return _response(product, user)
 
@@ -877,6 +1044,7 @@ def update_product_status(
 @router.put("/{product_id}/restore")
 def restore_product(
     product_id: int,
+    payload: ProductMutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
@@ -886,16 +1054,37 @@ def restore_product(
         raise HTTPException(status_code=400, detail="该纸箱不在垃圾站中")
     if product.purged_at is not None:
         raise HTTPException(status_code=409, detail="该纸箱已永久归档，不能恢复")
-    restore_from_trash(product)
-    audit_master_change(
-        db,
-        user=user,
-        action="RESTORE",
-        resource="Product",
-        resource_id=product.id,
-        details={"product_code": product.product_code},
-    )
-    db.commit()
+    updates = {
+        "is_active": True,
+    }
+    try:
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=updates,
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.products.restore",
+            action="restore",
+            confirmation_token=payload.confirmation_token,
+        )
+        product.deleted_at = None
+        product.deleted_by = None
+        product.purged_at = None
+        audit_master_change(
+            db,
+            user=user,
+            action="RESTORE",
+            resource="Product",
+            resource_id=product.id,
+            details={"product_code": product.product_code},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(product)
     return _response(product, user)
 
@@ -903,6 +1092,7 @@ def restore_product(
 @router.delete("/{product_id}/purge", response_model=None)
 def purge_product(
     product_id: int,
+    payload: ProductMutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> Response | dict:
@@ -914,35 +1104,56 @@ def purge_product(
         "customer_id": product.customer_id,
         "product_code": product.product_code,
     }
+    _raise_product_version_conflict(product, payload.expected_version)
     if has_historical_references(db, product.id):
-        archive_purged_product(product, user)
+        raise HTTPException(
+            status_code=409,
+            detail="该常用箱已有业务历史引用，必须保留垃圾站记录",
+        )
+    if _has_version_history(db, product.id):
+        raise HTTPException(
+            status_code=409,
+            detail="该常用箱已有版本历史，禁止物理删除；请保留归档记录",
+        )
+    try:
         audit_master_change(
             db,
             user=user,
             action="PURGE",
             resource="Product",
             resource_id=product.id,
-            details={**details, "mode": "archive"},
+            details={
+                **details,
+                "mode": "physical_delete",
+                "reason": payload.change_reason,
+            },
+        )
+        _cas_delete_product(
+            db,
+            product_id=product.id,
+            expected_version=payload.expected_version,
         )
         db.commit()
-        db.refresh(product)
-        return _response(product, user)
-    audit_master_change(
-        db,
-        user=user,
-        action="PURGE",
-        resource="Product",
-        resource_id=product.id,
-        details={**details, "mode": "physical_delete"},
-    )
-    db.delete(product)
-    db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 class SyncFieldsPayload(BaseModel):
     """从订单明细同步部分字段回常用箱（用户确认后调用）。"""
     fields: dict  # e.g. {"layer_count": 3, "flute_type": "A", "material_id": 5, ...}
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
 
 
 @router.post("/{product_id}/sync-fields")
@@ -1089,32 +1300,57 @@ def sync_product_fields(
         )
         if error:
             raise HTTPException(status_code=400, detail=error)
-    updated = []
+    updates = {}
+    versioned_fields = set(serialize_versioned_entity("product", product))
     for k, v in payload.fields.items():
         if k not in ALLOWED:
             continue
+        if k not in Product.__table__.columns or k not in versioned_fields:
+            continue
         if k == "flute_type":
             v = prospective_flute
-        setattr(product, k, v)
-        updated.append(k)
-    if not updated:
+        updates[k] = v
+    if not updates:
         raise HTTPException(status_code=400, detail="没有可同步的字段")
-    audit_master_change(
-        db,
-        user=user,
-        action="SYNC_FIELDS_FROM_ORDER",
-        resource="Product",
-        resource_id=product.id,
-        details={"synced": updated},
-    )
-    db.commit()
+    changed = _changed_updates(product, updates)
+    try:
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=updates,
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.products.sync_fields",
+            action="sync_fields",
+            confirmation_token=payload.confirmation_token,
+        )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="SYNC_FIELDS_FROM_ORDER",
+                resource="Product",
+                resource_id=product.id,
+                details={"synced": sorted(changed)},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(product)
-    return {"updated": updated, "product_id": product.id}
+    return {
+        "updated": sorted(changed),
+        "product_id": product.id,
+        "version": product.version,
+    }
 
 
 @router.delete("/{product_id}")
 def delete_product(
     product_id: int,
+    payload: ProductMutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
@@ -1122,18 +1358,40 @@ def delete_product(
     require_customer_access(product.customer_id, current_user=user, db=db)
     if product.deleted_at is not None:
         raise HTTPException(status_code=400, detail="该纸箱已在垃圾站中")
-    move_to_trash(product, user)
-    audit_master_change(
-        db,
-        user=user,
-        action="MOVE_TO_TRASH",
-        resource="Product",
-        resource_id=product.id,
-        details={
-            "customer_id": product.customer_id,
-            "product_code": product.product_code,
-        },
-    )
-    db.commit()
+    updates = {
+        "is_active": False,
+    }
+    try:
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=updates,
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.products.delete",
+            action="soft_delete",
+            confirmation_token=payload.confirmation_token,
+            force_version=True,
+        )
+        product.deleted_at = datetime.now()
+        product.deleted_by = user.id
+        product.purged_at = None
+        audit_master_change(
+            db,
+            user=user,
+            action="MOVE_TO_TRASH",
+            resource="Product",
+            resource_id=product.id,
+            details={
+                "customer_id": product.customer_id,
+                "product_code": product.product_code,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(product)
     return _response(product, user)

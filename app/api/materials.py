@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import PermissionChecker, RoleChecker, get_db, has_permission
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.material import Material
+from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.material_price_history import (
     MaterialPriceAdjustmentBatch,
     MaterialPriceHistory,
@@ -26,6 +27,10 @@ from app.services import material_pricing
 from app.services.corrugated_material_pricing import estimate_material_price
 from app.services.flute_mapping import seven_layer_code_error, validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
+from app.services.master_data_versioning import (
+    apply_versioned_update,
+    record_versioned_create,
+)
 
 
 router = APIRouter()
@@ -80,6 +85,35 @@ class MaterialResponse(MaterialPayload):
 
     id: int
     flute_type: str | None
+    version: int
+
+
+class MaterialMutationPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
+
+
+class MaterialUpdatePayload(MaterialPayload):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1)
+    confirmation_token: str | None = None
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
 
 
 class SupplierPaperCodePayload(BaseModel):
@@ -151,6 +185,7 @@ WORKSHOP_FIELDS = (
     "flute_type",
     "basis_weight_description",
     "is_active",
+    "version",
 )
 
 
@@ -255,6 +290,50 @@ def _response(material: Material, user: User) -> dict:
     return data
 
 
+def _material_write_data(payload: MaterialPayload) -> dict:
+    data = payload.model_dump(include=set(MaterialPayload.model_fields))
+    data["code"] = clean_code(payload.code)
+    data["flute_type"] = None
+    data["basis_weight_description"] = normalize_basis_weight(
+        payload.basis_weight_description
+    )
+    return data
+
+
+def _changed_updates(material: Material, updates: dict) -> dict:
+    return {
+        key: value
+        for key, value in updates.items()
+        if getattr(material, key) != value
+    }
+
+
+def _has_version_history(db: Session, material_id: int) -> bool:
+    return db.scalar(
+        select(MasterDataObjectVersion.id)
+        .where(
+            MasterDataObjectVersion.object_type == "material",
+            MasterDataObjectVersion.object_id == material_id,
+        )
+        .limit(1)
+    ) is not None
+
+
+def _raise_material_version_conflict(
+    material: Material,
+    expected_version: int,
+) -> None:
+    if material.version != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MASTER_VERSION_CONFLICT",
+                "expected_version": expected_version,
+                "current_version": material.version,
+            },
+        )
+
+
 @router.get("")
 def list_materials(
     page: int = Query(default=1, ge=1),
@@ -296,11 +375,31 @@ def list_materials(
     }
 
 
-class PriceAdjustRequest(BaseModel):
+class PriceAdjustPreviewRequest(BaseModel):
     supplier_name: str = Field(min_length=1)
     adjust_percent: str = Field(min_length=1)
     effective_date: date | None = None
-    remark: str | None = None
+
+
+class PriceAdjustApplyRequest(PriceAdjustPreviewRequest):
+    expected_versions: dict[int, int]
+    change_reason: str = Field(min_length=1)
+    confirmation_tokens: dict[int, str] = Field(default_factory=dict)
+
+    @field_validator("expected_versions")
+    @classmethod
+    def validate_expected_versions(cls, value: dict[int, int]) -> dict[int, int]:
+        if any(version < 1 for version in value.values()):
+            raise ValueError("预期版本必须大于等于1")
+        return value
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
 
 
 class BoardCostRequest(BaseModel):
@@ -353,7 +452,7 @@ class CompareRequest(BaseModel):
 
 @router.post("/price-adjustments/preview")
 def preview_price_adjustment(
-    payload: PriceAdjustRequest,
+    payload: PriceAdjustPreviewRequest,
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
@@ -371,23 +470,34 @@ def preview_price_adjustment(
 
 @router.post("/price-adjustments/apply")
 def apply_price_adjustment(
-    payload: PriceAdjustRequest,
+    payload: PriceAdjustApplyRequest,
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
     """供应商调价应用：先备份数据库，再写 materials + 批次 + 历史。"""
     try:
-        return price_adjust.apply(
+        result = price_adjust.apply(
             db,
             supplier_name=payload.supplier_name,
             adjust_percent_raw=payload.adjust_percent,
             effective_date=payload.effective_date,
-            remark=payload.remark,
+            expected_versions=payload.expected_versions,
+            change_reason=payload.change_reason,
+            confirmation_tokens=payload.confirmation_tokens,
+            user=user,
             operator=user.username,
         )
+        db.commit()
+        return result
+    except price_adjust.PriceAdjustConflictError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except price_adjust.PriceAdjustError as error:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/price-adjustments")
@@ -997,6 +1107,14 @@ def save_material_composition(
     before = None
     try:
         db.flush()
+        record_versioned_create(
+            db,
+            object_type="material",
+            entity=material,
+            user=user,
+            reason="新增材质",
+            source="api.materials.compose.save",
+        )
         audit_master_change(
             db,
             user=user,
@@ -1013,6 +1131,9 @@ def save_material_composition(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="材质编码重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(material)
     return {
         "material": _response(material, user),
@@ -1073,12 +1194,7 @@ def create_material(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
-    data = payload.model_dump()
-    data["code"] = clean_code(payload.code)
-    data["flute_type"] = None
-    data["basis_weight_description"] = normalize_basis_weight(
-        payload.basis_weight_description
-    )
+    data = _material_write_data(payload)
     duplicate = _find_dictionary_duplicate(
         db,
         supplier_name=(payload.supplier_name or "").strip(),
@@ -1094,6 +1210,14 @@ def create_material(
     try:
         db.add(material)
         db.flush()
+        record_versioned_create(
+            db,
+            object_type="material",
+            entity=material,
+            user=user,
+            reason="新增材质",
+            source="api.materials.create",
+        )
         audit_master_change(
             db,
             user=user,
@@ -1106,6 +1230,9 @@ def create_material(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="材质编码重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(material)
     return _response(material, user)
 
@@ -1113,7 +1240,7 @@ def create_material(
 @router.put("/{material_id}")
 def update_material(
     material_id: int,
-    payload: MaterialPayload,
+    payload: MaterialUpdatePayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
@@ -1131,26 +1258,36 @@ def update_material(
             status_code=409,
             detail=f"该供应商下已存在材质代码 {payload.code}，不能重复保存",
         )
-    for key, value in payload.model_dump().items():
-        setattr(material, key, value)
-    material.code = clean_code(payload.code)
-    material.flute_type = None
-    material.basis_weight_description = normalize_basis_weight(
-        payload.basis_weight_description
-    )
+    updates = _material_write_data(payload)
+    changed = _changed_updates(material, updates)
     try:
-        audit_master_change(
+        apply_versioned_update(
             db,
+            object_type="material",
+            entity=material,
+            updates=updates,
+            expected_version=payload.expected_version,
             user=user,
-            action="UPDATE",
-            resource="Material",
-            resource_id=material.id,
-            details={"before": before, "after": payload.model_dump()},
+            reason=payload.change_reason,
+            source="api.materials.update",
+            confirmation_token=payload.confirmation_token,
         )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="UPDATE",
+                resource="Material",
+                resource_id=material.id,
+                details={"before": before, "after": updates},
+            )
         db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="材质编码重复") from error
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(material)
     return _response(material, user)
 
@@ -1158,22 +1295,34 @@ def update_material(
 @router.delete("/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_material(
     material_id: int,
+    payload: MaterialMutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> Response:
     material = _material_or_404(db, material_id)
-    audit_master_change(
-        db,
-        user=user,
-        action="DELETE",
-        resource="Material",
-        resource_id=material.id,
-        details={"code": material.code},
-    )
     try:
-        db.delete(material)
+        apply_versioned_update(
+            db,
+            object_type="material",
+            entity=material,
+            updates={"is_active": False},
+            expected_version=payload.expected_version,
+            user=user,
+            reason=payload.change_reason,
+            source="api.materials.deactivate",
+            action="soft_delete",
+            confirmation_token=payload.confirmation_token,
+        )
+        audit_master_change(
+            db,
+            user=user,
+            action="DISABLE",
+            resource="Material",
+            resource_id=material.id,
+            details={"code": material.code, "reason": payload.change_reason},
+        )
         db.commit()
-    except IntegrityError as error:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=409, detail="材质已被产品使用，不能删除") from error
+        raise
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -283,7 +283,10 @@ class OrderItemUpdate(BaseModel):
     snapshot_pieces_per_box: int | None = None
     snapshot_flap_mm: int | None = None
     # v0.20.9: 订单编辑页中的常用箱生产字段；有关联产品时同事务同步。
-    sync_product: bool = True
+    sync_product: bool = False
+    product_expected_version: int | None = Field(default=None, ge=1)
+    product_change_reason: str | None = Field(default=None, max_length=500)
+    product_confirmation_token: str | None = Field(default=None, max_length=2000)
     box_style: str | None = None
     length_mm: int | None = Field(default=None, gt=0)
     width_mm: int | None = Field(default=None, gt=0)
@@ -2714,8 +2717,13 @@ def create_order(
                                 if new_sale_price is not None and new_sale_price > 0
                                 else None
                             ),
+                            layer_count=item_payload.layer_count,
+                            flute_type=item_payload.flute_type,
                         ),
                         cache=new_product_cache,
+                        user=user,
+                        reason="订单导入自动创建常用箱",
+                        source="orders.create.product-import",
                     )
                 except NewProductError as error:
                     raise HTTPException(
@@ -2789,10 +2797,6 @@ def create_order(
                 selected_material_id,
                 selected_material,
             )
-            if item_payload.is_new_product:
-                product.material_id = selected_material_id
-                product.layer_count = snapshot_layer_count
-                product.flute_type = snapshot_flute_type
             resolved_products[index] = product
 
         reservation_plan_states = _preflight_reservation_plans(
@@ -3073,6 +3077,21 @@ def update_order_item(
     require_customer_access(
         order_for_scope.customer_id, current_user=user, db=db
     )
+    product_change_reason: str | None = None
+    if payload.sync_product:
+        if not has_permission(user, "products.edit"):
+            _require_product_drawing_edit(user)
+        if payload.product_expected_version is None:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须提供 product_expected_version",
+            )
+        product_change_reason = (payload.product_change_reason or "").strip()
+        if not product_change_reason:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须填写 product_change_reason",
+            )
     production_changes = _production_meaning_changes(
         item,
         payload,
@@ -3428,10 +3447,16 @@ def update_order_item(
         item.snapshot_flap_mm = payload.snapshot_flap_mm
     if product_to_sync is not None:
         product = product_to_sync
+        product_updates: dict[str, object] = {}
+
+        def add_product_update(field_name: str, value: object) -> None:
+            if getattr(product, field_name) != value:
+                product_updates[field_name] = value
+
         if payload.material_id is not None:
-            product.material_id = selected_material_id
-        product.layer_count = prospective_product_layer
-        product.flute_type = prospective_product_flute
+            add_product_update("material_id", selected_material_id)
+        add_product_update("layer_count", prospective_product_layer)
+        add_product_update("flute_type", prospective_product_flute)
         for field_name in (
             "box_style",
             "length_mm",
@@ -3442,15 +3467,17 @@ def update_order_item(
         ):
             value = getattr(payload, field_name)
             if value is not None:
-                setattr(product, field_name, value)
-        product.splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
-        product.pieces_per_box = (
+                add_product_update(field_name, value)
+        splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
+        add_product_update("splice_mode", splice_mode)
+        pieces_per_box = (
             payload.snapshot_pieces_per_box
             if payload.snapshot_pieces_per_box is not None
-            else (2 if product.splice_mode == "double" else 1)
+            else (2 if splice_mode == "double" else 1)
         )
+        add_product_update("pieces_per_box", pieces_per_box)
         if payload.snapshot_flap_mm is not None:
-            product.flap_mm = payload.snapshot_flap_mm
+            add_product_update("flap_mm", payload.snapshot_flap_mm)
         for snapshot_field, product_field in report_field_mapping.items():
             if snapshot_field not in changed_report_fields:
                 continue
@@ -3458,9 +3485,23 @@ def update_order_item(
                 snapshot_field,
                 getattr(payload, snapshot_field),
             )
-            setattr(product, product_field, value)
+            add_product_update(product_field, value)
         if payload.product_remark is not None:
-            product.remark = payload.product_remark.strip() or None
+            add_product_update("remark", payload.product_remark.strip() or None)
+
+        from app.services.master_data_versioning import apply_versioned_update
+
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=product_updates,
+            expected_version=payload.product_expected_version,
+            user=user,
+            reason=product_change_reason,
+            source="orders.update-item.sync-product",
+            confirmation_token=payload.product_confirmation_token,
+        )
     db.flush()
     if refresh_production_task(db, item.id) is not None:
         refresh_order_production_status(db, item.order_id)

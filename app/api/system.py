@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, field_validator
+import jwt
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -486,6 +489,158 @@ class ReviewStatusUpdate(BaseModel):
     review_note: str | None = None
 
 
+class BatchVersionConfirmation(BaseModel):
+    preview_token: str = Field(min_length=1)
+    confirmation_tokens: dict[str, str]
+
+
+SYSTEM_BATCH_TOKEN_TTL_MINUTES = 5
+
+
+def _batch_actor(user: User) -> str:
+    if user.id is not None:
+        return f"id:{user.id}"
+    return f"username:{user.username}"
+
+
+def _batch_digest(value: Any) -> str:
+    from app.services.master_data_versioning import canonical_json
+
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _normalized_batch_plan(items: list[dict]) -> list[dict]:
+    plan = sorted((dict(item) for item in items), key=lambda item: item["key"])
+    keys = [str(item["key"]) for item in plan]
+    if len(keys) != len(set(keys)):
+        raise ValueError("系统批量预览包含重复对象")
+    return plan
+
+
+def _encode_batch_token(
+    *,
+    operation: str,
+    user: User,
+    scope: str,
+    digest: str,
+    object_key: str | None = None,
+) -> str:
+    now = datetime.now(timezone.utc)
+    claims = {
+        "sub": _batch_actor(user),
+        "type": "system_batch_preview_confirmation",
+        "operation": operation,
+        "scope": scope,
+        "digest": digest,
+        "iat": now,
+        "exp": now + timedelta(minutes=SYSTEM_BATCH_TOKEN_TTL_MINUTES),
+    }
+    if object_key is not None:
+        claims["object_key"] = object_key
+    return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
+
+
+def _batch_preview_confirmation(
+    operation: str,
+    items: list[dict],
+    user: User,
+) -> dict[str, Any]:
+    plan = _normalized_batch_plan(items)
+    return {
+        "preview_token": _encode_batch_token(
+            operation=operation,
+            user=user,
+            scope="plan",
+            digest=_batch_digest(plan),
+        ),
+        "confirmation_tokens": {
+            item["key"]: _encode_batch_token(
+                operation=operation,
+                user=user,
+                scope="object",
+                object_key=item["key"],
+                digest=_batch_digest(item),
+            )
+            for item in plan
+        },
+    }
+
+
+def _batch_confirmation_error(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": code, "message": message})
+
+
+def _decode_batch_token(token: str) -> Mapping[str, Any]:
+    try:
+        return jwt.decode(
+            token,
+            load_settings().secret_key,
+            algorithms=["HS256"],
+            options={
+                "require": [
+                    "sub",
+                    "type",
+                    "operation",
+                    "scope",
+                    "digest",
+                    "iat",
+                    "exp",
+                ]
+            },
+        )
+    except jwt.PyJWTError as exc:
+        raise _batch_confirmation_error(
+            "SYSTEM_BATCH_PREVIEW_STALE",
+            "批量预览确认已失效，请重新预览",
+        ) from exc
+
+
+def _require_batch_confirmation(
+    body: BatchVersionConfirmation,
+    *,
+    operation: str,
+    items: list[dict],
+    user: User,
+) -> None:
+    plan = _normalized_batch_plan(items)
+    expected_plan = {
+        "sub": _batch_actor(user),
+        "type": "system_batch_preview_confirmation",
+        "operation": operation,
+        "scope": "plan",
+        "digest": _batch_digest(plan),
+    }
+    preview_claims = _decode_batch_token(body.preview_token)
+    if any(preview_claims.get(key) != value for key, value in expected_plan.items()):
+        raise _batch_confirmation_error(
+            "SYSTEM_BATCH_PREVIEW_STALE",
+            "批量对象或版本已变化，请重新预览",
+        )
+
+    expected_keys = {str(item["key"]) for item in plan}
+    if set(body.confirmation_tokens) != expected_keys:
+        raise _batch_confirmation_error(
+            "SYSTEM_BATCH_OBJECT_CONFIRMATION_REQUIRED",
+            "必须提交本次预览中的全部对象确认 token",
+        )
+    for item in plan:
+        object_key = str(item["key"])
+        claims = _decode_batch_token(body.confirmation_tokens[object_key])
+        expected_object = {
+            "sub": _batch_actor(user),
+            "type": "system_batch_preview_confirmation",
+            "operation": operation,
+            "scope": "object",
+            "object_key": object_key,
+            "digest": _batch_digest(item),
+        }
+        if any(claims.get(key) != value for key, value in expected_object.items()):
+            raise _batch_confirmation_error(
+                "SYSTEM_BATCH_PREVIEW_STALE",
+                f"对象 {object_key} 的确认已失效，请重新预览",
+            )
+
+
 @router.get("/material-mapping/stats", dependencies=[Depends(admin_only)])
 def material_mapping_stats(db: Session = Depends(get_db)):
     """汇总材质映射候选表统计数据。"""
@@ -729,43 +884,86 @@ def import_mapping_csv(request: Request, db: Session = Depends(get_db)):
     }
 
 
-@router.post(
-    "/material-mapping/apply-high-confidence",
-    dependencies=[Depends(admin_only)],
-)
-def apply_high_confidence_mapping(request: Request, db: Session = Depends(get_db)):
+@router.get("/material-mapping/preview-high-confidence")
+def preview_high_confidence_mapping(
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
+    from pathlib import Path as _Path
+    from app.services.material_mapping import preview_high_confidence_material_mapping
+
+    settings = load_settings()
+    csv_path = _Path(settings.database_path).parent / "material_code_mapping.csv"
+    preview = preview_high_confidence_material_mapping(db, csv_path)
+    confirmation = _batch_preview_confirmation(
+        "material_high_confidence",
+        preview.changes,
+        user,
+    )
+    return {
+        "products_updated": preview.products_updated,
+        "materials_created": preview.materials_created,
+        "materials_reused": preview.materials_reused,
+        "skipped_no_match": preview.skipped_no_match,
+        "skipped_already_set": preview.skipped_already_set,
+        "changes": preview.changes[:100],
+        **confirmation,
+    }
+
+
+@router.post("/material-mapping/apply-high-confidence")
+def apply_high_confidence_mapping(
+    request: Request,
+    body: BatchVersionConfirmation,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
     """对高可信候选自动写入 products.material_id（dry_run 参数为 true 时只预览）。"""
-    from app.services.material_mapping import apply_high_confidence_material_mapping
+    from app.services.material_mapping import (
+        apply_high_confidence_material_mapping,
+        preview_high_confidence_material_mapping,
+    )
     from pathlib import Path as _Path
 
     settings = load_settings()
     csv_path = _Path(settings.database_path).parent / "material_code_mapping.csv"
+    preview = preview_high_confidence_material_mapping(db, csv_path)
+    _require_batch_confirmation(
+        body,
+        operation="material_high_confidence",
+        items=preview.changes,
+        user=user,
+    )
 
     try:
-        result = apply_high_confidence_material_mapping(db, csv_path)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"写入失败: {exc}") from exc
-
-    db.add(
-        OperationLog(
-            user_id=getattr(request.state, "user_id", None),
-            action="material_mapping_apply_high_confidence",
-            resource="material_mapping",
-            entity_type="products",
-            details=json.dumps(
-                {
-                    "products_updated": result.products_updated,
-                    "materials_created": result.materials_created,
-                    "materials_reused": result.materials_reused,
-                    "skipped_no_match": result.skipped_no_match,
-                },
-                ensure_ascii=False,
-            ),
+        result = apply_high_confidence_material_mapping(
+            db,
+            csv_path,
+            user=user,
+            confirmation_tokens=body.confirmation_tokens,
+            preview_confirmed=True,
         )
-    )
-    db.commit()
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="material_mapping_apply_high_confidence",
+                resource="material_mapping",
+                entity_type="products",
+                details=json.dumps(
+                    {
+                        "products_updated": result.products_updated,
+                        "materials_created": result.materials_created,
+                        "materials_reused": result.materials_reused,
+                        "skipped_no_match": result.skipped_no_match,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "ok": True,
@@ -778,38 +976,54 @@ def apply_high_confidence_mapping(request: Request, db: Session = Depends(get_db
     }
 
 
-@router.post(
-    "/material-mapping/apply-customer-codes",
-    dependencies=[Depends(admin_only)],
-)
-def apply_customer_codes(request: Request, db: Session = Depends(get_db)):
+@router.post("/material-mapping/apply-customer-codes")
+def apply_customer_codes(
+    request: Request,
+    body: BatchVersionConfirmation,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
     """批量规范客户料号（从品名中提取，写入 customer_material_code）。"""
-    from app.services.material_mapping import apply_customer_code_updates
+    from app.services.material_mapping import (
+        apply_customer_code_updates,
+        preview_customer_code_updates,
+    )
+
+    preview = preview_customer_code_updates(db)
+    _require_batch_confirmation(
+        body,
+        operation="customer_codes",
+        items=preview.changes,
+        user=user,
+    )
 
     try:
-        result = apply_customer_code_updates(db)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"写入失败: {exc}") from exc
-
-    db.add(
-        OperationLog(
-            user_id=getattr(request.state, "user_id", None),
-            action="customer_code_batch_update",
-            resource="material_mapping",
-            entity_type="products",
-            details=json.dumps(
-                {
-                    "updated": result.updated,
-                    "skipped": result.skipped,
-                    "sample_changes": result.changes[:20],
-                },
-                ensure_ascii=False,
-            ),
+        result = apply_customer_code_updates(
+            db,
+            user=user,
+            confirmation_tokens=body.confirmation_tokens,
+            preview_confirmed=True,
         )
-    )
-    db.commit()
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="customer_code_batch_update",
+                resource="material_mapping",
+                entity_type="products",
+                details=json.dumps(
+                    {
+                        "updated": result.updated,
+                        "skipped": result.skipped,
+                        "sample_changes": result.changes[:20],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "ok": True,
@@ -836,17 +1050,26 @@ def get_version():
     "/material-mapping/preview-customer-codes",
     dependencies=[Depends(admin_only)],
 )
-def preview_customer_codes(db: Session = Depends(get_db)):
+def preview_customer_codes(
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
     """只读预览客户料号规范化结果（不写库）。"""
     from app.services.material_mapping import preview_customer_code_updates
 
     preview = preview_customer_code_updates(db)
+    confirmation = _batch_preview_confirmation(
+        "customer_codes",
+        preview.changes,
+        user,
+    )
     return {
         "total": preview.total,
         "will_update": preview.will_update,
         "skipped": preview.skipped,
         "samples_update": preview.samples_update,
         "samples_skip": preview.samples_skip[:20],
+        **confirmation,
     }
 
 
@@ -858,11 +1081,25 @@ def preview_customer_codes(db: Session = Depends(get_db)):
     "/flute-mapping/preview",
     dependencies=[Depends(admin_only)],
 )
-def preview_flute_mapping(db: Session = Depends(get_db)):
+def preview_flute_mapping(
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
     """只读预览：显示当前所有有效产品的楞型识别结果（不写库）。"""
     from app.services.flute_mapping import preview_flute_mapping as _preview
 
     preview = _preview(db)
+    plan = [
+        {
+            "key": f"product:{row.product_id}",
+            "object_type": "product",
+            "object_id": row.product_id,
+            "expected_version": row.expected_version,
+            "updates": row.updates,
+        }
+        for row in preview.rows
+    ]
+    confirmation = _batch_preview_confirmation("flute_mapping", plan, user)
     return {
         "total_products": preview.total_products,
         "will_update": preview.will_update,
@@ -873,6 +1110,7 @@ def preview_flute_mapping(db: Session = Depends(get_db)):
                 "product_id": r.product_id,
                 "product_code": r.product_code,
                 "product_name": r.product_name,
+                "expected_version": r.expected_version,
                 "current_flute_type": r.current_flute_type,
                 "proposed_flute_type": r.proposed_flute_type,
                 "proposed_layer_count": r.proposed_layer_count,
@@ -881,46 +1119,71 @@ def preview_flute_mapping(db: Session = Depends(get_db)):
             }
             for r in preview.rows[:200]  # 最多返回前200行
         ],
+        **confirmation,
     }
 
 
-@router.post(
-    "/flute-mapping/apply",
-    dependencies=[Depends(admin_only)],
-)
-def apply_flute_mapping(request: Request, db: Session = Depends(get_db)):
+@router.post("/flute-mapping/apply")
+def apply_flute_mapping(
+    request: Request,
+    body: BatchVersionConfirmation,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
     """
     批量写入楞型（admin only）。
     只更新 flute_type 为 NULL 的有效产品，不覆盖已有值。
     调用前必须已完成数据库备份。
     """
     from app.services.flute_mapping import apply_flute_mapping as _apply
+    from app.services.flute_mapping import preview_flute_mapping as _preview
+
+    preview = _preview(db)
+    plan = [
+        {
+            "key": f"product:{row.product_id}",
+            "object_type": "product",
+            "object_id": row.product_id,
+            "expected_version": row.expected_version,
+            "updates": row.updates,
+        }
+        for row in preview.rows
+    ]
+    _require_batch_confirmation(
+        body,
+        operation="flute_mapping",
+        items=plan,
+        user=user,
+    )
 
     try:
-        result = _apply(db)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"楞型写入失败: {exc}") from exc
-
-    db.add(
-        OperationLog(
-            user_id=getattr(request.state, "user_id", None),
-            action="flute_mapping_apply",
-            resource="products",
-            entity_type="products",
-            details=json.dumps(
-                {
-                    "updated": result.updated,
-                    "skipped_already_set": result.skipped_already_set,
-                    "skipped_unrecognized": result.skipped_unrecognized,
-                    "sample_changes": result.changes[:20],
-                },
-                ensure_ascii=False,
-            ),
+        result = _apply(
+            db,
+            user=user,
+            confirmation_tokens=body.confirmation_tokens,
+            preview_confirmed=True,
         )
-    )
-    db.commit()
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="flute_mapping_apply",
+                resource="products",
+                entity_type="products",
+                details=json.dumps(
+                    {
+                        "updated": result.updated,
+                        "skipped_already_set": result.skipped_already_set,
+                        "skipped_unrecognized": result.skipped_unrecognized,
+                        "sample_changes": result.changes[:20],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "ok": True,
@@ -931,43 +1194,80 @@ def apply_flute_mapping(request: Request, db: Session = Depends(get_db)):
     }
 
 
-@router.post(
-    "/flute-mapping/fix-consistency",
-    dependencies=[Depends(admin_only)],
-)
-def fix_flute_consistency(request: Request, db: Session = Depends(get_db)):
+@router.get("/flute-mapping/preview-consistency")
+def preview_flute_consistency(
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
+    from app.services.flute_mapping import preview_flute_consistency_fix
+
+    preview = preview_flute_consistency_fix(db)
+    confirmation = _batch_preview_confirmation(
+        "flute_consistency",
+        preview.changes,
+        user,
+    )
+    return {
+        "fixed_5layer_to_3": preview.fixed_5layer_to_3,
+        "fixed_3layer_to_null": preview.fixed_3layer_to_null,
+        "changes": preview.changes[:100],
+        **confirmation,
+    }
+
+
+@router.post("/flute-mapping/fix-consistency")
+def fix_flute_consistency(
+    request: Request,
+    body: BatchVersionConfirmation,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+):
     """
     修复非法楞型/层数组合（admin only）：
     - 5层 + A/B/E → layer_count 改为 3（单楞必然是三层）
     - 3层 + AB/BE → flute_type 置 null（留人工确认）
     调用前请先完成数据库备份。
     """
-    from app.services.flute_mapping import apply_flute_consistency_fix
+    from app.services.flute_mapping import (
+        apply_flute_consistency_fix,
+        preview_flute_consistency_fix,
+    )
+
+    preview = preview_flute_consistency_fix(db)
+    _require_batch_confirmation(
+        body,
+        operation="flute_consistency",
+        items=preview.changes,
+        user=user,
+    )
 
     try:
-        result = apply_flute_consistency_fix(db)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"一致性修复失败: {exc}") from exc
-
-    db.add(
-        OperationLog(
-            user_id=getattr(request.state, "user_id", None),
-            action="flute_consistency_fix",
-            resource="products",
-            entity_type="products",
-            details=json.dumps(
-                {
-                    "fixed_5layer_to_3": result.fixed_5layer_to_3,
-                    "fixed_3layer_to_null": result.fixed_3layer_to_null,
-                    "sample_changes": result.changes[:20],
-                },
-                ensure_ascii=False,
-            ),
+        result = apply_flute_consistency_fix(
+            db,
+            user=user,
+            confirmation_tokens=body.confirmation_tokens,
+            preview_confirmed=True,
         )
-    )
-    db.commit()
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="flute_consistency_fix",
+                resource="products",
+                entity_type="products",
+                details=json.dumps(
+                    {
+                        "fixed_5layer_to_3": result.fixed_5layer_to_3,
+                        "fixed_3layer_to_null": result.fixed_3layer_to_null,
+                        "sample_changes": result.changes[:20],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "ok": True,

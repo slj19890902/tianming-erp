@@ -37,6 +37,9 @@ sys.path.insert(0, str(ROOT))
 
 from app.core.database import create_sqlite_engine  # noqa: E402
 from app.models.material import Material  # noqa: E402
+from scripts.master_data_write_guard import (  # noqa: E402
+    reject_legacy_master_data_write_if_versioned,
+)
 
 SUPPLIER_SHEETS = ("昆山鸣朋", "苏州佳丰", "苏州嘉林亿")
 DB_PATH = ROOT / "data" / "carton_erp.sqlite3"
@@ -264,6 +267,11 @@ def run(path: Path, apply: bool) -> None:
 
     engine = create_sqlite_engine(DB_PATH)
     with Session(engine) as session:
+        if apply:
+            reject_legacy_master_data_write_if_versioned(
+                session,
+                script_name="scripts/import_material_dataset.py",
+            )
         existing = {m.code: m for m in session.scalars(select(Material)).all()}
         refs = referenced_codes(session)
 

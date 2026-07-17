@@ -45,6 +45,7 @@ class Product(Base):
             "box_category IN ('normal', 'die_cut')",
             name="ck_products_box_category",
         ),
+        CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
         Index("ix_products_mold_tool_id", "mold_tool_id"),
@@ -159,6 +160,12 @@ class Product(Base):
         DateTime,
         nullable=True,
         index=True,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

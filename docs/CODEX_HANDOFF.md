@@ -1,5 +1,13 @@
 # Codex 项目交接
 
+## 2026-07-17 P2/P3 | PDF 预览客户范围隔离与成本脱敏（已集成，待统一隔离 UAT）
+
+- P2 独立分支 `feature/pdf-preview-customer-scope-p2` 提交 `06d0489`，合并提交 `6652b77`；P3 独立分支 `feature/pdf-preview-cost-redaction-p3` 提交 `87e9d46`，合并提交 `a791da0`。本轮没有新增 migration，没有连接或写入正式数据库，也没有创建正式订单。
+- 单份预览、批量预览和人工重匹配共用同一个客户范围门禁。受限账号只在 `customer_scope_ids` 内解析客户；空范围、跨客户模板和跨客户名称命中返回白名单构造的无业务数据草稿，并在产品、常用箱及其成本候选查询前终止。
+- 旧版天华、高泰和思迈尔可能出现 `customer_route=locked` 但没有 `template_customer_id`；该路径不再被误拒绝，而是只在当前账号允许的客户集合内按现有名称归一化规则唯一匹配，无法唯一确认时 fail-closed。
+- PDF 响应统一先附加可信安全 token，再按 `cost.view` 塑形。无成本权限时递归删除成本、毛利、供应商/材料/纸板采购价、报价构成和成本候选，并移除标准材质标签末尾报价；PDF 客户单价、常用箱销售价、产品、规格和匹配证据保持可见。源草稿不被修改。
+- 自动验证：客户范围专项 `19 passed`；订单 PDF 导入、天华、高泰、思迈尔和 token 回归 `29 passed`；成本脱敏纯函数/API finalizer `4 passed`；客户范围与敏感业务权限组合 `21 passed`；相关 Python 编译与 `git diff --check` 通过。版本更新为 `v0.22.14 PDF 预览权限隔离与成本脱敏`。
+
 ## 2026-07-17 N016 P2 | 通用客户 PDF 模板执行层（本地完成，待统一隔离 UAT）
 
 - 独立 worktree：`D:\tm-worktrees\erp-pdf-template-execution-n016-p2`；分支：`feature/pdf-template-execution-n016-p2`；基线 `96cee39`。本轮未新增 migration、未连接或写入正式数据库，也未创建正式订单。

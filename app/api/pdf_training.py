@@ -38,7 +38,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_current_user, get_db
+from app.api.deps import PermissionChecker, get_db
 from app.core.time_contract import utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
 from app.models.pdf_training import (
@@ -63,7 +63,8 @@ from app.services.pdf_scoring import compute_stats, correction_candidates, score
 
 router = APIRouter()
 
-require_admin = RoleChecker(["admin"])
+require_pdf_training_view = PermissionChecker("pdf_training.view")
+require_pdf_training_manage = PermissionChecker("pdf_training.manage")
 
 # 训练样本本地存储目录（使用绝对路径，避免因启动目录不同而写错位置）
 # 本文件位于 app/api/pdf_training.py，parents[2] = 项目根目录
@@ -303,7 +304,7 @@ class StatsOut(BaseModel):
 @router.get("/batches", response_model=list[BatchOut])
 def list_batches(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     batches = (
         db.query(PdfOrderTrainingBatch)
@@ -332,7 +333,7 @@ def list_batches(
 def create_batch(
     payload: BatchCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     batch = PdfOrderTrainingBatch(
         batch_name=payload.batch_name,
@@ -366,7 +367,7 @@ def list_samples(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     q = db.query(PdfOrderTrainingSample)
     if batch_id is not None:
@@ -392,7 +393,7 @@ def list_samples_legacy(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     return list_samples(batch_id, parse_status, customer_id, limit, offset, db, _user)
 
@@ -409,7 +410,7 @@ async def upload_sample(
     notes: str | None = Form(None),
     store_pdf: bool = Form(False),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """上传一个 PDF，立即运行解析器，保存样本记录。
 
@@ -483,7 +484,7 @@ async def upload_sample(
 def get_sample_legacy_detail(
     sample_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     sample, _ = _get_sample_or_404(db, sample_id)
     return sample
@@ -493,7 +494,7 @@ def get_sample_legacy_detail(
 def get_sample(
     sample_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     sample, _ = _get_sample_or_404(db, sample_id)
     return sample
@@ -504,7 +505,7 @@ def set_ground_truth(
     sample_id: str,
     payload: GroundTruthPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """写入人工标注 ground_truth_json，同时自动触发评分计算。"""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -578,7 +579,7 @@ def review_gold_sample(
     sample_id: str,
     payload: GoldReviewPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """Approve/reject a sample for activation evidence, fail-closed on approval."""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -620,7 +621,7 @@ def review_gold_sample(
 def compute_sample_score(
     sample_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """（重新）计算并保存评分。要求样本已有 ground_truth_json。"""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -659,7 +660,7 @@ def compute_sample_score(
 def reparse_sample(
     sample_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     if not sample.file_path:
@@ -710,7 +711,7 @@ def reparse_sample(
 def delete_sample(
     sample_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     _log(db, user, "pdf_training.sample.delete", f"删除样本 {safe_sample_id}: {sample.file_name}")
@@ -755,7 +756,7 @@ def add_correction(
     sample_id: str,
     payload: CorrectionCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """为样本新增字段纠错记录（不影响 ground_truth_json，仅记录差异）。"""
     _sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -778,7 +779,7 @@ def add_correction(
 def list_corrections(
     sample_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     _sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     return (
@@ -833,7 +834,7 @@ def list_templates(
     customer_id: int | None = Query(None),
     active_only: bool = Query(False),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     q = db.query(PdfOrderCustomerTemplate)
     if customer_id is not None:
@@ -855,7 +856,7 @@ def list_templates(
 def create_template(
     payload: TemplateCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """Create a non-routable draft.  Activation is evidence-gated separately."""
     tmpl = PdfOrderCustomerTemplate(
@@ -884,7 +885,7 @@ def update_template(
     template_id: int,
     payload: TemplateCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     tmpl = _get_template_or_404(db, template_id)
     _require_draft(tmpl, "原地编辑")
@@ -915,7 +916,7 @@ def clone_template_draft(
     template_id: int,
     payload: TemplateClonePayload,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     source = _get_template_or_404(db, template_id)
     clone = PdfOrderCustomerTemplate(
@@ -944,7 +945,7 @@ def clone_template_draft(
 def template_activation_dry_run(
     template_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_admin),
+    _user: User = Depends(require_pdf_training_manage),
 ):
     return activation_dry_run(db, _get_template_or_404(db, template_id))
 
@@ -954,7 +955,7 @@ def activate_template(
     template_id: int,
     payload: TemplateActivationPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     candidate = _get_template_or_404(db, template_id)
     _require_draft(candidate, "激活")
@@ -1013,7 +1014,7 @@ def retire_template(
     template_id: int,
     payload: TemplateRetirePayload,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     template = _get_template_or_404(db, template_id)
     if template.status != "active":
@@ -1039,7 +1040,7 @@ def retire_template(
 def delete_template(
     template_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     tmpl = _get_template_or_404(db, template_id)
     _require_draft(tmpl, "物理删除")
@@ -1060,7 +1061,7 @@ def delete_template(
 # ---------------------------------------------------------------------------
 
 @router.get("/ocr-status")
-def get_ocr_status(_user: User = Depends(get_current_user)):
+def get_ocr_status(_user: User = Depends(require_pdf_training_view)):
     """返回当前服务器 OCR 能力状态。"""
     return {
         "available": ocr_available(),
@@ -1079,7 +1080,7 @@ def get_ocr_status(_user: User = Depends(get_current_user)):
 @router.get("/stats", response_model=StatsOut)
 def get_stats(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     samples = db.query(PdfOrderTrainingSample).all()
     stats = compute_stats(samples)

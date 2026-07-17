@@ -48,6 +48,8 @@ PERMISSION_CATALOG = frozenset(
         "finance.view",
         "finance.execute",
         "cost.view",
+        "pdf_training.view",
+        "pdf_training.manage",
         "system.backup",
         "users.manage",
     }
@@ -68,11 +70,14 @@ SALES_DEFAULT_PERMISSIONS = frozenset(
     }
 )
 ALL_PERMISSIONS = PERMISSION_CATALOG
-ADMIN_ONLY_PERMISSIONS = frozenset({"system.backup", "users.manage"})
+ADMIN_ONLY_PERMISSIONS = frozenset(
+    {"system.backup", "users.manage", "pdf_training.manage"}
+)
 BOSS_DEFAULT_PERMISSIONS = frozenset(
     permission
     for permission in ALL_PERMISSIONS
-    if not permission.startswith("system.") and permission != "users.manage"
+    if not permission.startswith(("system.", "pdf_training."))
+    and permission != "users.manage"
 )
 ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": ALL_PERMISSIONS,

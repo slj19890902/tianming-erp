@@ -205,12 +205,18 @@ if ($LASTEXITCODE -ne 0) {
     throw "ERP 启动失败，请查看 logs\erp_server_error.log。数据库备份在：$backupPath"
 }
 
-# 7. 打印版本
-Write-Log "查询当前版本..."
+# 7. 从刚更新的本地代码读取版本。精确版本 API 需要登录，避免对外暴露指纹。
+Write-Log "读取当前版本..."
 try {
-    $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/system/version" -UseBasicParsing -TimeoutSec 5
-    $info = $resp.Content | ConvertFrom-Json
-    Write-Log "========== 更新完成，当前版本：$($info.version) — $($info.version_name) =========="
+    $versionOutput = @(
+        & $python -X utf8 -c "from app.version import APP_VERSION, APP_VERSION_NAME; print(APP_VERSION); print(APP_VERSION_NAME)" 2>&1
+    )
+    if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -lt 2) {
+        throw "无法从本地版本文件读取版本号"
+    }
+    $currentVersion = $versionOutput[-2].ToString().Trim()
+    $currentVersionName = $versionOutput[-1].ToString().Trim()
+    Write-Log "========== 更新完成，当前版本：$currentVersion — $currentVersionName =========="
 } catch {
     Write-Log "ERP 已启动，但无法读取版本号：$($_.Exception.Message)" "WARN"
     Write-Log "========== 更新流程完成 =========="

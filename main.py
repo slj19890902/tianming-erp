@@ -2147,12 +2147,22 @@ mount_static_files(app)
 
 if __name__ == "__main__":
     os.environ.setdefault("PYTHONUTF8", "1")
-    init_database()
     print_startup_banner()
+    from app.main import app as secure_app
+    from app.core.config import load_settings
+
+    runtime_settings = load_settings()
+
     uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=SERVER_PORT,
+        secure_app,
+        host=runtime_settings.bind_host,
+        port=runtime_settings.port,
         reload=False,
         access_log=True,
     )
+elif "app.main" not in sys.modules:
+    # Preserve the historical ``main:app`` ASGI target without exposing the
+    # pre-router legacy application and its weaker middleware configuration.
+    from app.main import create_app as _create_secure_app
+
+    app = _create_secure_app()

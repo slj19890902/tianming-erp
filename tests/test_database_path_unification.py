@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -114,7 +113,7 @@ def test_phase1_compatibility_backend_no_longer_defaults_to_test_database(
     importlib.reload(compatibility_database)
 
 
-def test_health_reports_current_configured_database_path(
+def test_health_only_reports_minimal_liveness_status(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -138,19 +137,14 @@ def test_health_reports_current_configured_database_path(
     from app.main import create_app
 
     application = create_app()
-    health_endpoint = next(
-        route.endpoint
-        for route in application.routes
-        if route.path == "/api/health" and "GET" in route.methods
-    )
-    response = health_endpoint()
-    payload = json.loads(response.body)
+    from fastapi.testclient import TestClient
+
+    with TestClient(application) as client:
+        response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert Path(payload["database"]).resolve() == database_path.resolve()
-    assert payload["orders_table"] == "sales_orders"
-    assert payload["orders_count"] == 2
-    assert payload["order_items_count"] == 3
+    assert response.json() == {"ok": True}
+    assert str(database_path) not in response.text
 
 
 def test_start_script_uses_complete_backend_entrypoint() -> None:

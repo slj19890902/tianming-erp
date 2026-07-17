@@ -52,7 +52,9 @@ class Settings:
     database_path: Path
     backup_dir: Path
     allowed_origins: tuple[str, ...]
-    allowed_origin_regex: str
+    allowed_origin_regex: str | None
+    trusted_hosts: tuple[str, ...]
+    trusted_proxy_ips: tuple[str, ...]
     secret_key: str
     bind_host: str
     port: int
@@ -87,12 +89,16 @@ def _resolved_path(env_name: str, default: Path) -> Path:
     return normalize_path(configured)
 
 
-def _load_or_create_secret(secret_file: Path) -> str:
+def _load_or_create_secret(secret_file: Path, *, allow_create: bool = True) -> str:
     if secret_file.exists():
         secret = secret_file.read_text(encoding="utf-8").strip()
         if secret:
             return secret
 
+    if not allow_create:
+        raise RuntimeError(
+            "生产环境缺少会话密钥：请配置 ERP_SECRET_KEY，或预先创建 ERP_SECRET_KEY_FILE"
+        )
     secret_file.parent.mkdir(parents=True, exist_ok=True)
     secret = secrets.token_urlsafe(48)
     secret_file.write_text(secret, encoding="utf-8")
@@ -131,23 +137,79 @@ def _allowed_origins() -> tuple[str, ...]:
     return origins or DEFAULT_ALLOWED_ORIGINS
 
 
+def _production_allowed_origins() -> tuple[str, ...]:
+    """Allow only explicitly configured origins in production."""
+    raw = os.getenv("ERP_ALLOWED_ORIGINS", "")
+    if not raw.strip():
+        return ()
+    origins = tuple(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
+    for origin in origins:
+        parsed = urlsplit(origin)
+        if (
+            origin == "*"
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+        ):
+            raise ValueError("生产环境 ERP_ALLOWED_ORIGINS 只允许显式 HTTPS 来源")
+    return origins
+
+
+def _trusted_hosts(*, production: bool) -> tuple[str, ...]:
+    if not production:
+        return ()
+    raw = os.getenv("ERP_TRUSTED_HOSTS", "localhost,127.0.0.1,[::1]")
+    hosts = tuple(item.strip() for item in raw.split(",") if item.strip())
+    if not hosts or "*" in hosts:
+        raise ValueError("ERP_TRUSTED_HOSTS must contain explicit hosts")
+    return hosts
+
+
+def _trusted_proxy_ips() -> tuple[str, ...]:
+    raw = os.getenv("ERP_TRUSTED_PROXY_IPS", "")
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    for value in values:
+        if value == "*":
+            raise ValueError("ERP_TRUSTED_PROXY_IPS must contain explicit IPs")
+        try:
+            ip_address(value)
+        except ValueError as error:
+            raise ValueError("ERP_TRUSTED_PROXY_IPS only accepts IP addresses") from error
+    return values
+
+
 def load_settings() -> Settings:
     database_path = _resolved_path("ERP_DATABASE_PATH", DEFAULT_DATABASE_PATH)
     backup_dir = _resolved_path("ERP_BACKUP_DIR", DEFAULT_BACKUP_DIR)
     secret_file = _resolved_path("ERP_SECRET_KEY_FILE", DEFAULT_SECRET_FILE)
-    secret_key = os.getenv("ERP_SECRET_KEY", "").strip() or _load_or_create_secret(
-        secret_file
+    environment = os.getenv("ERP_ENVIRONMENT", "development").strip().lower() or "development"
+    is_production = environment == "production"
+    configured_secret = os.getenv("ERP_SECRET_KEY", "").strip()
+    secret_key = configured_secret or _load_or_create_secret(
+        secret_file,
+        allow_create=not is_production,
     )
+    if is_production and len(secret_key) < 32:
+        raise RuntimeError("生产环境 ERP_SECRET_KEY 至少需要 32 个字符")
+    default_bind_host = "127.0.0.1" if is_production else "0.0.0.0"
     return Settings(
         database_path=database_path,
         backup_dir=backup_dir,
-        allowed_origins=_allowed_origins(),
-        allowed_origin_regex=PRIVATE_LAN_ORIGIN_REGEX,
+        allowed_origins=(
+            _production_allowed_origins() if is_production else _allowed_origins()
+        ),
+        allowed_origin_regex=None if is_production else PRIVATE_LAN_ORIGIN_REGEX,
+        trusted_hosts=_trusted_hosts(production=is_production),
+        trusted_proxy_ips=_trusted_proxy_ips(),
         secret_key=secret_key,
-        bind_host=os.getenv("ERP_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
+        bind_host=os.getenv("ERP_BIND_HOST", default_bind_host).strip()
+        or default_bind_host,
         port=int(os.getenv("ERP_PORT", "8000")),
-        environment=os.getenv("ERP_ENVIRONMENT", "development").strip().lower()
-        or "development",
+        environment=environment,
         sqlite_busy_timeout_ms=int(os.getenv("ERP_SQLITE_BUSY_TIMEOUT_MS", "5000")),
         session_cookie_name=os.getenv(
             "ERP_SESSION_COOKIE_NAME",
@@ -157,7 +219,8 @@ def load_settings() -> Settings:
         session_expire_minutes=int(
             os.getenv("ERP_SESSION_EXPIRE_MINUTES", "480")
         ),
-        session_cookie_secure=os.getenv(
+        session_cookie_secure=is_production
+        or os.getenv(
             "ERP_SESSION_COOKIE_SECURE",
             "false",
         ).strip().lower()

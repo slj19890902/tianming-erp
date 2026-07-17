@@ -1,8 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$HealthUrl = "http://127.0.0.1:8000/api/health"
-$BrowserUrl = "http://127.0.0.1:8000/"
+$HealthUrl = $null
+$BrowserUrl = $null
+$ErpPort = $null
+$BindHost = $null
 $LogDir = Join-Path $ProjectRoot "logs"
 $LogFile = Join-Path $LogDir "erp_startup.log"
 $ServerLog = Join-Path $LogDir "erp_server.log"
@@ -73,6 +75,41 @@ function Invoke-PythonCommand {
 try {
     Write-Log "Startup begin."
 
+    if (-not (Test-Path -LiteralPath $Python)) {
+        Write-Log "Python runtime not found."
+        throw "Python runtime not found. Please check the .venv folder."
+    }
+
+    $runtimeConfig = @(
+        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.environment)" 2>&1
+    )
+    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 3) {
+        $runtimeConfig | ForEach-Object { Write-Log $_ }
+        throw "ERP runtime configuration is invalid."
+    }
+    $BindHost = $runtimeConfig[-3].ToString().Trim()
+    $ErpPort = [int]$runtimeConfig[-2].ToString().Trim()
+    $RuntimeEnvironment = $runtimeConfig[-1].ToString().Trim()
+    if ($RuntimeEnvironment -eq "production") {
+        if (-not $env:ERP_HEALTH_URL -or -not $env:ERP_HEALTH_URL.StartsWith("https://")) {
+            throw "Production requires ERP_HEALTH_URL to use the HTTPS reverse-proxy health endpoint."
+        }
+        if (-not $env:ERP_BROWSER_URL -or -not $env:ERP_BROWSER_URL.StartsWith("https://")) {
+            throw "Production requires ERP_BROWSER_URL to use the HTTPS reverse-proxy ERP endpoint."
+        }
+    }
+    $HealthUrl = if ($env:ERP_HEALTH_URL) {
+        $env:ERP_HEALTH_URL
+    } else {
+        "http://127.0.0.1:$ErpPort/api/health"
+    }
+    $BrowserUrl = if ($env:ERP_BROWSER_URL) {
+        $env:ERP_BROWSER_URL
+    } else {
+        "http://127.0.0.1:$ErpPort/"
+    }
+    Write-Log ("Runtime bind: {0}:{1}" -f $BindHost, $ErpPort)
+
     if (Test-ErpRunning) {
         Write-Log "ERP already running."
         Open-Browser
@@ -80,15 +117,10 @@ try {
         exit 0
     }
 
-    $listening = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+    $listening = Get-NetTCPConnection -LocalPort $ErpPort -State Listen -ErrorAction SilentlyContinue
     if ($listening) {
-        Write-Log "Port 8000 is already in use."
-        throw "Port 8000 is already in use. ERP cannot start."
-    }
-
-    if (-not (Test-Path -LiteralPath $Python)) {
-        Write-Log "Python runtime not found."
-        throw "Python runtime not found. Please check the .venv folder."
+        Write-Log ("Port {0} is already in use." -f $ErpPort)
+        throw ("Port {0} is already in use. ERP cannot start." -f $ErpPort)
     }
 
     Write-Log "Running alembic upgrade head."
@@ -102,8 +134,8 @@ try {
         "-X", "utf8",
         "-m", "uvicorn",
         "app.main:app",
-        "--host", "0.0.0.0",
-        "--port", "8000",
+        "--host", $BindHost,
+        "--port", $ErpPort.ToString(),
         "--workers", "1"
     )
     $process = Start-Process `

@@ -165,7 +165,7 @@ def get_current_user(
             detail="未登录或登录已失效",
         )
     try:
-        user_id = decode_session_token(token)
+        user_id, token_auth_version = decode_session_token(token)
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -173,7 +173,11 @@ def get_current_user(
         ) from error
 
     user = db.get(User, user_id)
-    if user is None or not user.is_active:
+    if (
+        user is None
+        or not user.is_active
+        or token_auth_version != user.auth_version
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录或登录已失效",

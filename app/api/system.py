@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.deps import PermissionChecker, RoleChecker, get_db
+from app.api.deps import PermissionChecker, RoleChecker, get_current_user, get_db
 from app.core.time_contract import (
     beijing_naive_to_api,
     beijing_now_naive,
@@ -1041,16 +1041,27 @@ def apply_customer_codes(
 
 
 @router.get("/version")
-def get_version():
-    """返回当前 ERP 系统版本信息（无需登录）。"""
-    from app.version import APP_BUILD_DATE, APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
+def get_version(
+    _user: User = Depends(get_current_user),
+):
+    """Return the exact ERP release fingerprint to an authenticated user."""
+    from app.version import APP_BUILD_DATE, APP_VERSION, APP_VERSION_NAME
 
     return {
         "version": APP_VERSION,
         "version_name": APP_VERSION_NAME,
         "build_date": APP_BUILD_DATE,
-        "changelog": APP_CHANGELOG,
     }
+
+
+@router.get("/version/changelog")
+def get_version_changelog(
+    _user: User = Depends(get_current_user),
+):
+    """Return the complete changelog only to an authenticated user."""
+    from app.version import APP_CHANGELOG
+
+    return {"changelog": APP_CHANGELOG}
 
 
 @router.get(

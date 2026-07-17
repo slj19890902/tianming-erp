@@ -73,7 +73,7 @@ with SessionLocal() as db:
     if not admin:
         print(json.dumps({{'status': 0, 'body': 'no admin user'}}))
         sys.exit(0)
-    token = create_session_token(admin.id)
+    token = create_session_token(admin.id, auth_version=admin.auth_version)
     cookie_name = settings.session_cookie_name
 
 client.cookies.set(cookie_name, token)

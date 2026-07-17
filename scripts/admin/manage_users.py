@@ -173,7 +173,10 @@ def reset_password_cmd(args: argparse.Namespace, db_path: Path) -> list[ActionRe
             connection.execute(
                 """
                 UPDATE users
-                SET password_hash = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP
+                SET password_hash = ?,
+                    must_change_password = 1,
+                    auth_version = auth_version + 1,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE username = ?
                 """,
                 (hash_password(password), args.username),

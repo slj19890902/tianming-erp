@@ -105,14 +105,17 @@ def test_write_env_file_preserves_unrelated_values(tmp_path: Path) -> None:
     assert r"ERP_DATABASE_PATH=D:\ERP\data\carton_erp.sqlite3" in content
 
 
-def test_production_security_removes_docs_and_uses_private_lan_regex(
+def test_production_security_removes_docs_and_disables_lan_wildcard_cors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.core.config import load_settings
     from app.main import apply_production_security
 
     monkeypatch.setenv("ERP_ENVIRONMENT", "production")
-    monkeypatch.setenv("ERP_SECRET_KEY", "phase13-secret")
+    monkeypatch.setenv(
+        "ERP_SECRET_KEY",
+        "phase13-production-secret-that-is-longer-than-32-characters",
+    )
     settings = load_settings()
     app = FastAPI()
 
@@ -123,7 +126,9 @@ def test_production_security_removes_docs_and_uses_private_lan_regex(
     assert "/redoc" not in paths
     assert "/openapi.json" not in paths
     assert settings.is_production is True
-    assert "192\\.168\\." in settings.allowed_origin_regex
+    assert settings.allowed_origins == ()
+    assert settings.allowed_origin_regex is None
+    assert settings.session_cookie_secure is True
 
 
 def test_start_batch_uses_project_venv_one_worker_and_production_port(
@@ -140,9 +145,16 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port(
     assert "scripts\\windows\\start_erp.bat" in bat
     assert ".venv\\Scripts\\python.exe" in launcher
     assert "app.main:app" in launcher
-    assert '"--host", "0.0.0.0"' in launcher
-    assert '"--port", "8000"' in launcher
+    assert '"--host", $BindHost' in launcher
+    assert '"--port", $ErpPort.ToString()' in launcher
+    assert "from app.core.config import load_settings" in launcher
+    assert "生产环境必须配置 ERP_HEALTH_URL" in launcher
+    assert "生产环境必须配置 ERP_BROWSER_URL" in launcher
     assert '"--workers", "1"' in launcher
     assert "erp_server.log" in launcher
     monkeypatch.setenv("ERP_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "ERP_SECRET_KEY",
+        "n031-test-secret-that-is-longer-than-32-characters",
+    )
     assert load_settings().is_production is True

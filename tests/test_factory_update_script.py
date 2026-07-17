@@ -19,9 +19,9 @@ def test_update_script_defaults_to_formal_database_and_backup_directory() -> Non
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
 
-    assert APP_VERSION == "v0.22.10"
-    assert "\u5317\u4eac\u65f6\u95f4\u4e00\u81f4\u6027" in APP_VERSION_NAME
-    assert "\u65f6\u95f4\u8fb9\u754c\u4fdd\u62a4" in APP_VERSION_NAME
+    assert APP_VERSION == "v0.22.11"
+    assert "\u5b89\u5168\u8bbf\u95ee\u5e95\u5ea7" in APP_VERSION_NAME
+    assert "\u4f1a\u8bdd\u64a4\u9500\u4fdd\u62a4" in APP_VERSION_NAME
     assert any(
         "\u5ba2\u6237" in item
         and "\u5e38\u7528\u7bb1" in item
@@ -105,8 +105,9 @@ def test_update_script_only_fast_forwards_formal_baseline_branch() -> None:
     )
 
 
-def test_update_script_reads_real_version_endpoint() -> None:
-    assert "/api/system/version" in UPDATE_SCRIPT
+def test_update_script_reads_local_version_without_public_fingerprint_endpoint() -> None:
+    assert "from app.version import APP_VERSION, APP_VERSION_NAME" in UPDATE_SCRIPT
+    assert "/api/system/version" not in UPDATE_SCRIPT
     assert '"http://127.0.0.1:8000/api/version"' not in UPDATE_SCRIPT
 
 

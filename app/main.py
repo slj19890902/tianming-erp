@@ -6,7 +6,11 @@ import sqlite3
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import main as legacy
 from app.api.auth import router as auth_router
@@ -61,39 +65,45 @@ def apply_production_security(application: FastAPI, current) -> None:
     application.redoc_url = None
 
 
-def database_health(current) -> dict[str, object]:
-    database_path = current.database_path.resolve()
-    result: dict[str, object] = {
-        "ok": True,
-        "database": str(database_path),
-        "orders_table": "sales_orders",
-        "orders_count": None,
-        "order_items_count": None,
-    }
+class HSTSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=63072000"
+        return response
+
+
+def database_health(current) -> JSONResponse:
+    """Return an intentionally minimal public liveness result."""
+    database_path = current.database_path
     if not database_path.is_file():
-        return {**result, "ok": False, "database_error": "database file not found"}
+        return JSONResponse({"ok": False}, status_code=503)
     try:
         uri = f"file:{database_path.as_posix()}?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=5) as connection:
-            tables = {
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
-            if "sales_orders" in tables:
-                result["orders_count"] = int(
-                    connection.execute("SELECT COUNT(*) FROM sales_orders").fetchone()[0]
-                )
-            if "sales_order_items" in tables:
-                result["order_items_count"] = int(
-                    connection.execute(
-                        "SELECT COUNT(*) FROM sales_order_items"
-                    ).fetchone()[0]
-                )
-    except sqlite3.Error as error:
-        return {**result, "ok": False, "database_error": str(error)}
-    return result
+            connection.execute("SELECT 1")
+    except sqlite3.Error:
+        return JSONResponse({"ok": False}, status_code=503)
+    return JSONResponse({"ok": True})
+
+
+def apply_transport_security(application: FastAPI, current) -> None:
+    """Install production-only transport controls around the API boundary."""
+    if not current.is_production:
+        return
+    # Starlette wraps the last-added middleware outermost.  HTTPS redirect
+    # therefore has to be registered before TrustedHost so an untrusted HTTP
+    # Host is rejected instead of becoming the target of an open redirect.
+    application.add_middleware(HTTPSRedirectMiddleware)
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=list(current.trusted_hosts),
+    )
+    application.add_middleware(HSTSMiddleware)
+    if current.trusted_proxy_ips:
+        application.add_middleware(
+            ProxyHeadersMiddleware,
+            trusted_hosts=list(current.trusted_proxy_ips),
+        )
 
 
 def create_app() -> FastAPI:
@@ -239,7 +249,7 @@ def create_app() -> FastAPI:
 
     application.add_api_route(
         "/api/health",
-        lambda: JSONResponse(database_health(current)),
+        lambda: database_health(current),
         methods=["GET"],
         include_in_schema=True,
     )
@@ -351,14 +361,20 @@ def create_app() -> FastAPI:
     # caches middleware_stack, so invalidate it before calling add_middleware
     # again; doing this afterwards raises "Cannot add middleware...".
     application.middleware_stack = None
+    transport_middleware = {
+        CORSMiddleware,
+        TrustedHostMiddleware,
+        HTTPSRedirectMiddleware,
+        HSTSMiddleware,
+        ProxyHeadersMiddleware,
+    }
     application.user_middleware = [
         middleware
         for middleware in application.user_middleware
-        if middleware.cls is not CORSMiddleware
+        if middleware.cls not in transport_middleware
     ]
     legacy.db_path = lambda: current.database_path
     application.debug = False
-    apply_production_security(application, current)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(current.allowed_origins),
@@ -367,7 +383,10 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    apply_production_security(application, current)
+    apply_transport_security(application, current)
     return application
 
 
 app = create_app()
+legacy.app = app

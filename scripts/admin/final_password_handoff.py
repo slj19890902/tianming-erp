@@ -138,7 +138,10 @@ def update_passwords(db_path: Path, passwords: dict[str, str]) -> None:
             conn.execute(
                 """
                 UPDATE users
-                SET password_hash = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP
+                SET password_hash = ?,
+                    must_change_password = 1,
+                    auth_version = auth_version + 1,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE username = ?
                 """,
                 (hash_password(password), username),

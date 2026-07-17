@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -39,6 +39,15 @@ class User(Base):
     real_name: Mapped[str] = mapped_column(String(100))
     display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Bump this value whenever a security-relevant account property changes.
+    # Session JWTs carry the value they were issued with, so one bump revokes
+    # every existing browser session for this user.
+    auth_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     must_change_password: Mapped[bool] = mapped_column(
         Boolean,
         default=True,

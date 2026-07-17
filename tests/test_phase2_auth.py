@@ -260,9 +260,14 @@ def test_role_checker_allows_listed_role_and_rejects_other_role(auth_context) ->
 def test_session_token_rejects_tampering() -> None:
     from app.core.security import create_session_token, decode_session_token
 
-    token = create_session_token(7, secret_key="test-secret", expires_minutes=10)
+    token = create_session_token(
+        7,
+        auth_version=1,
+        secret_key="test-secret",
+        expires_minutes=10,
+    )
 
-    assert decode_session_token(token, secret_key="test-secret") == 7
+    assert decode_session_token(token, secret_key="test-secret") == (7, 1)
     with pytest.raises(ValueError, match="登录凭证无效或已过期"):
         decode_session_token(token + "tampered", secret_key="test-secret")
 

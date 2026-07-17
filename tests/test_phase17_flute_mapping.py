@@ -296,15 +296,22 @@ def _insert_test_products(factory) -> None:
 # 3. 版本 API
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_version_endpoint_no_auth(flute_api):
+def test_version_endpoint_requires_auth(flute_api):
     app, _, _f = flute_api
     with TestClient(app) as client:
-        resp = client.get("/api/system/version")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "version" in data
-        assert isinstance(data["changelog"], list)
-        assert len(data["changelog"]) > 0
+        denied_version = client.get("/api/system/version")
+        denied = client.get("/api/system/version/changelog")
+        _login(client)
+        version = client.get("/api/system/version")
+        changelog = client.get("/api/system/version/changelog")
+
+    assert denied_version.status_code == 401
+    assert denied.status_code == 401
+    assert version.status_code == 200
+    assert set(version.json()) == {"version", "version_name", "build_date"}
+    assert changelog.status_code == 200
+    assert isinstance(changelog.json()["changelog"], list)
+    assert len(changelog.json()["changelog"]) > 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════

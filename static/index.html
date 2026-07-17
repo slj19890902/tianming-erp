@@ -7118,15 +7118,16 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async loadSystem() {
-            const [backups, users, version, company] = await Promise.all([
+            const [backups, users, version, changelog, company] = await Promise.all([
               axios.get("/api/system/backups"),
               axios.get("/api/auth/users"),
               axios.get("/api/system/version"),
+              axios.get("/api/system/version/changelog"),
               axios.get("/api/system/company"),
             ]);
             this.backups = backups.data.items;
             this.systemUsers = users.data.items;
-            this.versionInfo = version.data;
+            this.versionInfo = { ...version.data, changelog: changelog.data.changelog };
             this.companyConfig = company.data;
             await this.loadMaterialMapping(1);
           },

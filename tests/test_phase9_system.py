@@ -359,3 +359,20 @@ def test_wildcard_and_public_cors_origins_are_rejected(
         "http://192.168.1.20:8000",
         "http://10.0.0.8:8000",
     )
+
+
+def test_version_changelog_requires_login(system_api_app) -> None:
+    app, _, _ = system_api_app
+    with TestClient(app) as client:
+        denied_version = client.get("/api/system/version")
+        denied = client.get("/api/system/version/changelog")
+        _login(client, "admin")
+        version = client.get("/api/system/version")
+        allowed = client.get("/api/system/version/changelog")
+
+    assert denied_version.status_code == 401
+    assert denied.status_code == 401
+    assert version.status_code == 200
+    assert set(version.json()) == {"version", "version_name", "build_date"}
+    assert allowed.status_code == 200
+    assert isinstance(allowed.json()["changelog"], list)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -28,6 +29,14 @@ from app.models.user import USER_ROLES, User
 
 
 router = APIRouter()
+
+
+# OperationLog is the shared persistence layer for this lightweight guard.  The
+# deployment runs one application worker, so its query-then-record flow remains
+# ordered without introducing a new table or migration.
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_IP_FAILURE_LIMIT = 30
+LOGIN_FAILURE_WINDOW = timedelta(minutes=15)
 
 
 PERMISSION_LABELS: dict[str, tuple[str, str]] = {
@@ -222,6 +231,72 @@ def _password_log(
     )
 
 
+def _login_request_metadata(request: Request, username: str) -> dict[str, str | None]:
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    return {
+        "attempted_username": username,
+        "ip_address": ip_address,
+        "user_agent": user_agent,
+    }
+
+
+def _login_attempt_log(
+    *,
+    action: str,
+    request: Request,
+    username: str,
+) -> OperationLog:
+    metadata = _login_request_metadata(request, username)
+    return OperationLog(
+        action=action,
+        resource="User",
+        details=json.dumps(metadata, ensure_ascii=False),
+        ip_address=metadata["ip_address"],
+        username=username,
+        description=(
+            "\u767b\u5f55\u5931\u8d25" if action == "LOGIN_FAILED" else "\u767b\u5f55\u8bf7\u6c42\u88ab\u9650\u6d41"
+        ),
+        user_agent=metadata["user_agent"],
+    )
+
+
+def _recent_failed_login_count(db: Session, *, username: str, ip_address: str | None) -> int:
+    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    last_success_id = db.scalar(
+        select(func.max(OperationLog.id)).where(
+            OperationLog.action == "LOGIN",
+            OperationLog.username == username,
+            OperationLog.ip_address == ip_address,
+        )
+    )
+    filters = [
+        OperationLog.action == "LOGIN_FAILED",
+        OperationLog.username == username,
+        OperationLog.ip_address == ip_address,
+        OperationLog.created_at >= cutoff,
+    ]
+    if last_success_id is not None:
+        filters.append(OperationLog.id > last_success_id)
+    return db.scalar(select(func.count(OperationLog.id)).where(*filters)) or 0
+
+
+def _recent_ip_failed_login_count(db: Session, *, ip_address: str | None) -> int:
+    if ip_address is None:
+        return 0
+    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    return (
+        db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action == "LOGIN_FAILED",
+                OperationLog.ip_address == ip_address,
+                OperationLog.created_at >= cutoff,
+            )
+        )
+        or 0
+    )
+
+
 @router.post("/login")
 def login(
     payload: LoginRequest,
@@ -230,12 +305,44 @@ def login(
     db: Session = Depends(get_db),
 ) -> dict:
     username = payload.username.strip()
+    ip_address = request.client.host if request.client else None
+    username_failures = _recent_failed_login_count(
+        db,
+        username=username,
+        ip_address=ip_address,
+    )
+    ip_failures = _recent_ip_failed_login_count(db, ip_address=ip_address)
+    if (
+        username_failures >= LOGIN_FAILURE_LIMIT
+        or ip_failures >= LOGIN_IP_FAILURE_LIMIT
+    ):
+        db.add(
+            _login_attempt_log(
+                action="LOGIN_THROTTLED",
+                request=request,
+                username=username,
+            )
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="\u767b\u5f55\u5c1d\u8bd5\u8fc7\u591a\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5",
+        )
+
     user = db.scalar(select(User).where(User.username == username))
     if (
         user is None
         or not user.is_active
         or not verify_password(payload.password, user.password_hash)
     ):
+        db.add(
+            _login_attempt_log(
+                action="LOGIN_FAILED",
+                request=request,
+                username=username,
+            )
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
@@ -245,6 +352,7 @@ def login(
     remember_seconds = 30 * 24 * 60 * 60
     token = create_session_token(
         user.id,
+        auth_version=user.auth_version,
         expires_minutes=(
             remember_seconds // 60
             if payload.remember_me
@@ -285,7 +393,15 @@ def login(
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict[str, bool]:
+def logout(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    # The intentionally coarse-grained first implementation revokes every
+    # browser session for this user, including the one that made this request.
+    current_user.auth_version += 1
+    db.commit()
     current = load_settings()
     response.delete_cookie(
         key=current.session_cookie_name,
@@ -356,6 +472,7 @@ def change_password(
 
     current_user.password_hash = hash_password(payload.new_password)
     current_user.must_change_password = False
+    current_user.auth_version += 1
     db.add(
         _password_log(
             actor=current_user,
@@ -466,6 +583,8 @@ def update_user(
         user.password_hash = hash_password(changes["password"])
         if "must_change_password" not in changes:
             user.must_change_password = True
+    if {"role", "is_active", "password"}.intersection(changes):
+        user.auth_version += 1
     db.add(
         OperationLog(
             user_id=admin.id,
@@ -535,6 +654,7 @@ def save_permission_overrides(
                 for permission_code, is_allowed in sorted(payload.overrides.items())
             ]
         )
+    user.auth_version += 1
     db.commit()
     db.refresh(user)
     return get_permission_overrides(user.id, admin, db)
@@ -587,6 +707,7 @@ def save_customer_scopes(
                 for customer_id in sorted(customer_ids)
             ]
         )
+    user.auth_version += 1
     db.commit()
     return get_customer_scopes(user.id, admin, db)
 
@@ -648,6 +769,7 @@ def save_user_access(
                 for customer_id in sorted(customer_ids)
             ]
         )
+    user.auth_version += 1
     db.add(
         OperationLog(
             user_id=admin.id,
@@ -693,6 +815,7 @@ def reset_password(
 
     target.password_hash = hash_password(payload.new_password)
     target.must_change_password = True
+    target.auth_version += 1
     db.add(
         _password_log(
             actor=admin,

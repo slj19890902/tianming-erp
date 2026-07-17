@@ -74,7 +74,7 @@ def test_auth_version_backfills_az53_users_and_refuses_data_loss_by_default(
         _assert_integrity(connection)
 
 
-def test_auth_version_empty_database_round_trips_without_confirmation(
+def test_auth_version_empty_database_still_requires_confirmation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -82,6 +82,10 @@ def test_auth_version_empty_database_round_trips_without_confirmation(
     config = _alembic_config(monkeypatch, database_path)
     command.upgrade(config, PARENT_REVISION)
     command.upgrade(config, TARGET_REVISION)
+    with pytest.raises(RuntimeError, match="Refusing to drop users.auth_version"):
+        command.downgrade(config, PARENT_REVISION)
+
+    monkeypatch.setenv(CONFIRMATION_ENV, CONFIRMATION_VALUE)
     command.downgrade(config, PARENT_REVISION)
     command.upgrade(config, TARGET_REVISION)
 

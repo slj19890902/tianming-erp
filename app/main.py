@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from pathlib import Path
 import sqlite3
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from fastapi.middleware.httpsredirect import (
+    HTTPSRedirectMiddleware as StarletteHTTPSRedirectMiddleware,
+)
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -72,6 +76,40 @@ class HSTSMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class HTTPSRedirectMiddleware(StarletteHTTPSRedirectMiddleware):
+    """Keep the loopback liveness probe HTTP-only without weakening public HTTPS."""
+
+    @staticmethod
+    def _is_loopback_health(scope) -> bool:
+        if (
+            scope.get("type") != "http"
+            or scope.get("path") != "/api/health"
+            or scope.get("method") not in {"GET", "HEAD"}
+        ):
+            return False
+        client = scope.get("client")
+        if not client:
+            return False
+        try:
+            if not ip_address(client[0]).is_loopback:
+                return False
+        except ValueError:
+            return False
+        headers = dict(scope.get("headers", ()))
+        host_header = headers.get(b"host", b"").decode("latin-1")
+        try:
+            host = urlsplit(f"//{host_header}").hostname
+            return host is not None and ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    async def __call__(self, scope, receive, send):
+        if self._is_loopback_health(scope):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
 def database_health(current) -> JSONResponse:
     """Return an intentionally minimal public liveness result."""
     database_path = current.database_path
@@ -96,7 +134,12 @@ def apply_transport_security(application: FastAPI, current) -> None:
     application.add_middleware(HTTPSRedirectMiddleware)
     application.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=list(current.trusted_hosts),
+        allowed_hosts=[
+            *current.trusted_hosts,
+            "127.0.0.1",
+            "localhost",
+            "[::1]",
+        ],
     )
     application.add_middleware(HSTSMiddleware)
     if current.trusted_proxy_ips:

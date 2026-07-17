@@ -1201,6 +1201,13 @@ def test_incoming_receipt_migration_round_trip_on_copy(
     } <= trigger_names
     assert temporary_tables == []
 
+    # This round-trip uses a disposable tmp_path database.  Explicitly
+    # acknowledge the auth-version data-loss guard before crossing N031;
+    # production downgrades must continue to fail closed without it.
+    monkeypatch.setenv(
+        "N031_AUTH_VERSION_DOWNGRADE_CONFIRM",
+        "DOWNTIME_COMPLETE_AND_SESSION_SECRET_ROTATED",
+    )
     command.downgrade(config, "aj37v7w8x9f27")
     with sqlite3.connect(database_path) as connection:
         tables = {

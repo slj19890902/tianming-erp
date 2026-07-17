@@ -37,6 +37,8 @@ def test_n016_template_lifecycle_list_has_daily_filter_and_audit_columns() -> No
     assert "日常：active + draft" in INDEX
     assert "默认隐藏历史 retired 模板" in INDEX
     assert "pdfTemplateRows()" in INDEX
+    assert "字段映射 JSON（明细正则捕获组）" in INDEX
+    assert '{"field_mapping":{"product_code":"sku","quantity":"qty","unit_price":6}}' in INDEX
 
 
 def test_n016_template_operation_matrix_and_reason_gates_are_present() -> None:

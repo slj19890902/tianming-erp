@@ -1,5 +1,14 @@
 # Codex 项目交接
 
+## 2026-07-17 N016 P2 | 通用客户 PDF 模板执行层（本地完成，待统一隔离 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-pdf-template-execution-n016-p2`；分支：`feature/pdf-template-execution-n016-p2`；基线 `96cee39`。本轮未新增 migration、未连接或写入正式数据库，也未创建正式订单。
+- 只有生命周期为 `active` 的通用客户模板会执行订单号、日期、明细行和字段映射；`draft/retired` 不参与。字段映射优先使用 `field_mapping`，兼容 `item_field_map` 和旧版顶层数字捕获组；训练库重解析、激活 dry-run 与订单预览继续共用 `parse_pdf_bytes`。
+- 天华超净、天华新能源、高泰和思迈尔继续优先使用专项解析器；宽泛通用模板不能抢占专项客户，天华两类客户按完整 `customer_type` 区分，不能互相绑定客户 ID 或常用箱。
+- 用户模板正则先校验长度、捕获组和高风险结构，再在独立 Python 子进程中执行；单次 2 秒硬超时会终止子进程并转人工确认，历史 active 模板也不能通过灾难性回溯卡住 ERP worker。非法 JSON、捕获组、金额、数量和真实日历日期均 fail-closed。
+- 通用模板只有在原单恰好存在一组独立整单合计，且数量、金额与解析明细在 `0.01` 误差内一致时才得到 `integrity_status=passed`。无合计、多个合计或分页小计保持 `unknown`，正式保存门禁不会放行；模板正则命中数不再冒充源明细数。
+- 自动验证：N016/PDF 解析、生命周期、专项路由与既有导入回归 `111 passed`；训练库前端 `6 passed, 46 deselected`；版本更新脚本 `9 passed`；相关 Python 编译和 `git diff --check` 通过。独立最终审查确认无 P0/P1，可提交。版本更新为 `v0.22.13 PDF 客户模板执行与安全校验`。
+
 ## 2026-07-17 N022 Phase C.2 | 模具码 + 位置码双码移动确认（本地完成，待人工 UAT）
 
 - 独立 worktree：`D:\tm-worktrees\erp-mold-location-movement-n022-c2`；分支：`feature/mold-location-movement-n022-c2`；基线 `5bf1540`。本轮未 commit、未 push，未连接、迁移或写入正式数据库。

@@ -28,6 +28,7 @@ Phase 18 / v0.18.0: PDF 订单识别训练样本库 REST API。
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -49,7 +50,11 @@ from app.models.pdf_training import (
 )
 from app.models.user import User
 from app.services.order_pdf_import import (
+    TEMPLATE_CAPTURE_GROUP_MAX,
+    TEMPLATE_ITEM_FIELDS,
+    TEMPLATE_PATTERN_MAX_LENGTH,
     file_sha256,
+    template_pattern_safety_error,
 )
 from app.services.pdf_customer_templates import (
     activation_dry_run,
@@ -276,6 +281,85 @@ class TemplateActivationPayload(BaseModel):
 
 class TemplateRetirePayload(BaseModel):
     reason: str
+
+
+def _validate_template_rule_payload(payload: TemplateCreate) -> None:
+    compiled_item_pattern: re.Pattern | None = None
+    for field_name, label in (
+        ("customer_name_pattern", "客户名称规则"),
+        ("order_no_pattern", "订单号规则"),
+        ("date_pattern", "日期规则"),
+        ("item_row_pattern", "明细行规则"),
+    ):
+        pattern = str(getattr(payload, field_name) or "").strip()
+        if not pattern:
+            continue
+        if len(pattern) > TEMPLATE_PATTERN_MAX_LENGTH:
+            raise HTTPException(status_code=422, detail=f"{label}过长，请缩短后再保存。")
+        try:
+            compiled = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+        except (RecursionError, re.error) as error:
+            raise HTTPException(status_code=422, detail=f"{label}无效：{error}") from error
+        if compiled.groups > TEMPLATE_CAPTURE_GROUP_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label}捕获组超过 {TEMPLATE_CAPTURE_GROUP_MAX} 个。",
+            )
+        safety_error = template_pattern_safety_error(pattern)
+        if safety_error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label}存在不安全正则结构：{safety_error}。",
+            )
+        if field_name == "item_row_pattern":
+            compiled_item_pattern = compiled
+
+    raw_mapping = str(payload.column_map_json or "").strip()
+    if not raw_mapping:
+        return
+    if len(raw_mapping.encode("utf-8")) > 20_000:
+        raise HTTPException(status_code=422, detail="字段映射 JSON 过大，请精简后再保存。")
+    try:
+        mapping_payload = json.loads(raw_mapping)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=f"字段映射 JSON 无效：{error}") from error
+    if not isinstance(mapping_payload, dict):
+        raise HTTPException(status_code=422, detail="字段映射 JSON 必须是对象。")
+
+    if "field_mapping" in mapping_payload:
+        field_mapping = mapping_payload.get("field_mapping")
+    elif "item_field_map" in mapping_payload:
+        field_mapping = mapping_payload.get("item_field_map")
+    else:
+        supported = {*TEMPLATE_ITEM_FIELDS, "specification", "production_notes", "reference_product_code"}
+        field_mapping = {
+            key: value for key, value in mapping_payload.items() if key in supported
+        }
+    if not isinstance(field_mapping, dict):
+        raise HTTPException(status_code=422, detail="field_mapping 必须是对象。")
+    supported = {*TEMPLATE_ITEM_FIELDS, "specification", "production_notes", "reference_product_code"}
+    for field_name, selector in field_mapping.items():
+        if field_name not in supported:
+            raise HTTPException(status_code=422, detail=f"字段映射不支持字段：{field_name}")
+        if not isinstance(selector, (str, int)) or isinstance(selector, bool):
+            raise HTTPException(status_code=422, detail=f"字段 {field_name} 的捕获组必须是名称或序号。")
+        selector_text = str(selector).strip()
+        if not selector_text:
+            raise HTTPException(status_code=422, detail=f"字段 {field_name} 的捕获组不能为空。")
+        if compiled_item_pattern is None:
+            continue
+        if selector_text.isdigit():
+            group_index = int(selector_text)
+            if group_index < 1 or group_index > compiled_item_pattern.groups:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"字段 {field_name} 指向不存在的捕获组 {group_index}。",
+                )
+        elif selector_text not in compiled_item_pattern.groupindex:
+            raise HTTPException(
+                status_code=422,
+                detail=f"字段 {field_name} 指向不存在的命名组 {selector_text}。",
+            )
 
 
 class ScoreOut(BaseModel):
@@ -859,6 +943,7 @@ def create_template(
     user: User = Depends(require_pdf_training_manage),
 ):
     """Create a non-routable draft.  Activation is evidence-gated separately."""
+    _validate_template_rule_payload(payload)
     tmpl = PdfOrderCustomerTemplate(
         customer_id=payload.customer_id,
         template_name=payload.template_name,
@@ -889,6 +974,7 @@ def update_template(
 ):
     tmpl = _get_template_or_404(db, template_id)
     _require_draft(tmpl, "原地编辑")
+    _validate_template_rule_payload(payload)
     if tmpl.customer_id != payload.customer_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

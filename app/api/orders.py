@@ -86,6 +86,7 @@ from app.services.order_pdf_import import (
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
 from app.services.pdf_parse_pipeline import parse_pdf_bytes
+from app.services.pdf_preview_redaction import redact_pdf_preview_for_user
 from app.services.product_import import (
     NewProductError,
     NewProductInput,
@@ -420,6 +421,25 @@ def _attach_pdf_preview_safety_token(
         state_overrides=state_overrides,
     )
     return result
+
+
+def _finalize_pdf_preview_for_user(
+    draft: dict,
+    user: User,
+    *,
+    state_overrides: dict | None = None,
+) -> dict:
+    """Attach the trusted preview token, then enforce the cost-view boundary."""
+
+    tokenized = _attach_pdf_preview_safety_token(
+        draft,
+        user,
+        state_overrides=state_overrides,
+    )
+    return redact_pdf_preview_for_user(
+        tokenized,
+        can_view_cost=has_permission(user, "cost.view"),
+    )
 
 
 def _pdf_preview_token_error(message: str) -> HTTPException:
@@ -1819,12 +1839,12 @@ async def preview_order_pdf(
     try:
         draft = _parse_order_pdf_preview(content, filename, template_rules)
         draft["file_hash"] = file_sha256(content)
-        return _attach_pdf_preview_safety_token(
+        return _finalize_pdf_preview_for_user(
             _match_pdf_preview_for_user(db, draft, user),
             user,
         )
     except PdfParseError as error:
-        return _attach_pdf_preview_safety_token(
+        return _finalize_pdf_preview_for_user(
             _pdf_failure_draft(filename, error, digest=file_sha256(content)),
             user,
         )
@@ -1857,53 +1877,62 @@ async def preview_order_pdf_batch(
             digest = file_sha256(content)
             if digest in seen_hashes:
                 drafts.append(
-                    _attach_pdf_preview_safety_token({
-                        "source_name": filename,
-                        "file_hash": digest,
-                        "recognition_status": "duplicate_skipped",
-                        "duplicate_status": "duplicate_skipped",
-                        "duplicate_reason": "本批次已上传相同文件",
-                        "items": [],
-                        "warnings": ["本批次已上传相同文件，已跳过。"],
-                    }, user)
+                    _finalize_pdf_preview_for_user(
+                        {
+                            "source_name": filename,
+                            "file_hash": digest,
+                            "recognition_status": "duplicate_skipped",
+                            "duplicate_status": "duplicate_skipped",
+                            "duplicate_reason": "本批次已上传相同文件",
+                            "items": [],
+                            "warnings": ["本批次已上传相同文件，已跳过。"],
+                        },
+                        user,
+                    )
                 )
                 continue
             seen_hashes.add(digest)
             draft = _parse_order_pdf_preview(content, filename, template_rules)
             draft["file_hash"] = digest
             drafts.append(
-                _attach_pdf_preview_safety_token(
+                _finalize_pdf_preview_for_user(
                     _match_pdf_preview_for_user(db, draft, user), user
                 )
             )
         except PdfParseError as error:
             drafts.append(
-                _attach_pdf_preview_safety_token(
+                _finalize_pdf_preview_for_user(
                     _pdf_failure_draft(filename, error, digest=digest),
                     user,
                 )
             )
         except ValueError as error:
             drafts.append(
-                _attach_pdf_preview_safety_token({
-                    "source_name": filename,
-                    "file_hash": digest,
-                    "recognition_status": "failed",
-                    "duplicate_status": None,
-                    "items": [],
-                    "warnings": [str(error)],
-                }, user)
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": [str(error)],
+                    },
+                    user,
+                )
             )
         except Exception:
             drafts.append(
-                _attach_pdf_preview_safety_token({
-                    "source_name": filename,
-                    "file_hash": digest,
-                    "recognition_status": "failed",
-                    "duplicate_status": None,
-                    "items": [],
-                    "warnings": ["文件识别失败，请检查文件内容后重试。"],
-                }, user)
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": ["文件识别失败，请检查文件内容后重试。"],
+                    },
+                    user,
+                )
             )
     return {"batch_count": len(files), "drafts": drafts}
 
@@ -1955,7 +1984,7 @@ def rematch_order_draft(
         _user,
         customer_id=payload.customer_id,
     )
-    return _attach_pdf_preview_safety_token(
+    return _finalize_pdf_preview_for_user(
         result,
         _user,
         state_overrides={

@@ -61,7 +61,7 @@ def test_homepage_has_role_menu_and_direct_link_to_warehouse_page() -> None:
     assert 'href="/warehouse.html">仓库库存管理</a>' in INDEX_HTML
     assert 'if (page === "warehouse")' in INDEX_HTML
     assert 'window.location.href = "/warehouse.html";' in INDEX_HTML
-    assert '"incoming", "warehouse", "deliveries"' in INDEX_HTML
+    assert '"incoming", "production", "warehouse", "deliveries"' in INDEX_HTML
 
 
 def test_warehouse_page_reads_nested_auth_user_and_uses_n028_permissions() -> None:
@@ -88,7 +88,8 @@ def test_warehouse_page_unauthenticated_and_initialization_failures_are_explicit
 def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
     for label in ("成品仓", "半成品仓", "库存经营看板", "库位管理", "库存流水"):
         assert label in WAREHOUSE_HTML
-    assert "<script src=" not in WAREHOUSE_HTML
+    assert '<script src="/static/assets/time-utils.js"></script>' in WAREHOUSE_HTML
+    assert WAREHOUSE_HTML.count("<script src=") == 1
     assert "<link rel=" not in WAREHOUSE_HTML
     assert 'href="/"' in WAREHOUSE_HTML
     for empty_text in ("暂无库存批次", "暂无库位", "暂无库存流水"):
@@ -96,7 +97,13 @@ def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
     assert "/api/warehouse/insights" in WAREHOUSE_HTML
     assert "成本待补" in WAREHOUSE_HTML
     assert "当前材料估算" in WAREHOUSE_HTML
-    assert "不自动改变业务数据" in WAREHOUSE_HTML
+    assert "库龄按入库日期，停滞按最后异动" in WAREHOUSE_HTML
+    assert "只读展示，不自动抵扣" in WAREHOUSE_HTML
+    assert "入库快照估算" in WAREHOUSE_HTML
+    assert "当前材料报价估算" in WAREHOUSE_HTML
+    assert "产品参考估算" in WAREHOUSE_HTML
+    assert "绝非实际现金成本覆盖" in WAREHOUSE_HTML
+    assert "建议不自动执行" in WAREHOUSE_HTML
 
 
 def test_warehouse_initialization_apis_return_empty_structures(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 import importlib
 import sys
 from types import SimpleNamespace
@@ -10,15 +11,44 @@ import pytest
 from app.services import (
     floor3_locations,
     incoming_receipts,
+    inventory_cost_snapshot,
     production_workflow,
     stock_replenishment,
     warehouse_inventory,
 )
+from app.services.inventory_cost_snapshot import InventoryCostEstimate
 
 
 class NullObject(SimpleNamespace):
     def __getattr__(self, _name: str):
         return None
+
+
+def test_inventory_cost_snapshot_uses_shared_utc_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    default_time = datetime(2026, 7, 17, 8, 30)
+    explicit_time = datetime(2026, 7, 16, 1, 2, 3)
+    estimate = InventoryCostEstimate(
+        unit_cost=Decimal("1.0000"),
+        square_price=Decimal("2.0000"),
+        area_m2=Decimal("0.500000"),
+        source="test",
+        detail={},
+    )
+    monkeypatch.setattr(
+        inventory_cost_snapshot, "utc_now_naive", lambda: default_time
+    )
+
+    default_snapshot = NullObject()
+    inventory_cost_snapshot.apply_cost_snapshot(default_snapshot, estimate)
+    assert default_snapshot.cost_snapshot_at == default_time
+
+    explicit_snapshot = NullObject()
+    inventory_cost_snapshot.apply_cost_snapshot(
+        explicit_snapshot, estimate, captured_at=explicit_time
+    )
+    assert explicit_snapshot.cost_snapshot_at == explicit_time
 
 
 @pytest.mark.parametrize(

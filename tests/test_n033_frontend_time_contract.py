@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -23,6 +24,7 @@ def test_static_pages_use_the_shared_time_contract() -> None:
         STATIC / "warehouse.html",
         STATIC / "incoming.html",
         STATIC / "delivery-print.html",
+        STATIC / "requisition-print.html",
         STATIC / "customers.html",
     ]
     for page in pages:
@@ -33,6 +35,45 @@ def test_static_pages_use_the_shared_time_contract() -> None:
         assert '${data.created_at}Z' not in text, page
     assert 'new Date(value).toLocaleString' not in (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'new Date(x.created_at).toLocaleString' not in (STATIC / "warehouse.html").read_text(encoding="utf-8")
+
+
+def test_requisition_print_keeps_business_date_out_of_browser_timezone() -> None:
+    page = (STATIC / "requisition-print.html").read_text(encoding="utf-8")
+    assert "TmTime.formatBusinessDate(value)" in page
+    assert "T00:00:00" not in page
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    script = (
+        "const fs=require('fs');"
+        "eval(fs.readFileSync(process.argv[1],'utf8'));"
+        "const page=fs.readFileSync(process.argv[2],'utf8');"
+        "const start=page.indexOf('const shortDate = value => {');"
+        "const end=page.indexOf('\\n    };',start)+7;"
+        "if(start<0||end<7)process.exit(2);"
+        "eval(page.slice(start,end)+';globalThis.__shortDate=shortDate;');"
+        "if(globalThis.__shortDate('2026-07-17')!=='26.7.17')process.exit(3);"
+    )
+    for timezone_name in ("America/Los_Angeles", "Pacific/Kiritimati"):
+        environment = os.environ.copy()
+        environment["TZ"] = timezone_name
+        result = subprocess.run(
+            [
+                node,
+                "-e",
+                script,
+                str(STATIC / "assets/time-utils.js"),
+                str(STATIC / "requisition-print.html"),
+            ],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, (
+            timezone_name + ": " + result.stdout + result.stderr
+        )
 
 
 def test_index_converts_utc_instants_and_keeps_calendar_days() -> None:

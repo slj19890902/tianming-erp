@@ -4,22 +4,22 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.order import Order, OrderItem
 from app.models.product import Product
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail,
+    InventoryLot,
+    SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
+)
 from app.services.inventory_cost_snapshot import (
     estimate_from_snapshot,
     estimate_inventory_lot_cost,
 )
-from app.services.semi_finished_inventory import (
-    semi_finished_lot_assigned_product_ids,
-)
-
-
 INACTIVE_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled"}
 NON_DEMAND_ORDER_STATUSES = {"dead", "cancelled"}
 AGE_BUCKETS = (
@@ -65,12 +65,15 @@ def _age_bucket(days: int) -> tuple[str, str]:
     return AGE_BUCKETS[-1][0], AGE_BUCKETS[-1][1]
 
 
-def _demand_by_product(db: Session, as_of: date) -> dict[int, dict[str, int]]:
+def _demand_by_product(
+    db: Session,
+    as_of: date,
+    customer_ids: set[int] | None = None,
+) -> dict[int, dict[str, int]]:
     demand: dict[int, dict[str, int]] = defaultdict(
         lambda: {"demand_30": 0, "demand_90": 0, "demand_180": 0, "open_demand": 0}
     )
-    rows = db.execute(
-        select(
+    query = select(
             OrderItem.product_id,
             OrderItem.quantity,
             OrderItem.delivered_quantity,
@@ -78,7 +81,9 @@ def _demand_by_product(db: Session, as_of: date) -> dict[int, dict[str, int]]:
             Order.order_date,
             Order.status,
         ).join(Order, Order.id == OrderItem.order_id)
-    ).all()
+    if customer_ids is not None:
+        query = query.where(Order.customer_id.in_(customer_ids))
+    rows = db.execute(query).all()
     cutoffs = {
         "demand_30": as_of - timedelta(days=30),
         "demand_90": as_of - timedelta(days=90),
@@ -95,38 +100,101 @@ def _demand_by_product(db: Session, as_of: date) -> dict[int, dict[str, int]]:
     return demand
 
 
+def _assigned_product_ids_by_lot(
+    db: Session,
+    lots: list[InventoryLot],
+    customer_ids: set[int] | None,
+) -> dict[int, set[int]]:
+    """Bulk-load semi-finished bindings, validating ownership when scoped."""
+
+    lot_ids = [
+        lot.id for lot in lots if lot.semi_finished_detail is not None
+    ]
+    result = {lot_id: set() for lot_id in lot_ids}
+    if not lot_ids:
+        return result
+    query = (
+        select(
+            SemiFinishedLotAllowedProduct.inventory_lot_id,
+            SemiFinishedLotAllowedProduct.product_id,
+        )
+        .join(
+            Product,
+            Product.id == SemiFinishedLotAllowedProduct.product_id,
+        )
+        .where(SemiFinishedLotAllowedProduct.inventory_lot_id.in_(lot_ids))
+    )
+    if customer_ids is not None:
+        query = query.join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id
+            == SemiFinishedLotAllowedProduct.inventory_lot_id,
+        ).where(
+            SemiFinishedInventoryDetail.owner_customer_id.in_(customer_ids),
+            Product.customer_id
+            == SemiFinishedInventoryDetail.owner_customer_id,
+        )
+    for lot_id, product_id in db.execute(query):
+        result[lot_id].add(product_id)
+    return result
+
+
 def build_inventory_insights(
     db: Session,
     *,
     as_of: date | None = None,
+    customer_ids: set[int] | None = None,
 ) -> dict:
     """Build a read-only inventory view; it never reserves or mutates stock."""
 
     as_of = as_of or beijing_today()
-    lots = list(
-        db.scalars(
-            select(InventoryLot)
-            .options(
-                selectinload(InventoryLot.location),
-                selectinload(InventoryLot.finished_detail),
-                selectinload(InventoryLot.semi_finished_detail),
+    lot_query = select(InventoryLot).options(
+        selectinload(InventoryLot.location),
+        selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryLot.semi_finished_detail),
+    )
+    if customer_ids is not None:
+        lot_query = lot_query.where(
+            or_(
+                InventoryLot.id.in_(
+                    select(FinishedGoodsInventoryDetail.inventory_lot_id)
+                    .join(
+                        Product,
+                        Product.id == FinishedGoodsInventoryDetail.product_id,
+                    )
+                    .where(
+                        FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                            customer_ids
+                        ),
+                        Product.customer_id
+                        == FinishedGoodsInventoryDetail.owner_customer_id,
+                    )
+                ),
+                InventoryLot.id.in_(
+                    select(SemiFinishedInventoryDetail.inventory_lot_id).where(
+                        SemiFinishedInventoryDetail.owner_customer_id.in_(
+                            customer_ids
+                        )
+                    )
+                ),
             )
-            .order_by(InventoryLot.id)
-        ).all()
+        )
+    lots = list(db.scalars(lot_query.order_by(InventoryLot.id)).all())
+    assigned_product_ids = _assigned_product_ids_by_lot(
+        db, lots, customer_ids
     )
     product_ids = {
         lot.finished_detail.product_id
         for lot in lots
         if lot.finished_detail is not None
     }
-    for lot in lots:
-        if lot.semi_finished_detail is not None:
-            product_ids.update(semi_finished_lot_assigned_product_ids(db, lot.id))
+    for assigned_ids in assigned_product_ids.values():
+        product_ids.update(assigned_ids)
     products = {
         row.id: row
         for row in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     } if product_ids else {}
-    demand = _demand_by_product(db, as_of)
+    demand = _demand_by_product(db, as_of, customer_ids)
     finished_available_by_product: dict[int, int] = defaultdict(int)
     for lot in lots:
         if lot.quantity_available > 0 and lot.finished_detail is not None:
@@ -230,7 +298,7 @@ def build_inventory_insights(
                 priority = min(priority, 2)
         elif lot.semi_finished_detail is not None:
             row = lot.semi_finished_detail
-            assigned_ids = semi_finished_lot_assigned_product_ids(db, lot.id)
+            assigned_ids = assigned_product_ids.get(lot.id, set())
             is_general = row.owner_customer_id is None
             assigned_open_demand = sum(
                 demand.get(product_id, {}).get("open_demand", 0)

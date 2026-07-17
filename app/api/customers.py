@@ -18,6 +18,7 @@ from app.api.deps import (
 )
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
+from app.models.access_control import UserCustomerScope
 from app.models.order import Order
 from app.models.user import User
 from app.services.master_data_versioning import (
@@ -177,6 +178,17 @@ def create_customer(
     try:
         db.add(customer)
         db.flush()
+        # A newly created customer must be usable immediately by the sales
+        # account that created it.  Keep this in the same transaction as the
+        # customer and audit rows so failed creates cannot leave a scope row.
+        if not has_unrestricted_customer_access(user, db):
+            db.add(
+                UserCustomerScope(
+                    user_id=user.id,
+                    customer_id=customer.id,
+                    assigned_by=user.id,
+                )
+            )
         record_versioned_create(
             db,
             object_type="customer",

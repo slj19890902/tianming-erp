@@ -406,6 +406,7 @@
       .status.green { background: var(--green-bg); color: var(--green); }
       .status.orange { background: var(--orange-bg); color: var(--orange); }
       .status.red { background: var(--red-bg); color: var(--red); }
+      .status.gray { background: #f3f4f6; color: #4b5563; }
       .row-voided { opacity: 0.5; text-decoration: line-through; }
       .status.blue { background: var(--blue-soft); color: var(--primary-dark); }
 
@@ -2024,7 +2025,7 @@
                   <table class="data-table" style="font-size:12px;min-width:700px">
                     <thead><tr>
                       <th>ID</th><th>文件名</th><th>解析方式</th><th>状态</th>
-                      <th>评分</th><th>上传时间</th><th>操作</th>
+                      <th>金样本</th><th>评分</th><th>上传时间</th><th>操作</th>
                     </tr></thead>
                     <tbody>
                       <tr v-for="s in pdfTrainingSamples" :key="s.id">
@@ -2049,6 +2050,7 @@
                             fontWeight: 600
                           }">{{ {pending:'待标注',labeled:'已标注',reviewed:'已复核'}[s.parse_status] || s.parse_status }}</span>
                         </td>
+                        <td><span :class="['status', pdfGoldReviewStatusClass(s.gold_review_status)]">{{ pdfGoldReviewStatusLabel(s.gold_review_status) }}</span></td>
                         <td>
                           <span v-if="s.score!=null" :style="{color:s.score>=0.9?'#16a34a':s.score>=0.7?'#d97706':'#dc2626',fontWeight:600}">
                             {{ (s.score*100).toFixed(1) }}%
@@ -2067,6 +2069,80 @@
                     <button class="btn small" :disabled="pdfSamplePage<=1" @click="loadPdfTrainingSamples(pdfSamplePage-1)">上一页</button>
                     <span style="font-size:13px">第 {{ pdfSamplePage }} 页</span>
                     <button class="btn small" :disabled="pdfTrainingSamples.length<50" @click="loadPdfTrainingSamples(pdfSamplePage+1)">下一页</button>
+                  </div>
+                </div>
+
+                <!-- PDF 客户模板生命周期 -->
+                <div class="section-title" style="margin-top:20px">客户 PDF 模板生命周期</div>
+                <div class="panel" style="padding:14px 18px">
+                  <div class="toolbar" style="margin-bottom:10px;align-items:flex-start">
+                    <div class="toolbar-group" style="flex-wrap:wrap">
+                      <button class="btn primary" :disabled="pdfTemplateLoading || !canAdmin" @click="openPdfTemplateEditor()">新建 draft 模板</button>
+                      <button class="btn" :disabled="pdfTemplateLoading" @click="loadPdfTemplates">刷新模板</button>
+                      <select class="select" style="width:auto;min-width:150px" v-model="pdfTemplateStatusFilter">
+                        <option value="active_draft">日常：active + draft</option>
+                        <option value="all">全部状态</option>
+                        <option value="active">仅 active</option>
+                        <option value="draft">仅 draft</option>
+                        <option value="retired">仅 retired</option>
+                      </select>
+                    </div>
+                    <span class="muted" style="font-size:12px;max-width:420px">默认隐藏历史 retired 模板；active 与 draft 优先显示，避免历史版本淹没日常操作。</span>
+                  </div>
+                  <div v-if="pdfTemplateDryRun" class="notice" style="margin-bottom:12px;white-space:normal">
+                    <div class="toolbar" style="align-items:flex-start;gap:8px">
+                      <strong>只读验证结果 · 模板 #{{ pdfTemplateDryRun.template_id }} / v{{ pdfTemplateDryRun.template_version }}</strong>
+                      <button class="btn small" @click="pdfTemplateDryRun = null">收起</button>
+                    </div>
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0">
+                      <span>样本数：<strong>{{ pdfTemplateDryRun.sample_count }}</strong></span>
+                      <span>平均分：<strong>{{ pdfTemplateDryRun.average_score == null ? '-' : (Number(pdfTemplateDryRun.average_score) * 100).toFixed(1) + '%' }}</strong></span>
+                      <span :class="['status', pdfTemplateDryRun.can_activate ? 'green' : 'red']">{{ pdfTemplateDryRun.can_activate ? '可激活' : '不可激活' }}</span>
+                    </div>
+                    <div v-if="pdfTemplateDryRun.reasons && pdfTemplateDryRun.reasons.length" class="status red" style="display:block;line-height:1.6;margin-bottom:8px">
+                      <strong>不可激活原因：</strong>
+                      <div v-for="(reason,index) in pdfTemplateDryRun.reasons" :key="`dry-reason-${index}`">{{ reason }}</div>
+                    </div>
+                    <div v-if="pdfTemplateDryRun.sample_results && pdfTemplateDryRun.sample_results.length" style="overflow-x:auto">
+                      <table class="data-table" style="font-size:12px;min-width:620px">
+                        <thead><tr><th>样本</th><th>得分</th><th>结果</th><th>错误 / 关键字段</th></tr></thead>
+                        <tbody><tr v-for="result in pdfTemplateDryRun.sample_results" :key="result.sample_id">
+                          <td>#{{ result.sample_id }}</td>
+                          <td>{{ result.score == null ? '-' : (Number(result.score) * 100).toFixed(1) + '%' }}</td>
+                          <td><span :class="['status', result.ok ? 'green' : 'red']">{{ result.ok ? '通过' : '未通过' }}</span></td>
+                          <td style="white-space:normal">{{ (result.reasons || []).join('；') || '无错误' }}<div class="muted" style="font-size:11px">{{ pdfTemplateStrictCheckText(result) }}</div></td>
+                        </tr></tbody>
+                      </table>
+                    </div>
+                    <div v-else class="muted">暂无可验证金样本；通常需要至少 3 份同客户已批准金样本。</div>
+                  </div>
+                  <div v-if="!pdfTemplateRows.length" class="empty">暂无符合筛选条件的模板</div>
+                  <div v-else style="overflow-x:auto">
+                    <table class="data-table" style="font-size:12px;min-width:1060px">
+                      <thead><tr><th>客户</th><th>模板名</th><th>版本</th><th>生命周期</th><th>更新时间</th><th>操作者</th><th>操作</th></tr></thead>
+                      <tbody>
+                        <tr v-for="row in pdfTemplateRows" :key="row.id" :style="row.status === 'retired' ? {opacity:0.72} : {background:row.status === 'active' ? '#f0fdf4' : '#eff6ff'}">
+                          <td>{{ customerName(row.customer_id) }}</td>
+                          <td style="max-width:220px;white-space:normal"><strong>{{ row.template_name }}</strong><div v-if="row.status === 'retired'" class="muted">{{ row.retired_reason || '历史退役版本' }}</div></td>
+                          <td>v{{ row.version }}</td>
+                          <td><span :class="['status', pdfTemplateStatusClass(row.status)]">{{ pdfTemplateStatusLabel(row.status) }}</span></td>
+                          <td>{{ formatDateTime(row.updated_at || row.created_at) }}</td>
+                          <td>{{ row.updated_by || row.created_by || row.activated_by || row.retired_by || '-' }}</td>
+                          <td>
+                            <div class="toolbar-group" style="flex-wrap:wrap;gap:4px">
+                              <button v-if="row.status !== 'draft' || !canAdmin" class="btn small" :disabled="pdfTemplateLoading" @click="openPdfTemplateEditor(row)">查看</button>
+                              <button v-if="canAdmin && row.status === 'draft'" class="btn small" :disabled="pdfTemplateLoading" @click="openPdfTemplateEditor(row)">编辑</button>
+                              <button v-if="canAdmin && ['draft','active','retired'].includes(row.status)" class="btn small" :disabled="pdfTemplateLoading" @click="clonePdfTemplate(row)">clone draft</button>
+                              <button v-if="canAdmin && row.status === 'draft'" class="btn small" :disabled="pdfTemplateLoading" @click="runPdfTemplateDryRun(row)">只读验证</button>
+                              <button v-if="canAdmin && row.status === 'draft'" class="btn small success" :disabled="pdfTemplateLoading || !pdfTemplateCanActivate(row)" :title="pdfTemplateActivationHint(row)" @click="activatePdfTemplate(row)">激活</button>
+                              <button v-if="canAdmin && row.status === 'active'" class="btn small danger" :disabled="pdfTemplateLoading" @click="retirePdfTemplate(row)">退役</button>
+                              <button v-if="canAdmin && row.status === 'draft'" class="btn small danger" :disabled="pdfTemplateLoading" @click="deletePdfTemplate(row)">删除</button>
+                            </div>
+                            <div v-if="row.status === 'draft' && !pdfTemplateCanActivate(row)" class="muted" style="font-size:11px;margin-top:4px">{{ pdfTemplateActivationHint(row) }}</div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>
@@ -3378,6 +3454,22 @@
               <div class="field wide muted">上传后系统自动运行解析器并保存结果，供后续人工标注和评分。</div>
             </div>
 
+            <!-- PDF 客户模板：draft 编辑，其余生命周期只读 -->
+            <div v-else-if="modal.type === 'pdfTemplate'">
+              <div v-if="pdfTemplateFormReadonly" class="notice readonly-hint" style="margin-bottom:12px">当前模板为 {{ pdfTemplateStatusLabel(pdfTemplateForm.status) }}，仅支持查看与 clone draft；不能原地编辑。</div>
+              <fieldset class="form-grid" :class="{'readonly-fieldset':pdfTemplateFormReadonly}" :disabled="pdfTemplateFormReadonly">
+                <div class="field"><label>客户</label><search-select v-model="pdfTemplateForm.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="搜索客户" :disabled="pdfTemplateFormReadonly"></search-select></div>
+                <div class="field"><label>模板名称 *</label><input class="input" v-model.trim="pdfTemplateForm.template_name" placeholder="例如：客户采购合同模板" /></div>
+                <div class="field"><label>订单号规则</label><input class="input" v-model.trim="pdfTemplateForm.order_no_pattern" placeholder="可留空，沿用默认规则" /></div>
+                <div class="field"><label>日期规则</label><input class="input" v-model.trim="pdfTemplateForm.date_pattern" placeholder="可留空，沿用默认规则" /></div>
+                <div class="field"><label>明细行规则</label><input class="input" v-model.trim="pdfTemplateForm.item_row_pattern" placeholder="可留空，沿用默认规则" /></div>
+                <div class="field"><label>客户名规则</label><input class="input" v-model.trim="pdfTemplateForm.customer_name_pattern" placeholder="可留空，沿用默认规则" /></div>
+                <div class="field wide"><label>字段映射 JSON</label><textarea class="textarea" rows="5" v-model.trim="pdfTemplateForm.column_map_json" placeholder='例如：{"item_columns":{"product_code":["产品编码"]}}'></textarea></div>
+                <div class="field wide"><label>备注</label><textarea class="textarea" rows="3" v-model.trim="pdfTemplateForm.notes" placeholder="记录规则来源、变更背景或验证说明"></textarea></div>
+              </fieldset>
+              <div class="muted" style="font-size:12px;margin-top:8px">模板创建后客户不可更换；如需基于其他版本维护，请使用 clone draft。</div>
+            </div>
+
             <!-- PDF 样本详情 + 标注 -->
             <div v-else-if="modal.type === 'pdfSampleDetail' && pdfSampleDetail">
               <div class="form-grid" style="margin-bottom:12px">
@@ -3386,6 +3478,19 @@
                 <div class="field"><label>状态</label>
                   <div :style="{color:pdfSampleDetail.parse_status==='labeled'?'#2563eb':pdfSampleDetail.parse_status==='reviewed'?'#16a34a':'#6b7280',fontWeight:600}">
                     {{ {pending:'待标注',labeled:'已标注',reviewed:'已复核'}[pdfSampleDetail.parse_status]||pdfSampleDetail.parse_status }}
+                  </div>
+                </div>
+                <div class="field wide" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px">
+                  <label>金样本复核</label>
+                  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                    <span :class="['status', pdfGoldReviewStatusClass(pdfSampleDetail.gold_review_status)]">{{ pdfGoldReviewStatusLabel(pdfSampleDetail.gold_review_status) }}</span>
+                    <span>复核人：{{ pdfSampleDetail.gold_reviewed_by || '-' }}</span>
+                    <span>复核时间：{{ formatDateTime(pdfSampleDetail.gold_reviewed_at) }}</span>
+                  </div>
+                  <div v-if="pdfSampleDetail.gold_review_note" class="muted" style="white-space:pre-wrap;margin-top:5px">备注：{{ pdfSampleDetail.gold_review_note }}</div>
+                  <div v-if="canAdmin" class="toolbar-group" style="margin-top:8px;flex-wrap:wrap">
+                    <button class="btn small success" :disabled="loading" @click="reviewPdfSample('approved')">批准为金样本</button>
+                    <button class="btn small danger" :disabled="loading" @click="reviewPdfSample('rejected')">拒绝</button>
                   </div>
                 </div>
                 <div class="field"><label>评分</label>
@@ -3530,6 +3635,7 @@
 
                 <div class="field wide">
                   <label>人工标注表单</label>
+                  <div class="notice" style="margin-bottom:8px;white-space:normal">保存人工标注后，金样本复核状态会刷新为“待复核”；需要管理员重新确认后才能批准。</div>
                   <div class="toolbar-group" style="margin-bottom:8px">
                     <button class="btn small" type="button" :disabled="loading" @click="fillPdfGroundTruthFromParsedResult">从解析结果生成草稿</button>
                     <button class="btn small" type="button" :disabled="loading" @click="addPdfGroundTruthItem">新增明细行</button>
@@ -3613,6 +3719,9 @@
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
+            </template>
+            <template v-if="modal?.type === 'pdfTemplate' && !pdfTemplateFormReadonly">
+              <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
             <button v-if="canSaveModal" class="btn primary" :disabled="loading || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError)) || (modal?.type==='quotationConvert' && !!quotationConvertCreaseMismatch) || (modal?.type==='orderItem' && !!orderItemCreaseMismatch) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && !!deliveryValidationError)" @click="saveModal">保存</button>
           </div>
@@ -3935,6 +4044,9 @@
             pdfGroundTruthJsonError: '', pdfGroundTruthShowJson: false,
             pdfUploadFile: null, pdfUploadBatchId: null, pdfUploadStore: false, pdfUploadNotes: '',
             pdfOcrStatus: null,
+            pdfTrainingTemplates: [], pdfTemplateStatusFilter: "active_draft", pdfTemplateDryRun: null,
+            pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
+            pdfTemplateLoading: false,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {}, selectedPendingKeys: [],
             requisitionSupplierFilter: "", requisitionSupplierCounts: [],
             requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:true },
@@ -4317,6 +4429,24 @@
             if (this.modal.type === "resetPassword") return this.user?.role === "admin";
             if (this.modal.type === "pdfUpload") return true;
             return false;
+          },
+          pdfTemplateRows() {
+            const status = this.pdfTemplateStatusFilter;
+            const rows = (this.pdfTrainingTemplates || []).filter(row => {
+              if (status === "all") return true;
+              if (status === "retired") return row.status === "retired";
+              if (status === "active" || status === "draft") return row.status === status;
+              return row.status === "active" || row.status === "draft";
+            });
+            return rows.sort((a, b) => {
+              const rank = { active: 0, draft: 1, retired: 2 };
+              return (rank[a.status] ?? 9) - (rank[b.status] ?? 9)
+                || Number(b.version || 0) - Number(a.version || 0)
+                || Number(b.id || 0) - Number(a.id || 0);
+            });
+          },
+          pdfTemplateFormReadonly() {
+            return !!this.pdfTemplateForm.id && this.pdfTemplateForm.status !== "draft";
           },
           menus() {
             const items = [
@@ -7141,6 +7271,7 @@
             this.versionInfo = { ...version.data, changelog: changelog.data.changelog };
             this.companyConfig = company.data;
             await this.loadMaterialMapping(1);
+            await this.loadPdfTemplates();
           },
           openCompanyModal() {
             this.companyForm = { ...this.companyConfig };
@@ -10954,6 +11085,228 @@
           },
 
           // ── Phase 18: PDF 训练库 ──
+          pdfGoldReviewStatusLabel(status) {
+            return { pending: "待复核", approved: "已批准", rejected: "已拒绝" }[status] || status || "待复核";
+          },
+          pdfGoldReviewStatusClass(status) {
+            return { pending: "orange", approved: "green", rejected: "red" }[status] || "gray";
+          },
+          pdfTemplateStatusLabel(status) {
+            return { draft: "draft（草稿）", active: "active（生效）", retired: "retired（已退役）" }[status] || status || "未知";
+          },
+          pdfTemplateStatusClass(status) {
+            return { draft: "blue", active: "green", retired: "gray" }[status] || "gray";
+          },
+          normalizePdfTemplateForm(template = null) {
+            const source = template || {};
+            return {
+              id: source.id || null,
+              customer_id: source.customer_id ?? null,
+              template_name: source.template_name || "",
+              order_no_pattern: source.order_no_pattern || "",
+              date_pattern: source.date_pattern || "",
+              item_row_pattern: source.item_row_pattern || "",
+              customer_name_pattern: source.customer_name_pattern || "",
+              column_map_json: source.column_map_json || "",
+              notes: source.notes || "",
+              status: source.status || "draft",
+              version: source.version || null,
+            };
+          },
+          async loadPdfTemplates() {
+            this.pdfTemplateLoading = true;
+            try {
+              const { data } = await axios.get("/api/pdf-training/templates");
+              this.pdfTrainingTemplates = Array.isArray(data) ? data : (data.items || []);
+            } catch (error) {
+              this.pdfTrainingTemplates = [];
+              this.showToast(`PDF 模板加载失败：${this.errorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
+          openPdfTemplateEditor(template = null) {
+            if (!template && !this.canAdmin) {
+              this.showToast("只有管理员可以维护 PDF 模板", true);
+              return;
+            }
+            this.pdfTemplateForm = this.normalizePdfTemplateForm(template);
+            this.pdfTemplateDryRun = template && this.pdfTemplateDryRun?.template_id === template.id ? this.pdfTemplateDryRun : null;
+            this.modal = {
+              type: "pdfTemplate",
+              title: template ? `PDF 模板详情 · ${template.template_name} v${template.version}` : "新建 PDF draft 模板",
+            };
+          },
+          pdfTemplatePayload() {
+            const rawCustomerId = this.pdfTemplateForm.customer_id;
+            const customerId = rawCustomerId === null || rawCustomerId === "" || rawCustomerId === undefined
+              ? null : Number(rawCustomerId);
+            return {
+              customer_id: Number.isInteger(customerId) && customerId > 0 ? customerId : null,
+              template_name: String(this.pdfTemplateForm.template_name || "").trim(),
+              order_no_pattern: String(this.pdfTemplateForm.order_no_pattern || "").trim() || null,
+              date_pattern: String(this.pdfTemplateForm.date_pattern || "").trim() || null,
+              item_row_pattern: String(this.pdfTemplateForm.item_row_pattern || "").trim() || null,
+              customer_name_pattern: String(this.pdfTemplateForm.customer_name_pattern || "").trim() || null,
+              column_map_json: String(this.pdfTemplateForm.column_map_json || "").trim() || null,
+              notes: String(this.pdfTemplateForm.notes || "").trim() || null,
+            };
+          },
+          async savePdfTemplate() {
+            if (this.pdfTemplateFormReadonly) return;
+            const payload = this.pdfTemplatePayload();
+            if (!payload.template_name) {
+              this.showToast("模板名称不能为空", true);
+              return;
+            }
+            const wasCreating = !this.pdfTemplateForm.id;
+            this.pdfTemplateLoading = true;
+            try {
+              const url = this.pdfTemplateForm.id
+                ? `/api/pdf-training/templates/${this.pdfTemplateForm.id}`
+                : "/api/pdf-training/templates";
+              const { data } = this.pdfTemplateForm.id
+                ? await axios.put(url, payload)
+                : await axios.post(url, payload);
+              this.pdfTemplateForm = this.normalizePdfTemplateForm(data);
+              this.pdfTemplateDryRun = null;
+              await this.loadPdfTemplates();
+              this.closeModal();
+              this.showToast(wasCreating ? "draft 模板已创建" : "draft 模板已保存");
+            } catch (error) {
+              this.showToast(`保存 PDF 模板失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
+          async clonePdfTemplate(template) {
+            if (!this.canAdmin) return;
+            if (!template?.id) return;
+            const suggestedName = `${template.template_name || "PDF 模板"} v${Number(template.version || 0) + 1}`;
+            const name = window.prompt("请输入新 draft 模板名称", suggestedName);
+            if (name === null) return;
+            const templateName = name.trim();
+            if (!templateName) {
+              this.showToast("模板名称不能为空", true);
+              return;
+            }
+            this.pdfTemplateLoading = true;
+            try {
+              await axios.post(`/api/pdf-training/templates/${template.id}/clone-draft`, { template_name: templateName, notes: template.notes || null });
+              await this.loadPdfTemplates();
+              this.showToast("已 clone 为 draft 模板");
+            } catch (error) {
+              this.showToast(`clone draft 失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
+          async runPdfTemplateDryRun(template) {
+            if (!this.canAdmin) return;
+            if (!template?.id) return;
+            this.pdfTemplateLoading = true;
+            try {
+              const { data } = await axios.post(`/api/pdf-training/templates/${template.id}/activation-dry-run`);
+              this.pdfTemplateDryRun = data;
+              this.showToast(data.can_activate ? "只读验证通过，可以激活" : "只读验证未通过，当前不可激活", !data.can_activate);
+            } catch (error) {
+              this.pdfTemplateDryRun = null;
+              this.showToast(`只读验证失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
+          pdfTemplateCanActivate(template) {
+            return template?.status === "draft"
+              && this.pdfTemplateDryRun?.template_id === template.id
+              && !!this.pdfTemplateDryRun?.can_activate;
+          },
+          pdfTemplateActivationHint(template) {
+            if (template?.status !== "draft") return "只有 draft 模板可以激活";
+            if (this.pdfTemplateDryRun?.template_id !== template.id) return "请先完成只读验证（dry-run）";
+            if (!this.pdfTemplateDryRun?.can_activate) {
+              return `不可激活：${(this.pdfTemplateDryRun?.reasons || []).join("；") || "验证未通过"}`;
+            }
+            return "验证已通过，可填写原因后激活";
+          },
+          pdfTemplateStrictCheckText(result) {
+            const checks = result?.strict_checks || {};
+            const failed = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+            if (failed.length) return `关键字段未命中：${failed.join("、")}`;
+            const passed = Object.keys(checks);
+            return passed.length ? `关键字段已核对：${passed.join("、")}` : "关键字段未返回";
+          },
+          pdfTemplateErrorMessage(error) {
+            const detail = error?.response?.data?.detail;
+            if (detail && typeof detail === "object") {
+              const evidence = detail.evidence || {};
+              const reasons = Array.isArray(evidence.reasons) ? evidence.reasons : [];
+              return [detail.message, ...reasons].filter(Boolean).join("；") || "后端拒绝了模板操作";
+            }
+            return this.errorMessage(error);
+          },
+          async activatePdfTemplate(template) {
+            if (!this.canAdmin) return;
+            if (!this.pdfTemplateCanActivate(template)) {
+              this.showToast(this.pdfTemplateActivationHint(template), true);
+              return;
+            }
+            if (!window.confirm(`确认激活模板“${template.template_name}” v${template.version}？激活会使同客户旧 active 模板自动退役。`)) return;
+            const reason = window.prompt("请填写激活原因（必填）", "完成金样本 dry-run 验证");
+            if (reason === null) return;
+            if (!reason.trim()) {
+              this.showToast("激活原因不能为空", true);
+              return;
+            }
+            this.pdfTemplateLoading = true;
+            try {
+              await axios.post(`/api/pdf-training/templates/${template.id}/activate`, { reason: reason.trim() });
+              await this.loadPdfTemplates();
+              this.pdfTemplateDryRun = null;
+              this.showToast("模板已激活，训练库列表已刷新");
+            } catch (error) {
+              this.showToast(`激活失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
+          async retirePdfTemplate(template) {
+            if (!this.canAdmin) return;
+            if (template?.status !== "active") return;
+            if (!window.confirm(`确认退役 active 模板“${template.template_name}” v${template.version}？退役后只能查看或 clone。`)) return;
+            const reason = window.prompt("请填写退役原因（必填）", "已由新版本模板替代");
+            if (reason === null) return;
+            if (!reason.trim()) {
+              this.showToast("退役原因不能为空", true);
+              return;
+            }
+            this.pdfTemplateLoading = true;
+            try {
+              await axios.post(`/api/pdf-training/templates/${template.id}/retire`, { reason: reason.trim() });
+              await this.loadPdfTemplates();
+              this.showToast("模板已退役，训练库列表已刷新");
+            } catch (error) {
+              this.showToast(`退役失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
+          async deletePdfTemplate(template) {
+            if (!this.canAdmin) return;
+            if (template?.status !== "draft") return;
+            if (!window.confirm(`确认删除 draft 模板“${template.template_name}” v${template.version}？此操作不可撤销。`)) return;
+            this.pdfTemplateLoading = true;
+            try {
+              await axios.delete(`/api/pdf-training/templates/${template.id}`);
+              if (this.pdfTemplateDryRun?.template_id === template.id) this.pdfTemplateDryRun = null;
+              await this.loadPdfTemplates();
+              this.showToast("draft 模板已删除，训练库列表已刷新");
+            } catch (error) {
+              this.showToast(`删除失败：${this.pdfTemplateErrorMessage(error)}`, true);
+            } finally {
+              this.pdfTemplateLoading = false;
+            }
+          },
           async loadPdfOcrStatus() {
             try {
               const { data } = await axios.get('/api/pdf-training/ocr-status');
@@ -11023,6 +11376,36 @@
               : value;
             const safeId = Number.parseInt(raw, 10);
             return Number.isInteger(safeId) && safeId > 0 ? safeId : null;
+          },
+          async reviewPdfSample(status) {
+            if (!this.canAdmin || !this.pdfSampleDetail) return;
+            const safeSampleId = this.normalizePdfSampleId(this.pdfSampleDetail);
+            if (!safeSampleId || !["approved", "rejected"].includes(status)) {
+              this.showToast("样本编号或复核状态无效，请刷新后重试", true);
+              return;
+            }
+            if (status === "approved") {
+              const confirmed = window.confirm("批准为金样本前，请确认已完成完整人工标注，并逐项核对客户、订单号及所有明细字段。后端还会校验原始 PDF 完整性。确认批准？");
+              if (!confirmed) return;
+            } else if (!window.confirm("确认拒绝该样本作为金样本？")) {
+              return;
+            }
+            const note = window.prompt(status === "approved" ? "批准备注（可留空）" : "拒绝备注（建议填写原因）", this.pdfSampleDetail.gold_review_note || "");
+            if (note === null) return;
+            this.loading = true;
+            try {
+              const { data } = await axios.post(`/api/pdf-training/samples/${safeSampleId}/gold-review`, {
+                status,
+                note: note.trim() || null,
+              });
+              this.pdfSampleDetail = data;
+              await this.loadPdfTrainingSamples(this.pdfSamplePage);
+              this.showToast(status === "approved" ? "样本已批准为金样本" : "样本已拒绝为金样本");
+            } catch (error) {
+              this.showToast(`金样本复核失败：${this.errorMessage(error)}`, true);
+            } finally {
+              this.loading = false;
+            }
           },
           async openPdfSampleDetail(sampleId) {
             const safeSampleId = this.normalizePdfSampleId(sampleId);
@@ -11182,7 +11565,7 @@
               this.pdfSampleDetail = data;
               this.loadPdfGroundTruthFormFromSample(data);
               const scoreText = data.score != null ? `${(data.score * 100).toFixed(1)}%` : "未评分";
-              this.showToast(`已保存人工标注并评分：${scoreText}`);
+              this.showToast(`已保存人工标注并评分：${scoreText}${data.gold_review_status === "pending" ? "；金样本状态已重置为待复核" : ""}`);
               await this.loadPdfTrainingSamples(this.pdfSamplePage);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }

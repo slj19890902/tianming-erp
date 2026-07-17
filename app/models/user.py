@@ -11,6 +11,10 @@ from app.models import Base
 USER_ROLES = ("admin", "boss", "finance", "sales", "workshop", "delivery_picker")
 
 
+def _default_ui_mode(context) -> str:
+    return "large" if context.get_current_parameters().get("role") == "boss" else "standard"
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
@@ -21,6 +25,10 @@ class User(Base):
         CheckConstraint(
             "customer_access_mode IN ('all', 'selected')",
             name="ck_users_customer_access_mode_valid",
+        ),
+        CheckConstraint(
+            "ui_mode IN ('standard', 'large')",
+            name="ck_users_ui_mode_valid",
         ),
     )
 
@@ -40,6 +48,12 @@ class User(Base):
         String(20),
         default="all",
         server_default="all",
+        nullable=False,
+    )
+    ui_mode: Mapped[str] = mapped_column(
+        String(20),
+        default=_default_ui_mode,
+        server_default="standard",
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

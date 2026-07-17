@@ -287,6 +287,13 @@ def build_inventory_insights(
             )
 
     actions.sort(key=lambda row: (row["priority"], -row["age_days"], row["lot_id"]))
+    action_item_count = len(actions)
+    high_priority_action_item_count = sum(
+        1
+        for item in actions
+        if isinstance(item.get("priority"), (int, float))
+        and item["priority"] <= 1
+    )
     missing_cost_lots = max(available_lots - cost_ready_lots, 0)
     return {
         "generated_at": datetime.now(),
@@ -314,5 +321,7 @@ def build_inventory_insights(
         },
         "by_type": by_type,
         "age_buckets": list(bucket_map.values()),
+        "action_item_count": action_item_count,
+        "high_priority_action_item_count": high_priority_action_item_count,
         "action_items": actions[:200],
     }

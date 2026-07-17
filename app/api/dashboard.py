@@ -28,6 +28,7 @@ from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
+from app.services.inventory_insights import build_inventory_insights
 
 
 router = APIRouter()
@@ -511,6 +512,44 @@ def dashboard_overview(
                     "description": "还没收款结清",
                     "button_label": "去收款/对账",
                     "target": "finance",
+                },
+            ]
+        )
+    if user.role == "boss" and has_permission(user, "warehouse.view"):
+        inventory_insights = build_inventory_insights(raw_db)
+        action_items = inventory_insights.get("action_items") or []
+        high_priority_count = sum(
+            1
+            for item in action_items
+            if isinstance(item.get("priority"), (int, float))
+            and item["priority"] <= 1
+        )
+        inventory_risk_count = _safe_int(
+            inventory_insights.get("action_item_count", len(action_items))
+        )
+        high_priority_count = _safe_int(
+            inventory_insights.get(
+                "high_priority_action_item_count",
+                high_priority_count,
+            )
+        )
+        cards.extend(
+            [
+                {
+                    "key": "inventory_risk",
+                    "title": "库存风险",
+                    "count": inventory_risk_count,
+                    "description": "库存洞察待处理项",
+                    "button_label": "查看库存",
+                    "target": "warehouse",
+                },
+                {
+                    "key": "business_anomaly",
+                    "title": "经营异常",
+                    "count": high_priority_count,
+                    "description": "高优先级库存异常",
+                    "button_label": "查看异常",
+                    "target": "warehouse",
                 },
             ]
         )

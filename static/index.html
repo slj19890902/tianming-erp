@@ -124,52 +124,85 @@
       .btn.small { min-height: 26px; padding: 3px 10px; font-size: 12px; }
       .btn:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
 
-      /* App shell */
+      /* App shell and persisted display modes */
       .app-shell { min-height: 100vh; display: grid; grid-template-rows: 60px 1fr; }
-      .role-boss { font-size: 16px; grid-template-rows: 72px 1fr; }
-      .role-boss .topbar { padding: 0 28px; }
-      .role-boss .brand { font-size: 19px; }
-      .role-boss .layout { grid-template-columns: 284px 1fr; }
-      .role-boss .sidebar { padding: 20px 12px; }
-      .role-boss .menu-title { font-size: 13px; padding: 8px 14px 10px; }
-      .role-boss .menu-item { min-height: 48px; padding: 12px 14px; font-size: 17px; line-height: 1.45; }
-      .role-boss .main { padding: 32px 36px 52px; }
-      .role-boss .page-head { margin-bottom: 24px; }
-      .role-boss .page-head h2 { font-size: 28px; }
-      .role-boss .page-head p, .role-boss .page-subtitle { font-size: 16px; }
-      .role-boss .btn { min-height: 44px; padding: 8px 18px; font-size: 16px; }
-      .role-boss .btn.small { min-height: 38px; padding: 6px 14px; font-size: 15px; }
-      .role-boss .input, .role-boss .select, .role-boss .textarea { min-height: 46px; padding: 9px 14px; font-size: 16px; }
-      .role-boss th, .role-boss td { min-height: 54px; padding: 15px 18px; line-height: 1.7; }
-      .role-boss .status { padding: 5px 12px; font-size: 14px; }
-      @media (max-width: 1280px) {
-        body:has(.role-boss) { min-width: 0; }
-        .role-boss .topbar { padding: 0 18px; }
-        .role-boss .layout { grid-template-columns: 220px minmax(0, 1fr); }
-        .role-boss .sidebar { padding: 16px 8px; }
-        .role-boss .main { padding: 24px 24px 40px; }
-        .role-boss .table-wrap { max-width: 100%; overflow-x: auto; }
+      body:has(.ui-large) { min-width: 0; }
+      .ui-mode-switch {
+        display: inline-flex; align-items: center; gap: 4px; padding: 4px;
+        border: 1px solid var(--line-strong); border-radius: 999px; background: #f2f2f4;
       }
-      @media (max-width: 900px) {
-        body:has(.role-boss) { width: 100%; max-width: 100vw; min-width: 0; }
-        .role-boss,
-        .role-boss .layout,
-        .role-boss .topbar,
-        .role-boss .sidebar,
-        .role-boss .main {
-          width: 100%;
-          max-width: 100vw;
-          min-width: 0;
-          box-sizing: border-box;
+      .ui-mode-label { padding-left: 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+      .ui-mode-button {
+        min-width: 64px; min-height: 34px; padding: 5px 12px; border: 0; border-radius: 999px;
+        background: transparent; color: var(--text-secondary); font-weight: 700;
+      }
+      .ui-mode-button.active { background: var(--primary); color: #fff; box-shadow: 0 2px 8px rgba(0,113,227,.25); }
+      .ui-mode-button:disabled { cursor: wait; opacity: .65; }
+
+      .ui-large { font-size: 18px; line-height: 1.65; grid-template-rows: 76px 1fr; }
+      .ui-large .topbar { min-width: 0; padding: 0 28px; }
+      .ui-large .brand { font-size: 20px; }
+      .ui-large .layout { min-width: 0; grid-template-columns: 260px minmax(0, 1fr); }
+      .ui-large .sidebar { min-width: 0; padding: 20px 12px; }
+      .ui-large .menu-title { padding: 8px 14px 10px; font-size: 16px; }
+      .ui-large .menu-item { min-height: 52px; padding: 12px 14px; font-size: 17px; line-height: 1.45; }
+      .ui-large .main { min-width: 0; padding: 30px 32px 48px; font-size: 18px; overflow-x: hidden; }
+      .ui-large .page-head { margin-bottom: 24px; }
+      .ui-large .page-head h2, .ui-large .order-head-card h2 { font-size: 28px !important; line-height: 1.3; }
+      .ui-large .page-head p, .ui-large .page-subtitle { font-size: 17px; }
+      .ui-large .field label, .ui-large .card-label, .ui-large .section-title,
+      .ui-large .filterbar label, .ui-large .ui-mode-label { font-size: 16px; }
+      .ui-large .btn { min-height: 48px; padding: 9px 20px; font-size: 17px; }
+      .ui-large .btn.small { min-height: 44px; padding: 7px 16px; font-size: 16px; }
+      .ui-large .input, .ui-large .select, .ui-large .textarea {
+        min-height: 48px; padding: 10px 14px; font-size: 17px;
+      }
+      .ui-large .textarea { min-height: 96px; }
+      .ui-large th, .ui-large td { min-height: 54px; padding: 14px 16px; font-size: 17px; line-height: 1.65; }
+      .ui-large .status { padding: 5px 12px; font-size: 16px; }
+      .ui-large .card-hint, .ui-large .todo-detail, .ui-large .todo-message,
+      .ui-large .todo-more, .ui-large .muted { font-size: 17px !important; }
+      .ui-large .dashboard-card { min-height: 190px; padding: 20px; }
+      .ui-large .dashboard-card-count { font-size: 30px; }
+      .ui-large .dashboard-card-amount { font-size: 18px; }
+      .ui-large .ui-mode-switch { flex: 0 0 auto; }
+      .ui-large .ui-mode-button { min-height: 48px; min-width: 76px; font-size: 17px; }
+
+      @media (max-width: 1400px) {
+        .ui-large .topbar { height: auto; min-height: 76px; padding: 10px 18px; flex-wrap: wrap; gap: 10px 16px; }
+        .ui-large .top-actions { min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+        .ui-large .layout { grid-template-columns: 220px minmax(0, 1fr); }
+        .ui-large .sidebar { padding: 14px 8px; }
+        .ui-large .main { padding: 24px 22px 40px; }
+        .ui-large .dashboard-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .ui-large .section-grid { grid-template-columns: 1fr; }
+        .ui-large .toolbar, .ui-large .filterbar, .ui-large .toolbar-group,
+        .ui-large .order-head-actions, .ui-large .order-filter-compact { flex-wrap: wrap; }
+        .ui-large .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
+      }
+      @media (max-width: 1180px) {
+        body:has(.ui-large) { width: 100%; max-width: 100vw; min-width: 0; }
+        .ui-large, .ui-large .layout, .ui-large .topbar, .ui-large .sidebar, .ui-large .main {
+          width: 100%; max-width: 100vw; min-width: 0; box-sizing: border-box;
         }
-        .role-boss .topbar { height: auto; min-height: 72px; padding: 12px 16px; flex-wrap: wrap; gap: 10px 16px; }
-        .role-boss .top-actions { flex: 1 1 100%; width: 100%; max-width: 100%; min-width: 0; justify-content: flex-start; flex-wrap: wrap; }
-        .role-boss .layout { display: flex; flex-direction: column; }
-        .role-boss .sidebar { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--line); overflow-y: auto; }
-        .role-boss .main { padding: 20px 16px 32px; overflow-x: hidden; }
-        .role-boss .page-head { align-items: flex-start; flex-wrap: wrap; gap: 10px 16px; }
-        .role-boss .toolbar, .role-boss .filterbar, .role-boss .toolbar-group { flex-wrap: wrap; }
-        .role-boss .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
+        .ui-large .top-actions { flex: 1 1 100%; width: 100%; justify-content: flex-start; }
+        .ui-large .layout { display: flex; flex-direction: column; }
+        .ui-large .sidebar {
+          display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+          border-right: 0; border-bottom: 1px solid var(--line); overflow: visible;
+        }
+        .ui-large .menu-title { grid-column: 1 / -1; }
+        .ui-large .menu-item { width: 100%; min-width: 0; }
+        .ui-large .main { padding: 20px 18px 32px; }
+        .ui-large .page-head { align-items: flex-start; flex-wrap: wrap; gap: 10px 16px; }
+      }
+      @media (max-width: 760px) {
+        .ui-large .topbar { padding: 10px 12px; }
+        .ui-large .sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .ui-large .main { padding: 18px 12px 28px; }
+        .ui-large .dashboard-cards { grid-template-columns: 1fr; }
+        .ui-large .ui-mode-switch { width: 100%; }
+        .ui-large .ui-mode-button { flex: 1 1 0; }
       }
 
       /* Header / topbar */
@@ -823,12 +856,17 @@
         </form>
       </div>
 
-      <div v-else :class="['app-shell', `role-${user.role}`, {'role-boss': user.role === 'boss', 'role-no-costs': !canViewCosts}]">
+      <div v-else :class="['app-shell', `role-${user.role}`, {'ui-large': isLargeUi, 'ui-standard': !isLargeUi, 'role-no-costs': !canViewCosts}]">
         <header class="topbar">
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
             <span>{{ user.real_name || user.username }}</span>
             <span class="status blue">{{ roleLabel(user.role) }}</span>
+            <div class="ui-mode-switch" role="group" aria-label="界面显示大小">
+              <span class="ui-mode-label">显示</span>
+              <button type="button" :class="['ui-mode-button',{active:uiMode==='standard'}]" :aria-pressed="uiMode==='standard'" :disabled="uiModeSaving" @click="setUiMode('standard')">标准</button>
+              <button type="button" :class="['ui-mode-button',{active:uiMode==='large'}]" :aria-pressed="uiMode==='large'" :disabled="uiModeSaving" @click="setUiMode('large')">大字</button>
+            </div>
             <button class="btn small" @click="openChangePassword()">修改密码</button>
             <button class="btn small" @click="refreshCurrent">刷新</button>
             <button class="btn small" @click="logout">退出</button>
@@ -849,8 +887,8 @@
               <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
-              <div v-if="overview.cards && overview.cards.length" class="dashboard-cards">
-                <div v-for="card in overview.cards" :key="card.key" class="card dashboard-card" @click="go(card.target)">
+              <div v-if="dashboardCards.length" class="dashboard-cards">
+                <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="go(card.target)">
                   <div class="card-label">{{ card.title }}</div>
                   <div class="dashboard-card-value">
                     <span class="dashboard-card-count">{{ card.count || 0 }}</span>
@@ -3726,6 +3764,14 @@
         boss: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse", "deliveries", "finance"],
         delivery_picker: []
       };
+      const bossOverviewCardOrder = Object.freeze([
+        { key: "pending_material", title: "待报料" },
+        { key: "pending_incoming", title: "待入库" },
+        { key: "pending_delivery", title: "待送货" },
+        { key: "unsettled_statements", title: "应收" },
+        { key: "inventory_risk", title: "库存风险" },
+        { key: "business_anomaly", title: "异常" },
+      ]);
       const menuPermissions = {
         dashboard: "dashboard.view", customers: "customers.view", products: "products.view", orders: "orders.view",
         requisition: "requisition.view", incoming: "incoming.view", production: "orders.view", warehouse: "warehouse.view",
@@ -3812,7 +3858,7 @@
       const app = createApp({
         data() {
           return {
-            user: null, loading: false, loginError: "", activePage: "dashboard",
+            user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
@@ -4102,6 +4148,20 @@
               }
             }
             return map;
+          },
+          isBoss() { return this.user?.role === "boss"; },
+          uiMode() {
+            if (["standard", "large"].includes(this.user?.ui_mode)) return this.user.ui_mode;
+            return this.isBoss ? "large" : "standard";
+          },
+          isLargeUi() { return this.uiMode === "large"; },
+          dashboardCards() {
+            const cards = Array.isArray(this.overview?.cards) ? this.overview.cards : [];
+            if (!this.isBoss) return cards;
+            const byKey = new Map(cards.map(card => [card.key, card]));
+            return bossOverviewCardOrder
+              .map(item => byKey.has(item.key) ? {...byKey.get(item.key), title:item.title} : null)
+              .filter(Boolean);
           },
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
@@ -4450,6 +4510,8 @@
         },
         async mounted() {
           window.erpAuthRequired = () => {
+            this.authGeneration += 1;
+            this.uiModeSaving = false;
             this.activePage = "dashboard";
             this.user = null;
             this.loginError = "登录已失效，请重新登录";
@@ -4467,6 +4529,27 @@
           });
         },
         methods: {
+          async setUiMode(mode) {
+            if (!["standard", "large"].includes(mode) || mode === this.uiMode || this.uiModeSaving) return;
+            const previousMode = this.uiMode;
+            const requestGeneration = this.authGeneration;
+            const requestUserId = this.user?.id;
+            this.uiModeSaving = true;
+            this.user = {...this.user, ui_mode:mode};
+            try {
+              const { data } = await axios.put("/api/auth/me/ui-mode", { ui_mode:mode });
+              if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
+              if (!data?.ok || !data?.user) throw new Error("显示模式保存失败");
+              this.user = {...this.user, ...data.user, ui_mode:data.user.ui_mode || mode};
+              this.showToast(mode === "large" ? "已切换为大字模式" : "已切换为标准模式");
+            } catch (error) {
+              if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
+              this.user = {...this.user, ui_mode:previousMode};
+              this.showToast(this.errorMessage(error), true);
+            } finally {
+              if (requestGeneration === this.authGeneration) this.uiModeSaving = false;
+            }
+          },
           hasPermission(code) {
             if (this.user?.role === "admin") return true;
             const permissions = this.user?.permissions;
@@ -4482,7 +4565,11 @@
           pagePermission(page) {
             return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
           },
-          pageAllowed(page) { const permission = this.pagePermission(page); return !permission || this.hasPermission(permission); },
+          pageAllowed(page) {
+            if (this.isBoss && ["system", "permissions"].includes(page)) return false;
+            const permission = this.pagePermission(page);
+            return !permission || this.hasPermission(permission);
+          },
           firstAllowedPage() { return this.menus[0]?.key || "dashboard"; },
           roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",boss:"老板",workshop:"车间",delivery_picker:"送货拿货员"})[role] || role; },
           navIcon(key) {
@@ -5769,9 +5856,15 @@
             finally { this.loading = false; }
           },
           async logout() {
-            await axios.post("/api/auth/logout");
+            this.authGeneration += 1;
+            this.uiModeSaving = false;
             this.activePage = "dashboard";
             this.user = null;
+            try {
+              await axios.post("/api/auth/logout");
+            } catch (error) {
+              if (error?.response?.status !== 401) this.showToast(this.errorMessage(error), true);
+            }
           },
           async loadBase() {
             const tasks = [];

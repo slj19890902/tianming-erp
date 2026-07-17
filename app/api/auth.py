@@ -78,6 +78,10 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class UiModeRequest(BaseModel):
+    ui_mode: Literal["standard", "large"]
+
+
 class ResetPasswordRequest(BaseModel):
     new_password: str
 
@@ -125,6 +129,7 @@ class UserResponse(BaseModel):
     display_name: str | None
     must_change_password: bool
     customer_access_mode: str
+    ui_mode: Literal["standard", "large"]
 
 
 def _user_payload(user: User) -> dict:
@@ -300,6 +305,42 @@ def me(
     return _auth_payload(current_user, db)
 
 
+@router.put("/me/ui-mode")
+def change_ui_mode(
+    payload: UiModeRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    previous_ui_mode = current_user.ui_mode
+    current_user.ui_mode = payload.ui_mode
+    db.add(
+        OperationLog(
+            user_id=current_user.id,
+            action="CHANGE_UI_MODE",
+            resource="User",
+            details=json.dumps(
+                {
+                    "target_user_id": current_user.id,
+                    "old_ui_mode": previous_ui_mode,
+                    "new_ui_mode": payload.ui_mode,
+                },
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=current_user.username,
+            role=current_user.role,
+            entity_type="user",
+            entity_id=current_user.id,
+            description="切换界面模式",
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+    db.refresh(current_user)
+    return {"ok": True, "user": _user_payload(current_user)}
+
+
 @router.put("/password")
 def change_password(
     payload: ChangePasswordRequest,
@@ -347,14 +388,16 @@ def create_user(
     if db.scalar(select(User.id).where(User.username == username)) is not None:
         raise HTTPException(status_code=409, detail="用户名已存在")
     _validate_new_password(payload.password)
+    role = _validate_role(payload.role)
     user = User(
         username=username,
         password_hash=hash_password(payload.password),
-        role=_validate_role(payload.role),
+        role=role,
         real_name=payload.real_name.strip() or username,
         display_name=payload.display_name.strip() if payload.display_name else None,
         is_active=payload.is_active,
         must_change_password=payload.must_change_password,
+        ui_mode="large" if role == "boss" else "standard",
     )
     db.add(user)
     db.flush()
@@ -404,7 +447,10 @@ def update_user(
             raise HTTPException(status_code=409, detail="用户名已存在")
         user.username = username
     if "role" in changes and changes["role"] is not None:
-        user.role = _validate_role(changes["role"])
+        new_role = _validate_role(changes["role"])
+        if user.role != "boss" and new_role == "boss":
+            user.ui_mode = "large"
+        user.role = new_role
     if "real_name" in changes and changes["real_name"] is not None:
         user.real_name = changes["real_name"].strip() or user.username
     if "display_name" in changes:

@@ -75,6 +75,7 @@ def test_login_sets_http_only_cookie_returns_me_and_writes_audit(auth_context) -
                 "display_name": "系统管理员",
                 "must_change_password": True,
                 "customer_access_mode": "all",
+                "ui_mode": "standard",
             }
         set_cookie = login.headers["set-cookie"]
         assert "erp_session=" in set_cookie

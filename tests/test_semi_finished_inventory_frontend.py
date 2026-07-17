@@ -9,6 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
+TIME_UTILS = (ROOT / "static" / "assets" / "time-utils.js").read_text(
+    encoding="utf-8"
+)
 
 
 def test_shared_inventory_order_payload_uses_idempotent_client_lines() -> None:
@@ -195,6 +198,7 @@ const sandbox = {{
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
 vm.createContext(sandbox);
+vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const method = sandbox.definition.methods.reallocateDraftInventorySequentially;
 function candidate(lotId, stock, yieldFactor=1, finished=false, source="signature", differences=[]) {{ return {{ lot_id:lotId, version:1, source, match_rule_id:source === "learned" ? 42 : null, signature_differences:differences, available_stock_quantity:stock, quantity_available:finished ? stock : undefined, stock_yield_per_sheet:yieldFactor }}; }}

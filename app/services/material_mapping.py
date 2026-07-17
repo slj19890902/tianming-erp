@@ -54,16 +54,22 @@ def _apply_batch_versioned_update(
             **kwargs,
         )
     except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        detail = exc.detail if isinstance(exc.detail, dict) else None
+        returned_token = (
+            detail.get("confirmation_token") if detail is not None else None
+        )
         if (
             not preview_confirmed
             or exc.status_code != 409
+            or detail is None
             or detail.get("code") != "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+            or not isinstance(returned_token, str)
+            or not returned_token
         ):
             raise
         return apply_versioned_update(
             db,
-            confirmation_token=detail["confirmation_token"],
+            confirmation_token=returned_token,
             **kwargs,
         )
 

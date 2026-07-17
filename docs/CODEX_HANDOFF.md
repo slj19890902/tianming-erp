@@ -1,5 +1,11 @@
 # Codex 项目交接
 
+## 2026-07-17 | 最终回归兼容：P5 批处理确认与前端时间工具
+
+- `material_mapping` 仅在调用者明确 `preview_confirmed=True` 时捕获精确的 P5 confirmation-required 409，并使用返回 token 保持原 `expected_version` 重试一次；默认未确认调用仍原样抛错。
+- 七层材质映射测试改为先走正式预览生成对象确认 tokens；半成品 Node harness 在首页内联脚本前执行真实 `static/assets/time-utils.js`，生产代码未增加 fallback。
+- 后端原失败节点连同新增 P5 门禁定向测试 `6 passed`，前端原失败节点 `1 passed`；材质映射/P4 间接写入 `67 passed`；半成品前端 `25 passed`。`py_compile` 与 `git diff --check` 通过；未 commit、未 push、未写正式数据库。
+
 ## 2026-07-17 | Alembic 客户账期迁移回滚链修复
 
 - 修复 `aq44v7w8x9m34` 在最新 head 回退时无法删除 `customers.statement_cycle_start_day` 的问题。真实根因是后续 SQLite batch recreate 将列级 CHECK 提升为表级约束；旧版原生 `DROP COLUMN` 会留下引用已删除列的约束。

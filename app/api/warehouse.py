@@ -21,6 +21,7 @@ from app.api.deps import (
     RoleChecker,
     customer_scope_ids,
     get_db,
+    has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
 )
@@ -3544,6 +3545,180 @@ def list_lots(
     return {"items": [_lot_dict(row) for row in rows], "total": total}
 
 
+_INSIGHT_OPERATIONAL_TOP_FIELDS = frozenset(
+    {"generated_at", "as_of", "scope_notice", "recommendation_notice"}
+)
+_INSIGHT_OPERATIONAL_SUMMARY_FIELDS = frozenset(
+    {
+        "recorded_lots",
+        "available_lots",
+        "finished_available",
+        "semi_finished_available",
+        "total_reserved",
+        "total_damaged",
+        "total_scrapped",
+    }
+)
+_INSIGHT_OPERATIONAL_QUALITY_FIELDS = frozenset({"active_location_lots"})
+_INSIGHT_OPERATIONAL_TYPE_FIELDS = frozenset(
+    {"lots", "available", "reserved", "damaged", "scrapped"}
+)
+_INSIGHT_OPERATIONAL_AGE_FIELDS = frozenset(
+    {"key", "label", "lots", "finished_available", "semi_finished_available"}
+)
+_INSIGHT_OPERATIONAL_ACTION_FIELDS = frozenset(
+    {
+        "priority",
+        "lot_id",
+        "lot_number",
+        "inventory_type",
+        "status",
+        "location_code",
+        "quantity_available",
+        "unit",
+        "age_days",
+        "age_basis",
+        "last_movement_at",
+        "movement_stagnant_days",
+        "covered_demand_quantity",
+        "uncovered_demand_quantity",
+        "coverage_percent",
+        "coverage_basis",
+    }
+)
+_INSIGHT_OPERATIONAL_DETAIL_FIELDS = frozenset(
+    {
+        "customer_name",
+        "inventory_code",
+        "name",
+        "assigned_product_count",
+        "binding_scope",
+        "deduction_eligibility",
+        "candidate_relationship_read_only",
+    }
+)
+_INSIGHT_OPERATIONAL_PRODUCT_FIELDS = frozenset(
+    {"product_id", "inventory_code", "name"}
+)
+_INSIGHT_OPERATIONAL_DEMAND_FIELDS = frozenset(
+    {"demand_30", "demand_90", "demand_180", "open_demand"}
+)
+_INSIGHT_OPERATIONAL_REASON_CODES = frozenset(
+    {
+        "finished_stock_can_cover_order",
+        "finished_stock_exceeds_open_demand",
+        "no_demand_180",
+        "semi_stock_may_cover_demand",
+        "semi_product_assignment_missing",
+        "age_cleanup",
+        "age_handling",
+        "age_attention",
+        "age_slow",
+        "location_unavailable",
+    }
+)
+
+
+def _insight_allowed_fields(value: object, fields: frozenset[str]) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {key: value[key] for key in fields if key in value}
+
+
+def _redact_inventory_insight_costs(insights: dict) -> dict:
+    """Return an operational-only warehouse insight response.
+
+    ``cost.view`` is a data boundary, not merely a display preference.  Keep
+    stock age, quantities, locations and demand suggestions, while dropping
+    all monetary values, cost sources and cost-completeness metadata before
+    the response serializer sees them.
+    """
+
+    source = insights if isinstance(insights, dict) else {}
+    result = _insight_allowed_fields(source, _INSIGHT_OPERATIONAL_TOP_FIELDS)
+    result["summary"] = _insight_allowed_fields(
+        source.get("summary"), _INSIGHT_OPERATIONAL_SUMMARY_FIELDS
+    )
+    result["data_quality"] = _insight_allowed_fields(
+        source.get("data_quality"), _INSIGHT_OPERATIONAL_QUALITY_FIELDS
+    )
+    source_by_type = source.get("by_type")
+    result["by_type"] = {
+        inventory_type: _insight_allowed_fields(
+            source_by_type.get(inventory_type), _INSIGHT_OPERATIONAL_TYPE_FIELDS
+        )
+        for inventory_type in ("finished", "semi_finished")
+        if isinstance(source_by_type, dict)
+        and isinstance(source_by_type.get(inventory_type), dict)
+    }
+    source_age_buckets = source.get("age_buckets")
+    result["age_buckets"] = [
+        _insight_allowed_fields(bucket, _INSIGHT_OPERATIONAL_AGE_FIELDS)
+        for bucket in source_age_buckets
+        if isinstance(bucket, dict)
+    ] if isinstance(source_age_buckets, list) else []
+
+    action_items: list[dict] = []
+    source_action_items = source.get("action_items")
+    if not isinstance(source_action_items, list):
+        source_action_items = []
+    for source_item in source_action_items:
+        if not isinstance(source_item, dict):
+            continue
+        reasons: list[dict] = []
+        source_reasons = source_item.get("reasons")
+        if isinstance(source_reasons, list):
+            for reason in source_reasons:
+                if not isinstance(reason, dict):
+                    continue
+                code = reason.get("code")
+                if code not in _INSIGHT_OPERATIONAL_REASON_CODES:
+                    continue
+                safe_reason = {"code": code}
+                if isinstance(reason.get("text"), str):
+                    safe_reason["text"] = reason["text"]
+                reasons.append(safe_reason)
+        # A row whose only purpose was cost completion is not an operational
+        # action for users who cannot view costs.
+        if not reasons:
+            continue
+        item = _insight_allowed_fields(
+            source_item, _INSIGHT_OPERATIONAL_ACTION_FIELDS
+        )
+        detail = _insight_allowed_fields(
+            source_item.get("detail"), _INSIGHT_OPERATIONAL_DETAIL_FIELDS
+        )
+        source_products = (
+            source_item.get("detail", {}).get("assigned_products")
+            if isinstance(source_item.get("detail"), dict)
+            else None
+        )
+        if isinstance(source_products, list):
+            detail["assigned_products"] = [
+                _insight_allowed_fields(
+                    product, _INSIGHT_OPERATIONAL_PRODUCT_FIELDS
+                )
+                for product in source_products
+                if isinstance(product, dict)
+            ]
+        item["detail"] = detail
+        item["demand"] = _insight_allowed_fields(
+            source_item.get("demand"), _INSIGHT_OPERATIONAL_DEMAND_FIELDS
+        )
+        item["reasons"] = reasons
+        action_items.append(item)
+
+    result["action_items"] = action_items
+    result["action_item_count"] = len(action_items)
+    result["high_priority_action_item_count"] = sum(
+        1
+        for item in action_items
+        if isinstance(item.get("priority"), (int, float))
+        and item["priority"] <= 1
+    )
+    return result
+
+
 @router.get("/insights")
 def get_inventory_insights(
     as_of: date | None = None,
@@ -3551,11 +3726,14 @@ def get_inventory_insights(
     user: User = Depends(can_read),
 ) -> dict:
     visible_customer_ids = _visible_customer_ids(user, db)
-    return build_inventory_insights(
+    insights = build_inventory_insights(
         db,
         as_of=as_of,
         customer_ids=visible_customer_ids,
     )
+    if has_permission(user, "cost.view"):
+        return insights
+    return _redact_inventory_insight_costs(insights)
 
 
 @router.get("/lots/{lot_id}")

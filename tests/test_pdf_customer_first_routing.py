@@ -27,7 +27,7 @@ def test_locked_route_survives_conflicting_ocr_keywords() -> None:
     assert parsed["items"][0]["product_code"] == "3D90078"
 
 
-def test_strong_order_number_routes_to_unique_customer_template() -> None:
+def test_strong_order_number_selects_specialized_parser_without_binding_customer() -> None:
     from app.services.order_pdf_import import resolve_pdf_customer_route
 
     simair = {
@@ -41,7 +41,8 @@ def test_strong_order_number_routes_to_unique_customer_template() -> None:
 
     assert route["status"] == "locked"
     assert route["parser_key"] == "simair"
-    assert route["template_customer_id"] == 37
+    assert route["template_customer_id"] is None
+    assert route["customer_name"] is None
 
 def test_invalid_and_cross_customer_routes_require_confirmation() -> None:
     from app.services.order_pdf_import import resolve_pdf_customer_route

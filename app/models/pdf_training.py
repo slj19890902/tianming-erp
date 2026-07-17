@@ -223,7 +223,9 @@ class PdfOrderCustomerTemplate(Base):
     item_row_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
     customer_name_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # 字段列号映射（JSON 字符串，如 {"product_code": 1, "quantity": 4}）
+    # 字段捕获组映射。正式格式为
+    # {"field_mapping":{"product_code":"sku","quantity":4}}；同时兼容
+    # 旧顶层列号格式 {"product_code":1,"quantity":4}。
     column_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(default=False, nullable=False)

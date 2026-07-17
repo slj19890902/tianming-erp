@@ -3464,7 +3464,7 @@
                 <div class="field"><label>日期规则</label><input class="input" v-model.trim="pdfTemplateForm.date_pattern" placeholder="可留空，沿用默认规则" /></div>
                 <div class="field"><label>明细行规则</label><input class="input" v-model.trim="pdfTemplateForm.item_row_pattern" placeholder="可留空，沿用默认规则" /></div>
                 <div class="field"><label>客户名规则</label><input class="input" v-model.trim="pdfTemplateForm.customer_name_pattern" placeholder="可留空，沿用默认规则" /></div>
-                <div class="field wide"><label>字段映射 JSON</label><textarea class="textarea" rows="5" v-model.trim="pdfTemplateForm.column_map_json" placeholder='例如：{"item_columns":{"product_code":["产品编码"]}}'></textarea></div>
+                <div class="field wide"><label>字段映射 JSON（明细正则捕获组）</label><textarea class="textarea" rows="5" v-model.trim="pdfTemplateForm.column_map_json" placeholder='例如：{"field_mapping":{"product_code":"sku","quantity":"qty","unit_price":6}}'></textarea></div>
                 <div class="field wide"><label>备注</label><textarea class="textarea" rows="3" v-model.trim="pdfTemplateForm.notes" placeholder="记录规则来源、变更背景或验证说明"></textarea></div>
               </fieldset>
               <div class="muted" style="font-size:12px;margin-top:8px">模板创建后客户不可更换；如需基于其他版本维护，请使用 clone draft。</div>

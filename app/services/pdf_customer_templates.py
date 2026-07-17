@@ -49,21 +49,48 @@ GAOTAI_TEMPLATE_RULE = {
 }
 
 
-def _json_dict(raw: str | None) -> dict:
+def _json_dict(raw: str | None) -> tuple[dict, list[str]]:
     if not raw:
-        return {}
+        return {}, []
     try:
         data = json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    except (TypeError, ValueError) as error:
+        return {}, [f"字段映射 JSON 无效：{error}"]
+    if not isinstance(data, dict):
+        return {}, ["字段映射 JSON 必须是对象。"]
+    return data, []
 
 
 def _template_rule(
     template: PdfOrderCustomerTemplate,
     customer: Customer | None,
 ) -> dict:
-    payload = _json_dict(template.column_map_json)
+    payload, configuration_errors = _json_dict(template.column_map_json)
+    if "field_mapping" in payload:
+        field_mapping = payload.get("field_mapping")
+    elif "item_field_map" in payload:
+        field_mapping = payload.get("item_field_map")
+    else:
+        field_mapping = None
+    if field_mapping is None:
+        # Backward compatibility with the model's original documented shape:
+        # {"product_code": 1, "quantity": 4}.  Metadata keys remain outside
+        # the executable mapping.
+        supported_fields = {
+            "line_no", "product_code", "product_name", "spec",
+            "specification", "quantity", "unit", "unit_price", "amount",
+            "delivery_date", "production_notes", "reference_product_code",
+        }
+        field_mapping = {
+            key: value
+            for key, value in payload.items()
+            if key in supported_fields
+            and isinstance(value, (str, int))
+            and not isinstance(value, bool)
+        }
+    elif not isinstance(field_mapping, dict):
+        configuration_errors.append("field_mapping 必须是对象。")
+        field_mapping = {}
     return {
         "template_id": template.id,
         "template_name": template.template_name,
@@ -82,6 +109,8 @@ def _template_rule(
         "keywords": payload.get("keywords") or [],
         "item_code_rules": payload.get("item_code_rules") or [],
         "item_columns": payload.get("item_columns") or {},
+        "field_mapping": field_mapping,
+        "configuration_errors": configuration_errors,
         "_source": "database",
     }
 

@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from decimal import Decimal
+import sre_parse
+import time
+from datetime import date
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 
 from pypdf import PdfReader
@@ -16,6 +19,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.api.materials import _parse_layer_weights
 from app.services.pricing import PricingError, calculate_price
+from app.services.template_regex import safe_regex_finditer, safe_regex_search
 
 
 class PdfParseError(ValueError):
@@ -43,6 +47,91 @@ ORDER_NO_RE = re.compile(
 )
 DATE_RE = re.compile(r"\b(20\d{2})[-/.](\d{2})[-/.](\d{2})\b")
 DMY_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})[/.](\d{1,2})[/.](20\d{2})(?!\d)")
+TEMPLATE_PATTERN_MAX_LENGTH = 2000
+TEMPLATE_PARSE_MAX_TEXT_LENGTH = 500_000
+TEMPLATE_ITEM_MATCH_MAX = 500
+TEMPLATE_CAPTURE_GROUP_MAX = 64
+TEMPLATE_ROUTE_REGEX_BUDGET_SECONDS = 3.0
+TEMPLATE_ITEM_FIELDS = (
+    "line_no",
+    "product_code",
+    "product_name",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "amount",
+    "delivery_date",
+)
+TEMPLATE_OPTIONAL_ITEM_FIELDS = ("production_notes", "reference_product_code")
+
+
+def _template_tokens_contain(tokens, targets: set) -> bool:
+    for operation, argument in tokens:
+        if operation in targets:
+            return True
+        if operation is sre_parse.SUBPATTERN and _template_tokens_contain(argument[-1], targets):
+            return True
+        if operation is sre_parse.BRANCH and any(
+            _template_tokens_contain(branch, targets) for branch in argument[1]
+        ):
+            return True
+        if operation in {sre_parse.ASSERT, sre_parse.ASSERT_NOT} and _template_tokens_contain(
+            argument[1], targets
+        ):
+            return True
+    return False
+
+
+def template_pattern_safety_error(pattern: str) -> str | None:
+    """Reject regex constructs that can monopolize a Python worker through backtracking."""
+
+    try:
+        parsed = sre_parse.parse(pattern)
+    except (RecursionError, re.error) as error:
+        return str(error)
+
+    repeat_operations = {sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT}
+    group_reference_operations = {
+        sre_parse.GROUPREF,
+        sre_parse.GROUPREF_EXISTS,
+    }
+
+    def inspect(tokens) -> str | None:
+        for operation, argument in tokens:
+            if operation in group_reference_operations:
+                return "不允许使用反向引用"
+            if operation in repeat_operations:
+                _minimum, maximum, repeated = argument
+                if maximum != sre_parse.MAXREPEAT and maximum > 10_000:
+                    return "重复次数上限过大"
+                repeated_many_times = maximum == sre_parse.MAXREPEAT or maximum > 1
+                if repeated_many_times and _template_tokens_contain(repeated, repeat_operations):
+                    return "不允许嵌套重复量词"
+                if repeated_many_times and _template_tokens_contain(repeated, {sre_parse.BRANCH}):
+                    return "不允许对分支表达式使用大范围重复量词"
+                nested_error = inspect(repeated)
+                if nested_error:
+                    return nested_error
+            elif operation is sre_parse.SUBPATTERN:
+                nested_error = inspect(argument[-1])
+                if nested_error:
+                    return nested_error
+            elif operation is sre_parse.BRANCH:
+                for branch in argument[1]:
+                    nested_error = inspect(branch)
+                    if nested_error:
+                        return nested_error
+            elif operation in {sre_parse.ASSERT, sre_parse.ASSERT_NOT}:
+                nested_error = inspect(argument[1])
+                if nested_error:
+                    return nested_error
+        return None
+
+    try:
+        return inspect(parsed)
+    except RecursionError:
+        return "正则嵌套层级过深"
 ROW_START_RE = re.compile(r"^\d+\s+\S+")
 TIANHUA_LINE_START_RE = re.compile(r"^\s*(?P<line_no>\d{1,4})\s+(?P<product_code>\d{8})\b")
 ITEM_RE = re.compile(
@@ -147,6 +236,9 @@ def _is_tianhua_customer(customer_name: str | None, customer_po: str | None = No
 def detect_pdf_customer_by_template(
     text: str,
     template_rules: list[dict] | None = None,
+    *,
+    execution_errors: list[str] | None = None,
+    timeout_seconds: float | None = None,
 ) -> dict | None:
     full_text = (text or "").lower()
     for rule in template_rules or []:
@@ -174,16 +266,35 @@ def detect_pdf_customer_by_template(
             }
         pattern = rule.get("customer_name_pattern")
         if pattern:
-            try:
-                if re.search(pattern, text, re.IGNORECASE):
-                    return {
-                        "customer_name": customer_name or None,
-                        "customer_type": rule.get("customer_type") or "unknown",
-                        "template_name": rule.get("template_name"),
-                        "rule": rule,
-                    }
-            except re.error:
+            compiled, pattern_error = _compile_template_pattern(pattern, "客户名称规则")
+            match = None
+            execution_error = None
+            if (
+                pattern_error is None
+                and compiled is not None
+                and len(text) <= TEMPLATE_PARSE_MAX_TEXT_LENGTH
+            ):
+                match, execution_error = safe_regex_search(
+                    str(pattern),
+                    text,
+                    timeout_seconds=timeout_seconds,
+                )
+            elif pattern_error is None and len(text) > TEMPLATE_PARSE_MAX_TEXT_LENGTH:
+                execution_error = "PDF 文本过长，未执行客户名称规则。"
+            if pattern_error or execution_error:
+                if execution_errors is not None:
+                    execution_errors.append(
+                        f"模板 {rule.get('template_name') or rule.get('template_id') or '未命名'}："
+                        f"{pattern_error or execution_error}"
+                    )
                 continue
+            if match is not None:
+                return {
+                    "customer_name": customer_name or None,
+                    "customer_type": rule.get("customer_type") or "unknown",
+                    "template_name": rule.get("template_name"),
+                    "rule": rule,
+                }
     return None
 
 
@@ -203,7 +314,8 @@ def _effective_template_rules(template_rules: list[dict] | None) -> list[dict]:
 def resolve_pdf_customer_route(text: str, template_rules: list[dict] | None = None) -> dict:
     """Resolve template identity once; callers keep this route for OCR/post-processing."""
     candidates = []
-    typed_candidates = []
+    route_errors: list[str] = []
+    route_deadline = time.monotonic() + TEMPLATE_ROUTE_REGEX_BUDGET_SECONDS
     for rule in _effective_template_rules(template_rules):
         customer_name = str(rule.get("customer_name") or "").strip() or None
         customer_type = rule.get("customer_type")
@@ -217,24 +329,37 @@ def resolve_pdf_customer_route(text: str, template_rules: list[dict] | None = No
             "customer_name": customer_name,
             "parser_key": _parser_key(customer_type),
         }
-        if customer_type not in (None, "", "unknown"):
-            typed_candidates.append(candidate)
-        if detect_pdf_customer_by_template(text, [rule]) is not None:
+        remaining_budget = route_deadline - time.monotonic()
+        if remaining_budget <= 0:
+            route_errors.append("客户模板路由执行超过总时间预算，请人工确认客户。")
+            break
+        if detect_pdf_customer_by_template(
+            text,
+            [rule],
+            execution_errors=route_errors,
+            timeout_seconds=remaining_budget,
+        ) is not None:
             candidates.append(candidate)
+        if route_errors:
+            break
     po_match = ORDER_NO_RE.search(text or "")
     legacy_type = _detect_customer_type(None, po_match.group(1) if po_match else None, text)
-    if candidates and legacy_type in {"tianhua_chao", "tianhua_energy"} and all(
-        item["parser_key"] != "tianhua" for item in candidates):
-        candidates = []
-    if not candidates and legacy_type not in (None, "", "unknown"):
-        candidates = [
-            item for item in typed_candidates
-            if item["customer_type"] == legacy_type
-        ]
+    legacy_parser_key = _parser_key(legacy_type)
+    if legacy_parser_key in {"tianhua", "gaotai", "simair"}:
+        if legacy_parser_key == "tianhua":
+            candidates = [
+                item for item in candidates
+                if item["customer_type"] == legacy_type
+            ]
+        else:
+            candidates = [
+                item for item in candidates
+                if item["parser_key"] == legacy_parser_key
+            ]
     route = {
         "status": "unmatched", "parser_key": "generic", "template_id": None,
         "template_customer_id": None, "customer_type": "unknown",
-        "customer_name": None, "candidates": candidates,
+        "customer_name": None, "candidates": candidates, "errors": route_errors,
     }
     identities = {
         ("id", item["template_customer_id"])
@@ -247,7 +372,16 @@ def resolve_pdf_customer_route(text: str, template_rules: list[dict] | None = No
         for item in candidates
     )
     parser_keys = {item["parser_key"] for item in candidates}
+    if route_errors:
+        return {**route, "status": "needs_confirmation"}
     if not candidates:
+        if legacy_parser_key in {"tianhua", "gaotai", "simair"}:
+            return {
+                **route,
+                "status": "locked",
+                "parser_key": legacy_parser_key,
+                "customer_type": legacy_type,
+            }
         return route
     if invalid or len(identities) > 1 or len(parser_keys) > 1:
         return {**route, "status": "needs_confirmation"}
@@ -492,6 +626,242 @@ def _decimal_to_str(raw: str, places: str) -> str:
 def _quantity_value(raw: str):
     value = Decimal(str(raw).replace(",", ""))
     return int(value) if value == value.to_integral_value() else float(value)
+
+
+def _compile_template_pattern(pattern: str | None, label: str) -> tuple[re.Pattern | None, str | None]:
+    value = str(pattern or "").strip()
+    if not value:
+        return None, None
+    if len(value) > TEMPLATE_PATTERN_MAX_LENGTH:
+        return None, f"客户模板{label}过长，请缩短后重新验证。"
+    safety_error = template_pattern_safety_error(value)
+    if safety_error:
+        return None, f"客户模板{label}存在不安全正则结构：{safety_error}。"
+    try:
+        compiled = re.compile(value, re.IGNORECASE | re.MULTILINE)
+    except (RecursionError, re.error) as error:
+        return None, f"客户模板{label}无效：{error}"
+    if compiled.groups > TEMPLATE_CAPTURE_GROUP_MAX:
+        return None, f"客户模板{label}捕获组超过 {TEMPLATE_CAPTURE_GROUP_MAX} 个。"
+    return compiled, None
+
+
+def _template_match_value(
+    match: re.Match,
+    preferred_groups: tuple[str, ...],
+) -> str:
+    groups = match.groupdict()
+    for name in preferred_groups:
+        value = groups.get(name)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    if match.lastindex == 1:
+        return str(match.group(1) or "").strip()
+    return str(match.group(0) or "").strip()
+
+
+def _extract_template_value(
+    text: str,
+    pattern: str | None,
+    *,
+    label: str,
+    preferred_groups: tuple[str, ...],
+) -> tuple[str | None, re.Match | None, str | None]:
+    compiled, error = _compile_template_pattern(pattern, label)
+    if error or compiled is None:
+        return None, None, error
+    if len(text) > TEMPLATE_PARSE_MAX_TEXT_LENGTH:
+        return None, None, "PDF 文本过长，未执行客户模板正则，请人工确认。"
+    match, execution_error = safe_regex_search(str(pattern), text)
+    if execution_error:
+        return None, None, execution_error
+    if match is None:
+        return None, None, f"客户模板{label}未匹配到内容，请人工确认。"
+    value = _template_match_value(match, preferred_groups)
+    if not value:
+        return None, match, f"客户模板{label}匹配结果为空，请人工确认。"
+    return value, match, None
+
+
+def _normalize_template_date(raw: str | None) -> str | None:
+    value = str(raw or "").strip()
+    normalized = _normalize_date(value)
+    if normalized:
+        try:
+            return date.fromisoformat(normalized).isoformat()
+        except ValueError:
+            return None
+    dmy = DMY_DATE_RE.search(value)
+    if dmy:
+        day, month, year = dmy.groups()
+        try:
+            return date(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            return None
+    chinese = re.search(r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", value)
+    if chinese:
+        year, month, day = chinese.groups()
+        try:
+            return date(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _template_field_selector(mapping: dict, field: str):
+    aliases = ("spec", "specification") if field == "spec" else (field,)
+    for alias in aliases:
+        if alias in mapping:
+            return mapping[alias]
+    return None
+
+
+def _template_item_value(
+    match: re.Match,
+    mapping: dict,
+    field: str,
+) -> tuple[str, str | None]:
+    aliases = ("spec", "specification") if field == "spec" else (field,)
+    selector = _template_field_selector(mapping, field)
+    try:
+        if selector is not None:
+            if isinstance(selector, int) or (
+                isinstance(selector, str) and selector.strip().isdigit()
+            ):
+                return str(match.group(int(selector)) or "").strip(), None
+            if isinstance(selector, str):
+                return str(match.group(selector.strip()) or "").strip(), None
+            return "", f"字段 {field} 的捕获组配置必须是名称或序号。"
+        groups = match.groupdict()
+        for alias in aliases:
+            if alias in groups:
+                return str(groups.get(alias) or "").strip(), None
+    except (IndexError, KeyError):
+        return "", f"字段 {field} 指向了不存在的正则捕获组。"
+    return "", None
+
+
+def _template_decimal_value(raw: str, places: str) -> str | None:
+    cleaned = re.sub(r"[^0-9,.-]", "", str(raw or ""))
+    if not cleaned:
+        return None
+    try:
+        return _decimal_to_str(cleaned, places)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _parse_configured_template_items(
+    text: str,
+    rule: dict,
+) -> tuple[list[dict], list[str], list[str], int, int | None]:
+    compiled, pattern_error = _compile_template_pattern(
+        rule.get("item_row_pattern"), "明细行规则"
+    )
+    if pattern_error:
+        return [], [], [pattern_error], 0, None
+    if compiled is None:
+        return [], [], [], 0, None
+    if len(text) > TEMPLATE_PARSE_MAX_TEXT_LENGTH:
+        return [], [], ["PDF 文本过长，未执行客户模板明细规则，请人工确认。"], 0, None
+    matches, execution_error = safe_regex_finditer(
+        str(rule.get("item_row_pattern") or ""),
+        text,
+        limit=TEMPLATE_ITEM_MATCH_MAX + 1,
+    )
+    if execution_error:
+        return [], [], [execution_error], 0, None
+    if not matches:
+        return [], [], ["客户模板明细行规则未匹配到任何明细，请人工确认。"], 0, None
+    if any(match.start() == match.end() for match in matches):
+        return [], [], ["客户模板明细行规则存在零长度匹配，请修改规则后重试。"], len(matches), None
+    if len(matches) > TEMPLATE_ITEM_MATCH_MAX:
+        return [], [], [
+            f"客户模板明细行规则命中 {len(matches)} 条，超过安全上限 {TEMPLATE_ITEM_MATCH_MAX} 条。"
+        ], len(matches), None
+
+    mapping = rule.get("field_mapping")
+    mapping = mapping if isinstance(mapping, dict) else {}
+    items: list[dict] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+    for index, match in enumerate(matches, start=1):
+        raw: dict[str, str] = {}
+        for field in (*TEMPLATE_ITEM_FIELDS, *TEMPLATE_OPTIONAL_ITEM_FIELDS):
+            value, selector_error = _template_item_value(match, mapping, field)
+            raw[field] = value
+            if selector_error:
+                errors.append(f"第{index}条模板明细：{selector_error}")
+
+        line_no: int | str = index
+        if raw["line_no"]:
+            try:
+                raw_line_no = Decimal(raw["line_no"].replace(",", ""))
+                if raw_line_no != raw_line_no.to_integral_value() or raw_line_no <= 0:
+                    raise InvalidOperation
+                line_no = int(raw_line_no)
+            except (InvalidOperation, ValueError):
+                errors.append(f"第{index}条模板明细：行号 {raw['line_no']} 无效。")
+        else:
+            errors.append(f"第{index}条模板明细：未提取到行号。")
+
+        quantity = None
+        if raw["quantity"]:
+            try:
+                quantity = _quantity_value(re.sub(r"[^0-9,.-]", "", raw["quantity"]))
+            except (InvalidOperation, ValueError):
+                pass
+        if quantity is None:
+            errors.append(f"第{line_no}行：数量 {raw['quantity'] or '为空'} 无法解析。")
+        elif _quantity_decimal(quantity) <= 0:
+            errors.append(f"第{line_no}行：数量必须大于 0。")
+
+        unit_price = _template_decimal_value(raw["unit_price"], "0.0000")
+        amount = _template_decimal_value(raw["amount"], "0.00")
+        delivery_date = _normalize_template_date(raw["delivery_date"])
+        required_text = {
+            "product_code": "存货编码",
+            "product_name": "产品名称",
+            "spec": "规格",
+            "unit": "单位",
+        }
+        for field, label in required_text.items():
+            if not raw[field]:
+                errors.append(f"第{line_no}行：未提取到{label}。")
+        if unit_price is None:
+            errors.append(f"第{line_no}行：单价 {raw['unit_price'] or '为空'} 无法解析。")
+        if amount is None:
+            errors.append(f"第{line_no}行：金额 {raw['amount'] or '为空'} 无法解析。")
+        if delivery_date is None:
+            errors.append(f"第{line_no}行：交货日期 {raw['delivery_date'] or '为空'} 无法解析。")
+
+        item = {
+            "line_no": line_no,
+            "raw_product_code": raw["product_code"],
+            "raw_product_name": raw["product_name"],
+            "raw_spec_model": raw["spec"],
+            "product_code": raw["product_code"],
+            "product_name": raw["product_name"],
+            "specification": raw["spec"],
+            "unit": raw["unit"],
+            "quantity": quantity,
+            "raw_quantity": raw["quantity"],
+            "unit_price": unit_price,
+            "amount": amount,
+            "delivery_date": delivery_date,
+            "raw_lines": [line for line in match.group(0).splitlines() if line.strip()],
+            "production_notes": raw["production_notes"],
+            "reference_product_code": raw["reference_product_code"],
+            "matched_product_id": None,
+            "matched_material_id": None,
+            "match_status": "unmatched",
+            "cost_status": "pending",
+            "product_candidates": [],
+            "material_candidates": [],
+        }
+        items.append(item)
+        warnings.extend(_check_item_warnings(item))
+    return items, warnings, errors, len(matches), max(match.end() for match in matches)
 
 
 def _quantity_decimal(value) -> Decimal:
@@ -1285,6 +1655,45 @@ def _extract_pdf_total(text: str) -> tuple[Decimal | None, Decimal | None]:
     return total_quantity, total_amount
 
 
+def _extract_unambiguous_pdf_total(
+    text: str,
+) -> tuple[Decimal | None, Decimal | None, bool, int | None, int | None]:
+    """Return totals only when the source has exactly one independent total row."""
+
+    totals = []
+    for match in re.finditer(
+        r"合计\s+(?P<quantity>[\d,]+(?:\.\d+)?)\s+(?P<amount>[\d,]+(?:\.\d+)?)",
+        text,
+    ):
+        totals.append(
+            (
+                Decimal(match.group("quantity").replace(",", "")),
+                Decimal(match.group("amount").replace(",", "")),
+                match.start(),
+                match.end(),
+            )
+        )
+    if len(totals) != 1:
+        return None, None, len(totals) > 1, None, None
+    quantity, amount, start, end = totals[0]
+    return quantity, amount, False, start, end
+
+
+GENERIC_SOURCE_LINE_RE = re.compile(
+    r"^\s*(?P<line_no>\d{1,4})(?:\s+|\|)(?P<body>[^\r\n]{4,})$",
+    re.MULTILINE,
+)
+
+
+def _extract_generic_source_lines(text: str) -> list[tuple[str, int]]:
+    """Find row-like source lines without reusing the configured item regex."""
+
+    return [
+        (str(int(match.group("line_no"))), match.start())
+        for match in GENERIC_SOURCE_LINE_RE.finditer(text)
+    ]
+
+
 def _decimal_diff(left: Decimal | None, right: Decimal | None) -> Decimal | None:
     if left is None or right is None:
         return None
@@ -1472,9 +1881,15 @@ def _finish_customer_route(result: dict, route: dict) -> dict:
     if final_route.get("status") == "needs_confirmation":
         result["recognition_status"] = "needs_confirmation"
         result["parse_status"] = "needs_confirmation"
-        warning = "客户模板绑定无效或存在跨客户歧义，请人工确认客户。"
-        if warning not in result.setdefault("warnings", []):
-            result["warnings"].append(warning)
+        route_warnings = ["客户模板绑定无效、执行异常或存在跨客户歧义，请人工确认客户。"]
+        route_warnings.extend(
+            f"客户模板执行异常：{error}"
+            for error in (final_route.get("errors") or [])
+        )
+        warnings = result.setdefault("warnings", [])
+        for warning in route_warnings:
+            if warning not in warnings:
+                warnings.append(warning)
     return result
 
 
@@ -1511,8 +1926,63 @@ def parse_purchase_order_text(
             "warnings": [],
             "is_tianhua": False,
         }, route)
-    order_match = ORDER_NO_RE.search(text)
     template_match = _template_match_from_route(route, template_rules)
+    template_rule = (
+        template_match.get("rule")
+        if template_match and isinstance(template_match.get("rule"), dict)
+        else {}
+    )
+
+    def _template_failure(message: str, customer_po: str | None = None) -> dict:
+        customer_name = route.get("customer_name")
+        customer_type = route.get("customer_type") or "unknown"
+        return _finish_customer_route({
+            "source_name": source_name or "uploaded.pdf",
+            "source_type": "purchase_order_pdf",
+            "customer_name_raw": customer_name,
+            "customer_name": customer_name,
+            "customer_type": customer_type,
+            "customer_po": customer_po,
+            "order_date": None,
+            "delivery_date": None,
+            "recognition_status": "needs_confirmation",
+            "parse_status": "needs_confirmation",
+            "message": "客户模板未能完整解析，请人工确认模板或原单。",
+            "template_name": template_match.get("template_name") if template_match else None,
+            "duplicate_status": None,
+            "duplicate_reason": None,
+            "item_count": 0,
+            "items": [],
+            "warnings": [message],
+            "integrity_check": {
+                "integrity_status": "failed",
+                "integrity_errors": [message],
+                "integrity_warnings": [],
+            },
+            "is_tianhua": False,
+        }, route)
+
+    configuration_errors = template_rule.get("configuration_errors") or []
+    if route.get("parser_key") == "generic" and configuration_errors:
+        return _template_failure(str(configuration_errors[0]))
+
+    order_pattern = (
+        template_rule.get("order_no_pattern")
+        if route.get("parser_key") == "generic"
+        else None
+    )
+    if order_pattern:
+        configured_order_no, order_match, order_error = _extract_template_value(
+            text,
+            order_pattern,
+            label="订单号规则",
+            preferred_groups=("order_no", "customer_po", "po"),
+        )
+        if order_error:
+            return _template_failure(order_error)
+    else:
+        configured_order_no = None
+        order_match = ORDER_NO_RE.search(text)
     if not order_match and template_match and template_match.get("customer_type") == "gaotai":
         gaotai_order_no = _extract_gaotai_order_no(text)
         if gaotai_order_no:
@@ -1524,7 +1994,9 @@ def parse_purchase_order_text(
             order_match = _SimpleMatch(gaotai_order_no)
     if not order_match:
         raise PdfParseError("未识别到采购订单号。", "order_no_not_recognized")
-    customer_po = order_match.group(1).upper()
+    customer_po = str(
+        configured_order_no if configured_order_no is not None else order_match.group(1)
+    ).strip().upper()
 
     # 提取客户名
     customer_name = _extract_customer_name(lines, customer_po)
@@ -1638,6 +2110,183 @@ def parse_purchase_order_text(
         raise PdfParseError(
             "未识别到客户，请按客户模板维护后再导入。",
             "customer_not_recognized",
+        )
+
+    if route.get("parser_key") == "generic" and template_rule.get("item_row_pattern"):
+        (
+            configured_items,
+            item_warnings,
+            item_errors,
+            template_match_count,
+            last_template_match_end,
+        ) = (
+            _parse_configured_template_items(text, template_rule)
+        )
+        if not configured_items:
+            return _template_failure(
+                item_errors[0] if item_errors else "客户模板未解析出明细，请人工确认。",
+                customer_po,
+            )
+
+        date_warnings: list[str] = []
+        configured_order_date: str | None = None
+        if template_rule.get("date_pattern"):
+            raw_order_date, _date_match, date_error = _extract_template_value(
+                text,
+                template_rule.get("date_pattern"),
+                label="日期规则",
+                preferred_groups=("order_date", "date"),
+            )
+            configured_order_date = _normalize_template_date(raw_order_date)
+            if date_error:
+                date_warnings.append(date_error)
+            elif configured_order_date is None:
+                date_warnings.append(
+                    f"客户模板日期规则匹配到 {raw_order_date}，但无法转换为日期，请人工确认。"
+                )
+        else:
+            configured_order_date = next(
+                (
+                    value
+                    for value in (_normalize_template_date(line) for line in lines)
+                    if value
+                ),
+                None,
+            )
+
+        line_numbers = [str(item.get("line_no")) for item in configured_items]
+        if len(set(line_numbers)) != len(line_numbers):
+            item_errors.append("客户模板解析出重复行号，请人工确认明细规则。")
+        source_line_entries = _extract_generic_source_lines(text)
+        source_line_numbers = [line_no for line_no, _start in source_line_entries]
+        missing_line_numbers = [
+            line_no for line_no in source_line_numbers if line_no not in line_numbers
+        ]
+        source_lines_complete = bool(source_line_numbers) and source_line_numbers == line_numbers
+        if missing_line_numbers:
+            item_errors.append(
+                "PDF 原文明细行号与客户模板解析结果不一致，缺失行号："
+                + "、".join(missing_line_numbers)
+            )
+        (
+            source_total_quantity,
+            source_total_amount,
+            totals_ambiguous,
+            source_total_start,
+            _source_total_end,
+        ) = _extract_unambiguous_pdf_total(text)
+        parsed_total_quantity = sum(
+            (_quantity_decimal(item.get("quantity")) for item in configured_items),
+            Decimal("0"),
+        )
+        parsed_total_amount = sum(
+            (_quantity_decimal(item.get("amount")) for item in configured_items),
+            Decimal("0"),
+        )
+        quantity_diff = _decimal_diff(source_total_quantity, parsed_total_quantity)
+        amount_diff = _decimal_diff(source_total_amount, parsed_total_amount)
+        integrity_warnings: list[str] = []
+        if not source_line_numbers:
+            integrity_warnings.append(
+                "未能独立识别 PDF 原文明细行，完整性状态保持待确认。"
+            )
+        elif not source_lines_complete and not missing_line_numbers:
+            integrity_warnings.append(
+                "PDF 原文明细行与模板解析行不能完整一一对应，完整性状态保持待确认。"
+            )
+        if source_total_quantity is None or source_total_amount is None:
+            integrity_warnings.append(
+                "客户模板未从原单提取到独立的合计数量和合计金额，完整性状态保持待确认。"
+            )
+        if totals_ambiguous:
+            integrity_warnings.append(
+                "PDF 中存在多个合计或分页小计，无法确认哪一组是整单总计，完整性状态保持待确认。"
+            )
+        total_after_all_source_rows = bool(
+            source_total_start is not None
+            and last_template_match_end is not None
+            and source_total_start >= last_template_match_end
+            and all(source_total_start > start for _line_no, start in source_line_entries)
+        )
+        if source_total_start is not None and not total_after_all_source_rows:
+            item_errors.append("PDF 合计出现在最后一条原文明细之前，疑似分页小计或漏行。")
+        if quantity_diff is not None and quantity_diff > Decimal("0.01"):
+            item_errors.append(
+                f"PDF合计数量 {_format_integrity_decimal(source_total_quantity)}，"
+                f"识别数量 {_format_integrity_decimal(parsed_total_quantity)}，"
+                f"差异 {_format_integrity_decimal(quantity_diff)}。"
+            )
+        if amount_diff is not None and amount_diff > Decimal("0.01"):
+            item_errors.append(
+                f"PDF合计金额 {_format_integrity_amount(source_total_amount)}，"
+                f"识别金额 {_format_integrity_amount(parsed_total_amount)}，"
+                f"差异 {_format_integrity_amount(amount_diff)}。"
+            )
+        if item_errors:
+            integrity_status = "failed"
+        elif (
+            source_total_quantity is not None
+            and source_total_amount is not None
+            and source_lines_complete
+            and total_after_all_source_rows
+        ):
+            integrity_status = "passed"
+        else:
+            integrity_status = "unknown"
+        integrity_check = {
+            "source_detail_count": len(source_line_numbers) or None,
+            "parsed_detail_count": len(configured_items),
+            "source_line_numbers": source_line_numbers,
+            "parsed_line_numbers": line_numbers,
+            "missing_line_numbers": missing_line_numbers,
+            "template_match_count": template_match_count,
+            "source_total_quantity": _format_integrity_decimal(source_total_quantity),
+            "parsed_total_quantity": _format_integrity_decimal(parsed_total_quantity),
+            "quantity_total_diff": _format_integrity_decimal(quantity_diff),
+            "source_total_amount": _format_integrity_amount(source_total_amount),
+            "parsed_total_amount": _format_integrity_amount(parsed_total_amount),
+            "amount_total_diff": _format_integrity_amount(amount_diff),
+            "integrity_status": integrity_status,
+            "integrity_errors": item_errors,
+            "integrity_warnings": integrity_warnings,
+        }
+        status = (
+            "recognized"
+            if integrity_status == "passed" and not item_errors and not date_warnings
+            else "needs_confirmation"
+        )
+        warnings = [*item_warnings, *item_errors, *date_warnings, *integrity_warnings]
+        result = {
+            "source_name": source_name or "uploaded.pdf",
+            "source_type": "purchase_order_pdf",
+            "customer_name_raw": customer_name,
+            "customer_name": customer_name,
+            "customer_type": customer_type,
+            "customer_po": customer_po,
+            "order_date": configured_order_date,
+            "delivery_date": next(
+                (item.get("delivery_date") for item in configured_items if item.get("delivery_date")),
+                None,
+            ),
+            "recognition_status": status,
+            "parse_status": status,
+            "message": "客户模板已生成结构化草稿，请核对后保存。",
+            "duplicate_status": None,
+            "duplicate_reason": None,
+            "item_count": len(configured_items),
+            "items": configured_items,
+            "warnings": warnings,
+            "integrity_check": integrity_check,
+            "is_tianhua": False,
+            "has_extra_columns": False,
+        }
+        return _finish_customer_route(
+            _apply_quantity_review_flags(
+                apply_customer_template_postprocess(
+                    result, text, template_rules=template_rules, customer_route=route
+                )
+            ),
+            route,
         )
 
     records, has_extra_columns, header_found = _split_records(lines)

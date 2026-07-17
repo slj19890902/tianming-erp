@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Literal
 
+import jwt
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
@@ -21,6 +22,13 @@ from app.api.deps import (
     has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
+)
+from app.core.config import load_settings
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    beijing_now_naive,
+    beijing_today,
+    utc_naive_to_api,
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -48,7 +56,7 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportItem,
 )
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import DeliveryInventoryAllocation, InventoryLot
 from app.services.history_orders import (
     build_display_registry,
     filter_order_ids_for_display_search,
@@ -70,21 +78,28 @@ from app.services import material_pricing
 from app.services.order_pdf_import import (
     PARSE_STATUS_LABELS,
     PdfParseError,
+    _company_name_key,
+    _full_company_name_key,
     calculate_draft_cost,
-    extract_text_from_pdf_bytes,
     file_sha256,
-    merge_simair_text_and_ocr_drafts,
     match_import_draft,
-    parse_purchase_order_text,
-    resolve_pdf_customer_route,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
-from app.services.pdf_ocr import analyze_pdf_text_quality, ocr_pdf_bytes, should_use_ocr
+from app.services.pdf_parse_pipeline import parse_pdf_bytes
+from app.services.pdf_preview_redaction import redact_pdf_preview_for_user
 from app.services.product_import import (
     NewProductError,
     NewProductInput,
     parse_dimensions,
     resolve_or_create_product,
+)
+from app.services.production_workflow import (
+    ProductionWorkflowError,
+    create_or_refresh_production_task,
+    has_production_completion_facts,
+    lock_order_rows_for_production_transition,
+    refresh_order_production_status,
+    refresh_production_task,
 )
 from app.services.report_crease import crease_width_error, product_crease_width_error
 from app.services.warehouse_inventory import (
@@ -138,6 +153,8 @@ ORDER_STATUSES = {
     "delivered",
 }
 FINAL_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled", "delivered"}
+
+_PRODUCTION_FACT_CONFLICT = "订单明细已有生产完工或转库存事实，不能执行该操作。"
 
 
 _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
@@ -242,6 +259,13 @@ class OrderItemCreate(BaseModel):
         return value
 
 
+class PdfImportConfirmation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    preview_safety_token: str = Field(min_length=1, max_length=4000)
+    confirmed: bool = False
+
+
 class OrderItemUpdate(BaseModel):
     quantity: int
     unit_price: Decimal
@@ -273,7 +297,10 @@ class OrderItemUpdate(BaseModel):
     snapshot_pieces_per_box: int | None = None
     snapshot_flap_mm: int | None = None
     # v0.20.9: 订单编辑页中的常用箱生产字段；有关联产品时同事务同步。
-    sync_product: bool = True
+    sync_product: bool = False
+    product_expected_version: int | None = Field(default=None, ge=1)
+    product_change_reason: str | None = Field(default=None, max_length=500)
+    product_confirmation_token: str | None = Field(default=None, max_length=2000)
     box_style: str | None = None
     length_mm: int | None = Field(default=None, gt=0)
     width_mm: int | None = Field(default=None, gt=0)
@@ -297,6 +324,8 @@ class OrderCreate(BaseModel):
     items: list[OrderItemCreate] | None = None
     import_integrity_status: str | None = None
     import_integrity_errors: list[str] | None = None
+    import_draft: bool = False
+    pdf_import_confirmation: PdfImportConfirmation | None = None
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -328,6 +357,192 @@ def _validated_order_quantity(value: int | float, index: int) -> int:
             detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
         )
     return int(decimal_value)
+
+
+PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES = 5
+PDF_PREVIEW_SAFETY_TOKEN_TYPE = "pdf_order_preview_safety"
+
+
+def _pdf_preview_actor(user: User) -> str:
+    if user.id is not None:
+        return f"id:{user.id}"
+    return f"username:{user.username}"
+
+
+def _pdf_preview_safety_states(draft: dict) -> dict:
+    route = draft.get("customer_route")
+    route_status = route.get("status") if isinstance(route, dict) else None
+    integrity = draft.get("integrity_check")
+    integrity_status = (
+        integrity.get("integrity_status") if isinstance(integrity, dict) else None
+    )
+    matched_customer_id = draft.get("matched_customer_id")
+    return {
+        "recognition_status": str(draft.get("recognition_status") or "failed"),
+        "customer_route_status": str(route_status or "unmatched"),
+        "customer_match_status": str(
+            draft.get("customer_match_status") or "unmatched"
+        ),
+        "integrity_status": str(integrity_status or "missing"),
+        "matched_customer_id": int(matched_customer_id or 0),
+    }
+
+
+def _encode_pdf_preview_safety_token(
+    draft: dict,
+    user: User,
+    *,
+    state_overrides: dict | None = None,
+) -> str:
+    now = datetime.now(timezone.utc)
+    states = {**_pdf_preview_safety_states(draft), **(state_overrides or {})}
+    claims = {
+        "sub": _pdf_preview_actor(user),
+        "type": PDF_PREVIEW_SAFETY_TOKEN_TYPE,
+        "source_name": str(draft.get("source_name") or ""),
+        "source_hash": str(draft.get("file_hash") or ""),
+        **states,
+        "iat": now,
+        "exp": now + timedelta(minutes=PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
+
+
+def _attach_pdf_preview_safety_token(
+    draft: dict,
+    user: User,
+    *,
+    state_overrides: dict | None = None,
+) -> dict:
+    result = dict(draft)
+    result["preview_safety_token"] = _encode_pdf_preview_safety_token(
+        result,
+        user,
+        state_overrides=state_overrides,
+    )
+    return result
+
+
+def _finalize_pdf_preview_for_user(
+    draft: dict,
+    user: User,
+    *,
+    state_overrides: dict | None = None,
+) -> dict:
+    """Attach the trusted preview token, then enforce the cost-view boundary."""
+
+    tokenized = _attach_pdf_preview_safety_token(
+        draft,
+        user,
+        state_overrides=state_overrides,
+    )
+    return redact_pdf_preview_for_user(
+        tokenized,
+        can_view_cost=has_permission(user, "cost.view"),
+    )
+
+
+def _pdf_preview_token_error(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": "PDF_PREVIEW_TOKEN_STALE", "message": message},
+    )
+
+
+def _decode_pdf_preview_safety_token(token: str, user: User) -> dict:
+    try:
+        claims = jwt.decode(
+            token,
+            load_settings().secret_key,
+            algorithms=["HS256"],
+            options={
+                "require": [
+                    "sub",
+                    "type",
+                    "source_name",
+                    "source_hash",
+                    "recognition_status",
+                    "customer_route_status",
+                    "customer_match_status",
+                    "integrity_status",
+                    "matched_customer_id",
+                    "iat",
+                    "exp",
+                ]
+            },
+        )
+    except jwt.ExpiredSignatureError as error:
+        raise _pdf_preview_token_error("PDF 预览确认已过期，请重新预览") from error
+    except jwt.PyJWTError as error:
+        raise _pdf_preview_token_error("PDF 预览确认无效，请重新预览") from error
+    if (
+        claims.get("type") != PDF_PREVIEW_SAFETY_TOKEN_TYPE
+        or claims.get("sub") != _pdf_preview_actor(user)
+    ):
+        raise _pdf_preview_token_error("PDF 预览确认与当前操作员不匹配")
+    try:
+        claims["matched_customer_id"] = int(claims["matched_customer_id"])
+    except (TypeError, ValueError) as error:
+        raise _pdf_preview_token_error("PDF 预览确认内容无效，请重新预览") from error
+    return claims
+
+
+def _validate_pdf_import_safety(
+    payload: OrderCreate,
+    user: User,
+) -> tuple[list[str], dict]:
+    context = payload.pdf_import_confirmation
+    if context is None:
+        if payload.import_draft:
+            raise HTTPException(
+                status_code=400,
+                detail="PDF 草稿缺少服务端保存确认上下文，不能直接保存。请返回预览页重新确认。",
+            )
+        return [], {}
+
+    if not context.confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail="PDF 草稿尚未执行明确确认，后端已拒绝直接保存。",
+        )
+    if payload.customer_id is None:
+        raise HTTPException(status_code=400, detail="PDF 草稿必须明确选择客户")
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="PDF 草稿至少需要一条明细")
+    for index, item in enumerate(payload.items, start=1):
+        if item.is_new_product or item.product_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条 PDF 明细必须明确选择唯一常用箱产品后才能直接保存",
+            )
+
+    claims = _decode_pdf_preview_safety_token(context.preview_safety_token, user)
+    if claims["integrity_status"] != "passed":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PDF_PREVIEW_INTEGRITY_FAILED",
+                "message": "PDF 完整性校验未通过或缺失，不能保存；请重新预览并补齐原单明细。",
+            },
+        )
+    if (
+        claims["customer_match_status"] != "matched"
+        or claims["matched_customer_id"] != payload.customer_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PDF_PREVIEW_CUSTOMER_STALE",
+                "message": "PDF 客户选择未经过最新重匹配确认，请重新选择客户。",
+            },
+        )
+
+    reasons: list[str] = []
+    if claims["recognition_status"] != "recognized":
+        reasons.append(f"recognition_status={claims['recognition_status']}")
+    if claims["customer_route_status"] != "locked":
+        reasons.append(f"customer_route={claims['customer_route_status']}")
+    return reasons, claims
 
 
 def _validated_order_layer_flute(
@@ -819,6 +1034,7 @@ class OrderUpdate(BaseModel):
 class DraftRematchRequest(BaseModel):
     draft: dict
     customer_id: int
+    preview_safety_token: str = Field(min_length=1, max_length=4000)
 
 
 class CostPreviewRequest(BaseModel):
@@ -1026,7 +1242,11 @@ def _order_response(
                 "unit_price": item.unit_price,
                 "subtotal": item.subtotal,
                 "material_status": item.material_status,
-                "material_received_at": item.material_received_at,
+                "material_received_at": (
+                    utc_naive_to_api(item.material_received_at)
+                    if item.material_received_at
+                    else None
+                ),
                 "snapshot_product_code": item.snapshot_product_code,
                 "snapshot_product_name": item.snapshot_product_name,
                 "snapshot_spec": item.snapshot_spec,
@@ -1083,7 +1303,11 @@ def _order_response(
                 "requisition_spec": item.requisition_spec,
                 "cardboard_len": item.cardboard_len,
                 "cardboard_width": item.cardboard_width,
-                "supplier_delivery_time": item.supplier_delivery_time,
+                "supplier_delivery_time": (
+                    beijing_naive_to_api(item.supplier_delivery_time)
+                    if item.supplier_delivery_time
+                    else None
+                ),
                 **cost_reference,
         }
         if may_view_cost and item_data.get("estimated_cost") is not None:
@@ -1376,7 +1600,7 @@ def get_order_number_preview(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
-    preview_date = order_date or date.today()
+    preview_date = order_date or beijing_today()
     main_number = preview_next_order_number(db, preview_date)
     return {
         "order_number": main_number,
@@ -1412,91 +1636,198 @@ def _parse_order_pdf_preview(
     filename: str,
     template_rules: list[dict],
 ) -> dict:
-    """Parse an order PDF for preview, using OCR only when text parsing needs it."""
-    text = extract_text_from_pdf_bytes(content)
-    quality_status = str(analyze_pdf_text_quality(text)["status"])
-    customer_route = resolve_pdf_customer_route(text or "", template_rules)
-    draft: dict | None = None
-    text_draft: dict | None = None
-    parse_error: PdfParseError | None = None
+    """Preview via the shared pure parse/OCR pipeline."""
+    return parse_pdf_bytes(content, filename, template_rules).draft
 
-    if text and text.strip():
-        try:
-            draft = parse_purchase_order_text(
-                text,
-                source_name=filename,
-                template_rules=template_rules,
-                customer_route=customer_route,
-            )
-            customer_route = draft.get("customer_route") or customer_route
-            if quality_status == "garbled_text_layer" and draft.get("customer_type") == "simair":
-                text_draft = draft
-                draft = None
-        except PdfParseError as error:
-            parse_error = error
 
-    if quality_status == "garbled_text_layer" or should_use_ocr(text, draft):
-        ocr_text, ocr_method = (
-            ocr_pdf_bytes(content, dpi=300)
-            if text_draft is not None
-            and text_draft.get("customer_type") == "simair"
-            else ocr_pdf_bytes(content)
+def _customer_id_value(value: object) -> int | None:
+    try:
+        customer_id = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return customer_id if customer_id > 0 else None
+
+
+def _scope_denied_pdf_preview(draft: dict) -> dict:
+    """Return a fixed, customer-data-free preview for an out-of-scope match.
+
+    Build this payload from a whitelist instead of redacting the matched draft.
+    This keeps future customer/product fields fail-closed as the PDF parser grows.
+    """
+
+    return {
+        "source_name": str(draft.get("source_name") or "uploaded.pdf"),
+        "file_hash": str(draft.get("file_hash") or ""),
+        "source_type": "purchase_order_pdf",
+        "recognition_status": "needs_confirmation",
+        "parse_status": "needs_confirmation",
+        "duplicate_status": None,
+        "item_count": 0,
+        "items": [],
+        "warnings": ["当前账号无权访问该 PDF 对应客户，请联系管理员分配客户范围。"],
+        "customer_route": {"status": "needs_confirmation"},
+        "integrity_check": {
+            "integrity_status": "unknown",
+            "integrity_errors": [],
+            "integrity_warnings": ["客户范围未通过，未执行业务数据匹配。"],
+        },
+    }
+
+
+def _match_pdf_customer_in_scope(
+    db: Session,
+    raw_name: str | None,
+    visible_customer_ids: set[int],
+) -> tuple[str, int | None, list[dict]]:
+    """Resolve a parsed customer name without reading outside the allow-list."""
+
+    if not raw_name or not visible_customer_ids:
+        return "unmatched", None, []
+    full_target = _full_company_name_key(raw_name)
+    target = _company_name_key(raw_name)
+    exact_candidates: list[dict] = []
+    normalized_candidates: list[dict] = []
+    partial_candidates: list[dict] = []
+    customers = db.scalars(
+        select(Customer)
+        .where(
+            Customer.id.in_(visible_customer_ids),
+            Customer.is_active.is_(True),
         )
-        if ocr_text and ocr_method not in {"ocr_unavailable", "ocr_failed"}:
-            try:
-                if customer_route.get("status") == "unmatched":
-                    customer_route = resolve_pdf_customer_route(ocr_text, template_rules)
-                ocr_parse_text = ocr_text
-                exact_po = str((text_draft or {}).get("customer_po") or "").strip()
-                if exact_po and exact_po.casefold() not in ocr_text.casefold():
-                    # Custom-font Simair PDFs can retain the exact PO in the text
-                    # layer while OCR only reads the table.  Preserve that header.
-                    ocr_parse_text = f"{exact_po}\n{ocr_text}"
-                ocr_draft = parse_purchase_order_text(
-                    ocr_parse_text,
-                    source_name=filename,
-                    template_rules=template_rules,
-                    customer_route=customer_route,
-                )
-                result = (
-                    merge_simair_text_and_ocr_drafts(text_draft, ocr_draft)
-                    if text_draft is not None and ocr_draft.get("customer_type") == "simair"
-                    else ocr_draft
-                )
-                result["source_text_quality"] = quality_status
-                result["parse_method"] = "mixed" if text_draft else ocr_method
-                return result
-            except PdfParseError as error:
-                parse_error = error
+        .order_by(Customer.id)
+    ).all()
+    for customer in customers:
+        candidate = {"id": customer.id, "name": customer.name}
+        full_key = _full_company_name_key(customer.name)
+        key = _company_name_key(customer.name)
+        if full_key and full_key == full_target:
+            exact_candidates.append(candidate)
+        elif key and key == target:
+            normalized_candidates.append(candidate)
+        elif key and target and (key in target or target in key):
+            partial_candidates.append(candidate)
+    candidates = exact_candidates or normalized_candidates or partial_candidates
+    if len(candidates) == 1:
+        return "matched", candidates[0]["id"], candidates
+    if len(candidates) > 1:
+        return "multiple_candidates", None, candidates
+    return "unmatched", None, []
 
-    if draft is not None:
-        draft["source_text_quality"] = quality_status
-        draft.setdefault("parse_method", "text")
-        return draft
-    if text_draft is not None:
-        text_draft["source_text_quality"] = quality_status
-        text_draft["parse_method"] = ocr_method if "ocr_method" in locals() else "text_fallback"
-        text_draft["recognition_status"] = "needs_confirmation"
-        text_draft["parse_status"] = "needs_confirmation"
-        text_draft.setdefault("warnings", []).append(
-            "思迈尔 PDF 文本层异常，OCR 未能补全；已保留精确客户订单号，产品需人工确认。"
-        )
-        return text_draft
-    if parse_error is not None:
-        raise parse_error
-    return parse_purchase_order_text(
-        text or "",
-        source_name=filename,
-        template_rules=template_rules,
-        customer_route=customer_route,
+
+def _match_pdf_preview_for_user(
+    db: Session,
+    draft: dict,
+    user: User,
+    *,
+    customer_id: int | None = None,
+) -> dict:
+    """Apply the same customer scope gate to preview, batch and rematch.
+
+    Restricted users are resolved against their allow-list before
+    ``match_import_draft`` can query customer products or material candidates.
+    """
+
+    if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
+        if db.get(Customer, customer_id) is None:
+            raise HTTPException(status_code=400, detail="客户不存在")
+        return match_import_draft(db, draft, customer_id=customer_id)
+
+    if has_unrestricted_customer_access(user, db):
+        return match_import_draft(db, draft)
+
+    visible_customer_ids = customer_scope_ids(user, db)
+    if not visible_customer_ids:
+        return _scope_denied_pdf_preview(draft)
+
+    route = (
+        draft.get("customer_route")
+        if isinstance(draft.get("customer_route"), dict)
+        else {}
     )
+    route_status = route.get("status")
+    if route_status == "locked":
+        routed_customer_id = _customer_id_value(route.get("template_customer_id"))
+        if routed_customer_id is not None:
+            if routed_customer_id not in visible_customer_ids:
+                return _scope_denied_pdf_preview(draft)
+            routed_customer = db.scalar(
+                select(Customer).where(
+                    Customer.id == routed_customer_id,
+                    Customer.is_active.is_(True),
+                    Customer.status == "active",
+                )
+            )
+            if routed_customer is None:
+                return _scope_denied_pdf_preview(draft)
+            return match_import_draft(db, draft, customer_id=routed_customer_id)
+        match_status, matched_customer_id, _candidates = _match_pdf_customer_in_scope(
+            db,
+            draft.get("customer_name_raw") or draft.get("customer_name"),
+            visible_customer_ids,
+        )
+        if match_status != "matched" or matched_customer_id is None:
+            return _scope_denied_pdf_preview(draft)
+        return match_import_draft(db, draft, customer_id=matched_customer_id)
+
+    if route_status == "needs_confirmation":
+        route_candidates = route.get("candidates")
+        if isinstance(route_candidates, list):
+            visible_candidates = [
+                candidate
+                for candidate in route_candidates
+                if isinstance(candidate, dict)
+                and _customer_id_value(candidate.get("template_customer_id"))
+                in visible_customer_ids
+            ]
+            if route_candidates and not visible_candidates:
+                return _scope_denied_pdf_preview(draft)
+            draft = {
+                **draft,
+                "customer_route": {**route, "candidates": visible_candidates},
+            }
+        return match_import_draft(db, draft)
+
+    match_status, matched_customer_id, candidates = _match_pdf_customer_in_scope(
+        db,
+        draft.get("customer_name_raw") or draft.get("customer_name"),
+        visible_customer_ids,
+    )
+    if matched_customer_id is not None:
+        if matched_customer_id not in visible_customer_ids:
+            return _scope_denied_pdf_preview(draft)
+        return match_import_draft(db, draft, customer_id=matched_customer_id)
+
+    if match_status == "multiple_candidates":
+        visible_candidates = [
+            candidate
+            for candidate in candidates
+            if _customer_id_value(candidate.get("id")) in visible_customer_ids
+        ]
+        if not visible_candidates:
+            return _scope_denied_pdf_preview(draft)
+        draft = {
+            **draft,
+            "customer_route": {
+                "status": "needs_confirmation",
+                "candidates": [
+                    {
+                        "template_customer_id": candidate["id"],
+                        "customer_name": candidate["name"],
+                    }
+                    for candidate in visible_candidates
+                ],
+            },
+        }
+        return match_import_draft(db, draft)
+    return _scope_denied_pdf_preview(draft)
 
 
 @router.post("/pdf-preview")
 async def preview_order_pdf(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_create),
+    user: User = Depends(can_create),
 ) -> dict:
     filename = (file.filename or "").strip()
     if not filename.lower().endswith(".pdf"):
@@ -1508,9 +1839,15 @@ async def preview_order_pdf(
     try:
         draft = _parse_order_pdf_preview(content, filename, template_rules)
         draft["file_hash"] = file_sha256(content)
-        return match_import_draft(db, draft)
+        return _finalize_pdf_preview_for_user(
+            _match_pdf_preview_for_user(db, draft, user),
+            user,
+        )
     except PdfParseError as error:
-        return _pdf_failure_draft(filename, error, digest=file_sha256(content))
+        return _finalize_pdf_preview_for_user(
+            _pdf_failure_draft(filename, error, digest=file_sha256(content)),
+            user,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -1521,7 +1858,7 @@ async def preview_order_pdf(
 async def preview_order_pdf_batch(
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_create),
+    user: User = Depends(can_create),
 ) -> dict:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个 PDF 文件")
@@ -1530,6 +1867,7 @@ async def preview_order_pdf_batch(
     template_rules = load_active_pdf_template_rules(db)
     for file in files:
         filename = (file.filename or "uploaded.pdf").strip()
+        digest = ""
         try:
             if not filename.lower().endswith(".pdf"):
                 raise ValueError("只支持 PDF 文件")
@@ -1539,42 +1877,62 @@ async def preview_order_pdf_batch(
             digest = file_sha256(content)
             if digest in seen_hashes:
                 drafts.append(
-                    {
-                        "source_name": filename,
-                        "file_hash": digest,
-                        "recognition_status": "duplicate_skipped",
-                        "duplicate_status": "duplicate_skipped",
-                        "duplicate_reason": "本批次已上传相同文件",
-                        "items": [],
-                        "warnings": ["本批次已上传相同文件，已跳过。"],
-                    }
+                    _finalize_pdf_preview_for_user(
+                        {
+                            "source_name": filename,
+                            "file_hash": digest,
+                            "recognition_status": "duplicate_skipped",
+                            "duplicate_status": "duplicate_skipped",
+                            "duplicate_reason": "本批次已上传相同文件",
+                            "items": [],
+                            "warnings": ["本批次已上传相同文件，已跳过。"],
+                        },
+                        user,
+                    )
                 )
                 continue
             seen_hashes.add(digest)
             draft = _parse_order_pdf_preview(content, filename, template_rules)
             draft["file_hash"] = digest
-            drafts.append(match_import_draft(db, draft))
+            drafts.append(
+                _finalize_pdf_preview_for_user(
+                    _match_pdf_preview_for_user(db, draft, user), user
+                )
+            )
         except PdfParseError as error:
-            drafts.append(_pdf_failure_draft(filename, error, digest=digest))
+            drafts.append(
+                _finalize_pdf_preview_for_user(
+                    _pdf_failure_draft(filename, error, digest=digest),
+                    user,
+                )
+            )
         except ValueError as error:
             drafts.append(
-                {
-                    "source_name": filename,
-                    "recognition_status": "failed",
-                    "duplicate_status": None,
-                    "items": [],
-                    "warnings": [str(error)],
-                }
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": [str(error)],
+                    },
+                    user,
+                )
             )
         except Exception:
             drafts.append(
-                {
-                    "source_name": filename,
-                    "recognition_status": "failed",
-                    "duplicate_status": None,
-                    "items": [],
-                    "warnings": ["文件识别失败，请检查文件内容后重试。"],
-                }
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": ["文件识别失败，请检查文件内容后重试。"],
+                    },
+                    user,
+                )
             )
     return {"batch_count": len(files), "drafts": drafts}
 
@@ -1585,10 +1943,58 @@ def rematch_order_draft(
     db: Session = Depends(get_db),
     _user: User = Depends(can_create),
 ) -> dict:
-    require_customer_access(payload.customer_id, current_user=_user, db=db)
-    if db.get(Customer, payload.customer_id) is None:
-        raise HTTPException(status_code=400, detail="客户不存在")
-    return match_import_draft(db, payload.draft, customer_id=payload.customer_id)
+    trusted_claims = _decode_pdf_preview_safety_token(
+        payload.preview_safety_token,
+        _user,
+    )
+    draft_source_name = str(payload.draft.get("source_name") or "").strip()
+    trusted_source_name = str(trusted_claims["source_name"] or "").strip()
+    draft_source_hash = str(payload.draft.get("file_hash") or "").strip().casefold()
+    trusted_source_hash = str(trusted_claims["source_hash"] or "").strip().casefold()
+    if (
+        draft_source_name or trusted_source_name
+    ) and draft_source_name != trusted_source_name:
+        raise _pdf_preview_token_error("PDF 预览 token 与草稿文件名不一致，请重新预览")
+    if (
+        draft_source_hash or trusted_source_hash
+    ) and draft_source_hash != trusted_source_hash:
+        raise _pdf_preview_token_error("PDF 预览 token 与草稿文件哈希不一致，请重新预览")
+    trusted_draft = dict(payload.draft)
+    trusted_draft["source_name"] = trusted_claims["source_name"]
+    trusted_draft["file_hash"] = trusted_claims["source_hash"]
+    trusted_draft["recognition_status"] = trusted_claims["recognition_status"]
+    trusted_draft["parse_status"] = trusted_claims["recognition_status"]
+    route = (
+        dict(trusted_draft.get("customer_route"))
+        if isinstance(trusted_draft.get("customer_route"), dict)
+        else {}
+    )
+    route["status"] = trusted_claims["customer_route_status"]
+    trusted_draft["customer_route"] = route
+    integrity = (
+        dict(trusted_draft.get("integrity_check"))
+        if isinstance(trusted_draft.get("integrity_check"), dict)
+        else {}
+    )
+    integrity["integrity_status"] = trusted_claims["integrity_status"]
+    trusted_draft["integrity_check"] = integrity
+    result = _match_pdf_preview_for_user(
+        db,
+        trusted_draft,
+        _user,
+        customer_id=payload.customer_id,
+    )
+    return _finalize_pdf_preview_for_user(
+        result,
+        _user,
+        state_overrides={
+            "recognition_status": trusted_claims["recognition_status"],
+            "customer_route_status": trusted_claims["customer_route_status"],
+            "customer_match_status": "matched",
+            "integrity_status": trusted_claims["integrity_status"],
+            "matched_customer_id": payload.customer_id,
+        },
+    )
 
 
 @router.post("/cost-preview")
@@ -1949,7 +2355,7 @@ def _rollback_supplier_requisition_items(
         ]
         if not remaining_items:
             supplier_order.status = "voided"
-            supplier_order.voided_at = supplier_order.voided_at or datetime.now()
+            supplier_order.voided_at = supplier_order.voided_at or beijing_now_naive()
             action = "void_supplier_order"
         else:
             for source_item in source_items:
@@ -2016,16 +2422,124 @@ def _release_order_reservations(
         ) from error
 
 
+def _ensure_no_production_completion_facts(
+    db: Session,
+    order_item_ids: list[int],
+) -> None:
+    if order_item_ids and has_production_completion_facts(
+        db,
+        order_item_ids,
+    ):
+        raise HTTPException(status_code=409, detail=_PRODUCTION_FACT_CONFLICT)
+
+
+def _lock_orders_for_production_transition(
+    db: Session,
+    order_ids: list[int],
+) -> dict[int, Order]:
+    try:
+        return lock_order_rows_for_production_transition(db, order_ids)
+    except ProductionWorkflowError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _production_meaning_changes(
+    item: OrderItem,
+    payload: OrderItemUpdate,
+    product: Product | None,
+) -> list[str]:
+    changes: list[str] = []
+
+    def changed(label: str, before: object, after: object) -> None:
+        if after != before:
+            changes.append(label)
+
+    def clean(value: str | None) -> str:
+        return (value or "").strip()
+
+    changed("数量", int(item.quantity or 0), int(payload.quantity))
+    changed("存货编码", clean(item.snapshot_product_code), clean(payload.product_code))
+    changed("产品名称", clean(item.snapshot_product_name), clean(payload.product_name))
+    changed("规格", clean(item.snapshot_spec), clean(payload.specification))
+    changed("材质", clean(item.snapshot_material), clean(payload.material))
+    if payload.production_notes is not None:
+        changed(
+            "生产说明",
+            clean(item.snapshot_production_notes),
+            clean(payload.production_notes),
+        )
+    if payload.material_id is not None:
+        changed("材质", item.material_id, payload.material_id)
+    if payload.layer_count is not None:
+        changed("层数", item.layer_count, payload.layer_count)
+    if payload.flute_type is not None:
+        changed(
+            "楞型",
+            clean(item.flute_type).upper(),
+            clean(payload.flute_type).upper(),
+        )
+
+    snapshot_fields = (
+        "snapshot_report_length_mm",
+        "snapshot_report_width_mm",
+        "snapshot_crease_type",
+        "snapshot_crease_left_mm",
+        "snapshot_crease_middle_mm",
+        "snapshot_crease_right_mm",
+        "snapshot_report_notes",
+        "snapshot_base_report_length_mm",
+        "snapshot_base_report_width_mm",
+        "snapshot_base_crease_type",
+        "snapshot_base_crease_left_mm",
+        "snapshot_base_crease_middle_mm",
+        "snapshot_base_crease_right_mm",
+        "snapshot_base_report_notes",
+        "snapshot_splice_mode",
+        "snapshot_pieces_per_box",
+        "snapshot_flap_mm",
+    )
+    for field_name in snapshot_fields:
+        value = getattr(payload, field_name)
+        if value is not None:
+            changed("生产快照", getattr(item, field_name), value or None)
+
+    if payload.sync_product and product is not None:
+        for field_name in (
+            "box_style",
+            "length_mm",
+            "width_mm",
+            "height_mm",
+            "production_process",
+            "print_content",
+        ):
+            value = getattr(payload, field_name)
+            if value is not None:
+                changed("产品生产参数", getattr(product, field_name), value)
+    return list(dict.fromkeys(changes))
+
+
 def _delete_orders_in_transaction(
     db: Session,
     *,
     orders: list[Order],
     user: User,
 ) -> None:
+    order_ids = [order.id for order in orders]
+    _lock_orders_for_production_transition(db, order_ids)
+    orders = db.scalars(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id.in_(order_ids))
+        .order_by(Order.id)
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(orders) != len(order_ids):
+        raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    item_ids = [item.id for order in orders for item in order.items]
+    _ensure_no_production_completion_facts(db, item_ids)
     dependencies = _order_flow_dependencies(db, [order.id for order in orders])
     if dependencies:
         raise HTTPException(status_code=409, detail=_flow_delete_message(dependencies))
-    item_ids = [item.id for order in orders for item in order.items]
     _unlink_predelivery_order_bindings(
         db,
         order_ids=[order.id for order in orders],
@@ -2106,6 +2620,35 @@ def update_order_status(
         raise HTTPException(status_code=400, detail="订单状态无效")
     if target in {"dead", "closed", "archived", "cancelled"} and not remark:
         raise HTTPException(status_code=400, detail="标记死单、已结档、已归档或已作废时必须填写备注")
+    if target in {
+        "pending_confirmation",
+        "pending_production",
+        "production",
+        "dead",
+        "cancelled",
+        "closed",
+        "archived",
+    }:
+        _lock_orders_for_production_transition(db, [order.id])
+        order = db.scalar(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(Order.id == order_id)
+            .execution_options(populate_existing=True)
+        )
+        if order is None:
+            raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    if target in {
+        "pending_confirmation",
+        "pending_production",
+        "production",
+        "dead",
+        "cancelled",
+    }:
+        _ensure_no_production_completion_facts(
+            db,
+            [item.id for item in order.items],
+        )
     before = order.status
     order.status = target
     if remark:
@@ -2206,9 +2749,19 @@ def rollback_order_workflow(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
+    _lock_orders_for_production_transition(db, [order.id])
+    order = db.scalar(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+        .execution_options(populate_existing=True)
+    )
+    if order is None:
+        raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
     if order.order_number.startswith("RUIDA-"):
         raise HTTPException(status_code=409, detail="历史订单禁止执行流程撤回")
     item_ids = [item.id for item in order.items]
+    _ensure_no_production_completion_facts(db, item_ids)
     delivery_items = db.scalars(
         select(DeliveryItem).where(DeliveryItem.order_item_id.in_(item_ids))
     ).all()
@@ -2227,6 +2780,21 @@ def rollback_order_workflow(
                 status_code=409,
                 detail="该订单与其他订单共用送货单，不能自动撤回，请先拆分处理。",
             )
+    delivery_item_ids = [item.id for item in delivery_items]
+    if delivery_item_ids and db.scalar(
+        select(DeliveryInventoryAllocation.id)
+        .where(
+            DeliveryInventoryAllocation.delivery_item_id.in_(delivery_item_ids)
+        )
+        .limit(1)
+    ) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "送货单已产生库存出库记录，不能直接撤回订单流程。"
+                "请先在送货管理中撤销发货并恢复库存。"
+            ),
+        )
     receipts = (
         db.scalars(select(ReturnReceipt).where(ReturnReceipt.delivery_id.in_(delivery_ids))).all()
         if delivery_ids
@@ -2448,6 +3016,10 @@ def create_order(
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    pdf_safety_override_reasons, pdf_safety_claims = _validate_pdf_import_safety(
+        payload,
+        user,
+    )
     if (
         any(
             item.drawing_save_option in _PRODUCT_DRAWING_SAVE_OPTIONS
@@ -2467,7 +3039,10 @@ def create_order(
             status_code=403,
             detail="无常用箱图纸覆盖权限",
         )
-    if payload.import_integrity_status == "failed":
+    if (
+        payload.import_integrity_status == "failed"
+        and payload.pdf_import_confirmation is None
+    ):
         errors = payload.import_integrity_errors or []
         message = (
             "当前 PDF 识别存在漏行或合计不一致，不能直接保存。"
@@ -2481,6 +3056,10 @@ def create_order(
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
             raise HTTPException(status_code=400, detail="客户不存在")
+        if payload.pdf_import_confirmation is not None and (
+            not customer.is_active or customer.status != "active"
+        ):
+            raise HTTPException(status_code=400, detail="PDF 草稿所选客户已停用")
 
         customer_po = (payload.customer_po or "").strip() or None
 
@@ -2542,8 +3121,13 @@ def create_order(
                                 if new_sale_price is not None and new_sale_price > 0
                                 else None
                             ),
+                            layer_count=item_payload.layer_count,
+                            flute_type=item_payload.flute_type,
                         ),
                         cache=new_product_cache,
+                        user=user,
+                        reason="订单导入自动创建常用箱",
+                        source="orders.create.product-import",
                     )
                 except NewProductError as error:
                     raise HTTPException(
@@ -2617,10 +3201,6 @@ def create_order(
                 selected_material_id,
                 selected_material,
             )
-            if item_payload.is_new_product:
-                product.material_id = selected_material_id
-                product.layer_count = snapshot_layer_count
-                product.flute_type = snapshot_flute_type
             resolved_products[index] = product
 
         reservation_plan_states = _preflight_reservation_plans(
@@ -2668,7 +3248,7 @@ def create_order(
                         detail="系统中已存在相同客户、客户单号和明细的订单，未重复生成。",
                     )
 
-        order_date = payload.order_date or date.today()
+        order_date = payload.order_date or beijing_today()
         order = Order(
             order_number=reserve_next_order_number(db, order_date),
             customer_id=customer.id,
@@ -2826,7 +3406,42 @@ def create_order(
                 description="创建多明细订单",
             )
         )
+        if pdf_safety_override_reasons:
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    action="PDF_SAFETY_OVERRIDE",
+                    resource="Order",
+                    details=json.dumps(
+                        {
+                            "order_number": order.order_number,
+                            "customer_id": order.customer_id,
+                            "item_count": len(payload.items),
+                            "source_name": pdf_safety_claims.get("source_name"),
+                            "source_hash": pdf_safety_claims.get("source_hash"),
+                            "recognition_status": pdf_safety_claims.get(
+                                "recognition_status"
+                            ),
+                            "customer_route_status": pdf_safety_claims.get(
+                                "customer_route_status"
+                            ),
+                            "integrity_status": pdf_safety_claims.get(
+                                "integrity_status"
+                            ),
+                            "override_reasons": pdf_safety_override_reasons,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    username=user.username,
+                    role=user.role,
+                    entity_type="order",
+                    entity_id=order.id,
+                    description="人工明确确认后保存存在安全闸门状态的 PDF 草稿",
+                )
+            )
         db.flush()  # 获取 item.id 以便处理图纸
+        for created_item in created_items:
+            create_or_refresh_production_task(db, created_item.id)
         # v0.19.2-B: 图纸保存到常用箱
         for i, item in enumerate(created_items):
             opt = payload.items[i].drawing_save_option if i < len(payload.items) else None
@@ -2850,6 +3465,9 @@ def create_order(
             states=reservation_plan_states,
             operator_id=user.id,
         )
+        for created_item in created_items:
+            refresh_production_task(db, created_item.id)
+        refresh_order_production_status(db, order.id)
         db.commit()
         db.refresh(order)
         response = _order_response(
@@ -2896,6 +3514,38 @@ def update_order_item(
     require_customer_access(
         order_for_scope.customer_id, current_user=user, db=db
     )
+    product_change_reason: str | None = None
+    if payload.sync_product:
+        if not has_permission(user, "products.edit"):
+            _require_product_drawing_edit(user)
+        if payload.product_expected_version is None:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须提供 product_expected_version",
+            )
+        product_change_reason = (payload.product_change_reason or "").strip()
+        if not product_change_reason:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须填写 product_change_reason",
+            )
+    production_changes = _production_meaning_changes(
+        item,
+        payload,
+        db.get(Product, item.product_id),
+    )
+    if production_changes and has_production_completion_facts(
+        db,
+        [item.id],
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "该订单明细已有生产完工或转库存事实，不能修改"
+                + "、".join(production_changes)
+                + "。"
+            ),
+        )
     if item.delivered_quantity > 0:
         raise HTTPException(status_code=409, detail="已发货明细禁止修改")
     if item.material_status == "received":
@@ -3234,10 +3884,16 @@ def update_order_item(
         item.snapshot_flap_mm = payload.snapshot_flap_mm
     if product_to_sync is not None:
         product = product_to_sync
+        product_updates: dict[str, object] = {}
+
+        def add_product_update(field_name: str, value: object) -> None:
+            if getattr(product, field_name) != value:
+                product_updates[field_name] = value
+
         if payload.material_id is not None:
-            product.material_id = selected_material_id
-        product.layer_count = prospective_product_layer
-        product.flute_type = prospective_product_flute
+            add_product_update("material_id", selected_material_id)
+        add_product_update("layer_count", prospective_product_layer)
+        add_product_update("flute_type", prospective_product_flute)
         for field_name in (
             "box_style",
             "length_mm",
@@ -3248,15 +3904,17 @@ def update_order_item(
         ):
             value = getattr(payload, field_name)
             if value is not None:
-                setattr(product, field_name, value)
-        product.splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
-        product.pieces_per_box = (
+                add_product_update(field_name, value)
+        splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
+        add_product_update("splice_mode", splice_mode)
+        pieces_per_box = (
             payload.snapshot_pieces_per_box
             if payload.snapshot_pieces_per_box is not None
-            else (2 if product.splice_mode == "double" else 1)
+            else (2 if splice_mode == "double" else 1)
         )
+        add_product_update("pieces_per_box", pieces_per_box)
         if payload.snapshot_flap_mm is not None:
-            product.flap_mm = payload.snapshot_flap_mm
+            add_product_update("flap_mm", payload.snapshot_flap_mm)
         for snapshot_field, product_field in report_field_mapping.items():
             if snapshot_field not in changed_report_fields:
                 continue
@@ -3264,9 +3922,26 @@ def update_order_item(
                 snapshot_field,
                 getattr(payload, snapshot_field),
             )
-            setattr(product, product_field, value)
+            add_product_update(product_field, value)
         if payload.product_remark is not None:
-            product.remark = payload.product_remark.strip() or None
+            add_product_update("remark", payload.product_remark.strip() or None)
+
+        from app.services.master_data_versioning import apply_versioned_update
+
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=product_updates,
+            expected_version=payload.product_expected_version,
+            user=user,
+            reason=product_change_reason,
+            source="orders.update-item.sync-product",
+            confirmation_token=payload.product_confirmation_token,
+        )
+    db.flush()
+    if refresh_production_task(db, item.id) is not None:
+        refresh_order_production_status(db, item.order_id)
     _refresh_total(db, order)
     db.add(
         OperationLog(
@@ -3330,14 +4005,26 @@ def delete_order_item(
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
-    if item.delivered_quantity > 0 or item.material_status == "received":
-        raise HTTPException(status_code=409, detail="已流转明细禁止删除")
-    if item.requisition_status != "未报料":
-        raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
     order = db.get(Order, item.order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
+    _lock_orders_for_production_transition(db, [order.id])
+    item = db.scalar(
+        select(OrderItem)
+        .where(OrderItem.id == item_id)
+        .execution_options(populate_existing=True)
+    )
+    if item is None:
+        raise HTTPException(status_code=409, detail="订单明细已被删除，请刷新后重试")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
+    _ensure_no_production_completion_facts(db, [item.id])
+    if item.delivered_quantity > 0 or item.material_status == "received":
+        raise HTTPException(status_code=409, detail="已流转明细禁止删除")
+    if item.requisition_status != "未报料":
+        raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
     item_count = db.scalar(
         select(func.count()).select_from(OrderItem).where(
             OrderItem.order_id == order.id

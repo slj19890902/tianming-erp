@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import beijing_today
 from app.models.material_price_history import MaterialPriceAdjustmentBatch
 from app.models.supplier_material_rule import (
     SupplierMaterialBasePrice,
@@ -159,7 +159,7 @@ def estimate_material_price(
         usage_base_price
         * (Decimal("1") + adjustment["percent"] / Decimal("100"))
     )
-    source_date = base.effective_date if base else date.today()
+    source_date = base.effective_date if base else beijing_today()
     return {
         "calculable": True,
         "material_code": code,

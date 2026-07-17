@@ -15,7 +15,10 @@ from app.models.access_control import (  # noqa: E402,F401
 from app.models.audit import OperationLog  # noqa: E402,F401
 from app.models.customer import Customer  # noqa: E402,F401
 from app.models.material import Material  # noqa: E402,F401
-from app.models.mold_tool import MoldTool  # noqa: E402,F401
+from app.models.master_data_object_version import (  # noqa: E402,F401
+    MasterDataObjectVersion,
+)
+from app.models.mold_tool import MoldLocationMovement, MoldTool  # noqa: E402,F401
 from app.models.product import Product  # noqa: E402,F401
 from app.models.product_drawing import ProductDrawing  # noqa: E402,F401
 from app.models.historical_requisition import (  # noqa: E402,F401
@@ -83,6 +86,12 @@ from app.models.quotation import (  # noqa: E402,F401
     QuotationDailySequence,
     QuotationItem,
     QuotationOrder,
+)
+from app.models.production import (  # noqa: E402,F401
+    ProductionCompletion,
+    ProductionCompletionBatch,
+    ProductionStockTransfer,
+    ProductionTask,
 )
 from app.models.warehouse_inventory import (  # noqa: E402,F401
     DeliveryInventoryAllocation,

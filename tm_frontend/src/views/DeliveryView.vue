@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { masterDataApi, type DeliveryNote, type DeliveryPendingItem, type ReturnReceipt } from '../api/masterData'
+import { beijingToday } from '../utils/time'
 
 const activeTab = ref('pending')
 const loading = ref(false)
@@ -14,7 +15,7 @@ const receiptDialog = ref(false)
 const activeDelivery = ref<DeliveryNote | null>(null)
 const receiptRows = ref<Array<{ delivery_item_id: number; product_name: string; delivery_qty: number; actual_signed_qty: number; difference_reason: string }>>([])
 
-const today = new Date().toISOString().slice(0, 10)
+const today = beijingToday()
 const deliveryForm = ref({
   delivery_date: today,
   vehicle_number: '苏E12345',

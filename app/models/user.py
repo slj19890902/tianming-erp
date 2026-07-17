@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
 
 
 USER_ROLES = ("admin", "boss", "finance", "sales", "workshop", "delivery_picker")
+
+
+def _default_ui_mode(context) -> str:
+    return "large" if context.get_current_parameters().get("role") == "boss" else "standard"
 
 
 class User(Base):
@@ -22,6 +26,10 @@ class User(Base):
             "customer_access_mode IN ('all', 'selected')",
             name="ck_users_customer_access_mode_valid",
         ),
+        CheckConstraint(
+            "ui_mode IN ('standard', 'large')",
+            name="ck_users_ui_mode_valid",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -31,6 +39,15 @@ class User(Base):
     real_name: Mapped[str] = mapped_column(String(100))
     display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Bump this value whenever a security-relevant account property changes.
+    # Session JWTs carry the value they were issued with, so one bump revokes
+    # every existing browser session for this user.
+    auth_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     must_change_password: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -40,6 +57,12 @@ class User(Base):
         String(20),
         default="all",
         server_default="all",
+        nullable=False,
+    )
+    ui_mode: Mapped[str] = mapped_column(
+        String(20),
+        default=_default_ui_mode,
+        server_default="standard",
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import beijing_now_naive
 from app.models.historical_requisition import HistoricalRequisitionMap
 from app.models.migration import MigrationEntityMap
 from app.models.order import OrderItem
@@ -42,7 +41,7 @@ def has_historical_references(db: Session, product_id: int) -> bool:
 
 def move_to_trash(product: Product, user: User) -> None:
     product.is_active = False
-    product.deleted_at = datetime.now()
+    product.deleted_at = beijing_now_naive()
     product.deleted_by = user.id
     product.purged_at = None
 
@@ -57,4 +56,4 @@ def restore_from_trash(product: Product) -> None:
 def archive_purged_product(product: Product, user: User) -> None:
     product.is_active = False
     product.deleted_by = user.id
-    product.purged_at = datetime.now()
+    product.purged_at = beijing_now_naive()

@@ -10,10 +10,68 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+    from app.models.user import User
+
+
+def _confirmation_token(
+    tokens: Mapping[str, str] | None,
+    object_type: str,
+    entity_id: int,
+) -> str | None:
+    if tokens is None:
+        return None
+    return tokens.get(f"{object_type}:{entity_id}")
+
+
+def _version_actor(user: "User | None") -> Any:
+    """Return the authenticated user or an explicit offline system actor."""
+
+    return user or SimpleNamespace(id=None, username="system", role="admin")
+
+
+def _apply_batch_versioned_update(
+    db: "Session",
+    *,
+    confirmation_token: str | None,
+    preview_confirmed: bool,
+    **kwargs: Any,
+) -> Any:
+    """Apply through the version service after an explicit batch preview gate."""
+
+    from fastapi import HTTPException
+    from app.services.master_data_versioning import apply_versioned_update
+
+    try:
+        return apply_versioned_update(
+            db,
+            confirmation_token=confirmation_token,
+            **kwargs,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else None
+        returned_token = (
+            detail.get("confirmation_token") if detail is not None else None
+        )
+        if (
+            not preview_confirmed
+            or exc.status_code != 409
+            or detail is None
+            or detail.get("code") != "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+            or not isinstance(returned_token, str)
+            or not returned_token
+        ):
+            raise
+        return apply_versioned_update(
+            db,
+            confirmation_token=returned_token,
+            **kwargs,
+        )
 
 
 # ──────────────────────────────────────────────
@@ -271,6 +329,7 @@ class CustomerCodePreview:
     skipped: int = 0
     samples_update: list[dict] = field(default_factory=list)
     samples_skip: list[dict] = field(default_factory=list)
+    changes: list[dict] = field(default_factory=list)
     write_field: str = "customer_material_code"
     legacy_field: str = "legacy_customer_material_code"
 
@@ -335,6 +394,19 @@ def preview_customer_code_updates(db: "Session") -> CustomerCodePreview:
             continue
 
         preview.will_update += 1
+        updates = {"customer_material_code": candidate}
+        if not p.legacy_customer_material_code:
+            updates["legacy_customer_material_code"] = current_cmc
+        preview.changes.append({
+            "key": f"product:{p.id}",
+            "object_type": "product",
+            "object_id": p.id,
+            "expected_version": int(p.version),
+            "updates": updates,
+            "old": current_cmc,
+            "new": candidate,
+            "rule": rule,
+        })
         if len(preview.samples_update) < 50:
             preview.samples_update.append({
                 "id": p.id,
@@ -358,57 +430,54 @@ class CustomerCodeWriteResult:
     changes: list[dict] = field(default_factory=list)
 
 
-def apply_customer_code_updates(db: "Session") -> CustomerCodeWriteResult:
-    """在事务中批量更新 customer_material_code，写旧值到 legacy_customer_material_code。"""
+def apply_customer_code_updates(
+    db: "Session",
+    *,
+    user: "User | None" = None,
+    confirmation_tokens: Mapping[str, str] | None = None,
+    preview_confirmed: bool = False,
+) -> CustomerCodeWriteResult:
+    """在事务中按版本服务批量更新 customer_material_code。"""
     from app.models.product import Product
     from sqlalchemy import select
 
+    user = _version_actor(user)
     result = CustomerCodeWriteResult()
-    products = db.scalars(
-        select(Product).where(Product.deleted_at.is_(None))
-    ).all()
+    preview = preview_customer_code_updates(db)
+    result.skipped = preview.skipped
+    product_ids = [item["object_id"] for item in preview.changes]
+    products = {
+        product.id: product
+        for product in db.scalars(
+            select(Product).where(Product.id.in_(product_ids))
+        ).all()
+    } if product_ids else {}
 
-    from collections import defaultdict
-    cmc_by_customer: dict[int, set[str]] = defaultdict(set)
-    for p in products:
-        cmc_by_customer[p.customer_id].add(p.customer_material_code or "")
-
-    for p in products:
-        extraction = extract_customer_code(p.product_name or "")
-        if extraction is None:
-            result.skipped += 1
-            continue
-
-        candidate, rule = extraction
-        current_cmc = p.customer_material_code or ""
-
-        if candidate == current_cmc:
-            result.skipped += 1
-            continue
-
-        others_cmc = cmc_by_customer[p.customer_id] - {current_cmc}
-        if candidate in others_cmc:
-            result.skipped += 1
-            continue
-
-        # 写入旧值到 legacy 字段（若 legacy 已有值则不覆盖）
-        if p.legacy_customer_material_code is None:
-            p.legacy_customer_material_code = current_cmc
-
-        # 更新 customer_material_code
-        old_val = p.customer_material_code
-        p.customer_material_code = candidate
-
-        # 更新本地唯一性集合
-        cmc_by_customer[p.customer_id].discard(current_cmc)
-        cmc_by_customer[p.customer_id].add(candidate)
-
+    for item in preview.changes:
+        p = products[item["object_id"]]
+        _apply_batch_versioned_update(
+            db,
+            object_type="product",
+            entity=p,
+            updates=item["updates"],
+            expected_version=item["expected_version"],
+            user=user,
+            reason="系统批量规范客户料号",
+            source="system.material-mapping.apply-customer-codes",
+            action="update",
+            confirmation_token=_confirmation_token(
+                confirmation_tokens,
+                "product",
+                p.id,
+            ),
+            preview_confirmed=preview_confirmed,
+        )
         result.updated += 1
         result.changes.append({
             "id": p.id,
-            "old": old_val,
-            "new": candidate,
-            "rule": rule,
+            "old": item["old"],
+            "new": item["new"],
+            "rule": item["rule"],
         })
 
     db.flush()
@@ -471,9 +540,153 @@ def _validated_material_code_and_layer(
     return code, layer_count
 
 
+@dataclass
+class MaterialMappingPreview:
+    products_updated: int = 0
+    materials_created: int = 0
+    materials_reused: int = 0
+    skipped_no_match: int = 0
+    skipped_already_set: int = 0
+    changes: list[dict] = field(default_factory=list)
+
+
+def preview_high_confidence_material_mapping(
+    db: "Session",
+    csv_path: Path,
+) -> MaterialMappingPreview:
+    """Build the exact semantic plan that must be confirmed before apply."""
+
+    from collections import defaultdict
+    from app.models.material import Material
+    from app.models.material_mapping import MaterialCodeMappingCandidate
+    from app.models.product import Product
+    from sqlalchemy import select
+
+    del csv_path  # Candidates are persisted; the path remains API-compatible.
+    preview = MaterialMappingPreview()
+    candidates = db.scalars(
+        select(MaterialCodeMappingCandidate).where(
+            MaterialCodeMappingCandidate.confidence_level == "高可信",
+            MaterialCodeMappingCandidate.new_code.isnot(None),
+        )
+    ).all()
+    code_to_candidates: dict[str, list[MaterialCodeMappingCandidate]] = defaultdict(list)
+    for candidate in candidates:
+        code_to_candidates[candidate.old_code].append(candidate)
+
+    unique_mapping: dict[
+        str, tuple[MaterialCodeMappingCandidate, str, int]
+    ] = {}
+    for old_code, grouped in code_to_candidates.items():
+        valid_candidates = [
+            (candidate, validated)
+            for candidate in grouped
+            if (
+                validated := _validated_material_code_and_layer(
+                    candidate.new_code,
+                    candidate.layer_count,
+                )
+            )
+            is not None
+        ]
+        targets = {validated for _, validated in valid_candidates}
+        if len(targets) == 1:
+            candidate, (new_code, layer_count) = valid_candidates[0]
+            unique_mapping[old_code] = (candidate, new_code, layer_count)
+
+    existing_materials = {
+        material.code.strip().upper(): material
+        for material in db.scalars(select(Material)).all()
+    }
+    available_codes = set(existing_materials)
+    planned_keys: set[str] = set()
+    products = db.scalars(
+        select(Product).where(
+            Product.deleted_at.is_(None),
+            Product.material_id.is_(None),
+            Product.legacy_material_text.isnot(None),
+        )
+    ).all()
+
+    for product in products:
+        matched = next(
+            (
+                unique_mapping[code]
+                for code in _clean_legacy_to_code(product.legacy_material_text or "")
+                if code in unique_mapping
+            ),
+            None,
+        )
+        if matched is None:
+            preview.skipped_no_match += 1
+            continue
+        candidate, new_code, layer_count = matched
+        material = existing_materials.get(new_code)
+        if material is not None and material.layer_count not in (None, layer_count):
+            preview.skipped_no_match += 1
+            continue
+
+        if new_code not in available_codes:
+            create_key = f"material-create:{new_code}"
+            preview.changes.append({
+                "key": create_key,
+                "object_type": "material",
+                "object_id": None,
+                "create": {
+                    "code": new_code,
+                    "layer_count": layer_count,
+                    "supplier_name": "嘉林亿",
+                    "basis_weight_description": candidate.weight_structure,
+                    "quote_price": candidate.new_price,
+                },
+            })
+            planned_keys.add(create_key)
+            available_codes.add(new_code)
+            preview.materials_created += 1
+        else:
+            preview.materials_reused += 1
+
+        if material is not None:
+            updates = {
+                field_name: value
+                for field_name, value in {
+                    "layer_count": layer_count,
+                    "flute_type": None,
+                }.items()
+                if getattr(material, field_name) != value
+            }
+            material_key = f"material:{material.id}"
+            if updates and material_key not in planned_keys:
+                preview.changes.append({
+                    "key": material_key,
+                    "object_type": "material",
+                    "object_id": material.id,
+                    "expected_version": int(material.version),
+                    "updates": updates,
+                })
+                planned_keys.add(material_key)
+
+        preview.changes.append({
+            "key": f"product:{product.id}",
+            "object_type": "product",
+            "object_id": product.id,
+            "expected_version": int(product.version),
+            "updates": {"material_code": new_code},
+            "candidate_id": candidate.id,
+            "matched_old_code": candidate.old_code,
+        })
+        preview.products_updated += 1
+
+    return preview
+
+
 def apply_high_confidence_material_mapping(
     db: "Session",
     csv_path: Path,
+    *,
+    user: "User | None" = None,
+    confirmation_tokens: Mapping[str, str] | None = None,
+    preview_confirmed: bool = False,
 ) -> MaterialMappingResult:
     """
     高可信材质映射直接写入 products.material_id。
@@ -488,8 +701,10 @@ def apply_high_confidence_material_mapping(
     from app.models.material_mapping import MaterialCodeMappingCandidate
     from app.models.material import Material
     from app.models.product import Product
+    from app.services.master_data_versioning import record_versioned_create
     from sqlalchemy import select
 
+    user = _version_actor(user)
     result = MaterialMappingResult()
 
     # 从候选表中取高可信唯一映射
@@ -583,17 +798,65 @@ def apply_high_confidence_material_mapping(
             )
             db.add(mat)
             db.flush()  # 获取 mat.id
+            record_versioned_create(
+                db,
+                object_type="material",
+                entity=mat,
+                user=user,
+                reason="系统高可信材质映射批次创建材质",
+                source="system.material-mapping.apply-high-confidence",
+            )
             existing_materials[new_code] = mat
             result.materials_created += 1
         else:
             if mat.layer_count not in (None, layer_count_int):
                 result.skipped_no_match += 1
                 continue
-            mat.layer_count = layer_count_int
-            mat.flute_type = None
+            material_updates = {
+                field_name: value
+                for field_name, value in {
+                    "layer_count": layer_count_int,
+                    "flute_type": None,
+                }.items()
+                if getattr(mat, field_name) != value
+            }
+            if material_updates:
+                _apply_batch_versioned_update(
+                    db,
+                    object_type="material",
+                    entity=mat,
+                    updates=material_updates,
+                    expected_version=int(mat.version),
+                    user=user,
+                    reason="系统高可信材质映射批次更新材质",
+                    source="system.material-mapping.apply-high-confidence",
+                    action="update",
+                    confirmation_token=_confirmation_token(
+                        confirmation_tokens,
+                        "material",
+                        mat.id,
+                    ),
+                    preview_confirmed=preview_confirmed,
+                )
             result.materials_reused += 1
 
-        p.material_id = mat.id
+        _apply_batch_versioned_update(
+            db,
+            object_type="product",
+            entity=p,
+            updates={"material_id": mat.id},
+            expected_version=int(p.version),
+            user=user,
+            reason="系统高可信材质映射批次更新常用箱",
+            source="system.material-mapping.apply-high-confidence",
+            action="update",
+            confirmation_token=_confirmation_token(
+                confirmation_tokens,
+                "product",
+                p.id,
+            ),
+            preview_confirmed=preview_confirmed,
+        )
         result.products_updated += 1
         result.changes.append({
             "product_id": p.id,

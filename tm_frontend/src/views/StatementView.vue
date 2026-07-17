@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { masterDataApi, type Customer, type Statement } from '../api/masterData'
+import { beijingToday, formatBusinessDate } from '../utils/time'
 
 const loading = ref(false)
 const customers = ref<Customer[]>([])
@@ -9,22 +10,11 @@ const selectedCustomerId = ref<number>()
 const currentStatement = ref<Statement | null>(null)
 
 function defaultPeriod() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = now.getMonth()
-  const start = new Date(year, month, 1)
-  const end = new Date(year, month, 20)
+  const month = beijingToday().slice(0, 7)
   return {
-    start_date: formatLocalDate(start),
-    end_date: formatLocalDate(end),
+    start_date: formatBusinessDate(month + '-01'),
+    end_date: formatBusinessDate(month + '-20'),
   }
-}
-
-function formatLocalDate(value: Date) {
-  const y = value.getFullYear()
-  const m = String(value.getMonth() + 1).padStart(2, '0')
-  const d = String(value.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
 }
 
 const period = ref(defaultPeriod())

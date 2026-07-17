@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.models.customer import Customer
 from app.models.material import Material
 from app.models.product import Product
+from app.models.user import User
+from app.services.flute_mapping import normalize_flute_type
 
 AUTO_CREATE_REMARK = "PDF导入自动创建（待补全报料信息）"
 
@@ -52,6 +54,8 @@ class NewProductInput:
     width_mm: Decimal | None = None
     height_mm: Decimal | None = None
     sale_unit_price: Decimal | None = None
+    layer_count: int | None = None
+    flute_type: str | None = None
 
 
 def _dedup_key(customer_id: int, data: NewProductInput) -> str:
@@ -137,6 +141,9 @@ def resolve_or_create_product(
     customer: Customer,
     data: NewProductInput,
     cache: dict[str, Product],
+    user: User,
+    reason: str,
+    source: str,
 ) -> Product:
     code = _clean(data.inventory_code)
     name = (data.product_name or "").strip()
@@ -154,9 +161,9 @@ def resolve_or_create_product(
         cache[key] = existing
         return existing
 
-    material_id = data.material_id
-    if material_id is not None and db.get(Material, material_id) is None:
-        material_id = None
+    material = db.get(Material, data.material_id) if data.material_id is not None else None
+    material_id = material.id if material is not None else None
+    layer_count = material.layer_count if material is not None else data.layer_count
 
     product = Product(
         customer_id=customer.id,
@@ -167,6 +174,8 @@ def resolve_or_create_product(
         length_mm=data.length_mm,
         width_mm=data.width_mm,
         height_mm=data.height_mm,
+        layer_count=layer_count,
+        flute_type=normalize_flute_type(data.flute_type),
         box_category="normal",
         sale_unit_price=data.sale_unit_price,
         remark=AUTO_CREATE_REMARK,
@@ -174,5 +183,15 @@ def resolve_or_create_product(
     )
     db.add(product)
     db.flush()
+    from app.services.master_data_versioning import record_versioned_create
+
+    record_versioned_create(
+        db,
+        object_type="product",
+        entity=product,
+        user=user,
+        reason=reason,
+        source=source,
+    )
     cache[key] = product
     return product

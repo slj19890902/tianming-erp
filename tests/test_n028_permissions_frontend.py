@@ -69,32 +69,20 @@ def test_n028_sales_default_menu_and_permissions_are_business_limited() -> None:
         assert forbidden not in expected
 
 
-def test_n028_boss_responsive_breakpoints_are_scoped_from_regular_roles() -> None:
-    assert ".role-boss .btn { min-height: 44px;" in INDEX
-    assert ".role-boss .input, .role-boss .select, .role-boss .textarea { min-height: 46px;" in INDEX
-    assert "@media (max-width: 1280px)" in INDEX
-    assert "@media (max-width: 900px)" in INDEX
-    assert "body:has(.role-boss) { min-width: 0; }" in INDEX
-    assert ".role-boss .layout { grid-template-columns: 220px minmax(0, 1fr); }" in INDEX
-    assert ".role-boss .layout { display: flex; flex-direction: column; }" in INDEX
-    assert ".role-boss .top-actions { flex: 1 1 100%;" in INDEX
-    assert ".role-boss .page-head { align-items: flex-start; flex-wrap: wrap;" in INDEX
-    mobile_match = re.search(r"@media \(max-width: 900px\) \{(.*?)\n      \}", INDEX, re.DOTALL)
-    assert mobile_match is not None
-    mobile_css = mobile_match.group(1)
-    shell_match = re.search(
-        r"\.role-boss,\s*\.role-boss \.layout,\s*\.role-boss \.topbar,\s*"
-        r"\.role-boss \.sidebar,\s*\.role-boss \.main \{(.*?)\}",
-        mobile_css,
-        re.DOTALL,
-    )
-    assert shell_match is not None
-    shell_css = shell_match.group(1)
-    for declaration in ("width: 100%;", "max-width: 100vw;", "min-width: 0;", "box-sizing: border-box;"):
-        assert declaration in shell_css
-    assert "body:has(.role-boss) { width: 100%; max-width: 100vw; min-width: 0; }" in mobile_css
-    assert ".role-boss .main { padding: 20px 16px 32px; overflow-x: hidden; }" in mobile_css
-    assert ".role-boss .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }" in mobile_css
+def test_n028_large_ui_responsive_breakpoints_are_scoped_from_regular_roles() -> None:
+    assert ".ui-large .btn { min-height: 48px;" in INDEX
+    assert ".ui-large .input, .ui-large .select, .ui-large .textarea {" in INDEX
+    assert "min-height: 48px; padding: 10px 14px; font-size: 17px;" in INDEX
+    assert "@media (max-width: 1400px)" in INDEX
+    assert "@media (max-width: 1180px)" in INDEX
+    assert "body:has(.ui-large) { min-width: 0; }" in INDEX
+    assert ".ui-large .layout { grid-template-columns: 220px minmax(0, 1fr); }" in INDEX
+    assert ".ui-large .layout { display: flex; flex-direction: column; }" in INDEX
+    assert ".ui-large .top-actions { flex: 1 1 100%; width: 100%; justify-content: flex-start; }" in INDEX
+    assert ".ui-large .page-head { align-items: flex-start; flex-wrap: wrap;" in INDEX
+    assert "body:has(.ui-large) { width: 100%; max-width: 100vw; min-width: 0; }" in INDEX
+    assert ".ui-large .main { padding: 20px 18px 32px; }" in INDEX
+    assert ".ui-large .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }" in INDEX
     assert ".role-admin .layout" not in INDEX
     assert ".role-sales .layout" not in INDEX
 

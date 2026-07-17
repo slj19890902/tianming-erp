@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.time_contract import (
+    beijing_now_naive,
+    utc_naive_to_api,
+    utc_naive_to_beijing_date,
+    utc_now_naive,
+)
 from app.models.audit import OperationLog
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
@@ -18,6 +24,13 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+from app.services.production_workflow import (
+    ProductionWorkflowError,
+    has_production_completion_facts,
+    lock_order_rows_for_production_transition,
+    refresh_order_production_status,
+    refresh_production_task,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     manual_semi_finished_in,
@@ -41,12 +54,8 @@ class IncomingTarget:
     component_type: str
 
 
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 def _number(prefix: str) -> str:
-    return f"{prefix}-{datetime.now():%Y%m%d}-{uuid4().hex[:10].upper()}"
+    return f"{prefix}-{beijing_now_naive():%Y%m%d}-{uuid4().hex[:10].upper()}"
 
 
 def _component_kind(name: str | None) -> str:
@@ -334,7 +343,7 @@ def _supplier_link(
 
 def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, user_id: int) -> None:
     item = target.order_item
-    now = utc_now()
+    now = utc_now_naive()
     if target.requisition_item is not None:
         target.requisition_item.status = (
             "已入库"
@@ -363,6 +372,13 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
         item.material_received_at = None
         item.material_received_by = None
     db.flush()
+    try:
+        production_task = refresh_production_task(db, item.id)
+    except ProductionWorkflowError as error:
+        raise IncomingReceiptError(str(error), error.status_code) from error
+    if production_task is not None:
+        refresh_order_production_status(db, item.order_id)
+        return
     remaining_items = int(
         db.scalar(
             select(func.count(OrderItem.id)).where(
@@ -430,7 +446,7 @@ def _create_surplus_lot(
             db,
             location_id=location_id,
             quantity=surplus,
-            stock_date=receipt_item.receipt.received_at.date(),
+            stock_date=utc_naive_to_beijing_date(receipt_item.receipt.received_at),
             source_type="purchase_surplus",
             material_code=material_code,
             layer_count=int(item.layer_count),
@@ -586,7 +602,7 @@ def receive_one(
     )
     variance = cumulative - target.planned_quantity
     variance_type = "matched" if variance == 0 else "short" if variance < 0 else "over"
-    now = utc_now()
+    now = utc_now_naive()
     receipt = IncomingReceipt(
         receipt_number=_number("IR"),
         status="posted",
@@ -693,7 +709,7 @@ def accept_short(
     cumulative = cumulative_received(db, target)
     if cumulative <= 0 or cumulative >= target.planned_quantity:
         raise IncomingReceiptError("当前记录不是可结单的短收状态", 409)
-    now = utc_now()
+    now = utc_now_naive()
     pending_items = db.scalars(
         select(IncomingReceiptItem).where(
             _source_filter(target),
@@ -781,9 +797,19 @@ def revert_receipt_item(
     receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
     if receipt_item is None:
         raise IncomingReceiptError("来料实收记录不存在", 404)
+    try:
+        locked_orders = lock_order_rows_for_production_transition(
+            db, [receipt_item.order_id]
+        )
+    except ProductionWorkflowError as error:
+        raise IncomingReceiptError(str(error), error.status_code) from error
+    db.expire(receipt_item)
+    receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
+    if receipt_item is None:
+        raise IncomingReceiptError("来料实收记录不存在", 409)
     if receipt_item.status != "posted":
         raise IncomingReceiptError("该来料实收记录已经撤销", 409)
-    order = db.get(Order, receipt_item.order_id)
+    order = locked_orders.get(receipt_item.order_id)
     if order is None:
         raise IncomingReceiptError("关联订单不存在", 409)
     if order.status in {"partially_delivered", "delivered"}:
@@ -795,6 +821,8 @@ def revert_receipt_item(
         else receipt_item.order_item_id,
         allow_closed=True,
     )
+    if has_production_completion_facts(db, [target.order_item.id]):
+        raise IncomingReceiptError("订单明细已有生产完工事实，不能撤销来料实收", 409)
     latest = db.scalar(
         select(IncomingReceiptItem)
         .where(_source_filter(target), IncomingReceiptItem.status == "posted")
@@ -808,7 +836,7 @@ def revert_receipt_item(
     _reverse_surplus_lot(
         db, receipt_item=receipt_item, user=user, reason=clean_reason
     )
-    now = utc_now()
+    now = utc_now_naive()
     receipt_item.status = "reversed"
     receipt_item.reversal_reason = clean_reason
     receipt_item.reversed_by = user.id
@@ -866,7 +894,11 @@ def receipt_item_dict(row: IncomingReceiptItem) -> dict:
         "receipt_item_id": row.id,
         "receipt_number": row.receipt.receipt_number,
         "receipt_status": row.receipt.status,
-        "received_at": row.receipt.received_at,
+        "received_at": (
+            utc_naive_to_api(row.receipt.received_at)
+            if row.receipt.received_at
+            else None
+        ),
         "received_by": row.receipt.received_by,
         "order_id": row.order_id,
         "order_item_id": row.order_item_id,

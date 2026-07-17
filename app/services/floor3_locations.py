@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
+from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
 from app.models.customer import Customer
 from app.models.product import Product
 from app.models.warehouse_inventory import (
@@ -43,9 +44,6 @@ class Floor3MoveResult:
     movement: InventoryLocationMovement
     replayed: bool
 
-
-def _now() -> datetime:
-    return datetime.now()
 
 
 def _trim(value: str | None) -> str | None:
@@ -325,7 +323,7 @@ def update_layout_area(
                 z_index=slot["z_index"],
                 version=slot["expected_version"] + 1,
                 updated_by=operator_id,
-                updated_at=_now(),
+                updated_at=beijing_now_naive(),
             )
             .execution_options(synchronize_session=False)
         )
@@ -369,7 +367,7 @@ def set_layout_slot_active(
         .values(
             version=expected_version + 1,
             updated_by=operator_id,
-            updated_at=_now(),
+            updated_at=beijing_now_naive(),
         )
         .execution_options(synchronize_session=False)
     )
@@ -404,7 +402,7 @@ def set_layout_slot_active(
     location_result = db.execute(
         update(WarehouseLocation)
         .where(*location_conditions)
-        .values(is_active=is_active, updated_at=_now())
+        .values(is_active=is_active, updated_at=beijing_now_naive())
         .execution_options(synchronize_session=False)
     )
     if location_result.rowcount != 1:
@@ -421,7 +419,7 @@ def set_layout_slot_active(
 
 
 def _generated_pallet_code() -> str:
-    return f"PLT-3F-{_now():%Y%m%d}-{uuid4().hex[:8].upper()}"
+    return f"PLT-3F-{beijing_now_naive():%Y%m%d}-{uuid4().hex[:8].upper()}"
 
 
 def _product_snapshot(
@@ -702,7 +700,7 @@ def create_pallet(
             to_location_id=location.id,
             movement_type="create",
             operator_id=operator_id,
-            moved_at=_now(),
+            moved_at=beijing_now_naive(),
             remarks=_trim(remarks),
         )
     )
@@ -765,7 +763,7 @@ def _create_pallet_with_official_items(
             product_id=int(item["product_id"]),
             location_id=location_id,
             quantity=int(quantity),
-            stock_date=item.get("stock_date") or date.today(),
+            stock_date=item.get("stock_date") or beijing_today(),
             source_type="manual",
             remarks=item.get("remarks") or remarks,
             operator_id=operator_id,
@@ -822,7 +820,7 @@ def add_pallet_item(
             to_location_id=location.id,
             movement_type="add_item",
             operator_id=operator_id,
-            moved_at=_now(),
+            moved_at=beijing_now_naive(),
             remarks=f"增加同栈板内容：{_trim(item.get('inventory_code')) or _trim(item.get('product_name')) or '待匹配'}",
         )
     )
@@ -1000,16 +998,16 @@ def move_pallet(
             for lot in _linked_inventory_lots(db, row.id):
                 lot.warehouse_location_id = target.id
                 lot.version += 1
-                lot.last_movement_at = _now()
+                lot.last_movement_at = utc_now_naive()
             movement = InventoryLocationMovement(
                 pallet_id=row.id,
                 from_location_id=from_location_id,
                 to_location_id=target.id,
                 movement_type="move",
                 operator_id=operator_id,
-                moved_at=_now(),
+                moved_at=beijing_now_naive(),
                 idempotency_key=idempotency_key,
-                confirmed_at=_now(),
+                confirmed_at=beijing_now_naive(),
                 pallet_version_before=version_before,
                 pallet_version_after=row.version,
                 remarks=_trim(remarks),
@@ -1060,7 +1058,7 @@ def clear_pallet(
     row.status = "closed"
     row.is_current = False
     row.needs_relocation = False
-    row.closed_at = _now()
+    row.closed_at = beijing_now_naive()
     row.updated_by = operator_id
     db.add(
         InventoryLocationMovement(
@@ -1069,7 +1067,7 @@ def clear_pallet(
             to_location_id=None,
             movement_type="clear",
             operator_id=operator_id,
-            moved_at=_now(),
+            moved_at=beijing_now_naive(),
             remarks=_trim(remarks),
         )
     )

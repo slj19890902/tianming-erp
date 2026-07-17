@@ -3,6 +3,7 @@ import { computed, nextTick, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as XLSX from 'xlsx'
 import { masterDataApi, type ProductHistoryMatch } from '../api/masterData'
+import { beijingToday } from '../utils/time'
 
 interface ExcelReqRow {
   id: number
@@ -156,7 +157,7 @@ function exportSupplierSheet() {
   worksheet['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 22 }, { wch: 10 }]
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, worksheet, '供应商报料单')
-  XLSX.writeFile(workbook, `供应商报料单-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  XLSX.writeFile(workbook, '供应商报料单-' + beijingToday() + '.xlsx')
   ElMessage.success(`已导出 ${filledRows.value.length} 行供应商报料单`)
 }
 </script>

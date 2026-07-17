@@ -125,10 +125,10 @@ def test_user_model_accepts_only_blueprint_roles(tmp_path: Path) -> None:
 
         session.add(
             User(
-                username="legacy-boss",
+                username="invalid-role-user",
                 password_hash="hashed",
-                role="boss",
-                real_name="旧角色",
+                role="legacy-owner",
+                real_name="非法角色",
                 must_change_password=True,
             )
         )
@@ -160,6 +160,156 @@ def test_initialize_users_creates_four_accounts_once(tmp_path: Path) -> None:
     }
     assert all(user.must_change_password for user in users)
     assert all(user.password_hash != "ChangeMe123!" for user in users)
+
+
+def test_initialize_users_revokes_sessions_for_auth_sensitive_repairs(tmp_path: Path) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.user import User
+    from init_db import initialize_users
+
+    engine = create_sqlite_engine(tmp_path / "init-repair.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    initialize_users(session_factory, initial_password="StrongInitPass123!")
+    with session_factory() as session:
+        admin = session.query(User).filter_by(username="admin").one()
+        admin.password_hash = "legacy-hash"
+        admin.role = "sales"
+        admin.is_active = False
+        admin.auth_version = 7
+        session.commit()
+
+    assert initialize_users(
+        session_factory,
+        initial_password="StrongInitPass123!",
+    ) == 1
+    with session_factory() as session:
+        admin = session.query(User).filter_by(username="admin").one()
+        assert (admin.role, admin.is_active, admin.auth_version) == ("admin", True, 8)
+
+
+def test_initialize_users_production_rejects_missing_or_public_default_password(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.user import User
+    from init_db import initialize_users
+
+    engine = create_sqlite_engine(tmp_path / "init-production.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    monkeypatch.delenv("ERP_ALLOW_PRODUCTION_USER_BOOTSTRAP", raising=False)
+    with pytest.raises(RuntimeError, match="ERP_ALLOW_PRODUCTION_USER_BOOTSTRAP"):
+        initialize_users(
+            session_factory,
+            initial_password=None,
+            environment="production",
+        )
+    monkeypatch.setenv("ERP_ALLOW_PRODUCTION_USER_BOOTSTRAP", "1")
+    with pytest.raises(RuntimeError, match="ERP_INITIAL_PASSWORD"):
+        initialize_users(
+            session_factory,
+            initial_password=None,
+            environment="production",
+        )
+    with pytest.raises(RuntimeError, match="密码策略"):
+        initialize_users(
+            session_factory,
+            initial_password="ChangeMe123!",
+            environment="production",
+        )
+    with session_factory() as session:
+        assert session.query(User).count() == 0
+    assert initialize_users(
+        session_factory,
+        initial_password="StrongInitPass123!",
+        environment="production",
+    ) == 4
+
+
+def test_initialize_users_production_custom_admin_prevents_default_account_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.user import User
+    from init_db import initialize_users
+
+    engine = create_sqlite_engine(tmp_path / "init-production-custom-admin.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with session_factory() as session:
+        session.add(
+            User(
+                username="custom-admin",
+                password_hash=hash_password("CustomAdminPass123!"),
+                role="admin",
+                real_name="Custom Admin",
+                display_name="Custom Admin",
+                is_active=True,
+                must_change_password=False,
+            )
+        )
+        session.commit()
+
+    monkeypatch.setenv("ERP_ALLOW_PRODUCTION_USER_BOOTSTRAP", "1")
+    with pytest.raises(RuntimeError, match="manage_users.py"):
+        initialize_users(
+            session_factory,
+            initial_password="StrongInitPass123!",
+            environment="production",
+        )
+
+    with session_factory() as session:
+        users = session.query(User).all()
+    assert [user.username for user in users] == ["custom-admin"]
+
+
+def test_initialize_users_production_refuses_existing_account_repairs(
+    tmp_path: Path,
+) -> None:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.user import User
+    from init_db import initialize_users
+
+    engine = create_sqlite_engine(tmp_path / "init-production-existing.sqlite3")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    initialize_users(
+        session_factory,
+        initial_password="StrongInitPass123!",
+        environment="development",
+    )
+    with session_factory() as session:
+        admin = session.query(User).filter_by(username="admin").one()
+        admin.password_hash = "legacy-hash"
+        admin.role = "sales"
+        admin.is_active = False
+        admin.auth_version = 9
+        session.commit()
+
+    with pytest.raises(RuntimeError, match="受控账号维护流程"):
+        initialize_users(
+            session_factory,
+            initial_password="StrongInitPass123!",
+            environment="production",
+        )
+
+    with session_factory() as session:
+        admin = session.query(User).filter_by(username="admin").one()
+        assert (
+            admin.password_hash,
+            admin.role,
+            admin.is_active,
+            admin.auth_version,
+        ) == ("legacy-hash", "sales", False, 9)
 
 
 def test_alembic_baseline_creates_users_without_dropping_existing_tables(

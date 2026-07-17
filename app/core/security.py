@@ -43,9 +43,16 @@ def verify_password(password: str, password_hash: str) -> bool:
 def create_session_token(
     user_id: int,
     *,
+    auth_version: int,
     secret_key: str | None = None,
     expires_minutes: int | None = None,
 ) -> str:
+    if (
+        isinstance(auth_version, bool)
+        or not isinstance(auth_version, int)
+        or auth_version < 1
+    ):
+        raise ValueError("auth_version must be a positive integer")
     current = load_settings()
     now = datetime.now(timezone.utc)
     expires = now + timedelta(
@@ -57,6 +64,7 @@ def create_session_token(
             "iat": now,
             "exp": expires,
             "type": "session",
+            "auth_version": auth_version,
         },
         secret_key or current.secret_key,
         algorithm="HS256",
@@ -67,7 +75,7 @@ def decode_session_token(
     token: str,
     *,
     secret_key: str | None = None,
-) -> int:
+) -> tuple[int, int]:
     current = load_settings()
     try:
         payload = jwt.decode(
@@ -77,7 +85,10 @@ def decode_session_token(
         )
         if payload.get("type") != "session":
             raise ValueError
-        return int(payload["sub"])
+        auth_version = payload["auth_version"]
+        if isinstance(auth_version, bool) or not isinstance(auth_version, int):
+            raise ValueError
+        return int(payload["sub"]), int(auth_version)
     except (jwt.PyJWTError, KeyError, TypeError, ValueError) as error:
         raise ValueError("登录凭证无效或已过期") from error
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from io import BytesIO
 from uuid import uuid4
 
@@ -19,6 +19,11 @@ from app.api.deps import (
     get_db,
     has_unrestricted_customer_access,
     require_customer_access,
+)
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    utc_naive_to_api,
+    utc_now_naive,
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -43,6 +48,13 @@ from app.services.incoming_receipts import (
     revert_receipt_item,
     source_summary_for_item,
 )
+from app.services.production_workflow import (
+    ProductionWorkflowError,
+    has_production_completion_facts,
+    lock_order_rows_for_production_transition,
+    refresh_order_production_status,
+    refresh_production_task,
+)
 
 
 router = APIRouter()
@@ -51,7 +63,29 @@ can_operate = PermissionChecker("incoming.execute")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utc_now_naive()
+
+
+def _refresh_production_after_material_change(
+    db: Session,
+    order_item: OrderItem,
+) -> bool:
+    """Refresh N029 state and report whether this is a production-managed item."""
+    try:
+        task = refresh_production_task(db, order_item.id)
+    except ProductionWorkflowError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    if task is None:
+        return False
+    refresh_order_production_status(db, order_item.order_id)
+    return True
+
+
+def _lock_order_for_material_revert(db: Session, order_id: int) -> Order:
+    try:
+        return lock_order_rows_for_production_transition(db, [order_id])[order_id]
+    except ProductionWorkflowError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
 class RevertRequest(BaseModel):
@@ -688,7 +722,11 @@ def _item_response(db: Session, item_id: int) -> dict:
         "requisition_status": item.requisition_status,
         "requisition_qty": item.requisition_qty,
         "incoming_quantity": item.requisition_qty or item.quantity,
-        "material_received_at": item.material_received_at,
+        "material_received_at": (
+            utc_naive_to_api(item.material_received_at)
+            if item.material_received_at
+            else None
+        ),
         "material_received_by": item.material_received_by,
     }
 
@@ -710,7 +748,11 @@ def _component_response(db: Session, requisition_item_id: int) -> dict:
         "requisition_status": order_item.requisition_status,
         "requisition_qty": requisition_item.requisition_qty,
         "incoming_quantity": requisition_item.requisition_qty,
-        "material_received_at": order_item.material_received_at,
+        "material_received_at": (
+            utc_naive_to_api(order_item.material_received_at)
+            if order_item.material_received_at
+            else None
+        ),
         "material_received_by": order_item.material_received_by,
         "component_status": requisition_item.status,
     }
@@ -785,21 +827,23 @@ def _receive_requisition_component(
         order_item.material_received_at = received_at
         order_item.material_received_by = user.id
         order_item.requisition_qty = int(total_received)
-        remaining_pending = db.scalar(
-            select(func.count(OrderItem.id)).where(
-                OrderItem.order_id == order_item.order_id,
-                OrderItem.material_status != "received",
-            )
-        ) or 0
-        if remaining_pending == 0:
-            db.execute(
-                update(Order)
-                .where(
-                    Order.id == order_item.order_id,
-                    Order.status.in_(["pending_production", "production"]),
+        db.flush()
+        if not _refresh_production_after_material_change(db, order_item):
+            remaining_pending = db.scalar(
+                select(func.count(OrderItem.id)).where(
+                    OrderItem.order_id == order_item.order_id,
+                    OrderItem.material_status != "received",
                 )
-                .values(status="pending_delivery")
-            )
+            ) or 0
+            if remaining_pending == 0:
+                db.execute(
+                    update(Order)
+                    .where(
+                        Order.id == order_item.order_id,
+                        Order.status.in_(["pending_production", "production"]),
+                    )
+                    .values(status="pending_delivery")
+                )
 
     _audit(
         db,
@@ -877,21 +921,23 @@ def _receive_material(
             status_code=409,
             detail="该明细当前不可入库，可能已入库、已作废或状态已变化",
         )
-    remaining_pending = db.scalar(
-        select(func.count(OrderItem.id)).where(
-            OrderItem.order_id == current.order_id,
-            OrderItem.material_status != "received",
-        )
-    ) or 0
-    if remaining_pending == 0:
-        db.execute(
-            update(Order)
-            .where(
-                Order.id == current.order_id,
-                Order.status.in_(["pending_production", "production"]),
+    db.flush()
+    if not _refresh_production_after_material_change(db, current):
+        remaining_pending = db.scalar(
+            select(func.count(OrderItem.id)).where(
+                OrderItem.order_id == current.order_id,
+                OrderItem.material_status != "received",
             )
-            .values(status="pending_delivery")
-        )
+        ) or 0
+        if remaining_pending == 0:
+            db.execute(
+                update(Order)
+                .where(
+                    Order.id == current.order_id,
+                    Order.status.in_(["pending_production", "production"]),
+                )
+                .values(status="pending_delivery")
+            )
     active_requisition_items = db.scalars(
         select(RequisitionItem)
         .where(
@@ -1099,6 +1145,23 @@ def _received_rows(
 
 
 
+def _incoming_row_response(row: dict) -> dict:
+    """Serialize incoming-list datetime fields using their storage contracts."""
+
+    response = dict(row)
+    if response.get("created_at"):
+        response["created_at"] = utc_naive_to_api(response["created_at"])
+    if response.get("supplier_delivery_time"):
+        response["supplier_delivery_time"] = beijing_naive_to_api(
+            response["supplier_delivery_time"]
+        )
+    if response.get("material_received_at"):
+        response["material_received_at"] = utc_naive_to_api(
+            response["material_received_at"]
+        )
+    return response
+
+
 @router.get("/surplus-locations")
 def surplus_inventory_locations(
     db: Session = Depends(get_db),
@@ -1131,7 +1194,12 @@ def pending_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    return {"items": _rows(db, user=user)}
+    return {
+        "items": [
+            _incoming_row_response(row)
+            for row in _rows(db, user=user)
+        ]
+    }
 
 
 @router.get("/received")
@@ -1140,11 +1208,14 @@ def recently_received_items(
     user: User = Depends(can_read),
 ) -> dict:
     return {
-        "items": _received_rows(
-            db,
-            user=user,
-            received_since=_utc_now() - timedelta(hours=24),
-        )
+        "items": [
+            _incoming_row_response(row)
+            for row in _received_rows(
+                db,
+                user=user,
+                received_since=_utc_now() - timedelta(hours=24),
+            )
+        ]
     }
 
 
@@ -1157,12 +1228,15 @@ def history_received_items(
     # received_since=epoch_start 表示"从最早时间起"即不过滤
     epoch_start = datetime(2000, 1, 1)
     return {
-        "items": _received_rows(
-            db,
-            user=user,
-            received_since=epoch_start,
-            include_reversed=True,
-        )
+        "items": [
+            _incoming_row_response(row)
+            for row in _received_rows(
+                db,
+                user=user,
+                received_since=epoch_start,
+                include_reversed=True,
+            )
+        ]
     }
 
 
@@ -1421,10 +1495,23 @@ def _revert_requisition_component(
         order_item_id=order_item.id,
         user=user,
     )
+    _lock_order_for_material_revert(db, order.id)
+    row = db.execute(
+        select(RequisitionItem, OrderItem, Order)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(RequisitionItem.id == requisition_item_id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=409, detail="报料明细或关联订单已被删除，请刷新后重试")
+    requisition_item, order_item, order = row
     if order.status in {"partially_delivered", "delivered"}:
         raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
     if requisition_item.status != "已入库":
         raise HTTPException(status_code=409, detail="该报料明细当前不是已入库状态")
+    if has_production_completion_facts(db, [order_item.id]):
+        raise HTTPException(status_code=409, detail="订单明细已有生产完工事实，不能撤销来料实收")
 
     active_components = _active_requisition_components(
         db,
@@ -1466,6 +1553,9 @@ def _revert_requisition_component(
                 material_received_by=None,
             )
         )
+        db.flush()
+        db.refresh(order_item)
+        _refresh_production_after_material_change(db, order_item)
         _audit(
             db,
             user=user,
@@ -1522,10 +1612,22 @@ def revert_item(
         order_item_id=item.id,
         user=user,
     )
+    _lock_order_for_material_revert(db, order.id)
+    row = db.execute(
+        select(OrderItem, Order)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.id == item_id_int)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=409, detail="订单明细或关联订单已被删除，请刷新后重试")
+    item, order = row
     if order.status in {"partially_delivered", "delivered"}:
         raise HTTPException(status_code=409, detail="订单已发货，禁止撤回来料")
     if item.material_status != "received":
         raise HTTPException(status_code=409, detail="该明细当前不是已入库状态")
+    if has_production_completion_facts(db, [item.id]):
+        raise HTTPException(status_code=409, detail="订单明细已有生产完工事实，不能撤销来料实收")
 
     previous_received_at = item.material_received_at
     previous_received_by = item.material_received_by
@@ -1545,6 +1647,9 @@ def revert_item(
         )
         if result.rowcount != 1:
             raise HTTPException(status_code=409, detail="状态已变化，请刷新后重试")
+        db.flush()
+        db.refresh(item)
+        _refresh_production_after_material_change(db, item)
         _audit(
             db,
             user=user,

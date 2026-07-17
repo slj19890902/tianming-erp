@@ -156,6 +156,35 @@ def reserve(db: Session, data: dict, lot, quantity: int, key: str):
     )
 
 
+def test_finished_reservation_rejects_order_with_active_semi_reservation(
+    reservation_db,
+) -> None:
+    db, data = reservation_db
+    lot = add_lot(db, data, key="finished-after-semi-lot")
+    db.add(
+        InventoryReservation(
+            reservation_number="RSV-SEMI-BEFORE-FINISHED",
+            inventory_lot_id=lot.id,
+            reservation_type="semi_order",
+            order_id=data["order"].id,
+            order_item_id=data["item"].id,
+            reserved_stock_quantity=10,
+            credited_requirement_quantity=10,
+            status="active",
+            reserved_by=data["admin"].id,
+            reservation_group_key="semi-before-finished",
+            idempotency_key="semi-before-finished",
+        )
+    )
+    db.flush()
+
+    with pytest.raises(WarehouseInventoryError) as exc_info:
+        reserve(db, data, lot, 10, "finished-after-semi-reserve")
+
+    assert exc_info.value.status_code == 409
+    assert "已有半成品库存预占" in str(exc_info.value)
+
+
 def test_candidates_use_exact_product_customer_and_active_available_rules(
     reservation_db,
 ) -> None:

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from phase1_postgres.database import SessionLocal
 from phase1_postgres.models import Customer
+from scripts.master_data_write_guard import reject_legacy_master_data_write_if_versioned
 
 
 LEGACY_SOURCE = "BoxDB20"
@@ -115,6 +116,11 @@ def apply_customer_row(session: Session, row: dict[str, str]) -> str:
 def sync_customers(csv_path: Path, commit: bool) -> dict[str, int]:
     stats = {"source_rows": 0, "created": 0, "updated": 0}
     with SessionLocal() as session:
+        if commit:
+            reject_legacy_master_data_write_if_versioned(
+                session,
+                script_name="scripts/sync_ruida_customers_csv.py",
+            )
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             for row in reader:

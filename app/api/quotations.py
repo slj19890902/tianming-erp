@@ -731,6 +731,16 @@ def convert_to_product(
     )
     db.add(product)
     db.flush()
+    from app.services.master_data_versioning import record_versioned_create
+
+    record_versioned_create(
+        db,
+        object_type="product",
+        entity=product,
+        user=user,
+        reason="报价转常用箱创建主档",
+        source="quotations.convert-to-product",
+    )
     item.converted_product_id = product.id
     if all(row.converted_product_id is not None for row in quotation.items):
         quotation.status = "converted"

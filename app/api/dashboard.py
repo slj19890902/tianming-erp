@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from app.api.deps import (
@@ -15,6 +15,7 @@ from app.api.deps import (
     has_unrestricted_customer_access,
 )
 from app.api.incoming import _rows as incoming_rows
+from app.core.time_contract import beijing_today, utc_naive_to_beijing_date
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.customer import Customer
 from app.models.finance import (
@@ -24,7 +25,11 @@ from app.models.finance import (
     StatementItem,
 )
 from app.models.order import Order, OrderItem
+from app.models.production import ProductionTask
+from app.models.requisition import RequisitionItem
 from app.models.user import User
+from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
+from app.services.inventory_insights import build_inventory_insights
 
 
 router = APIRouter()
@@ -39,8 +44,119 @@ def _safe_int(value) -> int:
     return int(value or 0)
 
 
-def _coalesce_date(value):
-    return value or date.max
+def _business_date_string(value: date | datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return utc_naive_to_beijing_date(value).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _coalesce_date(value: str | None) -> str:
+    return value or date.max.isoformat()
+
+
+def _delivery_ready_filter():
+    task_exists = exists(
+        select(ProductionTask.id).where(
+            ProductionTask.order_item_id == OrderItem.id,
+        )
+    )
+    task_ready = exists(
+        select(ProductionTask.id).where(
+            ProductionTask.order_item_id == OrderItem.id,
+            ProductionTask.status.in_(["completed", "not_required"]),
+        )
+    )
+    active_finished_reserved = (
+        select(
+            func.coalesce(
+                func.sum(
+                    func.coalesce(
+                        InventoryReservation.credited_requirement_quantity,
+                        0,
+                    )
+                    - InventoryReservation.released_requirement_quantity
+                ),
+                0,
+            )
+        )
+        .where(
+            InventoryReservation.order_item_id == OrderItem.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status != "cancelled",
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    active_semi_for_requirement = (
+        select(
+            func.coalesce(
+                func.sum(
+                    func.coalesce(
+                        InventoryReservation.credited_requirement_quantity,
+                        0,
+                    )
+                    - InventoryReservation.released_requirement_quantity
+                ),
+                0,
+            )
+        )
+        .where(
+            InventoryReservation.semi_requirement_id == OrderItemSemiRequirement.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+        )
+        .correlate(OrderItemSemiRequirement)
+        .scalar_subquery()
+    )
+    semi_requirement_count = (
+        select(func.count(OrderItemSemiRequirement.id))
+        .where(OrderItemSemiRequirement.order_item_id == OrderItem.id)
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    uncovered_semi_requirement_count = (
+        select(func.count(OrderItemSemiRequirement.id))
+        .where(
+            OrderItemSemiRequirement.order_item_id == OrderItem.id,
+            active_semi_for_requirement
+            < OrderItemSemiRequirement.required_piece_quantity,
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    semi_fully_covered = and_(
+        semi_requirement_count > 0,
+        uncovered_semi_requirement_count == 0,
+    )
+    received_telescoping_components = (
+        select(func.count(RequisitionItem.id))
+        .where(
+            RequisitionItem.order_item_id == OrderItem.id,
+            RequisitionItem.status == "已入库",
+            or_(
+                RequisitionItem.product_name_snapshot.like("%-盖"),
+                RequisitionItem.product_name_snapshot.like("%-底"),
+            ),
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    return or_(
+        task_ready,
+        and_(
+            ~task_exists,
+            or_(
+                OrderItem.material_status == "received",
+                active_finished_reserved >= OrderItem.quantity,
+                semi_fully_covered,
+                received_telescoping_components > 0,
+            ),
+        ),
+    )
 
 
 def _customer_scope_criteria(customer_id_column, visible_customer_ids: set[int] | None):
@@ -89,6 +205,7 @@ def _todo_sort_key(todo: dict) -> tuple:
         "未结清对账单": 20,
         "待回单": 30,
         "待送货": 40,
+        "待生产": 45,
         "待入库": 50,
         "待报料": 60,
     }
@@ -105,7 +222,7 @@ def dashboard_kpi(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    today = date.today()
+    today = beijing_today()
     month = today.strftime("%Y-%m")
     visible_customer_ids = (
         None
@@ -113,6 +230,7 @@ def dashboard_kpi(
         else customer_scope_ids(user, db)
     )
     can_view_incoming = has_permission(user, "incoming.view")
+    can_view_orders = has_permission(user, "orders.view")
     can_view_deliveries = has_permission(user, "deliveries.view")
     can_view_finance = has_permission(user, "finance.view")
     db = _CustomerScopedSession(db, visible_customer_ids)
@@ -124,13 +242,26 @@ def dashboard_kpi(
             .join(Order, Order.id == OrderItem.order_id)
             .where(
                 Order.delivery_date == today,
-                OrderItem.material_status == "received",
+                _delivery_ready_filter(),
                 OrderItem.delivered_quantity < OrderItem.quantity,
                 OrderItem.is_force_closed.is_(False),
                 *_customer_scope_criteria(Order.customer_id, visible_customer_ids),
             )
         )
         result["today_pending_delivery_tasks"] = int(pending_delivery or 0)
+    if can_view_orders:
+        pending_production = db.scalar(
+            select(func.count(ProductionTask.id))
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(
+                Order.delivery_date == today,
+                ProductionTask.status == "pending",
+                OrderItem.is_force_closed.is_(False),
+                *_customer_scope_criteria(Order.customer_id, visible_customer_ids),
+            )
+        )
+        result["today_pending_production_tasks"] = int(pending_production or 0)
     if can_view_incoming:
         pending_incoming = db.scalar(
             select(func.count(OrderItem.id))
@@ -210,7 +341,7 @@ def dashboard_overview(
     user: User = Depends(can_read),
 ) -> dict:
     raw_db = db
-    today = date.today()
+    today = beijing_today()
     month = today.strftime("%Y-%m")
     visible_customer_ids = (
         None
@@ -239,6 +370,20 @@ def dashboard_overview(
     ) if can_view_requisition else 0
     pending_incoming_rows = incoming_rows(raw_db, user=user) if can_view_incoming else []
     pending_incoming_items = len(pending_incoming_rows)
+    pending_production_items = _safe_int(
+        db.scalar(
+            select(func.count(ProductionTask.id))
+            .select_from(ProductionTask)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(
+                Order.status.notin_(["cancelled", "dead"]),
+                ProductionTask.status == "pending",
+                OrderItem.is_force_closed.is_(False),
+                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
+            )
+        )
+    ) if can_view_orders else 0
     pending_delivery_items = _safe_int(
         db.scalar(
             select(func.count(OrderItem.id))
@@ -246,7 +391,7 @@ def dashboard_overview(
             .join(Order, Order.id == OrderItem.order_id)
             .where(
                 Order.status.notin_(["cancelled", "dead"]),
-                OrderItem.material_status == "received",
+                _delivery_ready_filter(),
                 OrderItem.delivered_quantity < OrderItem.quantity,
                 OrderItem.is_force_closed.is_(False),
                 or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
@@ -327,6 +472,17 @@ def dashboard_overview(
                 "target": "incoming",
             }
         )
+    if can_view_orders and pending_production_items > 0:
+        cards.append(
+            {
+                "key": "pending_production",
+                "title": "待生产明细",
+                "count": pending_production_items,
+                "description": "材料已齐，等待生产完工确认",
+                "button_label": "去生产确认",
+                "target": "production",
+            }
+        )
     if can_view_deliveries:
         cards.extend(
             [
@@ -334,7 +490,7 @@ def dashboard_overview(
                     "key": "pending_delivery",
                     "title": "待送货明细",
                     "count": pending_delivery_items,
-                    "description": "已入库但还没送货",
+                    "description": "生产已完成但还没送货",
                     "button_label": "去送货",
                     "target": "deliveries",
                 },
@@ -370,6 +526,44 @@ def dashboard_overview(
                 },
             ]
         )
+    if user.role == "boss" and has_permission(user, "warehouse.view"):
+        inventory_insights = build_inventory_insights(raw_db)
+        action_items = inventory_insights.get("action_items") or []
+        high_priority_count = sum(
+            1
+            for item in action_items
+            if isinstance(item.get("priority"), (int, float))
+            and item["priority"] <= 1
+        )
+        inventory_risk_count = _safe_int(
+            inventory_insights.get("action_item_count", len(action_items))
+        )
+        high_priority_count = _safe_int(
+            inventory_insights.get(
+                "high_priority_action_item_count",
+                high_priority_count,
+            )
+        )
+        cards.extend(
+            [
+                {
+                    "key": "inventory_risk",
+                    "title": "库存风险",
+                    "count": inventory_risk_count,
+                    "description": "库存洞察待处理项",
+                    "button_label": "查看库存",
+                    "target": "warehouse",
+                },
+                {
+                    "key": "business_anomaly",
+                    "title": "经营异常",
+                    "count": high_priority_count,
+                    "description": "高优先级库存异常",
+                    "button_label": "查看异常",
+                    "target": "warehouse",
+                },
+            ]
+        )
 
     pending_material_rows = (
         db.execute(
@@ -398,6 +592,36 @@ def dashboard_overview(
         if can_view_requisition
         else []
     )
+    pending_production_rows = (
+        db.execute(
+            select(
+                Customer.id.label("customer_id"),
+                Customer.name.label("customer_name"),
+                Order.order_number,
+                Order.delivery_date,
+                Order.created_at,
+                OrderItem.snapshot_product_code,
+            )
+            .select_from(ProductionTask)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .join(Customer, Customer.id == Order.customer_id)
+            .where(
+                Order.status.notin_(["cancelled", "dead"]),
+                ProductionTask.status == "pending",
+                OrderItem.is_force_closed.is_(False),
+                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
+            )
+            .order_by(
+                Order.delivery_date.is_(None),
+                Order.delivery_date,
+                Order.created_at,
+                OrderItem.id,
+            )
+        ).mappings().all()
+        if can_view_orders
+        else []
+    )
     pending_delivery_rows = (
         db.execute(
             select(
@@ -413,7 +637,7 @@ def dashboard_overview(
             .join(Customer, Customer.id == Order.customer_id)
             .where(
                 Order.status.notin_(["cancelled", "dead"]),
-                OrderItem.material_status == "received",
+                _delivery_ready_filter(),
                 OrderItem.delivered_quantity < OrderItem.quantity,
                 OrderItem.is_force_closed.is_(False),
                 or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
@@ -543,7 +767,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": None,
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "requisition",
                 "action_text": "去报料",
@@ -561,10 +787,32 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": row.get("product_code"),
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "incoming",
                 "action_text": "去入库",
+            },
+        )
+        group["count"] += 1
+
+    pending_production_groups: dict[int, dict] = {}
+    for row in pending_production_rows:
+        group = pending_production_groups.setdefault(
+            row["customer_id"],
+            {
+                "type": "待生产",
+                "customer_name": row["customer_name"],
+                "count": 0,
+                "first_order_no": row["order_number"],
+                "first_item_no": row["snapshot_product_code"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
+                "message": "",
+                "target": "production",
+                "action_text": "去生产确认",
             },
         )
         group["count"] += 1
@@ -579,7 +827,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": row["snapshot_product_code"],
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "deliveries",
                 "action_text": "去送货",
@@ -597,7 +847,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["delivery_number"],
                 "first_item_no": None,
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "deliveries",
                 "action_text": "去回单",
@@ -614,6 +866,11 @@ def dashboard_overview(
     for group in pending_incoming_groups.values():
         group["message"] = (
             f"该客户有 {group['count']} 条明细已报料但还没有确认来料入库。"
+        )
+        todos.append(group)
+    for group in pending_production_groups.values():
+        group["message"] = (
+            f"该客户有 {group['count']} 条明细材料已齐，等待生产完工确认。"
         )
         todos.append(group)
     for group in pending_delivery_groups.values():
@@ -641,7 +898,9 @@ def dashboard_overview(
                 "amount": amount,
                 "first_order_no": None,
                 "first_item_no": None,
-                "sort_date": row["first_received_date"] or row["first_created_at"],
+                "sort_date": _business_date_string(
+                    row["first_received_date"] or row["first_created_at"]
+                ),
                 "message": (
                     f"该客户 {month_label} 有 {item_count} 条送货明细待生成月结对账单，"
                     f"合计 {amount} 元。"
@@ -663,7 +922,7 @@ def dashboard_overview(
                 "month": row["statement_month"],
                 "first_order_no": None,
                 "first_item_no": None,
-                "sort_date": row["created_at"],
+                "sort_date": _business_date_string(row["created_at"]),
                 "message": "",
                 "target": "finance",
                 "action_text": "去收款/对账",

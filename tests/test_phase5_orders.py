@@ -525,9 +525,7 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
         _login(client, "sales")
         created = client.post("/api/orders", json=_payload()).json()
         item_id = created["items"][0]["id"]
-        edited = client.put(
-            f"/api/orders/items/{item_id}",
-            json={
+        edit_body = {
                 "quantity": 500,
                 "unit_price": "3.92",
                 "product_code": "SME-001",
@@ -558,7 +556,18 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
                 "print_content": "单色印刷",
                 "product_remark": "订单编辑同步",
                 "sync_product": True,
-            },
+                "product_expected_version": 1,
+                "product_change_reason": "订单编辑同步常用箱",
+            }
+        preview = client.put(
+            f"/api/orders/items/{item_id}",
+            json=edit_body,
+        )
+        assert preview.status_code == 409
+        token = preview.json()["detail"]["confirmation_token"]
+        edited = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**edit_body, "product_confirmation_token": token},
         )
         assert edited.status_code == 200, edited.text
 
@@ -626,20 +635,30 @@ def test_legacy_crease_mismatch_allows_unrelated_edit_without_overwriting_produc
         "snapshot_crease_middle_mm": 150,
         "snapshot_crease_right_mm": 100,
         "sync_product": True,
+        "product_expected_version": 1,
+        "product_change_reason": "订单编辑同步常用箱",
     }
     with TestClient(app) as client:
         _login(client, "sales")
-        unrelated_edit = client.put(
+        unrelated_preview = client.put(
             f"/api/orders/items/{item_id}",
             json=edit_payload,
         )
+        assert unrelated_preview.status_code == 409
+        unrelated_edit = client.put(
+            f"/api/orders/items/{item_id}",
+            json={
+                **edit_payload,
+                "product_confirmation_token": unrelated_preview.json()["detail"]["confirmation_token"],
+            },
+        )
         rejected_mismatch = client.put(
             f"/api/orders/items/{item_id}",
-            json={**edit_payload, "snapshot_report_width_mm": 356},
+            json={**edit_payload, "product_expected_version": 2, "snapshot_report_width_mm": 356},
         )
         corrected = client.put(
             f"/api/orders/items/{item_id}",
-            json={**edit_payload, "snapshot_report_width_mm": 350},
+            json={**edit_payload, "product_expected_version": 2, "snapshot_report_width_mm": 350},
         )
 
     assert unrelated_edit.status_code == 200, unrelated_edit.text
@@ -669,6 +688,8 @@ def test_order_item_sync_rejects_invalid_common_box_flute_without_partial_save(
         "specification": "520×350×300mm",
         "layer_count": 3,
         "sync_product": True,
+        "product_expected_version": 1,
+        "product_change_reason": "订单编辑同步常用箱",
     }
     with TestClient(app) as client:
         _login(client, "sales")

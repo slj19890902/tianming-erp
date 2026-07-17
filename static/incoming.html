@@ -7,6 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <title>车间来料入库</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/static/assets/time-utils.js"></script>
   <style>
     /* v0.23.0 P0-2：Tailwind CDN 在弱网/首次扫码时可能加载较慢，
        这里手写一份最基础的兜底样式，避免出现"只看到裸文字、没有任何 UI"的情况。
@@ -274,7 +275,7 @@
 
     function formatTime(value) {
       if (!value) return "";
-      return new Date(`${value}Z`).toLocaleString("zh-CN", { hour12: false });
+      return TmTime.formatBeijingDateTime(value);
     }
 
     function hasDrawing(item) {

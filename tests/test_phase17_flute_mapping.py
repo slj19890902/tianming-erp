@@ -296,15 +296,22 @@ def _insert_test_products(factory) -> None:
 # 3. 版本 API
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_version_endpoint_no_auth(flute_api):
+def test_version_endpoint_requires_auth(flute_api):
     app, _, _f = flute_api
     with TestClient(app) as client:
-        resp = client.get("/api/system/version")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "version" in data
-        assert isinstance(data["changelog"], list)
-        assert len(data["changelog"]) > 0
+        denied_version = client.get("/api/system/version")
+        denied = client.get("/api/system/version/changelog")
+        _login(client)
+        version = client.get("/api/system/version")
+        changelog = client.get("/api/system/version/changelog")
+
+    assert denied_version.status_code == 401
+    assert denied.status_code == 401
+    assert version.status_code == 200
+    assert set(version.json()) == {"version", "version_name", "build_date"}
+    assert changelog.status_code == 200
+    assert isinstance(changelog.json()["changelog"], list)
+    assert len(changelog.json()["changelog"]) > 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -328,7 +335,19 @@ def test_flute_mapping_apply(flute_api):
     _insert_test_products(factory)
     with TestClient(app) as client:
         _login(client)
-        resp = client.post("/api/system/flute-mapping/apply")
+        preview_resp = client.get("/api/system/flute-mapping/preview")
+        assert preview_resp.status_code == 200
+        preview = preview_resp.json()
+        assert preview["preview_token"]
+        assert preview["confirmation_tokens"]
+
+        resp = client.post(
+            "/api/system/flute-mapping/apply",
+            json={
+                "preview_token": preview["preview_token"],
+                "confirmation_tokens": preview["confirmation_tokens"],
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
@@ -394,7 +413,19 @@ def test_flute_consistency_fix(flute_api):
 
     with TestClient(app) as client:
         _login(client)
-        resp = client.post("/api/system/flute-mapping/fix-consistency")
+        preview_resp = client.get("/api/system/flute-mapping/preview-consistency")
+        assert preview_resp.status_code == 200
+        preview = preview_resp.json()
+        assert preview["preview_token"]
+        assert preview["confirmation_tokens"]
+
+        resp = client.post(
+            "/api/system/flute-mapping/fix-consistency",
+            json={
+                "preview_token": preview["preview_token"],
+                "confirmation_tokens": preview["confirmation_tokens"],
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True

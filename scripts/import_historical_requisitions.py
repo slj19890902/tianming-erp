@@ -24,6 +24,7 @@ from app.core.config import load_settings, normalize_path
 from app.core.database import create_engine_from_settings
 from app.models.historical_requisition import HistoricalRequisitionMap
 from app.models.product import Product
+from scripts.master_data_write_guard import reject_legacy_master_data_write_if_versioned
 
 
 NUMBER = r"\d+(?:\.\d+)?"
@@ -386,45 +387,52 @@ def commit_matches(
     engine = create_engine_from_settings(settings)
     updated = 0
     fallback = 0
-    with Session(engine) as session, session.begin():
-        for record, product_id in matches:
-            if product_id is not None:
-                product = session.get(Product, product_id)
-                if product is None:
-                    raise RuntimeError(f"产品不存在: {product_id}")
-                product.default_cardboard_length = Decimal(str(record.cardboard_length))
-                product.default_cardboard_width = Decimal(str(record.cardboard_width))
-                product.default_score_lines = record.score_lines
-                product.default_material_code = record.material_code
-                updated += 1
-                continue
-            normalized = normalize_search_key(record.search_key)
-            existing = session.scalar(
-                select(HistoricalRequisitionMap).where(
-                    HistoricalRequisitionMap.normalized_search_key == normalized
-                )
+    try:
+        with Session(engine) as session:
+            reject_legacy_master_data_write_if_versioned(
+                session,
+                script_name="scripts/import_historical_requisitions.py",
             )
-            values = {
-                "search_key": record.search_key,
-                "normalized_search_key": normalized,
-                "cardboard_length": Decimal(str(record.cardboard_length)),
-                "cardboard_width": Decimal(str(record.cardboard_width)),
-                "score_lines": record.score_lines,
-                "material_code": record.material_code,
-                "quantity": record.quantity,
-                "record_date": record.record_date,
-                "source_workbook": workbook_path.name,
-                "source_sheet": record.sheet_name,
-                "source_row": record.row_number,
-                "raw_data": record.raw_data,
-            }
-            if existing:
-                for key, value in values.items():
-                    setattr(existing, key, value)
-            else:
-                session.add(HistoricalRequisitionMap(**values))
-            fallback += 1
-    engine.dispose()
+            with session.begin():
+                for record, product_id in matches:
+                    if product_id is not None:
+                        product = session.get(Product, product_id)
+                        if product is None:
+                            raise RuntimeError(f"产品不存在: {product_id}")
+                        product.default_cardboard_length = Decimal(str(record.cardboard_length))
+                        product.default_cardboard_width = Decimal(str(record.cardboard_width))
+                        product.default_score_lines = record.score_lines
+                        product.default_material_code = record.material_code
+                        updated += 1
+                        continue
+                    normalized = normalize_search_key(record.search_key)
+                    existing = session.scalar(
+                        select(HistoricalRequisitionMap).where(
+                            HistoricalRequisitionMap.normalized_search_key == normalized
+                        )
+                    )
+                    values = {
+                        "search_key": record.search_key,
+                        "normalized_search_key": normalized,
+                        "cardboard_length": Decimal(str(record.cardboard_length)),
+                        "cardboard_width": Decimal(str(record.cardboard_width)),
+                        "score_lines": record.score_lines,
+                        "material_code": record.material_code,
+                        "quantity": record.quantity,
+                        "record_date": record.record_date,
+                        "source_workbook": workbook_path.name,
+                        "source_sheet": record.sheet_name,
+                        "source_row": record.row_number,
+                        "raw_data": record.raw_data,
+                    }
+                    if existing:
+                        for key, value in values.items():
+                            setattr(existing, key, value)
+                    else:
+                        session.add(HistoricalRequisitionMap(**values))
+                    fallback += 1
+    finally:
+        engine.dispose()
     return updated, fallback
 
 

@@ -48,6 +48,8 @@ PERMISSION_CATALOG = frozenset(
         "finance.view",
         "finance.execute",
         "cost.view",
+        "pdf_training.view",
+        "pdf_training.manage",
         "system.backup",
         "users.manage",
     }
@@ -68,11 +70,14 @@ SALES_DEFAULT_PERMISSIONS = frozenset(
     }
 )
 ALL_PERMISSIONS = PERMISSION_CATALOG
-ADMIN_ONLY_PERMISSIONS = frozenset({"system.backup", "users.manage"})
+ADMIN_ONLY_PERMISSIONS = frozenset(
+    {"system.backup", "users.manage", "pdf_training.manage"}
+)
 BOSS_DEFAULT_PERMISSIONS = frozenset(
     permission
     for permission in ALL_PERMISSIONS
-    if not permission.startswith("system.") and permission != "users.manage"
+    if not permission.startswith(("system.", "pdf_training."))
+    and permission != "users.manage"
 )
 ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": ALL_PERMISSIONS,
@@ -165,7 +170,7 @@ def get_current_user(
             detail="未登录或登录已失效",
         )
     try:
-        user_id = decode_session_token(token)
+        user_id, token_auth_version = decode_session_token(token)
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -173,7 +178,11 @@ def get_current_user(
         ) from error
 
     user = db.get(User, user_id)
-    if user is None or not user.is_active:
+    if (
+        user is None
+        or not user.is_active
+        or token_auth_version != user.auth_version
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录或登录已失效",

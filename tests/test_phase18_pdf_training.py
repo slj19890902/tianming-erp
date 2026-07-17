@@ -269,7 +269,7 @@ with SessionLocal() as db:
     if not admin:
         print(json.dumps({{'status': 0, 'body': 'no admin user'}}))
         sys.exit(0)
-    token = create_session_token(admin.id)
+    token = create_session_token(admin.id, auth_version=admin.auth_version)
     cookie_name = settings.session_cookie_name
 
 client.cookies.set(cookie_name, token)
@@ -348,7 +348,8 @@ class TestPdfTrainingApi:
         assert r["status"] == 201, f"create template failed: {r['body']}"
         body = json.loads(r["body"])
         assert body["template_name"] == "测试模板"
-        assert body["is_active"] is True
+        assert body["is_active"] is False
+        assert body["status"] == "draft"
         return body["id"]
 
     def test_sample_not_found(self):

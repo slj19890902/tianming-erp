@@ -12,6 +12,7 @@ import io
 import sqlite3
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -387,13 +388,31 @@ class TestCustomerCodeUpdates:
 
     def test_apply_updates_and_saves_legacy(self, mapping_db: Session):
         from app.models.product import Product
-        from app.services.material_mapping import apply_customer_code_updates
+        from app.api.system import preview_customer_codes
+        from app.services.material_mapping import (
+            apply_customer_code_updates,
+            preview_customer_code_updates,
+        )
         from sqlalchemy import select
 
         self._seed_products(mapping_db)
         mapping_db.commit()
 
-        result = apply_customer_code_updates(mapping_db)
+        plan = preview_customer_code_updates(mapping_db)
+        preview = preview_customer_codes(
+            db=mapping_db,
+            user=SimpleNamespace(id=None, username="system"),
+        )
+        assert plan.changes
+        assert set(preview["confirmation_tokens"]) == {
+            change["key"] for change in plan.changes
+        }
+
+        result = apply_customer_code_updates(
+            mapping_db,
+            preview_confirmed=True,
+            confirmation_tokens=preview["confirmation_tokens"],
+        )
         mapping_db.commit()
 
         assert result.updated == 2
@@ -455,9 +474,13 @@ class TestCustomerCodeUpdates:
 
     def test_apply_does_not_overwrite_existing_legacy(self, mapping_db: Session):
         """legacy_customer_material_code 已有值时不覆盖。"""
+        from app.api.system import preview_customer_codes
         from app.models.customer import Customer
         from app.models.product import Product
-        from app.services.material_mapping import apply_customer_code_updates
+        from app.services.material_mapping import (
+            apply_customer_code_updates,
+            preview_customer_code_updates,
+        )
         from sqlalchemy import select
 
         cust = Customer(
@@ -482,7 +505,21 @@ class TestCustomerCodeUpdates:
         mapping_db.add(p)
         mapping_db.commit()
 
-        apply_customer_code_updates(mapping_db)
+        plan = preview_customer_code_updates(mapping_db)
+        preview = preview_customer_codes(
+            db=mapping_db,
+            user=SimpleNamespace(id=None, username="system"),
+        )
+        assert plan.changes
+        assert set(preview["confirmation_tokens"]) == {
+            change["key"] for change in plan.changes
+        }
+
+        apply_customer_code_updates(
+            mapping_db,
+            preview_confirmed=True,
+            confirmation_tokens=preview["confirmation_tokens"],
+        )
         mapping_db.commit()
 
         p_ref = mapping_db.scalar(select(Product).where(Product.product_code == "PC020"))
@@ -541,12 +578,27 @@ class TestHighConfidenceMaterialMapping:
         return p, cand, csv_path
 
     def test_applies_high_confidence(self, mapping_db: Session, tmp_path: Path):
+        from app.api.system import preview_high_confidence_mapping
         from app.models.product import Product
         from app.services.material_mapping import apply_high_confidence_material_mapping
         from sqlalchemy import select
 
         p, _cand, csv_path = self._seed(mapping_db, tmp_path)
-        result = apply_high_confidence_material_mapping(mapping_db, csv_path)
+        preview = preview_high_confidence_mapping(
+            db=mapping_db,
+            user=SimpleNamespace(id=None, username="system"),
+        )
+        assert preview["changes"]
+        assert set(preview["confirmation_tokens"]) == {
+            change["key"] for change in preview["changes"]
+        }
+
+        result = apply_high_confidence_material_mapping(
+            mapping_db,
+            csv_path,
+            preview_confirmed=True,
+            confirmation_tokens=preview["confirmation_tokens"],
+        )
         mapping_db.commit()
 
         assert result.products_updated == 1
@@ -648,6 +700,7 @@ class TestHighConfidenceMaterialMapping:
 
     def test_legacy_material_text_not_modified(self, mapping_db: Session, tmp_path: Path):
         """apply_high_confidence_material_mapping 不得修改 legacy_material_text。"""
+        from app.api.system import preview_high_confidence_mapping
         from app.models.product import Product
         from app.services.material_mapping import apply_high_confidence_material_mapping
         from sqlalchemy import select
@@ -655,7 +708,21 @@ class TestHighConfidenceMaterialMapping:
         p, _cand, csv_path = self._seed(mapping_db, tmp_path)
         original_legacy = p.legacy_material_text
 
-        apply_high_confidence_material_mapping(mapping_db, csv_path)
+        preview = preview_high_confidence_mapping(
+            db=mapping_db,
+            user=SimpleNamespace(id=None, username="system"),
+        )
+        assert preview["changes"]
+        assert set(preview["confirmation_tokens"]) == {
+            change["key"] for change in preview["changes"]
+        }
+
+        apply_high_confidence_material_mapping(
+            mapping_db,
+            csv_path,
+            preview_confirmed=True,
+            confirmation_tokens=preview["confirmation_tokens"],
+        )
         mapping_db.commit()
 
         p_ref = mapping_db.scalar(select(Product).where(Product.id == p.id))

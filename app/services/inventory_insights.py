@@ -4,21 +4,22 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.order import Order, OrderItem
 from app.models.product import Product
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail,
+    InventoryLot,
+    SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
+)
 from app.services.inventory_cost_snapshot import (
     estimate_from_snapshot,
     estimate_inventory_lot_cost,
 )
-from app.services.semi_finished_inventory import (
-    semi_finished_lot_assigned_product_ids,
-)
-
-
 INACTIVE_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled"}
 NON_DEMAND_ORDER_STATUSES = {"dead", "cancelled"}
 AGE_BUCKETS = (
@@ -38,7 +39,23 @@ def _money(value: Decimal | None) -> str | None:
 
 
 def _age_days(lot: InventoryLot, as_of: date) -> int:
+    """Keep inventory age tied to the original stock date, never movements."""
     return max((as_of - lot.stock_date).days, 0)
+
+
+def _movement_stagnant_days(
+    last_movement_at: datetime | None,
+    as_of: date,
+) -> int | None:
+    if last_movement_at is None:
+        return None
+    return max((as_of - last_movement_at.date()).days, 0)
+
+
+def _coverage_percent(covered: int, demand: int) -> float | None:
+    if demand <= 0:
+        return None
+    return round(covered * 100 / demand, 1)
 
 
 def _age_bucket(days: int) -> tuple[str, str]:
@@ -48,12 +65,15 @@ def _age_bucket(days: int) -> tuple[str, str]:
     return AGE_BUCKETS[-1][0], AGE_BUCKETS[-1][1]
 
 
-def _demand_by_product(db: Session, as_of: date) -> dict[int, dict[str, int]]:
+def _demand_by_product(
+    db: Session,
+    as_of: date,
+    customer_ids: set[int] | None = None,
+) -> dict[int, dict[str, int]]:
     demand: dict[int, dict[str, int]] = defaultdict(
         lambda: {"demand_30": 0, "demand_90": 0, "demand_180": 0, "open_demand": 0}
     )
-    rows = db.execute(
-        select(
+    query = select(
             OrderItem.product_id,
             OrderItem.quantity,
             OrderItem.delivered_quantity,
@@ -61,7 +81,9 @@ def _demand_by_product(db: Session, as_of: date) -> dict[int, dict[str, int]]:
             Order.order_date,
             Order.status,
         ).join(Order, Order.id == OrderItem.order_id)
-    ).all()
+    if customer_ids is not None:
+        query = query.where(Order.customer_id.in_(customer_ids))
+    rows = db.execute(query).all()
     cutoffs = {
         "demand_30": as_of - timedelta(days=30),
         "demand_90": as_of - timedelta(days=90),
@@ -78,35 +100,105 @@ def _demand_by_product(db: Session, as_of: date) -> dict[int, dict[str, int]]:
     return demand
 
 
+def _assigned_product_ids_by_lot(
+    db: Session,
+    lots: list[InventoryLot],
+    customer_ids: set[int] | None,
+) -> dict[int, set[int]]:
+    """Bulk-load semi-finished bindings, validating ownership when scoped."""
+
+    lot_ids = [
+        lot.id for lot in lots if lot.semi_finished_detail is not None
+    ]
+    result = {lot_id: set() for lot_id in lot_ids}
+    if not lot_ids:
+        return result
+    query = (
+        select(
+            SemiFinishedLotAllowedProduct.inventory_lot_id,
+            SemiFinishedLotAllowedProduct.product_id,
+        )
+        .join(
+            Product,
+            Product.id == SemiFinishedLotAllowedProduct.product_id,
+        )
+        .where(SemiFinishedLotAllowedProduct.inventory_lot_id.in_(lot_ids))
+    )
+    if customer_ids is not None:
+        query = query.join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id
+            == SemiFinishedLotAllowedProduct.inventory_lot_id,
+        ).where(
+            SemiFinishedInventoryDetail.owner_customer_id.in_(customer_ids),
+            Product.customer_id
+            == SemiFinishedInventoryDetail.owner_customer_id,
+        )
+    for lot_id, product_id in db.execute(query):
+        result[lot_id].add(product_id)
+    return result
+
+
 def build_inventory_insights(
     db: Session,
     *,
     as_of: date | None = None,
+    customer_ids: set[int] | None = None,
 ) -> dict:
     """Build a read-only inventory view; it never reserves or mutates stock."""
 
-    as_of = as_of or date.today()
-    lots = list(
-        db.scalars(
-            select(InventoryLot)
-            .options(
-                selectinload(InventoryLot.location),
-                selectinload(InventoryLot.finished_detail),
-                selectinload(InventoryLot.semi_finished_detail),
+    as_of = as_of or beijing_today()
+    lot_query = select(InventoryLot).options(
+        selectinload(InventoryLot.location),
+        selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryLot.semi_finished_detail),
+    )
+    if customer_ids is not None:
+        lot_query = lot_query.where(
+            or_(
+                InventoryLot.id.in_(
+                    select(FinishedGoodsInventoryDetail.inventory_lot_id)
+                    .join(
+                        Product,
+                        Product.id == FinishedGoodsInventoryDetail.product_id,
+                    )
+                    .where(
+                        FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                            customer_ids
+                        ),
+                        Product.customer_id
+                        == FinishedGoodsInventoryDetail.owner_customer_id,
+                    )
+                ),
+                InventoryLot.id.in_(
+                    select(SemiFinishedInventoryDetail.inventory_lot_id).where(
+                        SemiFinishedInventoryDetail.owner_customer_id.in_(
+                            customer_ids
+                        )
+                    )
+                ),
             )
-            .order_by(InventoryLot.id)
-        ).all()
+        )
+    lots = list(db.scalars(lot_query.order_by(InventoryLot.id)).all())
+    assigned_product_ids = _assigned_product_ids_by_lot(
+        db, lots, customer_ids
     )
     product_ids = {
         lot.finished_detail.product_id
         for lot in lots
         if lot.finished_detail is not None
     }
+    for assigned_ids in assigned_product_ids.values():
+        product_ids.update(assigned_ids)
     products = {
         row.id: row
         for row in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     } if product_ids else {}
-    demand = _demand_by_product(db, as_of)
+    demand = _demand_by_product(db, as_of, customer_ids)
+    finished_available_by_product: dict[int, int] = defaultdict(int)
+    for lot in lots:
+        if lot.quantity_available > 0 and lot.finished_detail is not None:
+            finished_available_by_product[lot.finished_detail.product_id] += lot.quantity_available
 
     bucket_map = {
         key: {
@@ -126,6 +218,7 @@ def build_inventory_insights(
     available_lots = 0
     active_location_lots = 0
     cost_ready_lots = 0
+    estimate_source_lots = defaultdict(int)
     estimated_value = Decimal("0")
 
     for lot in lots:
@@ -154,6 +247,12 @@ def build_inventory_insights(
         estimated_unit_cost: Decimal | None = None
         estimated_cost_status = "pending"
         demand_metrics = {"demand_30": 0, "demand_90": 0, "demand_180": 0, "open_demand": 0}
+        coverage = {
+            "covered_demand_quantity": None,
+            "uncovered_demand_quantity": None,
+            "coverage_percent": None,
+            "coverage_basis": "not_applicable",
+        }
 
         if lot.finished_detail is not None:
             row = lot.finished_detail
@@ -164,6 +263,15 @@ def build_inventory_insights(
                 "inventory_code": row.inventory_code_snapshot,
                 "name": row.product_name_snapshot,
             }
+            total_available = finished_available_by_product[row.product_id]
+            open_demand = demand_metrics["open_demand"]
+            covered_demand = min(total_available, open_demand)
+            coverage = {
+                "covered_demand_quantity": covered_demand,
+                "uncovered_demand_quantity": max(open_demand - total_available, 0),
+                "coverage_percent": _coverage_percent(covered_demand, open_demand),
+                "coverage_basis": "finished_available_vs_open_order_demand",
+            }
             if demand_metrics["open_demand"] > 0:
                 reasons.append(
                     {
@@ -172,6 +280,14 @@ def build_inventory_insights(
                     }
                 )
                 priority = min(priority, 1)
+            if total_available > open_demand and open_demand > 0:
+                reasons.append(
+                    {
+                        "code": "finished_stock_exceeds_open_demand",
+                        "text": f"当前可用量比未完成需求多 {total_available - open_demand} 个；仅供人工核对是否存在超额库存。",
+                    }
+                )
+                priority = min(priority, 2)
             if demand_metrics["demand_180"] <= 0:
                 reasons.append(
                     {
@@ -182,7 +298,7 @@ def build_inventory_insights(
                 priority = min(priority, 2)
         elif lot.semi_finished_detail is not None:
             row = lot.semi_finished_detail
-            assigned_ids = semi_finished_lot_assigned_product_ids(db, lot.id)
+            assigned_ids = assigned_product_ids.get(lot.id, set())
             is_general = row.owner_customer_id is None
             assigned_open_demand = sum(
                 demand.get(product_id, {}).get("open_demand", 0)
@@ -203,13 +319,28 @@ def build_inventory_insights(
                         else "ineligible_no_product_binding"
                     )
                 ),
+                "assigned_products": [
+                    {
+                        "product_id": product_id,
+                        "inventory_code": products[product_id].product_code if product_id in products else None,
+                        "name": products[product_id].product_name if product_id in products else None,
+                    }
+                    for product_id in assigned_ids
+                ],
+                "candidate_relationship_read_only": True,
             }
             demand_metrics["open_demand"] = assigned_open_demand
+            coverage = {
+                "covered_demand_quantity": None,
+                "uncovered_demand_quantity": None,
+                "coverage_percent": None,
+                "coverage_basis": "semi_finished_candidate_relationship_read_only",
+            }
             if assigned_open_demand > 0:
                 reasons.append(
                     {
                         "code": "semi_stock_may_cover_demand",
-                        "text": f"已分配成品款号存在 {assigned_open_demand} 个未完成需求，请到合并报料中人工核对抵扣。",
+                        "text": f"已分配成品款号存在 {assigned_open_demand} 个未完成需求；候选关系只读展示，请到合并报料中人工核对抵扣。",
                     }
                 )
                 priority = min(priority, 1)
@@ -259,6 +390,7 @@ def build_inventory_insights(
             reasons.append({"code": "cost_pending", "text": "库存成本待补，暂不计算现金占用。"})
         else:
             cost_ready_lots += 1
+            estimate_source_lots[estimated_cost_status] += 1
             estimated_value += estimated_unit_cost * lot.quantity_available
 
         if reasons:
@@ -273,8 +405,16 @@ def build_inventory_insights(
                     "quantity_available": lot.quantity_available,
                     "unit": lot.unit,
                     "age_days": days,
+                    "age_basis": "stock_date",
+                    "last_movement_at": utc_naive_to_api(lot.last_movement_at)
+                    if lot.last_movement_at is not None
+                    else None,
+                    "movement_stagnant_days": _movement_stagnant_days(
+                        lot.last_movement_at, as_of
+                    ),
                     "detail": detail,
                     "demand": demand_metrics,
+                    **coverage,
                     "cost_status": estimated_cost_status,
                     "estimated_unit_cost": _money(estimated_unit_cost),
                     "estimated_value": _money(
@@ -287,9 +427,26 @@ def build_inventory_insights(
             )
 
     actions.sort(key=lambda row: (row["priority"], -row["age_days"], row["lot_id"]))
+    action_item_count = len(actions)
+    high_priority_action_item_count = sum(
+        1
+        for item in actions
+        if isinstance(item.get("priority"), (int, float))
+        and item["priority"] <= 1
+    )
     missing_cost_lots = max(available_lots - cost_ready_lots, 0)
+    source_coverage = {
+        status: round(estimate_source_lots[status] * 100 / available_lots, 1)
+        if available_lots
+        else None
+        for status in (
+            "estimated_snapshot",
+            "estimated_current_material_quote",
+            "estimated_product_cost",
+        )
+    }
     return {
-        "generated_at": datetime.now(),
+        "generated_at": utc_naive_to_api(utc_now_naive()),
         "as_of": as_of,
         "scope_notice": "当前看板只统计已录入 ERP 的库存，不代表现场尚未盘点的库存。",
         "recommendation_notice": "所有少报、先消耗或清理建议仅供人工判断，本接口不会修改库存、订单、预占或报料。",
@@ -309,10 +466,15 @@ def build_inventory_insights(
             "cost_ready_lots": cost_ready_lots,
             "missing_cost_lots": missing_cost_lots,
             "cost_coverage_percent": round(cost_ready_lots * 100 / available_lots, 1) if available_lots else None,
+            "snapshot_estimate_coverage": source_coverage["estimated_snapshot"],
+            "current_quote_coverage": source_coverage["estimated_current_material_quote"],
+            "product_reference_coverage": source_coverage["estimated_product_cost"],
             "actual_cost_supported": False,
-            "actual_cost_message": "库存批次尚无实际单位成本快照，实际现金占用不可计算。",
+            "actual_cost_message": "库存批次尚无实际单位成本快照；所有覆盖率仅表示估算来源，不代表实际现金成本覆盖。",
         },
         "by_type": by_type,
         "age_buckets": list(bucket_map.values()),
+        "action_item_count": action_item_count,
+        "high_priority_action_item_count": high_priority_action_item_count,
         "action_items": actions[:200],
     }

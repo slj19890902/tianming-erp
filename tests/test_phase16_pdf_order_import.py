@@ -210,6 +210,136 @@ def test_match_import_draft_links_customer_and_products(tmp_path: Path) -> None:
         database_path.unlink(missing_ok=True)
 
 
+def _match_simair_duplicate_cpn(tmp_path: Path, item: dict) -> tuple[dict, int, int]:
+    from app.core.database import create_sqlite_engine
+    from app.models import Base
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.services.order_pdf_import import match_import_draft
+
+    engine = create_sqlite_engine(tmp_path / "simair-duplicate-cpn.sqlite3")
+    Base.metadata.create_all(engine)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        customer = Customer(
+            customer_number=37,
+            customer_code="SMA",
+            name="苏州思迈尔电子设备有限公司",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        session.add(customer)
+        session.flush()
+        first = Product(
+            customer_id=customer.id,
+            product_code="CPN126831",
+            customer_material_code="CPN084557 CPN126831",
+            product_name="纸板内衬",
+            length_mm=Decimal("73"),
+            width_mm=Decimal("35"),
+            height_mm=Decimal("24.5"),
+            sale_unit_price=Decimal("18.11"),
+            box_category="normal",
+        )
+        second = Product(
+            customer_id=customer.id,
+            product_code="CPN126830",
+            customer_material_code="CPN084557 CPN126830",
+            product_name="瓦楞外箱",
+            length_mm=Decimal("61"),
+            width_mm=Decimal("42"),
+            height_mm=Decimal("31"),
+            sale_unit_price=Decimal("16.80"),
+            box_category="normal",
+        )
+        session.add_all([first, second])
+        session.commit()
+        matched = match_import_draft(
+            session,
+            {
+                "customer_type": "simair",
+                "recognition_status": "recognized",
+                "warnings": [],
+                "items": [{"product_code": "CPN084557", "quantity": 100, **item}],
+            },
+            customer_id=customer.id,
+        )
+        return matched, first.id, second.id
+
+
+def test_simair_duplicate_cpn_uses_variant_name_spec_and_price_evidence(
+    tmp_path: Path,
+) -> None:
+    matched, first_id, _second_id = _match_simair_duplicate_cpn(
+        tmp_path,
+        {
+            "reference_product_code": "CPN126831",
+            "raw_product_name": "纸板内衬",
+            "raw_spec_model": "73×35×24.5mm",
+            "unit_price": "18.11",
+        },
+    )
+
+    item = matched["items"][0]
+    assert item["matched_product_id"] == first_id
+    assert item["match_evidence"]["policy"] == "simair_duplicate_cpn_fail_closed"
+    assert item["match_evidence"]["decision"] == "matched"
+    assert item["match_evidence"]["margin"] >= item["match_evidence"]["minimum_margin"]
+    assert all("cost" not in candidate for candidate in item["product_candidates"])
+    assert {candidate["customer_material_code"] for candidate in item["product_candidates"]} == {
+        "CPN084557 CPN126831",
+        "CPN084557 CPN126830",
+    }
+
+
+def test_simair_duplicate_cpn_missing_name_and_spec_stays_unmatched(
+    tmp_path: Path,
+) -> None:
+    matched, _first_id, _second_id = _match_simair_duplicate_cpn(
+        tmp_path,
+        {"raw_product_name": "CPN084557", "raw_spec_model": "", "unit_price": "18.11"},
+    )
+
+    item = matched["items"][0]
+    assert item["matched_product_id"] is None
+    assert item["match_status"] == "unmatched"
+    assert any("缺少" in reason for reason in item["match_evidence"]["reasons"])
+
+
+def test_simair_wrong_ocr_name_and_coincidental_price_does_not_select_variant(
+    tmp_path: Path,
+) -> None:
+    matched, _first_id, _second_id = _match_simair_duplicate_cpn(
+        tmp_path,
+        {
+            "raw_product_name": "乱码错误名称",
+            "raw_spec_model": "999×999×999mm",
+            "unit_price": "18.11",
+        },
+    )
+
+    item = matched["items"][0]
+    assert item["matched_product_id"] is None
+    assert item["match_evidence"]["top_score"] < item["match_evidence"]["minimum_score"]
+
+
+def test_simair_duplicate_cpn_conflicting_fields_and_small_margin_fail_closed(
+    tmp_path: Path,
+) -> None:
+    matched, _first_id, _second_id = _match_simair_duplicate_cpn(
+        tmp_path,
+        {
+            "raw_product_name": "纸板内衬",
+            "raw_spec_model": "61×42×31mm",
+            "unit_price": "16.80",
+        },
+    )
+
+    item = matched["items"][0]
+    assert item["matched_product_id"] is None
+    assert item["match_evidence"]["margin"] < item["match_evidence"]["minimum_margin"]
+    assert any("指向不同候选" in reason for reason in item["match_evidence"]["reasons"])
+
+
 def test_customer_match_returns_multiple_candidates_for_ambiguous_name(
     tmp_path: Path,
 ) -> None:
@@ -335,6 +465,16 @@ def _order_import_app(tmp_path: Path):
         )
         session.add(customer)
         session.flush()
+        simair_customer = Customer(
+            id=37,
+            customer_number=37,
+            customer_code="SMA",
+            name="苏州思迈尔电子设备有限公司",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        session.add(simair_customer)
+        session.flush()
         gaotai_customer = Customer(
             id=46,
             customer_number=46,
@@ -382,6 +522,28 @@ def _order_import_app(tmp_path: Path):
                     product_name="纸箱190*190*160",
                     box_category="normal",
                 ),
+                Product(
+                    customer_id=simair_customer.id,
+                    product_code="CPN126831",
+                    customer_material_code="CPN084557 CPN126831",
+                    product_name="纸板内衬",
+                    length_mm=Decimal("73"),
+                    width_mm=Decimal("35"),
+                    height_mm=Decimal("24.5"),
+                    sale_unit_price=Decimal("18.11"),
+                    box_category="normal",
+                ),
+                Product(
+                    customer_id=simair_customer.id,
+                    product_code="CPN126830",
+                    customer_material_code="CPN084557 CPN126830",
+                    product_name="瓦楞外箱",
+                    length_mm=Decimal("61"),
+                    width_mm=Decimal("42"),
+                    height_mm=Decimal("31"),
+                    sale_unit_price=Decimal("16.80"),
+                    box_category="normal",
+                ),
             ]
         )
         session.commit()
@@ -398,18 +560,76 @@ def _order_import_app(tmp_path: Path):
     return app
 
 
+def _database_scalar(app: FastAPI, statement):
+    from app.api.deps import get_db
+
+    dependency = app.dependency_overrides[get_db]
+    db_generator = dependency()
+    db = next(db_generator)
+    try:
+        return db.scalar(statement)
+    finally:
+        db_generator.close()
+
+
+def _signed_pdf_preview_token(
+    app: FastAPI,
+    *,
+    recognition_status: str = "needs_confirmation",
+    customer_route_status: str = "needs_confirmation",
+    customer_match_status: str = "matched",
+    integrity_status: str = "passed",
+    matched_customer_id: int = 1,
+) -> str:
+    from sqlalchemy import select
+
+    from app.api.orders import _encode_pdf_preview_safety_token
+    from app.models.user import User
+
+    user = _database_scalar(app, select(User).where(User.username == "sales"))
+    return _encode_pdf_preview_safety_token(
+        {
+            "source_name": "needs-confirmation.pdf",
+            "file_hash": "a" * 64,
+            "recognition_status": recognition_status,
+            "customer_route": {"status": customer_route_status},
+            "customer_match_status": customer_match_status,
+            "integrity_check": {"integrity_status": integrity_status},
+            "matched_customer_id": matched_customer_id,
+        },
+        user,
+    )
+
+
+def _decode_pdf_preview_token_for_test(token: str) -> dict:
+    import jwt
+
+    from app.core.config import load_settings
+
+    return jwt.decode(
+        token,
+        load_settings().secret_key,
+        algorithms=["HS256"],
+    )
+
+
 def test_pdf_preview_endpoint_returns_draft_without_writing_order(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "extract_text_from_pdf_bytes",
         lambda _content: SAMPLE_PO_TEXT,
     )
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    before_count = _database_scalar(app, select(func.count(Order.id)))
 
     with TestClient(app) as client:
         login = client.post(
@@ -424,11 +644,20 @@ def test_pdf_preview_endpoint_returns_draft_without_writing_order(
 
     assert response.status_code == 200, response.text
     body = response.json()
+    assert body["preview_safety_token"]
+    claims = _decode_pdf_preview_token_for_test(body["preview_safety_token"])
+    assert claims["source_name"] == "PO2026060469.pdf"
+    assert claims["source_hash"] == body["file_hash"]
+    assert claims["recognition_status"] == body["recognition_status"]
+    assert claims["customer_route_status"] == body["customer_route"]["status"]
+    assert claims["customer_match_status"] == body["customer_match_status"]
+    assert claims["integrity_status"] == body["integrity_check"]["integrity_status"]
     assert body["customer_po"] == "PO2026060469"
     assert body["matched_customer_id"] == 1
     assert body["item_count"] == 3
     assert body["items"][0]["matched_product_id"] is not None
     assert body["items"][2]["matched_product_id"] is None
+    assert _database_scalar(app, select(func.count(Order.id))) == before_count
 
 
 def test_pdf_integrity_failed_payload_cannot_create_order(tmp_path: Path) -> None:
@@ -489,16 +718,373 @@ def test_pdf_import_non_integer_quantity_requires_manual_fix(tmp_path: Path) -> 
     assert "当前 PDF 识别存在非整数数量" in response.json()["detail"]
 
 
+def _pdf_order_payload(*, confirmed: bool, token: str) -> dict:
+    return {
+        "customer_id": 1,
+        "customer_po": "PO-PDF-SAFETY-001",
+        "order_date": "2026-07-17",
+        "delivery_date": "2026-07-24",
+        "import_draft": True,
+        "import_integrity_status": "passed",
+        "import_integrity_errors": [],
+        "pdf_import_confirmation": {
+            "preview_safety_token": token,
+            "confirmed": confirmed,
+        },
+        "items": [
+            {
+                "product_id": 1,
+                "quantity": 30,
+                "unit_price": "1.79",
+                "product_code": "21312009",
+                "product_name": "中性内箱",
+            }
+        ],
+    }
+
+
+def test_needs_confirmation_pdf_cannot_save_without_explicit_confirmation(
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    app = _order_import_app(tmp_path)
+    token = _signed_pdf_preview_token(app)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post(
+            "/api/orders",
+            json=_pdf_order_payload(confirmed=False, token=token),
+        )
+
+    assert response.status_code == 409
+    assert "尚未执行明确确认" in response.json()["detail"]
+    assert _database_scalar(app, select(func.count(Order.id))) == 0
+
+
+def test_pdf_import_marker_without_confirmation_context_cannot_bypass_backend(
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    app = _order_import_app(tmp_path)
+    payload = _pdf_order_payload(
+        confirmed=True,
+        token=_signed_pdf_preview_token(app),
+    )
+    payload.pop("pdf_import_confirmation")
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 400
+    assert "缺少服务端保存确认上下文" in response.json()["detail"]
+    assert _database_scalar(app, select(func.count(Order.id))) == 0
+
+
+def test_tampered_pdf_preview_token_is_rejected_without_writing_order(
+    tmp_path: Path,
+) -> None:
+    import jwt
+
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    app = _order_import_app(tmp_path)
+    token = _signed_pdf_preview_token(app)
+    tampered_claims = jwt.decode(
+        token,
+        options={"verify_signature": False},
+    )
+    tampered_claims["recognition_status"] = "recognized"
+    tampered_claims["customer_route_status"] = "locked"
+    tampered_token = jwt.encode(
+        tampered_claims,
+        "attacker-controlled-secret",
+        algorithm="HS256",
+    )
+    payload = _pdf_order_payload(confirmed=True, token=tampered_token)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
+    assert _database_scalar(app, select(func.count(Order.id))) == 0
+
+
+def test_expired_invalid_and_missing_pdf_preview_tokens_are_rejected(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    import jwt
+
+    from app.core.config import load_settings
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    app = _order_import_app(tmp_path)
+    valid = _signed_pdf_preview_token(app)
+    claims = jwt.decode(
+        valid,
+        load_settings().secret_key,
+        algorithms=["HS256"],
+        options={"verify_exp": False},
+    )
+    claims["exp"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    expired = jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        expired_response = client.post(
+            "/api/orders",
+            json=_pdf_order_payload(confirmed=True, token=expired),
+        )
+        invalid_response = client.post(
+            "/api/orders",
+            json=_pdf_order_payload(confirmed=True, token="not-a-jwt"),
+        )
+        missing_payload = _pdf_order_payload(confirmed=True, token=valid)
+        missing_payload["pdf_import_confirmation"].pop("preview_safety_token")
+        missing_response = client.post("/api/orders", json=missing_payload)
+
+    assert expired_response.status_code == 409
+    assert invalid_response.status_code == 409
+    assert missing_response.status_code == 422
+    assert expired_response.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
+    assert invalid_response.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
+    assert _database_scalar(app, select(func.count(Order.id))) == 0
+
+
+def test_signed_integrity_failure_or_missing_cannot_be_changed_to_passed_by_client(
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    app = _order_import_app(tmp_path)
+    responses = []
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        for signed_status in ("failed", "missing"):
+            token = _signed_pdf_preview_token(
+                app,
+                integrity_status=signed_status,
+            )
+            payload = _pdf_order_payload(confirmed=True, token=token)
+            payload["import_integrity_status"] = "passed"
+            payload["pdf_import_confirmation"]["integrity_status"] = "passed"
+            responses.append(client.post("/api/orders", json=payload))
+
+    assert all(response.status_code == 409 for response in responses)
+    assert all(
+        response.json()["detail"]["code"] == "PDF_PREVIEW_INTEGRITY_FAILED"
+        for response in responses
+    )
+    assert _database_scalar(app, select(func.count(Order.id))) == 0
+
+
+def test_draft_rematch_rejects_source_name_or_hash_mismatch(tmp_path: Path) -> None:
+    app = _order_import_app(tmp_path)
+    token = _signed_pdf_preview_token(app)
+    base_draft = {
+        "source_name": "needs-confirmation.pdf",
+        "file_hash": "a" * 64,
+        "recognition_status": "needs_confirmation",
+        "customer_route": {"status": "needs_confirmation"},
+        "integrity_check": {"integrity_status": "passed"},
+        "items": [{"product_code": "21312009", "quantity": 30, "unit_price": "1.79"}],
+    }
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        wrong_name = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": {**base_draft, "source_name": "different.pdf"},
+                "customer_id": 1,
+                "preview_safety_token": token,
+            },
+        )
+        wrong_hash = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": {**base_draft, "file_hash": "b" * 64},
+                "customer_id": 1,
+                "preview_safety_token": token,
+            },
+        )
+
+    assert wrong_name.status_code == 409
+    assert wrong_hash.status_code == 409
+    assert wrong_name.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
+    assert wrong_hash.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
+
+
+def test_normal_non_pdf_order_create_is_unaffected(tmp_path: Path) -> None:
+    app = _order_import_app(tmp_path)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "NORMAL-NON-PDF-001",
+                "order_date": "2026-07-17",
+                "items": [{"product_id": 1, "quantity": 10, "unit_price": "1.79"}],
+            },
+        )
+
+    assert response.status_code == 201, response.text
+
+
+def test_manual_pdf_customer_product_and_quantity_confirmation_allows_save_and_logs(
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import select
+
+    from app.models.audit import OperationLog
+
+    app = _order_import_app(tmp_path)
+    token = _signed_pdf_preview_token(app)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post(
+            "/api/orders",
+            json=_pdf_order_payload(confirmed=True, token=token),
+        )
+
+    assert response.status_code == 201, response.text
+    log = _database_scalar(
+        app,
+        select(OperationLog).where(OperationLog.action == "PDF_SAFETY_OVERRIDE"),
+    )
+    assert log is not None
+    assert "recognition_status=needs_confirmation" in (log.details or "")
+    assert "customer_route=needs_confirmation" in (log.details or "")
+
+
+def test_manual_simair_selection_uses_fresh_rematch_token_and_logs_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import select
+
+    import app.api.orders as orders_api
+    from app.models.audit import OperationLog
+
+    app = _order_import_app(tmp_path)
+    monkeypatch.setattr(
+        orders_api,
+        "_parse_order_pdf_preview",
+        lambda _content, filename, _rules: {
+            "source_name": filename,
+            "customer_type": "simair",
+            "customer_po": "P-MANUAL-SIMAIR-001",
+            "recognition_status": "needs_confirmation",
+            "parse_status": "needs_confirmation",
+            "customer_route": {"status": "needs_confirmation", "candidates": []},
+            "integrity_check": {"integrity_status": "passed"},
+            "warnings": [],
+            "items": [
+                {
+                    "line_no": 10,
+                    "product_code": "CPN084557",
+                    "raw_product_name": "乱码错误名称",
+                    "raw_spec_model": "999×999×999mm",
+                    "quantity": 100,
+                    "unit_price": "18.11",
+                }
+            ],
+        },
+    )
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        preview = client.post(
+            "/api/orders/pdf-preview",
+            files={"file": ("simair-manual.pdf", b"%PDF-stub", "application/pdf")},
+        )
+        assert preview.status_code == 200, preview.text
+        preview_draft = preview.json()
+        rematch = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": preview_draft,
+                "customer_id": 37,
+                "preview_safety_token": preview_draft["preview_safety_token"],
+            },
+        )
+        assert rematch.status_code == 200, rematch.text
+        rematched = rematch.json()
+        assert rematched["preview_safety_token"] != preview_draft["preview_safety_token"]
+        rematch_claims = _decode_pdf_preview_token_for_test(
+            rematched["preview_safety_token"]
+        )
+        assert rematch_claims["source_name"] == "simair-manual.pdf"
+        assert rematch_claims["source_hash"] == preview_draft["file_hash"]
+        assert rematch_claims["recognition_status"] == "needs_confirmation"
+        assert rematch_claims["customer_route_status"] == "needs_confirmation"
+        assert rematch_claims["customer_match_status"] == "matched"
+        assert rematch_claims["integrity_status"] == "passed"
+        assert rematch_claims["matched_customer_id"] == 37
+        candidate = next(
+            row
+            for row in rematched["items"][0]["product_candidates"]
+            if row["customer_material_code"].endswith("CPN126831")
+        )
+        save = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 37,
+                "customer_po": rematched["customer_po"],
+                "order_date": "2026-07-17",
+                "import_draft": True,
+                "import_integrity_status": "passed",
+                "pdf_import_confirmation": {
+                    "preview_safety_token": rematched["preview_safety_token"],
+                    "confirmed": True,
+                },
+                "items": [
+                    {
+                        "product_id": candidate["id"],
+                        "product_code": "CPN084557",
+                        "product_name": candidate["product_name"],
+                        "specification": candidate["specification"],
+                        "quantity": 100,
+                        "unit_price": "18.11",
+                    }
+                ],
+            },
+        )
+
+    assert save.status_code == 201, save.text
+    log = _database_scalar(
+        app,
+        select(OperationLog).where(OperationLog.action == "PDF_SAFETY_OVERRIDE"),
+    )
+    assert log is not None
+    assert "simair-manual.pdf" in (log.details or "")
+    assert "customer_route=needs_confirmation" in (log.details or "")
+
+
 def test_pdf_preview_uses_ocr_fallback_for_gaotai_image_pdf(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
-    monkeypatch.setattr(orders_api, "extract_text_from_pdf_bytes", lambda _content: "")
+    monkeypatch.setattr(pdf_pipeline, "extract_text_from_pdf_bytes", lambda _content: "")
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "ocr_pdf_bytes",
         lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
     )
@@ -588,15 +1174,15 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
     tmp_path: Path,
 ) -> None:
     app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "extract_text_from_pdf_bytes",
         lambda content: SAMPLE_PO_TEXT if content == b"good" else "",
     )
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "ocr_pdf_bytes",
         lambda _content: (None, "ocr_failed"),
     )
@@ -616,6 +1202,7 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
 
     assert response.status_code == 200
     drafts = response.json()["drafts"]
+    assert all(draft["preview_safety_token"] for draft in drafts)
     assert drafts[0]["recognition_status"] in {"recognized", "needs_confirmation"}
     assert drafts[1]["duplicate_status"] == "duplicate_skipped"
     assert drafts[2]["recognition_status"] == "failed"
@@ -627,10 +1214,11 @@ def test_batch_pdf_preview_uses_ocr_fallback_without_saving_order(
 ) -> None:
     app = _order_import_app(tmp_path)
     import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
-    monkeypatch.setattr(orders_api, "extract_text_from_pdf_bytes", lambda _content: "")
+    monkeypatch.setattr(pdf_pipeline, "extract_text_from_pdf_bytes", lambda _content: "")
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "ocr_pdf_bytes",
         lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
     )
@@ -695,3 +1283,46 @@ def test_simair_merge_keeps_text_numbers_and_dates_while_ocr_supplies_labels() -
     assert merged["items"][0]["delivery_date"] == "2026-07-20"
     assert merged["items"][0]["raw_product_name"] == "纸板内衬"
     assert merged["items"][0]["raw_spec_model"] == "73×35×24.5"
+
+
+def test_pdf_draft_edits_and_reservation_changes_invalidate_confirmation() -> None:
+    source = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh" in source
+    assert 'v-model="item.unit_price" style="width:75px" @input="invalidateImportDraftConfirmation(draft)"' in source
+    assert 'v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)"' in source
+    assert 'v-model="draft.order_date" @input="invalidateImportDraftConfirmation(draft)"' in source
+    assert 'v-model="draft.delivery_date" @input="invalidateImportDraftConfirmation(draft)"' in source
+    assert '@change="selectImportProduct(draft,item)"' in source
+    assert '@change="toggleNewProduct(draft,item)"' in source
+    assert '@click="removeImportDraftItem(draft,item)"' in source
+    assert 'v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" @input="invalidateImportDraftConfirmation(draft)"' in source
+    assert 'draft?.integrity_check?.integrity_status !== "passed"' in source
+
+    helper = source.split("invalidatePdfDraftForItem(item) {", 1)[1].split(
+        "removeImportDraftItem", 1
+    )[0]
+    assert "this.orderImportDrafts.find" in helper
+    assert ".includes(item)" in helper
+    assert "invalidateImportDraftConfirmation(draft)" in helper
+    assert "orderForm" not in helper
+
+    safe_confirm = source.split("confirmSafeOrderLineInventoryRecommendations(line) {", 1)[1].split(
+        "inventorySourcesText", 1
+    )[0]
+    load_inventory = source.split("async loadOrderLineInventory(line, customerId) {", 1)[1].split(
+        "async loadOrderLineManualInventory", 1
+    )[0]
+    confirm = source.split("confirmOrderLineInventory(line, component", 1)[1].split(
+        "skipOrderLineInventory", 1
+    )[0]
+    skip = source.split("skipOrderLineInventory(line, component)", 1)[1].split(
+        "rechooseOrderLineInventory", 1
+    )[0]
+    rechoose = source.split("rechooseOrderLineInventory(line, component", 1)[1].split(
+        "reallocateDraftInventorySequentially", 1
+    )[0]
+    for block in (safe_confirm, load_inventory, confirm, skip, rechoose):
+        assert "invalidatePdfDraftForItem?.(line)" in block

@@ -75,6 +75,7 @@ def test_login_sets_http_only_cookie_returns_me_and_writes_audit(auth_context) -
                 "display_name": "系统管理员",
                 "must_change_password": True,
                 "customer_access_mode": "all",
+                "ui_mode": "standard",
             }
         set_cookie = login.headers["set-cookie"]
         assert "erp_session=" in set_cookie
@@ -158,14 +159,14 @@ def test_user_can_change_own_password_and_must_supply_current_password(
             "/api/auth/password",
             json={
                 "current_password": "wrong-password",
-                "new_password": "NewAdminPass456!",
+                "new_password": "NewSecurePass456!",
             },
         )
         changed = client.put(
             "/api/auth/password",
             json={
                 "current_password": "AdminPass123!",
-                "new_password": "NewAdminPass456!",
+                "new_password": "NewSecurePass456!",
             },
         )
         client.post("/api/auth/logout")
@@ -175,7 +176,7 @@ def test_user_can_change_own_password_and_must_supply_current_password(
         )
         new_login = client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "NewAdminPass456!"},
+            json={"username": "admin", "password": "NewSecurePass456!"},
         )
 
     assert denied.status_code == 400
@@ -228,6 +229,57 @@ def test_admin_can_reset_account_password_and_non_admin_cannot(auth_context) -> 
         assert '"username": "workshop"' in (log.details or "")
 
 
+def test_username_normalization_is_shared_by_create_update_reset_and_login(
+    auth_context,
+) -> None:
+    from app.models.user import User
+
+    app, session_factory = auth_context
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "AdminPass123!"},
+        ).status_code == 200
+        created = client.post(
+            "/api/auth/users",
+            json={
+                "username": "　ｎｅｗ－ｕｓｅｒ　",
+                "password": "StrongCreate123!",
+                "role": "sales",
+                "real_name": "兼容字符用户",
+            },
+        )
+        assert created.status_code == 201
+        assert created.json()["user"]["username"] == "new-user"
+
+        user_id = created.json()["user"]["id"]
+        updated = client.put(
+            f"/api/auth/users/{user_id}",
+            json={"username": "　ｒｅｎａｍｅｄ－ｕｓｅｒ　"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["user"]["username"] == "renamed-user"
+
+        reset = client.put(
+            "/api/auth/users/　ｒｅｎａｍｅｄ－ｕｓｅｒ　/reset-password",
+            json={"new_password": "ResetReady123!"},
+        )
+        assert reset.status_code == 200
+        client.post("/api/auth/logout")
+        login = client.post(
+            "/api/auth/login",
+            json={
+                "username": "　ｒｅｎａｍｅｄ－ｕｓｅｒ　",
+                "password": "ResetReady123!",
+            },
+        )
+
+    assert login.status_code == 200
+    assert login.json()["user"]["username"] == "renamed-user"
+    with session_factory() as session:
+        assert session.scalar(select(User.username).where(User.id == user_id)) == "renamed-user"
+
+
 def test_role_checker_allows_listed_role_and_rejects_other_role(auth_context) -> None:
     from app.api.deps import RoleChecker
 
@@ -259,9 +311,14 @@ def test_role_checker_allows_listed_role_and_rejects_other_role(auth_context) ->
 def test_session_token_rejects_tampering() -> None:
     from app.core.security import create_session_token, decode_session_token
 
-    token = create_session_token(7, secret_key="test-secret", expires_minutes=10)
+    token = create_session_token(
+        7,
+        auth_version=1,
+        secret_key="test-secret",
+        expires_minutes=10,
+    )
 
-    assert decode_session_token(token, secret_key="test-secret") == 7
+    assert decode_session_token(token, secret_key="test-secret") == (7, 1)
     with pytest.raises(ValueError, match="登录凭证无效或已过期"):
         decode_session_token(token + "tampered", secret_key="test-secret")
 

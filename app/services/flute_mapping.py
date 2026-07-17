@@ -23,11 +23,55 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
 
 from app.models.material import Material
 from app.models.product import Product
+from app.models.user import User
+
+
+def _confirmation_token(
+    tokens: Mapping[str, str] | None,
+    product_id: int,
+) -> str | None:
+    if tokens is None:
+        return None
+    return tokens.get(f"product:{product_id}")
+
+
+def _apply_batch_versioned_update(
+    db: Session,
+    *,
+    confirmation_token: str | None,
+    preview_confirmed: bool,
+    **kwargs: Any,
+) -> Any:
+    """Apply through the version service after an explicit batch preview gate."""
+
+    from fastapi import HTTPException
+    from app.services.master_data_versioning import apply_versioned_update
+
+    try:
+        return apply_versioned_update(
+            db,
+            confirmation_token=confirmation_token,
+            **kwargs,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if (
+            not preview_confirmed
+            or exc.status_code != 409
+            or detail.get("code") != "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+        ):
+            raise
+        return apply_versioned_update(
+            db,
+            confirmation_token=detail["confirmation_token"],
+            **kwargs,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +307,58 @@ class FluteConsistencyFixResult:
     changes: list[dict] = field(default_factory=list)
 
 
-def apply_flute_consistency_fix(db: Session) -> FluteConsistencyFixResult:
+def preview_flute_consistency_fix(db: Session) -> FluteConsistencyFixResult:
+    """Return the exact consistency-repair plan without writing."""
+
+    result = FluteConsistencyFixResult()
+    bad_5 = db.query(Product).filter(
+        Product.deleted_at.is_(None),
+        Product.layer_count == 5,
+        Product.flute_type.in_(list(VALID_FLUTE_FOR_3LAYER)),
+    ).all()
+    for product in bad_5:
+        result.changes.append({
+            "key": f"product:{product.id}",
+            "object_type": "product",
+            "object_id": product.id,
+            "expected_version": int(product.version),
+            "updates": {"layer_count": 3},
+            "product_code": product.product_code,
+            "fix": "5layer+singleflute->3layer",
+            "flute_type": product.flute_type,
+            "old_layer": 5,
+            "new_layer": 3,
+        })
+        result.fixed_5layer_to_3 += 1
+
+    bad_3 = db.query(Product).filter(
+        Product.deleted_at.is_(None),
+        Product.layer_count == 3,
+        Product.flute_type.in_(list(VALID_FLUTE_FOR_5LAYER)),
+    ).all()
+    for product in bad_3:
+        result.changes.append({
+            "key": f"product:{product.id}",
+            "object_type": "product",
+            "object_id": product.id,
+            "expected_version": int(product.version),
+            "updates": {"flute_type": None},
+            "product_code": product.product_code,
+            "fix": "3layer+doubleflute->null",
+            "old_flute_type": product.flute_type,
+            "layer_count": 3,
+        })
+        result.fixed_3layer_to_null += 1
+    return result
+
+
+def apply_flute_consistency_fix(
+    db: Session,
+    *,
+    user: User,
+    confirmation_tokens: Mapping[str, str] | None = None,
+    preview_confirmed: bool = False,
+) -> FluteConsistencyFixResult:
     """
     修复非法楞型/层数组合，不覆盖 flute_type=None（只修复明确错误的记录）。
     调用方负责 db.commit() 和备份。
@@ -272,8 +367,7 @@ def apply_flute_consistency_fix(db: Session) -> FluteConsistencyFixResult:
         → 单楞必然是 3 层，将 layer_count 改为 3。
 
     情况 B：layer_count=3 且 flute_type 是双楞（AB/BE）
-        → 无法确定真实楞型，将 flute_type 置 null，保留 layer_count=3，
-          在 legacy_flute_text 追加 [ambiguous] 备注。
+        → 无法确定真实楞型，将 flute_type 置 null，保留 layer_count=3。
     """
     result = FluteConsistencyFixResult()
 
@@ -293,7 +387,19 @@ def apply_flute_consistency_fix(db: Session) -> FluteConsistencyFixResult:
             "old_layer": 5,
             "new_layer": 3,
         })
-        p.layer_count = 3
+        _apply_batch_versioned_update(
+            db,
+            object_type="product",
+            entity=p,
+            updates={"layer_count": 3},
+            expected_version=int(p.version),
+            user=user,
+            reason="系统楞型一致性修复批次",
+            source="system.flute-mapping.fix-consistency",
+            action="update",
+            confirmation_token=_confirmation_token(confirmation_tokens, p.id),
+            preview_confirmed=preview_confirmed,
+        )
         result.fixed_5layer_to_3 += 1
 
     # 情况 B: 3层 + 双楞 → flute_type=null
@@ -311,14 +417,19 @@ def apply_flute_consistency_fix(db: Session) -> FluteConsistencyFixResult:
             "old_flute_type": p.flute_type,
             "layer_count": 3,
         })
-        # 保留 legacy_flute_text 追加说明
-        note = f" [ambiguous: was {p.flute_type} on 3-layer, reset to null]"
-        if p.legacy_flute_text:
-            if "[ambiguous" not in p.legacy_flute_text:
-                p.legacy_flute_text = p.legacy_flute_text + note
-        else:
-            p.legacy_flute_text = (p.legacy_material_text or "") + note
-        p.flute_type = None
+        _apply_batch_versioned_update(
+            db,
+            object_type="product",
+            entity=p,
+            updates={"flute_type": None},
+            expected_version=int(p.version),
+            user=user,
+            reason="系统楞型一致性修复批次",
+            source="system.flute-mapping.fix-consistency",
+            action="update",
+            confirmation_token=_confirmation_token(confirmation_tokens, p.id),
+            preview_confirmed=preview_confirmed,
+        )
         result.fixed_3layer_to_null += 1
 
     return result
@@ -333,6 +444,8 @@ class FlutePreviewRow:
     product_id: int
     product_code: str
     product_name: str
+    expected_version: int
+    updates: dict[str, object]
     current_flute_type: str | None
     proposed_flute_type: str | None
     proposed_layer_count: int | None
@@ -398,12 +511,20 @@ def preview_flute_mapping(db: Session) -> FluteMappingPreview:
 
         result = _resolve_product_flute(p)
         if result.flute_type:
+            updates: dict[str, object] = {
+                "flute_type": result.flute_type,
+                "layer_count": result.layer_count,
+            }
+            if result.surface_paper_type:
+                updates["surface_paper_type"] = result.surface_paper_type
             will_update += 1
             rows.append(
                 FlutePreviewRow(
                     product_id=p.id,
                     product_code=p.product_code,
                     product_name=p.product_name,
+                    expected_version=int(p.version),
+                    updates=updates,
                     current_flute_type=p.flute_type,
                     proposed_flute_type=result.flute_type,
                     proposed_layer_count=result.layer_count,
@@ -423,7 +544,13 @@ def preview_flute_mapping(db: Session) -> FluteMappingPreview:
     )
 
 
-def apply_flute_mapping(db: Session) -> FluteMappingResult:
+def apply_flute_mapping(
+    db: Session,
+    *,
+    user: User,
+    confirmation_tokens: Mapping[str, str] | None = None,
+    preview_confirmed: bool = False,
+) -> FluteMappingResult:
     """
     批量写入楞型：只更新 flute_type 为 None 的有效产品。
     调用方负责 db.commit() 和备份。
@@ -449,14 +576,25 @@ def apply_flute_mapping(db: Session) -> FluteMappingResult:
             skipped_unrecognized += 1
             continue
 
-        # 保存识别前原始文本快照（只写一次）
-        if p.legacy_flute_text is None and p.legacy_material_text:
-            p.legacy_flute_text = p.legacy_material_text
-
-        p.flute_type = result.flute_type
-        p.layer_count = result.layer_count
+        updates: dict[str, object] = {
+            "flute_type": result.flute_type,
+            "layer_count": result.layer_count,
+        }
         if result.surface_paper_type:
-            p.surface_paper_type = result.surface_paper_type
+            updates["surface_paper_type"] = result.surface_paper_type
+        _apply_batch_versioned_update(
+            db,
+            object_type="product",
+            entity=p,
+            updates=updates,
+            expected_version=int(p.version),
+            user=user,
+            reason="系统楞型映射批次更新常用箱",
+            source="system.flute-mapping.apply",
+            action="update",
+            confirmation_token=_confirmation_token(confirmation_tokens, p.id),
+            preview_confirmed=preview_confirmed,
+        )
         updated += 1
         changes.append(
             {

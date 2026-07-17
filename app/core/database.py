@@ -6,7 +6,6 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event
@@ -14,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.backup_retention import auto_cleanup_regular_backups
 from app.core.config import Settings, load_settings, normalize_path, settings
+from app.core.time_contract import beijing_now_naive
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +129,7 @@ def backup_to_nas(
         raise FileNotFoundError(f"数据库文件不存在: {source}")
 
     destination_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    timestamp = beijing_now_naive().strftime("%Y%m%d_%H%M%S_%f")
     if filename_suffix and not re.fullmatch(r"_[A-Za-z0-9_-]+", filename_suffix):
         raise ValueError("备份文件后缀只能包含字母、数字、下划线和连字符")
     destination = (

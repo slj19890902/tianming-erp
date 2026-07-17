@@ -671,3 +671,55 @@ cd D:\纸箱厂erp软件搭建
 1. 下一步只做“最终只读验收”，不得追加任何迁移写入。
 2. 最终只读验收通过后，再做最终备份归档。
 3. 本轮完成后不要宣布项目结束。
+
+## N031 auth_version 迁移与受控回滚（2026-07-17）
+
+迁移 `ba54v8x9z44` 在 `az53v8x9z43` 后为 `users` 增加不可为空的
+`auth_version`，默认值为 `1`。升级会为已有用户回填 `1`，用于使登录
+会话能够按用户撤销。
+
+### 升级
+
+1. 停止应用或确认没有并发数据库写入，创建并验证可恢复备份。
+2. 对目标副本或已获批准的正式数据库执行：
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m alembic upgrade ba54v8x9z44
+   ```
+
+3. 确认版本、字段及 SQLite 完整性：
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m alembic current
+   sqlite3 <database> "PRAGMA integrity_check; PRAGMA foreign_key_check;"
+   ```
+
+### 默认回滚策略：拒绝有用户数据的降级
+
+空 `users` 表可以直接降级；有任一用户时，`downgrade az53v8x9z43` 默认
+失败。这是 fail-closed 保护：删除 `auth_version` 会永久丢失按用户撤销
+会话的状态，旧应用可能重新接受原本应失效的已签名会话。
+
+### 正式紧急回滚：仅限停机并完成会话密钥轮换后
+
+只有在以下条件全部满足时，才允许有用户数据的降级：
+
+1. 应用及所有 worker 已完全停机，且已确认没有旧版本实例继续处理请求。
+2. 已完成并验证数据库备份；回滚范围、负责人和恢复步骤已记录。
+3. 已在部署密钥系统中轮换会话签名密钥，并确保旧密钥不再可用。不要把
+   密钥写入命令行、环境确认值、文档或日志。
+4. 仅为这一次 Alembic 命令设置下列精确确认值，然后立即清除它：
+
+   ```powershell
+   $env:N031_AUTH_VERSION_DOWNGRADE_CONFIRM = "DOWNTIME_COMPLETE_AND_SESSION_SECRET_ROTATED"
+   .\.venv\Scripts\python.exe -m alembic downgrade az53v8x9z43
+   Remove-Item Env:N031_AUTH_VERSION_DOWNGRADE_CONFIRM
+   ```
+
+该确认值只表示操作者已完成停机和密钥轮换；迁移不会读取、校验、输出或
+记录任何会话密钥。它无法替代停机、密钥轮换和备份验证。若任一前提无法
+确认，应保持在 `ba54v8x9z44`，不要降级。
+
+降级后应在隔离环境执行登录和会话失效验收。若重新升级，`auth_version`
+会以 `1` 回填，因此此前更高的撤销版本不可恢复；必须按一次新的会话安全
+切换处理，并要求用户重新登录。

@@ -7,10 +7,25 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, exists, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import PermissionChecker, get_db
+from app.api.deps import (
+    PermissionChecker,
+    customer_scope_ids,
+    get_db,
+    has_permission,
+    has_unrestricted_customer_access,
+    require_customer_access,
+)
+from app.models.historical_purchase import HistoricalPurchaseEntry
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    beijing_now_naive,
+    beijing_today,
+    utc_naive_to_api,
+    utc_now_naive,
+)
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -29,6 +44,7 @@ from app.models.stock_replenishment import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail,
     InventoryLot,
     OrderItemSemiRequirement,
     WarehouseLocation,
@@ -39,6 +55,10 @@ from app.services.history_orders import (
     is_history_order_number,
 )
 from app.services.historical_purchase_lookup import (
+    DEFAULT_SHEET_NAME,
+    _historical_purchase_display_key,
+    _historical_purchase_group_response,
+    normalize_lookup_text,
     search_historical_purchase_database,
 )
 from app.services.stock_replenishment import (
@@ -185,7 +205,10 @@ class PendingMaterialUpdate(BaseModel):
     material_id: int
     layer_count: int | None = None
     flute_type: str | None = None
-    sync_product: bool = True
+    sync_product: bool = False
+    product_expected_version: int | None = Field(default=None, ge=1)
+    product_change_reason: str | None = Field(default=None, max_length=500)
+    product_confirmation_token: str | None = Field(default=None, max_length=2000)
 
     @field_validator("flute_type")
     @classmethod
@@ -1045,6 +1068,139 @@ def _item_or_404(db: Session, item_id: int) -> OrderItem:
     return item
 
 
+def _allowed_customer_ids(user: User, db: Session) -> set[int] | None:
+    """None denotes the existing admin/boss or all-customer access mode."""
+    # A few legacy unit tests call endpoint functions directly with an opaque
+    # dependency placeholder.  Real HTTP requests always receive a User from
+    # PermissionChecker; preserve the old direct-call behavior for placeholders.
+    if not isinstance(user, User):
+        return None
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+def _require_order_item_customer_access(
+    db: Session, item: OrderItem, user: User
+) -> None:
+    customer_id = db.scalar(
+        select(Order.customer_id).where(Order.id == item.order_id)
+    )
+    if customer_id is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(customer_id, user, db)
+
+
+def _supplier_order_is_visible(
+    order: SupplierRequisitionOrder, user: User, db: Session
+) -> bool:
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return True
+    # Supplier orders only carry a customer name snapshot.  Scope through the
+    # linked order item; an unlinked legacy/manual line is deliberately hidden.
+    linked_ids = [item.order_item_id for item in order.items if item.order_item_id]
+    if not linked_ids or len(linked_ids) != len(order.items):
+        return False
+    rows = db.execute(
+        select(OrderItem.id, Order.customer_id)
+        .join(Order, OrderItem.order_id == Order.id)
+        .where(OrderItem.id.in_(linked_ids))
+    ).all()
+    return (
+        len(rows) == len(set(linked_ids))
+        and {customer_id for _item_id, customer_id in rows}.issubset(allowed)
+    )
+
+
+def _require_supplier_order_customer_access(
+    order: SupplierRequisitionOrder, user: User, db: Session
+) -> None:
+    if not _supplier_order_is_visible(order, user, db):
+        raise HTTPException(status_code=403, detail="无客户访问权限")
+
+
+def _apply_supplier_order_scope(query, user: User, db: Session):
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return query
+    visible_order_ids = (
+        select(SupplierRequisitionOrderItem.supplier_order_id)
+        .join(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.customer_id.in_(allowed))
+    )
+    inaccessible_order_ids = (
+        select(SupplierRequisitionOrderItem.supplier_order_id)
+        .outerjoin(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .where(
+            or_(
+                SupplierRequisitionOrderItem.order_item_id.is_(None),
+                Order.customer_id.is_(None),
+                ~Order.customer_id.in_(allowed),
+            )
+        )
+    )
+    return query.where(
+        SupplierRequisitionOrder.id.in_(visible_order_ids),
+        ~SupplierRequisitionOrder.id.in_(inaccessible_order_ids),
+    )
+
+
+def _requisition_is_visible(group: Requisition, user: User, db: Session) -> bool:
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return True
+    item_ids = [item.order_item_id for item in group.items]
+    if not item_ids:
+        return False
+    rows = db.execute(
+        select(OrderItem.id, Order.customer_id)
+        .join(Order, OrderItem.order_id == Order.id)
+        .where(OrderItem.id.in_(item_ids))
+    ).all()
+    return (
+        len(rows) == len(set(item_ids))
+        and {customer_id for _item_id, customer_id in rows}.issubset(allowed)
+    )
+
+
+def _require_requisition_customer_access(
+    group: Requisition, user: User, db: Session
+) -> None:
+    if not _requisition_is_visible(group, user, db):
+        raise HTTPException(status_code=403, detail="无客户访问权限")
+
+
+def _apply_requisition_scope(query, user: User, db: Session):
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return query
+    visible_group_ids = (
+        select(RequisitionItem.requisition_id)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.customer_id.in_(allowed))
+    )
+    inaccessible_group_ids = (
+        select(RequisitionItem.requisition_id)
+        .outerjoin(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .where(
+            or_(
+                OrderItem.id.is_(None),
+                Order.customer_id.is_(None),
+                ~Order.customer_id.in_(allowed),
+            )
+        )
+    )
+    return query.where(
+        Requisition.id.in_(visible_group_ids),
+        ~Requisition.id.in_(inaccessible_group_ids),
+    )
+
+
 def _item_response(item: OrderItem, db: Session | None = None) -> dict:
     pieces_per_box = _pieces_per_box(item)
     cutting_mode = item.special_process if item.special_process in CUTTING_MODE_FACTORS else DEFAULT_CUTTING_MODE
@@ -1099,7 +1255,11 @@ def _item_response(item: OrderItem, db: Session | None = None) -> dict:
         "cardboard_len": item.cardboard_len,
         "cardboard_width": item.cardboard_width,
         "requisition_date": item.requisition_date,
-        "supplier_delivery_time": item.supplier_delivery_time,
+        "supplier_delivery_time": (
+            beijing_naive_to_api(item.supplier_delivery_time)
+            if item.supplier_delivery_time
+            else None
+        ),
         "supplier_order_number": item.supplier_order_number,
         "remark": item.requisition_remark,
     }
@@ -1849,6 +2009,7 @@ def _draft_lines_from_group(
 def _pending_selection_preview_groups(
     db: Session,
     payload: PendingSupplierOrderCreatePayload,
+    user: User,
 ) -> dict:
     registry = build_display_registry(db)
     grouped: dict[str, list[dict]] = {}
@@ -1872,6 +2033,7 @@ def _pending_selection_preview_groups(
             item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
                 db, selection.order_item_id
             )
+            _require_order_item_customer_access(db, item, user)
             if _order_item_in_merged_pending_group(db, item.id):
                 raise HTTPException(status_code=409, detail="订单明细已属于待报料合并组，不能按普通行重复报料")
             supplier_name = (selection.supplier_name or item.snapshot_supplier_name or "").strip()
@@ -1948,6 +2110,7 @@ def _pending_selection_preview_groups(
         group = db.get(Requisition, selection.merge_group_id)
         if group is None:
             raise HTTPException(status_code=404, detail="待报料合并组不存在")
+        _require_requisition_customer_access(group, user, db)
         if group.status != "merged_pending":
             raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
         rows = _merge_group_rows(db, group.id)
@@ -2350,7 +2513,7 @@ def _create_supplier_order_for_pending_entries(
     )
     db.add(order)
     db.flush()
-    requisition_date = date.today()
+    requisition_date = beijing_today()
     for entry in entries:
         order_item: OrderItem = entry["order_item"]
         req_item: RequisitionItem | None = entry["req_item"]
@@ -2403,11 +2566,17 @@ def pending_requisitions(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    user = _user
     registry = build_display_registry(db)
-    merge_groups = db.scalars(
+    allowed = _allowed_customer_ids(user, db)
+    merge_group_query = (
         select(Requisition)
+        .options(selectinload(Requisition.items))
         .where(Requisition.status == "merged_pending")
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
+    )
+    merge_groups = db.scalars(
+        _apply_requisition_scope(merge_group_query, user, db)
     ).all()
     merged_order_item_ids = set(
         db.scalars(
@@ -2433,9 +2602,9 @@ def pending_requisitions(
     )
     if merged_order_item_ids:
         base_query = base_query.where(~OrderItem.id.in_(merged_order_item_ids))
-    rows = db.execute(
-        base_query.order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
-    ).all()
+    if allowed is not None:
+        base_query = base_query.where(Order.customer_id.in_(allowed))
+    rows = db.execute(base_query.order_by(OrderItem.created_at.desc(), OrderItem.id.desc())).all()
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
@@ -2480,6 +2649,7 @@ def pending_requisitions(
                 "customer_id": customer.id,
                 "customer_name": customer.name,
                 "product_id": product.id,
+                "product_version": product.version,
                 "product_code": item.snapshot_product_code or product.product_code,
                 "product_name": item.snapshot_product_name,
                 "specification": item.snapshot_spec,
@@ -2581,10 +2751,28 @@ def update_pending_material(
     user: User = Depends(can_operate),
 ) -> dict:
     item = _item_or_404(db, item_id)
+    _require_order_item_customer_access(db, item, user)
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="已生成报料单的明细不能更换供应商或材质")
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细不能更换供应商或材质")
+    product_change_reason: str | None = None
+    if payload.sync_product:
+        if not has_permission(user, "products.edit"):
+            raise HTTPException(status_code=403, detail="缺少 products.edit 权限")
+        if not item.product_id:
+            raise HTTPException(status_code=409, detail="当前报料明细未关联常用箱")
+        if payload.product_expected_version is None:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须提供 product_expected_version",
+            )
+        product_change_reason = (payload.product_change_reason or "").strip()
+        if not product_change_reason:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须填写 product_change_reason",
+            )
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
@@ -2622,10 +2810,30 @@ def update_pending_material(
     item.flute_type = flute_type
     if payload.sync_product and item.product_id:
         product = db.get(Product, item.product_id)
-        if product is not None:
-            product.material_id = material.id
-            product.layer_count = layer_count
-            product.flute_type = flute_type
+        if product is None:
+            raise HTTPException(status_code=409, detail="关联常用箱不存在，报料明细未保存")
+        product_updates = {
+            field_name: value
+            for field_name, value in {
+                "material_id": material.id,
+                "layer_count": layer_count,
+                "flute_type": flute_type,
+            }.items()
+            if getattr(product, field_name) != value
+        }
+        from app.services.master_data_versioning import apply_versioned_update
+
+        apply_versioned_update(
+            db,
+            object_type="product",
+            entity=product,
+            updates=product_updates,
+            expected_version=payload.product_expected_version,
+            user=user,
+            reason=product_change_reason,
+            source="requisition.pending-material.sync-product",
+            confirmation_token=payload.product_confirmation_token,
+        )
     _audit(
         db,
         user=user,
@@ -2665,6 +2873,7 @@ def list_requisition_items(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    user = _user
     registry = build_display_registry(db)
     query = (
         select(OrderItem, Order, Customer, Product)
@@ -2677,6 +2886,9 @@ def list_requisition_items(
             OrderItem.id.desc(),
         )
     )
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is not None:
+        query = query.where(Order.customer_id.in_(allowed))
     rows = db.execute(query).all()
     items: list[dict] = []
     for item, order, customer, product in rows:
@@ -2719,7 +2931,7 @@ def create_batch(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    requisition_date = date.today()
+    requisition_date = beijing_today()
     try:
         batch = Requisition(
             requisition_number=_next_number(db, requisition_date),
@@ -2744,6 +2956,7 @@ def create_batch(
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
             item, product = row
+            _require_order_item_customer_access(db, item, user)
             if item.material_status == "received":
                 raise HTTPException(status_code=409, detail="已入库明细不能报料")
             if item.requisition_status != "未报料":
@@ -2904,6 +3117,7 @@ def edit_requisition(
     user: User = Depends(can_operate),
 ) -> dict:
     item = _item_or_404(db, item_id)
+    _require_order_item_customer_access(db, item, user)
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
@@ -2974,6 +3188,7 @@ def supplier_schedule(
     user: User = Depends(can_operate),
 ) -> dict:
     item = _item_or_404(db, item_id)
+    _require_order_item_customer_access(db, item, user)
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止登记排单")
     if item.requisition_status not in {"已报料", "供应商已排单"}:
@@ -3003,6 +3218,7 @@ def cancel_requisition(
     user: User = Depends(can_operate),
 ) -> dict:
     item = _item_or_404(db, item_id)
+    _require_order_item_customer_access(db, item, user)
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
@@ -3067,6 +3283,195 @@ def _stock_policy_query():
     )
 
 
+def _stock_policy_customer_id(
+    db: Session,
+    policy: InventoryStockPolicy,
+    *,
+    relationships_loaded: bool = False,
+) -> int | None:
+    if policy.customer_id is None:
+        return None
+    customer_ids = {policy.customer_id}
+    if policy.product_id is not None:
+        product = (
+            policy.product
+            if relationships_loaded
+            else db.get(Product, policy.product_id)
+        )
+        if product is None or product.deleted_at is not None:
+            return None
+        customer_ids.add(product.customer_id)
+    return next(iter(customer_ids)) if len(customer_ids) == 1 else None
+
+
+def _require_stock_policy_customer_access(
+    db: Session, policy: InventoryStockPolicy, user: User
+) -> None:
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return
+    customer_id = _stock_policy_customer_id(db, policy)
+    if customer_id is None or customer_id not in allowed:
+        raise HTTPException(status_code=403, detail="无客户库存策略访问权限")
+
+
+def _apply_stock_policy_scope(query, user: User, db: Session):
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return query
+    matching_product = exists(
+        select(Product.id).where(
+            Product.id == InventoryStockPolicy.product_id,
+            Product.customer_id == InventoryStockPolicy.customer_id,
+            InventoryStockPolicy.customer_id.in_(allowed),
+            Product.customer_id.in_(allowed),
+            Product.deleted_at.is_(None),
+        )
+    )
+    return query.where(
+        or_(
+            and_(
+                InventoryStockPolicy.product_id.is_(None),
+                InventoryStockPolicy.customer_id.in_(allowed),
+            ),
+            matching_product,
+        )
+    )
+
+
+def _stock_policy_summary(
+    db: Session,
+    policy: InventoryStockPolicy,
+    user: User,
+) -> dict:
+    summary = stock_policy_dict(db, policy)
+    if has_unrestricted_customer_access(user, db):
+        return summary
+    customer_id = _stock_policy_customer_id(
+        db, policy, relationships_loaded=True
+    )
+    if customer_id is None:
+        return summary
+    if policy.target_inventory_type == "finished" and policy.product_id is not None:
+        available = int(
+            db.scalar(
+                select(func.coalesce(func.sum(InventoryLot.quantity_available), 0))
+                .join(
+                    FinishedGoodsInventoryDetail,
+                    FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+                )
+                .join(
+                    WarehouseLocation,
+                    WarehouseLocation.id == InventoryLot.warehouse_location_id,
+                )
+                .where(
+                    InventoryLot.inventory_type == "finished",
+                    InventoryLot.status == "active",
+                    FinishedGoodsInventoryDetail.product_id == policy.product_id,
+                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+                    FinishedGoodsInventoryDetail.is_general.is_(False),
+                    or_(
+                        WarehouseLocation.source_version.is_(None),
+                        WarehouseLocation.source_version != "V11",
+                    ),
+                )
+            )
+            or 0
+        )
+        summary["available_quantity"] = available
+        summary["warning_triggered"] = bool(
+            policy.active and available <= int(policy.warning_quantity or 0)
+        )
+        summary["suggested_replenishment_quantity"] = max(
+            int(policy.target_quantity or 0) - available,
+            0,
+        )
+    return summary
+
+
+def _stock_replenishment_item_customer_id(
+    db: Session,
+    item: StockReplenishmentOrderItem,
+    *,
+    relationships_loaded: bool = False,
+) -> int | None:
+    customer_ids: set[int] = set()
+    if item.customer_id is not None:
+        customer_ids.add(item.customer_id)
+    if item.product_id is not None:
+        product = (
+            item.product
+            if relationships_loaded
+            else db.get(Product, item.product_id)
+        )
+        if product is None or product.deleted_at is not None:
+            return None
+        customer_ids.add(product.customer_id)
+    if item.stock_policy_id is not None:
+        policy = (
+            item.stock_policy
+            if relationships_loaded
+            else db.get(InventoryStockPolicy, item.stock_policy_id)
+        )
+        if policy is None:
+            return None
+        policy_customer_id = _stock_policy_customer_id(
+            db,
+            policy,
+            relationships_loaded=relationships_loaded,
+        )
+        if policy_customer_id is None:
+            return None
+        customer_ids.add(policy_customer_id)
+    return next(iter(customer_ids)) if len(customer_ids) == 1 else None
+
+
+def _stock_replenishment_order_is_visible(
+    db: Session,
+    order: StockReplenishmentOrder,
+    user: User,
+    *,
+    relationships_loaded: bool = False,
+) -> bool:
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return True
+    if not order.items:
+        return False
+    item_customer_ids = {
+        _stock_replenishment_item_customer_id(
+            db,
+            item,
+            relationships_loaded=relationships_loaded,
+        )
+        for item in order.items
+    }
+    if None in item_customer_ids or not item_customer_ids.issubset(allowed):
+        return False
+    if order.customer_id is not None and (
+        order.customer_id not in allowed
+        or order.customer_id not in item_customer_ids
+    ):
+        return False
+    return True
+
+
+def _require_stock_replenishment_order_access(
+    db: Session,
+    order: StockReplenishmentOrder,
+    user: User,
+    *,
+    relationships_loaded: bool = False,
+) -> None:
+    if not _stock_replenishment_order_is_visible(
+        db,
+        order,
+        user,
+        relationships_loaded=relationships_loaded,
+    ):
+        raise HTTPException(status_code=403, detail="无客户补库单访问权限")
+
+
 def _apply_stock_policy_payload(
     row: InventoryStockPolicy,
     payload: StockPolicyPayload,
@@ -3093,7 +3498,7 @@ def list_stock_policies(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    query = _stock_policy_query()
+    query = _apply_stock_policy_scope(_stock_policy_query(), _user, db)
     if not include_inactive:
         query = query.where(InventoryStockPolicy.active.is_(True))
     if target_inventory_type:
@@ -3102,7 +3507,7 @@ def list_stock_policies(
             == target_inventory_type.strip().lower()
         )
     rows = db.scalars(query.order_by(InventoryStockPolicy.id.desc())).all()
-    items = [stock_policy_dict(db, row) for row in rows]
+    items = [_stock_policy_summary(db, row, _user) for row in rows]
     if q and q.strip():
         keyword = q.strip().lower()
         items = [
@@ -3190,7 +3595,11 @@ def search_stock_replenishment_products(
             Product.deleted_at.is_(None),
         )
     )
+    allowed_customer_ids = _allowed_customer_ids(_user, db)
+    if allowed_customer_ids is not None:
+        query = query.where(Product.customer_id.in_(allowed_customer_ids))
     if customer_id:
+        require_customer_access(customer_id, _user, db)
         query = query.where(Product.customer_id == customer_id)
     if q and q.strip():
         pattern = f"%{q.strip()}%"
@@ -3255,11 +3664,15 @@ def create_stock_policy(
     try:
         _apply_stock_policy_payload(row, payload, user_id=user.id)
         validate_stock_policy(db, row)
+        _require_stock_policy_customer_access(db, row, user)
         db.add(row)
         db.commit()
         row = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == row.id))
         assert row is not None
-        return stock_policy_dict(db, row)
+        return _stock_policy_summary(db, row, user)
+    except HTTPException:
+        db.rollback()
+        raise
     except (StockReplenishmentError, WarehouseInventoryError) as error:
         db.rollback()
         raise HTTPException(
@@ -3277,13 +3690,18 @@ def update_stock_policy(
     row = db.get(InventoryStockPolicy, policy_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库存预警策略不存在。")
+    _require_stock_policy_customer_access(db, row, user)
     try:
         _apply_stock_policy_payload(row, payload, user_id=user.id)
         validate_stock_policy(db, row)
+        _require_stock_policy_customer_access(db, row, user)
         db.commit()
         row = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == policy_id))
         assert row is not None
-        return stock_policy_dict(db, row)
+        return _stock_policy_summary(db, row, user)
+    except HTTPException:
+        db.rollback()
+        raise
     except (StockReplenishmentError, WarehouseInventoryError) as error:
         db.rollback()
         raise HTTPException(
@@ -3300,7 +3718,8 @@ def stock_policy_replenishment_draft(
     policy = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == policy_id))
     if policy is None:
         raise HTTPException(status_code=404, detail="库存预警策略不存在。")
-    summary = stock_policy_dict(db, policy)
+    _require_stock_policy_customer_access(db, policy, _user)
+    summary = _stock_policy_summary(db, policy, _user)
     return {
         "source_type": "stock_warning",
         "supplier_name": policy.supplier_name,
@@ -3341,6 +3760,18 @@ def _replenishment_order_query():
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.inventory_lot
         ),
+        selectinload(StockReplenishmentOrder.items).selectinload(
+            StockReplenishmentOrderItem.customer
+        ),
+        selectinload(StockReplenishmentOrder.items).selectinload(
+            StockReplenishmentOrderItem.product
+        ),
+        selectinload(StockReplenishmentOrder.items)
+        .selectinload(StockReplenishmentOrderItem.stock_policy)
+        .selectinload(InventoryStockPolicy.customer),
+        selectinload(StockReplenishmentOrder.items)
+        .selectinload(StockReplenishmentOrderItem.stock_policy)
+        .selectinload(InventoryStockPolicy.product),
     )
 
 
@@ -3497,9 +3928,10 @@ def create_stock_replenishment_order(
             remark=payload.remark,
             created_by=user.id,
             confirmed_by=user.id,
-            confirmed_at=datetime.now(),
+            confirmed_at=utc_now_naive(),
         )
         order.items = items
+        _require_stock_replenishment_order_access(db, order, user)
         db.add(order)
         db.flush()
         if payload.stock_now:
@@ -3527,6 +3959,13 @@ def list_stock_replenishment_orders(
     if status_filter:
         query = query.where(StockReplenishmentOrder.status == status_filter.strip())
     rows = db.scalars(query.order_by(StockReplenishmentOrder.id.desc())).all()
+    rows = [
+        row
+        for row in rows
+        if _stock_replenishment_order_is_visible(
+            db, row, _user, relationships_loaded=True
+        )
+    ]
     return {"items": [replenishment_order_dict(row) for row in rows]}
 
 
@@ -3541,6 +3980,9 @@ def get_stock_replenishment_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="库存补库单不存在。")
+    _require_stock_replenishment_order_access(
+        db, order, _user, relationships_loaded=True
+    )
     return replenishment_order_dict(order)
 
 
@@ -3555,6 +3997,9 @@ def print_stock_replenishment_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="库存补库单不存在。")
+    _require_stock_replenishment_order_access(
+        db, order, _user, relationships_loaded=True
+    )
     payload = replenishment_order_dict(order)
     payload["sender"] = _company_sender(db)
     return payload
@@ -3571,6 +4016,9 @@ def stock_saved_replenishment_order(
     )
     if order is None:
         raise HTTPException(status_code=404, detail="库存补库单不存在。")
+    _require_stock_replenishment_order_access(
+        db, order, user, relationships_loaded=True
+    )
     try:
         stock_replenishment_order(db, order=order, operator_id=user.id)
         db.commit()
@@ -3593,7 +4041,72 @@ def search_historical_purchase_source(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    return search_historical_purchase_database(db, q, limit=limit)
+    user = _user
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is None:
+        return search_historical_purchase_database(db, q, limit=limit)
+
+    # Customer attribution is optional in imported history.  Scoped accounts
+    # intentionally see only attributed rows, with the scope applied before
+    # grouping and limiting so unrelated history cannot crowd out valid hits.
+    normalized_query = normalize_lookup_text(q)
+    indexed_records = int(
+        db.scalar(
+            select(func.count(HistoricalPurchaseEntry.id)).where(
+                HistoricalPurchaseEntry.customer_id.in_(allowed)
+            )
+        )
+        or 0
+    )
+    if not normalized_query:
+        return {
+            "query": q,
+            "items": [],
+            "total_matches": 0,
+            "source_record_matches": 0,
+            "indexed_records": indexed_records,
+            "source_workbook": None,
+            "source_sheet": DEFAULT_SHEET_NAME,
+        }
+    matching_rows = list(
+        db.scalars(
+            select(HistoricalPurchaseEntry)
+            .where(
+                HistoricalPurchaseEntry.customer_id.in_(allowed),
+                HistoricalPurchaseEntry.normalized_search_text.contains(
+                    normalized_query
+                ),
+            )
+            .order_by(
+                HistoricalPurchaseEntry.record_date.desc(),
+                HistoricalPurchaseEntry.source_row.desc(),
+            )
+        )
+    )
+    grouped_rows: dict[tuple, list[HistoricalPurchaseEntry]] = {}
+    for row in matching_rows:
+        grouped_rows.setdefault(
+            _historical_purchase_display_key(row), []
+        ).append(row)
+    groups = list(grouped_rows.values())
+    return {
+        "query": q,
+        "items": [
+            _historical_purchase_group_response(group)
+            for group in groups[:limit]
+        ],
+        "total_matches": len(groups),
+        "source_record_matches": len(matching_rows),
+        "indexed_records": indexed_records,
+        "source_workbook": (
+            matching_rows[0].source_workbook if matching_rows else None
+        ),
+        "source_sheet": (
+            matching_rows[0].source_sheet
+            if matching_rows
+            else DEFAULT_SHEET_NAME
+        ),
+    }
 
 
 @router.get("/search_history")
@@ -3603,6 +4116,7 @@ def search_history(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    user = _user
     registry = build_display_registry(db)
     query = (
         select(OrderItem, Order, Customer, Product)
@@ -3623,6 +4137,9 @@ def search_history(
                 OrderItem.snapshot_spec.like(pattern),
             )
         )
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is not None:
+        query = query.where(Order.customer_id.in_(allowed))
     rows = db.execute(
         query.order_by(
             OrderItem.requisition_date.desc(),
@@ -3660,8 +4177,9 @@ def merge_suggestions(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    user = _user
     registry = build_display_registry(db)
-    rows = db.execute(
+    query = (
         select(OrderItem, Order, Customer, Product)
         .join(Order, Order.id == OrderItem.order_id)
         .join(Customer, Customer.id == Order.customer_id)
@@ -3673,7 +4191,11 @@ def merge_suggestions(
             OrderItem.is_force_closed.is_(False),
         )
         .order_by(OrderItem.created_at.desc(), OrderItem.id.desc())
-    ).all()
+    )
+    allowed = _allowed_customer_ids(user, db)
+    if allowed is not None:
+        query = query.where(Order.customer_id.in_(allowed))
+    rows = db.execute(query).all()
 
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
@@ -3808,10 +4330,12 @@ def create_merge_group(
     user: User = Depends(can_operate),
 ) -> dict:
     rows = _validate_merge_member_rows(db, payload.member_item_ids)
+    for item, _order, _customer, _product in rows:
+        _require_order_item_customer_access(db, item, user)
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
-    requisition_date = date.today()
+    requisition_date = beijing_today()
     try:
         group = Requisition(
             requisition_number=_next_number(db, requisition_date),
@@ -3885,6 +4409,7 @@ def update_merge_group(
     group = db.get(Requisition, group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="待报料合并组不存在")
+    _require_requisition_customer_access(group, user, db)
     if group.status != "merged_pending":
         raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能修改")
     try:
@@ -3944,6 +4469,7 @@ def create_supplier_order_from_merge_group(
     group = db.get(Requisition, group_id)
     if group is None:
         raise HTTPException(status_code=404, detail="待报料合并组不存在")
+    _require_requisition_customer_access(group, user, db)
     if group.status != "merged_pending":
         raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能重复生成")
     supplier_name = (group.supplier_name or "").strip()
@@ -4035,7 +4561,7 @@ def create_supplier_order_from_merge_group(
     try:
         db.add(order)
         db.flush()
-        requisition_date = date.today()
+        requisition_date = beijing_today()
         for (
             req_item,
             order_item,
@@ -4113,6 +4639,7 @@ def print_batch(
     batch = db.get(Requisition, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="报料单不存在")
+    _require_requisition_customer_access(batch, _user, db)
     if batch.status in {"merged_pending", "supplier_requisition_created"}:
         raise HTTPException(status_code=409, detail="待报料合并组不是正式报料单，不能打印")
     rows = db.execute(
@@ -4247,8 +4774,7 @@ class SupplierOrderCreatePayload(BaseModel):
 
 def _supplier_order_number(db: Session) -> str:
     """生成供应商报料单号，格式：SRO-YYYYMMDD-NNNN"""
-    from datetime import date as _date
-    today_str = _date.today().strftime("%Y%m%d")
+    today_str = beijing_today().strftime("%Y%m%d")
     prefix = f"SRO-{today_str}-"
     count = db.scalar(
         select(func.count(SupplierRequisitionOrder.id)).where(
@@ -4470,8 +4996,10 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "requisition_qty": order.requisition_qty,
         "remark": order.remark,
         "status": order.status,
-        "created_at": order.created_at,
-        "voided_at": order.voided_at,
+        "created_at": utc_naive_to_api(order.created_at) if order.created_at else None,
+        "voided_at": (
+            beijing_naive_to_api(order.voided_at) if order.voided_at else None
+        ),
         "lines": purchase_lines,
         "items": purchase_lines,
         "source_items": source_items,
@@ -4488,6 +5016,7 @@ def reserve_semi_inventory_from_pending(
         item, _order, _customer, product = _ensure_pending_order_item_for_supplier_order(
             db, payload.order_item_id
         )
+        _require_order_item_customer_access(db, item, user)
         specs = _semi_component_specs_for_requisition(
             item,
             product,
@@ -4512,6 +5041,13 @@ def reserve_semi_inventory_from_pending(
         ).all()
         if len(inventory_lots) != len(lot_ids):
             raise HTTPException(status_code=404, detail="所选半成品库存批次不存在")
+        allowed = _allowed_customer_ids(user, db)
+        if allowed is not None and any(
+            lot.semi_finished_detail is None
+            or lot.semi_finished_detail.owner_customer_id not in allowed
+            for lot in inventory_lots
+        ):
+            raise HTTPException(status_code=403, detail="无客户库存访问权限")
         inventory_lots.sort(key=lambda row: (row.stock_date, row.id))
         first_detail = inventory_lots[0].semi_finished_detail
         if first_detail is None:
@@ -4638,7 +5174,7 @@ def preview_supplier_orders_from_pending_selection(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    return _pending_selection_preview_groups(db, payload)
+    return _pending_selection_preview_groups(db, payload, _user)
 
 
 @router.post("/supplier-orders/from-pending-selection", status_code=status.HTTP_201_CREATED)
@@ -4649,6 +5185,9 @@ def create_supplier_orders_from_pending_selection(
 ) -> dict:
     try:
         grouped, touched_groups = _draft_group_entries_by_purchase_lines(db, payload)
+        for entries in grouped.values():
+            for entry in entries:
+                _require_order_item_customer_access(db, entry["order_item"], user)
         created_orders: list[SupplierRequisitionOrder] = []
         for supplier_name, entries in grouped.items():
             created_orders.append(
@@ -4726,9 +5265,16 @@ def create_supplier_order(
                 status_code=400,
                 detail="旧库存抵扣字段已停用，真实抵扣只能来自成品库存预占",
             )
+        if member.item_id is None and user.role not in {"admin", "boss"}:
+            raise HTTPException(
+                status_code=403,
+                detail="受限账号不能创建无订单明细关联的手工报料单",
+            )
         order_item = db.get(OrderItem, member.item_id) if member.item_id else None
         if member.item_id is not None and order_item is None:
             raise HTTPException(status_code=404, detail="订单明细不存在")
+        if order_item is not None:
+            _require_order_item_customer_access(db, order_item, user)
         if order_item is None:
             pieces_per_box = max(int(member.pieces_per_box or 1), 1)
             production_required_qty = max(int(member.quantity or 0), 0)
@@ -4867,9 +5413,13 @@ def list_supplier_orders(
     _user: User = Depends(can_read),
 ) -> dict:
     """列出供应商报料单（最新在前）。"""
-    q = select(SupplierRequisitionOrder)
+    user = _user
+    q = select(SupplierRequisitionOrder).options(
+        selectinload(SupplierRequisitionOrder.items)
+    )
     if status_filter:
         q = q.where(SupplierRequisitionOrder.status == status_filter)
+    q = _apply_supplier_order_scope(q, user, db)
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     orders = db.scalars(
         q.order_by(SupplierRequisitionOrder.created_at.desc())
@@ -4889,10 +5439,14 @@ def list_reported_documents(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    user = _user
     registry = build_display_registry(db)
     documents: list[dict] = []
+    supplier_order_query = select(SupplierRequisitionOrder).options(
+        selectinload(SupplierRequisitionOrder.items)
+    )
     supplier_orders = db.scalars(
-        select(SupplierRequisitionOrder).order_by(
+        _apply_supplier_order_scope(supplier_order_query, user, db).order_by(
             SupplierRequisitionOrder.created_at.desc(),
             SupplierRequisitionOrder.id.desc(),
         )
@@ -4926,6 +5480,10 @@ def list_reported_documents(
         )
     ).all()
     for order in stock_orders:
+        if not _stock_replenishment_order_is_visible(
+            db, order, user, relationships_loaded=True
+        ):
+            continue
         product_codes = _unique_text(
             [item.product_code_snapshot or item.product_name_snapshot for item in order.items]
         )
@@ -4957,11 +5515,27 @@ def list_reported_documents(
             }
         )
 
-    legacy_batches = db.scalars(
+    legacy_query = (
         select(Requisition)
+        .options(selectinload(Requisition.items))
         .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]))
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
+    )
+    legacy_batches = db.scalars(
+        _apply_requisition_scope(legacy_query, user, db)
     ).all()
+    legacy_order_item_ids = {
+        item.order_item_id for batch in legacy_batches for item in batch.items
+    }
+    legacy_order_rows = {
+        item_id: (order, customer)
+        for item_id, order, customer in db.execute(
+            select(OrderItem.id, Order, Customer)
+            .join(Order, Order.id == OrderItem.order_id)
+            .join(Customer, Customer.id == Order.customer_id)
+            .where(OrderItem.id.in_(legacy_order_item_ids))
+        ).all()
+    } if legacy_order_item_ids else {}
     for batch in legacy_batches:
         order_numbers: list[str | None] = []
         product_codes: list[str | None] = []
@@ -4970,15 +5544,12 @@ def list_reported_documents(
         for item in batch.items:
             total_requisition_qty += int(item.requisition_qty or 0)
             product_codes.append(item.product_code_snapshot)
-            order_item = db.get(OrderItem, item.order_item_id)
-            if order_item is None:
+            order_row = legacy_order_rows.get(item.order_item_id)
+            if order_row is None:
                 continue
-            order = db.get(Order, order_item.order_id)
-            if order is not None:
-                order_numbers.append(display_order_number(order, registry))
-                customer = db.get(Customer, order.customer_id)
-                if customer is not None:
-                    customer_names.append(customer.name)
+            order, customer = order_row
+            order_numbers.append(display_order_number(order, registry))
+            customer_names.append(customer.name)
         documents.append(
             {
                 "source_type": "legacy_material_requisition",
@@ -5003,7 +5574,20 @@ def list_reported_documents(
         ),
         reverse=True,
     )
-    return {"total": len(documents), "items": documents}
+    return {
+        "total": len(documents),
+        "items": [
+            {
+                **document,
+                "created_at": (
+                    utc_naive_to_api(document["created_at"])
+                    if document["created_at"]
+                    else None
+                ),
+            }
+            for document in documents
+        ],
+    }
 
 
 @router.get("/supplier-orders/{order_id}")
@@ -5012,9 +5596,11 @@ def get_supplier_order(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    user = _user
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, user, db)
     return _supplier_order_dict(order, db)
 
 
@@ -5024,15 +5610,15 @@ def void_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    from datetime import datetime as _datetime
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, user, db)
     if order.status == "voided":
         raise HTTPException(status_code=400, detail="该报料单已作废")
 
     order.status = "voided"
-    order.voided_at = _datetime.now()
+    order.voided_at = beijing_now_naive()
 
     for item in order.items:
         if item.order_item_id:

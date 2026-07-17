@@ -368,6 +368,9 @@ def test_three_and_five_layer_replenishment_regression(
 def test_high_confidence_mapping_validates_seven_layer_code_and_clears_flute(
     tmp_path: Path,
 ) -> None:
+    from types import SimpleNamespace
+
+    from app.api.system import preview_high_confidence_mapping
     from app.core.database import create_sqlite_engine
     from app.models import Base
     from app.models.customer import Customer
@@ -465,9 +468,19 @@ def test_high_confidence_mapping_validates_seven_layer_code_and_clears_flute(
         )
         db.commit()
 
+        actor = SimpleNamespace(id=None, username="system", role="admin")
+        preview = preview_high_confidence_mapping(db=db, user=actor)
+        assert preview["changes"]
+        assert set(preview["confirmation_tokens"]) == {
+            change["key"] for change in preview["changes"]
+        }
+
         result = apply_high_confidence_material_mapping(
             db,
             tmp_path / "unused-seven-layer.csv",
+            user=actor,
+            confirmation_tokens=preview["confirmation_tokens"],
+            preview_confirmed=True,
         )
         db.commit()
 
@@ -490,6 +503,116 @@ def test_high_confidence_mapping_validates_seven_layer_code_and_clears_flute(
             db.refresh(product)
             assert product.material_id is None
     engine.dispose()
+
+
+def test_batch_versioned_update_retries_exact_p5_confirmation_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+    from app.services import master_data_versioning
+    from app.services.material_mapping import _apply_batch_versioned_update
+
+    calls: list[dict[str, object]] = []
+
+    def confirmation_then_update(_db: object, **kwargs: object) -> None:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MASTER_CHANGE_CONFIRMATION_REQUIRED",
+                    "confirmation_token": "returned-p5-token",
+                },
+            )
+
+    monkeypatch.setattr(
+        master_data_versioning,
+        "apply_versioned_update",
+        confirmation_then_update,
+    )
+
+    _apply_batch_versioned_update(
+        object(),
+        object_type="product",
+        entity=object(),
+        updates={"material_id": 7},
+        expected_version=11,
+        user=object(),
+        reason="test",
+        source="test",
+        action="update",
+        confirmation_token=None,
+        preview_confirmed=True,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["expected_version"] == calls[1]["expected_version"] == 11
+    assert calls[0]["confirmation_token"] is None
+    assert calls[1]["confirmation_token"] == "returned-p5-token"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "detail", "preview_confirmed"),
+    [
+        (
+            400,
+            {
+                "code": "MASTER_CHANGE_CONFIRMATION_REQUIRED",
+                "confirmation_token": "returned-p5-token",
+            },
+            True,
+        ),
+        (409, "MASTER_CHANGE_CONFIRMATION_REQUIRED", True),
+        (409, {"code": "MASTER_CHANGE_CONFIRMATION_REQUIRED"}, True),
+        (
+            409,
+            {
+                "code": "MASTER_CHANGE_CONFIRMATION_REQUIRED",
+                "confirmation_token": "returned-p5-token",
+            },
+            False,
+        ),
+    ],
+)
+def test_batch_versioned_update_does_not_retry_other_errors_or_unconfirmed_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    detail: object,
+    preview_confirmed: bool,
+) -> None:
+    from fastapi import HTTPException
+    from app.services import master_data_versioning
+    from app.services.material_mapping import _apply_batch_versioned_update
+
+    calls = 0
+
+    def rejected_update(_db: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    monkeypatch.setattr(
+        master_data_versioning,
+        "apply_versioned_update",
+        rejected_update,
+    )
+
+    with pytest.raises(HTTPException):
+        _apply_batch_versioned_update(
+            object(),
+            object_type="product",
+            entity=object(),
+            updates={"material_id": 7},
+            expected_version=11,
+            user=object(),
+            reason="test",
+            source="test",
+            action="update",
+            confirmation_token=None,
+            preview_confirmed=preview_confirmed,
+        )
+
+    assert calls == 1
 
 
 def _alembic_config(

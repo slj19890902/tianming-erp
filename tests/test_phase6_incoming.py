@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -1162,6 +1163,8 @@ def test_incoming_receipt_migration_round_trip_on_copy(
     monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("ERP_SECRET_KEY", "n005-migration-test")
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    current_head = ScriptDirectory.from_config(config).get_current_head()
+    assert current_head is not None
 
     command.upgrade(config, "head")
     with sqlite3.connect(database_path) as connection:
@@ -1189,7 +1192,7 @@ def test_incoming_receipt_migration_round_trip_on_copy(
         ).fetchall()
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert {"incoming_receipts", "incoming_receipt_items"} <= tables
-    assert version == "at47v7w8x9p37"
+    assert version == current_head
     assert finance_columns["resolution_action"][3] == 0
     assert finance_columns["resolution_action"][4] is None
     assert {
@@ -1198,6 +1201,13 @@ def test_incoming_receipt_migration_round_trip_on_copy(
     } <= trigger_names
     assert temporary_tables == []
 
+    # This round-trip uses a disposable tmp_path database.  Explicitly
+    # acknowledge the auth-version data-loss guard before crossing N031;
+    # production downgrades must continue to fail closed without it.
+    monkeypatch.setenv(
+        "N031_AUTH_VERSION_DOWNGRADE_CONFIRM",
+        "DOWNTIME_COMPLETE_AND_SESSION_SECRET_ROTATED",
+    )
     command.downgrade(config, "aj37v7w8x9f27")
     with sqlite3.connect(database_path) as connection:
         tables = {

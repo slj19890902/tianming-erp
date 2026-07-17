@@ -327,3 +327,467 @@ def test_n028_migration_has_required_revision_link() -> None:
     assert 'down_revision = "ai36v7w8x9e26"' in source
     assert "user_permission_overrides" in source
     assert "user_customer_scopes" in source
+
+
+def test_all_access_write_endpoints_record_complete_audit_and_revoke_session(
+    access_control_app,
+) -> None:
+    import json
+
+    from sqlalchemy import select
+
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids, customer_ids, _engine = access_control_app
+    actions = [
+        "UPDATE_PERMISSION_OVERRIDES",
+        "UPDATE_CUSTOMER_SCOPES",
+        "UPDATE_USER_ACCESS",
+    ]
+    with TestClient(app) as admin_client, TestClient(app) as sales_client:
+        _login(admin_client, "admin", "AdminPass123!")
+        _login(sales_client, "sales", "SalesPass123!")
+        assert sales_client.get("/api/auth/me").status_code == 200
+
+        permission_response = admin_client.put(
+            f"/api/auth/users/{ids['sales']}/permission-overrides",
+            json={"overrides": {"orders.create": False, "cost.view": True}},
+        )
+        assert permission_response.status_code == 200
+        assert sales_client.get("/api/auth/me").status_code == 401
+
+        scope_response = admin_client.put(
+            f"/api/auth/users/{ids['sales']}/customer-scopes",
+            json={
+                "mode": "selected",
+                "customer_ids": [customer_ids[1], customer_ids[0]],
+            },
+        )
+        assert scope_response.status_code == 200
+
+        access_response = admin_client.put(
+            f"/api/auth/users/{ids['sales']}/access",
+            json={
+                "overrides": {
+                    "warehouse.view": True,
+                    "orders.create": False,
+                },
+                "mode": "selected",
+                "customer_ids": [customer_ids[1]],
+            },
+        )
+        assert access_response.status_code == 200
+
+    with factory() as db:
+        target = db.get(User, ids["sales"])
+        logs = db.scalars(
+            select(OperationLog)
+            .where(OperationLog.action.in_(actions))
+            .order_by(OperationLog.id)
+        ).all()
+
+    assert target.auth_version == 4
+    assert [log.action for log in logs] == actions
+    expected_versions = [(1, 2), (2, 3), (3, 4)]
+    for log, (before_version, after_version) in zip(logs, expected_versions):
+        details = json.loads(log.details)
+        assert log.user_id == ids["admin"]
+        assert log.username == "admin"
+        assert log.role == "admin"
+        assert log.entity_id == ids["sales"]
+        assert details["action"] == log.action
+        assert details["actor"] == {
+            "user_id": ids["admin"],
+            "username": "admin",
+            "role": "admin",
+        }
+        assert details["target_user_id"] == ids["sales"]
+        assert details["result"] == "changed"
+        assert details["auth_version"] == {
+            "before": before_version,
+            "after": after_version,
+        }
+        for side in ("before", "after"):
+            snapshot = details[side]
+            assert list(snapshot) == [
+                "customer_access_mode",
+                "customer_ids",
+                "effective_permissions",
+                "permission_overrides",
+            ]
+            assert snapshot["customer_ids"] == sorted(snapshot["customer_ids"])
+            assert snapshot["effective_permissions"] == sorted(
+                snapshot["effective_permissions"]
+            )
+            assert snapshot["permission_overrides"] == sorted(
+                snapshot["permission_overrides"], key=lambda row: row["code"]
+            )
+            assert all(
+                row["decision"] in {"allow", "deny"}
+                for row in snapshot["permission_overrides"]
+            )
+        lowered = log.details.lower()
+        for sensitive_name in ("password", "password_hash", "token", "secret"):
+            assert sensitive_name not in lowered
+
+    first = json.loads(logs[0].details)
+    assert first["after"]["permission_overrides"] == [
+        {"code": "cost.view", "decision": "allow"},
+        {"code": "orders.create", "decision": "deny"},
+    ]
+    second = json.loads(logs[1].details)
+    assert second["after"]["customer_ids"] == sorted(customer_ids)
+    third = json.loads(logs[2].details)
+    assert third["after"]["customer_ids"] == [customer_ids[1]]
+
+
+def test_no_change_access_save_is_audited_without_revoking_session(
+    access_control_app,
+) -> None:
+    import json
+
+    from sqlalchemy import select
+
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids, _customer_ids, _engine = access_control_app
+    with TestClient(app) as admin_client, TestClient(app) as sales_client:
+        _login(admin_client, "admin", "AdminPass123!")
+        _login(sales_client, "sales", "SalesPass123!")
+        response = admin_client.put(
+            f"/api/auth/users/{ids['sales']}/access",
+            json={"overrides": {}, "mode": "all", "customer_ids": []},
+        )
+        assert response.status_code == 200
+        assert sales_client.get("/api/auth/me").status_code == 200
+
+    with factory() as db:
+        target = db.get(User, ids["sales"])
+        log = db.scalar(
+            select(OperationLog)
+            .where(OperationLog.action == "UPDATE_USER_ACCESS")
+            .order_by(OperationLog.id.desc())
+        )
+    details = json.loads(log.details)
+    assert target.auth_version == 1
+    assert details["result"] == "no_change"
+    assert details["before"] == details["after"]
+    assert details["auth_version"] == {"before": 1, "after": 1}
+
+
+def test_access_audit_failure_rolls_back_configuration_version_and_log(
+    access_control_app,
+) -> None:
+    from sqlalchemy import event, func, select
+
+    from app.models.access_control import UserCustomerScope, UserPermissionOverride
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids, customer_ids, _engine = access_control_app
+
+    def reject_access_audit(session, _flush_context, _instances) -> None:
+        if any(
+            isinstance(row, OperationLog) and row.action == "UPDATE_USER_ACCESS"
+            for row in session.new
+        ):
+            raise RuntimeError("simulated audit persistence failure")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login(client, "admin", "AdminPass123!")
+        event.listen(factory.class_, "before_flush", reject_access_audit)
+        try:
+            response = client.put(
+                f"/api/auth/users/{ids['sales']}/access",
+                json={
+                    "overrides": {"cost.view": True},
+                    "mode": "selected",
+                    "customer_ids": [customer_ids[0]],
+                },
+            )
+        finally:
+            event.remove(factory.class_, "before_flush", reject_access_audit)
+    assert response.status_code == 500
+
+    with factory() as db:
+        target = db.get(User, ids["sales"])
+        override_count = db.scalar(
+            select(func.count(UserPermissionOverride.id)).where(
+                UserPermissionOverride.user_id == ids["sales"]
+            )
+        )
+        scope_count = db.scalar(
+            select(func.count(UserCustomerScope.id)).where(
+                UserCustomerScope.user_id == ids["sales"]
+            )
+        )
+        log_count = db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action == "UPDATE_USER_ACCESS"
+            )
+        )
+    assert target.auth_version == 1
+    assert target.customer_access_mode == "all"
+    assert override_count == 0
+    assert scope_count == 0
+    assert log_count == 0
+
+
+@pytest.mark.parametrize("_attempt", range(5))
+def test_concurrent_access_updates_return_one_conflict_without_lost_update(
+    access_control_app,
+    monkeypatch,
+    _attempt: int,
+) -> None:
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from sqlalchemy import select
+
+    import app.api.auth as auth_api
+    from app.models.access_control import UserPermissionOverride
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids, _customer_ids, _engine = access_control_app
+    barrier = Barrier(2)
+    original_claim = auth_api._claim_access_auth_version
+
+    def synchronized_claim(db, *, target, expected_auth_version, increment) -> None:
+        barrier.wait(timeout=10)
+        original_claim(
+            db,
+            target=target,
+            expected_auth_version=expected_auth_version,
+            increment=increment,
+        )
+
+    monkeypatch.setattr(auth_api, "_claim_access_auth_version", synchronized_claim)
+    payloads = {
+        "cost": {
+            "overrides": {"cost.view": True},
+            "mode": "all",
+            "customer_ids": [],
+        },
+        "warehouse": {
+            "overrides": {"warehouse.view": True},
+            "mode": "all",
+            "customer_ids": [],
+        },
+    }
+    with TestClient(app) as first, TestClient(app) as second:
+        _login(first, "admin", "AdminPass123!")
+        _login(second, "admin", "AdminPass123!")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                "cost": executor.submit(
+                    first.put,
+                    f"/api/auth/users/{ids['sales']}/access",
+                    json=payloads["cost"],
+                ),
+                "warehouse": executor.submit(
+                    second.put,
+                    f"/api/auth/users/{ids['sales']}/access",
+                    json=payloads["warehouse"],
+                ),
+            }
+            responses = {name: future.result(timeout=20) for name, future in futures.items()}
+
+    assert sorted(response.status_code for response in responses.values()) == [200, 409]
+    winner = next(name for name, response in responses.items() if response.status_code == 200)
+    conflict = next(response for response in responses.values() if response.status_code == 409)
+    assert "其他管理员修改" in conflict.json()["detail"]
+    expected_code = "cost.view" if winner == "cost" else "warehouse.view"
+
+    with factory() as db:
+        target = db.get(User, ids["sales"])
+        overrides = db.scalars(
+            select(UserPermissionOverride)
+            .where(UserPermissionOverride.user_id == ids["sales"])
+            .order_by(UserPermissionOverride.permission_code)
+        ).all()
+        logs = db.scalars(
+            select(OperationLog).where(OperationLog.action == "UPDATE_USER_ACCESS")
+        ).all()
+
+    assert target.auth_version == 2
+    assert [(row.permission_code, row.is_allowed) for row in overrides] == [
+        (expected_code, True)
+    ]
+    assert len(logs) == 1
+    details = json.loads(logs[0].details)
+    assert details["auth_version"] == {"before": 1, "after": 2}
+    assert details["before"]["permission_overrides"] == []
+    assert details["after"]["permission_overrides"] == [
+        {"code": expected_code, "decision": "allow"}
+    ]
+
+
+def test_audit_effective_permissions_exclude_historical_admin_only_override(
+    access_control_app,
+) -> None:
+    import json
+
+    from sqlalchemy import select
+
+    from app.api.deps import effective_permissions
+    from app.models.access_control import UserPermissionOverride
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids, customer_ids, _engine = access_control_app
+    with factory() as db:
+        db.add(
+            UserPermissionOverride(
+                user_id=ids["sales"],
+                permission_code="users.manage",
+                is_allowed=True,
+                granted_by=ids["admin"],
+            )
+        )
+        db.commit()
+        assert "users.manage" not in effective_permissions(db.get(User, ids["sales"]))
+
+    with TestClient(app) as client:
+        _login(client, "admin", "AdminPass123!")
+        response = client.put(
+            f"/api/auth/users/{ids['sales']}/customer-scopes",
+            json={"mode": "selected", "customer_ids": [customer_ids[0]]},
+        )
+    assert response.status_code == 200
+
+    with factory() as db:
+        log = db.scalar(
+            select(OperationLog)
+            .where(OperationLog.action == "UPDATE_CUSTOMER_SCOPES")
+            .order_by(OperationLog.id.desc())
+        )
+    details = json.loads(log.details)
+    assert details["before"]["permission_overrides"] == [
+        {"code": "users.manage", "decision": "allow"}
+    ]
+    assert "users.manage" not in details["before"]["effective_permissions"]
+    assert "users.manage" not in details["after"]["effective_permissions"]
+
+
+@pytest.mark.parametrize(
+    ("route", "noop_payload", "change_payload", "audit_action"),
+    [
+        (
+            "permission-overrides",
+            {"overrides": {}},
+            {"overrides": {"cost.view": True}},
+            "UPDATE_PERMISSION_OVERRIDES",
+        ),
+        (
+            "customer-scopes",
+            {"mode": "all", "customer_ids": []},
+            {"mode": "selected", "customer_ids": [1]},
+            "UPDATE_CUSTOMER_SCOPES",
+        ),
+        (
+            "access",
+            {"overrides": {}, "mode": "all", "customer_ids": []},
+            {
+                "overrides": {"cost.view": True},
+                "mode": "selected",
+                "customer_ids": [1],
+            },
+            "UPDATE_USER_ACCESS",
+        ),
+    ],
+)
+def test_stale_noop_conflicts_with_concurrent_real_change_for_every_access_route(
+    access_control_app,
+    monkeypatch,
+    route: str,
+    noop_payload: dict,
+    change_payload: dict,
+    audit_action: str,
+) -> None:
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from sqlalchemy import select
+
+    import app.api.auth as auth_api
+    from app.models.access_control import UserCustomerScope, UserPermissionOverride
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids, customer_ids, _engine = access_control_app
+    if route in {"customer-scopes", "access"}:
+        change_payload = {**change_payload, "customer_ids": [customer_ids[0]]}
+    noop_ready = Event()
+    real_claimed = Event()
+    original_claim = auth_api._claim_access_auth_version
+
+    def ordered_claim(db, *, target, expected_auth_version, increment) -> None:
+        if increment:
+            assert noop_ready.wait(timeout=10)
+            original_claim(
+                db,
+                target=target,
+                expected_auth_version=expected_auth_version,
+                increment=True,
+            )
+            real_claimed.set()
+            return
+        noop_ready.set()
+        assert real_claimed.wait(timeout=10)
+        original_claim(
+            db,
+            target=target,
+            expected_auth_version=expected_auth_version,
+            increment=False,
+        )
+
+    monkeypatch.setattr(auth_api, "_claim_access_auth_version", ordered_claim)
+    url = f"/api/auth/users/{ids['sales']}/{route}"
+    with TestClient(app) as noop_client, TestClient(app) as change_client:
+        _login(noop_client, "admin", "AdminPass123!")
+        _login(change_client, "admin", "AdminPass123!")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            noop_future = executor.submit(noop_client.put, url, json=noop_payload)
+            change_future = executor.submit(change_client.put, url, json=change_payload)
+            noop_response = noop_future.result(timeout=20)
+            change_response = change_future.result(timeout=20)
+
+    assert change_response.status_code == 200
+    assert noop_response.status_code == 409
+    assert "其他管理员修改" in noop_response.json()["detail"]
+    with factory() as db:
+        target = db.get(User, ids["sales"])
+        overrides = db.scalars(
+            select(UserPermissionOverride).where(
+                UserPermissionOverride.user_id == ids["sales"]
+            )
+        ).all()
+        scopes = db.scalars(
+            select(UserCustomerScope).where(UserCustomerScope.user_id == ids["sales"])
+        ).all()
+        logs = db.scalars(
+            select(OperationLog).where(OperationLog.action == audit_action)
+        ).all()
+
+    assert target.auth_version == 2
+    assert len(logs) == 1
+    details = json.loads(logs[0].details)
+    assert details["result"] == "changed"
+    assert details["auth_version"] == {"before": 1, "after": 2}
+    if route in {"permission-overrides", "access"}:
+        assert [(row.permission_code, row.is_allowed) for row in overrides] == [
+            ("cost.view", True)
+        ]
+    else:
+        assert overrides == []
+    if route in {"customer-scopes", "access"}:
+        assert [row.customer_id for row in scopes] == [customer_ids[0]]
+        assert target.customer_access_mode == "selected"
+    else:
+        assert scopes == []
+        assert target.customer_access_mode == "all"

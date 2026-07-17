@@ -1,5 +1,68 @@
 # Codex 项目交接
 
+## 2026-07-17 P2/P3 | PDF 预览客户范围隔离与成本脱敏（已集成，待统一隔离 UAT）
+
+- P2 独立分支 `feature/pdf-preview-customer-scope-p2` 提交 `06d0489`，合并提交 `6652b77`；P3 独立分支 `feature/pdf-preview-cost-redaction-p3` 提交 `87e9d46`，合并提交 `a791da0`。本轮没有新增 migration，没有连接或写入正式数据库，也没有创建正式订单。
+- 单份预览、批量预览和人工重匹配共用同一个客户范围门禁。受限账号只在 `customer_scope_ids` 内解析客户；空范围、跨客户模板和跨客户名称命中返回白名单构造的无业务数据草稿，并在产品、常用箱及其成本候选查询前终止。
+- 旧版天华、高泰和思迈尔可能出现 `customer_route=locked` 但没有 `template_customer_id`；该路径不再被误拒绝，而是只在当前账号允许的客户集合内按现有名称归一化规则唯一匹配，无法唯一确认时 fail-closed。
+- PDF 响应统一先附加可信安全 token，再按 `cost.view` 塑形。无成本权限时递归删除成本、毛利、供应商/材料/纸板采购价、报价构成和成本候选，并移除标准材质标签末尾报价；PDF 客户单价、常用箱销售价、产品、规格和匹配证据保持可见。源草稿不被修改。
+- 自动验证：客户范围专项 `19 passed`；订单 PDF 导入、天华、高泰、思迈尔和 token 回归 `29 passed`；成本脱敏纯函数/API finalizer `4 passed`；客户范围与敏感业务权限组合 `21 passed`；相关 Python 编译与 `git diff --check` 通过。版本更新为 `v0.22.14 PDF 预览权限隔离与成本脱敏`。
+
+## 2026-07-17 N016 P2 | 通用客户 PDF 模板执行层（本地完成，待统一隔离 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-pdf-template-execution-n016-p2`；分支：`feature/pdf-template-execution-n016-p2`；基线 `96cee39`。本轮未新增 migration、未连接或写入正式数据库，也未创建正式订单。
+- 只有生命周期为 `active` 的通用客户模板会执行订单号、日期、明细行和字段映射；`draft/retired` 不参与。字段映射优先使用 `field_mapping`，兼容 `item_field_map` 和旧版顶层数字捕获组；训练库重解析、激活 dry-run 与订单预览继续共用 `parse_pdf_bytes`。
+- 天华超净、天华新能源、高泰和思迈尔继续优先使用专项解析器；宽泛通用模板不能抢占专项客户，天华两类客户按完整 `customer_type` 区分，不能互相绑定客户 ID 或常用箱。
+- 用户模板正则先校验长度、捕获组和高风险结构，再在独立 Python 子进程中执行；单次 2 秒硬超时会终止子进程并转人工确认，历史 active 模板也不能通过灾难性回溯卡住 ERP worker。非法 JSON、捕获组、金额、数量和真实日历日期均 fail-closed。
+- 通用模板只有在原单恰好存在一组独立整单合计，且数量、金额与解析明细在 `0.01` 误差内一致时才得到 `integrity_status=passed`。无合计、多个合计或分页小计保持 `unknown`，正式保存门禁不会放行；模板正则命中数不再冒充源明细数。
+- 自动验证：N016/PDF 解析、生命周期、专项路由与既有导入回归 `111 passed`；训练库前端 `6 passed, 46 deselected`；版本更新脚本 `9 passed`；相关 Python 编译和 `git diff --check` 通过。独立最终审查确认无 P0/P1，可提交。版本更新为 `v0.22.13 PDF 客户模板执行与安全校验`。
+
+## 2026-07-17 N022 Phase C.2 | 模具码 + 位置码双码移动确认（本地完成，待人工 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-mold-location-movement-n022-c2`；分支：`feature/mold-location-movement-n022-c2`；基线 `5bf1540`。本轮未 commit、未 push，未连接、迁移或写入正式数据库。
+- 新迁移 `bb55v8x9z45` 线性接在 `ba54v8x9z44` 后：`mold_tools` 新增非空 `location_version` 和最后位置确认时间/人员；新增唯一幂等、记录 CAS 前后版本且由数据库触发器保护 UPDATE/DELETE 的 `mold_location_movements`。一旦存在移动事实或确认版本，downgrade 会 fail-closed。
+- 新增 `warehouse.view` 双码预览和 `warehouse.execute` 移动确认接口。目标仅接受合法平放/竖放 `3F-M` 位置码；旧自由文本、非法编码、停用模具、目标被其他启用模具占用、旧版本和异业务幂等键均拒绝。幂等键在去除首尾空白后必须至少 8 个字符；相同业务重放复用同一流水，换模具/目标/版本/来源/备注均返回 409。同位置确认没有状态变化，不生成移动业务事实，因而不占用幂等键；成功移动写 `OperationLog`。
+- 原 `MoldTool.rack_location` 显示、模具查询、二维码标签和关联产品保持兼容；旧档案编辑接口不再允许绕过流水直接改位置。`static/mobile_mold_lookup.html` 新增模具码、位置码、备注、预览和确认流程，支持手输、粘贴以及 `mold/location` URL 参数，没有引入新前端库。
+- 移动事务不查询或修改成品/半成品库存、订单、报料、库存流水或 `warehouse_locations`；专项非空保护基线验证这些表的行数和数量不变。`3F-M` 继续是独立模具位置体系，不映射三楼成品货位。
+- 隔离迁移副本 `C:\tmp\n022_c2_rehearsal_20260717_125745\carton_erp_uat_copy.sqlite3` 在升级前备份 SHA-256 校验一致后完成 `ba54 -> bb55 -> ba54 -> bb55`；三阶段均 `integrity_check=ok`、外键异常 0，两条模具基线保留且升级后版本为 1。备份 SHA-256：`97F792619E4E3D4B76885F59A843DDAB1C4A3677DBC05BDA164EF2E3EE149B5D`。
+- 自动验证：独立审计修正后的 N022 C.2 专项、迁移和原模具工作流定向运行 `19 passed`；N022/权限/仓库/订单/报料扩展回归此前为 `156 passed, 2 failed`。两项失败均来自本轮未修改文件中的旧前端断言（旧菜单连续字符串、禁止基线已有的 `time-utils.js`），未越界修改。人工清单：`docs/warehouse_reports/N022_PHASE_C2_UAT_CHECKLIST_20260717.md`。
+
+## 2026-07-17 | 最终回归兼容：P5 批处理确认与前端时间工具
+
+- `material_mapping` 仅在调用者明确 `preview_confirmed=True` 时捕获精确的 P5 confirmation-required 409，并使用返回 token 保持原 `expected_version` 重试一次；默认未确认调用仍原样抛错。
+- 七层材质映射测试改为先走正式预览生成对象确认 tokens；半成品 Node harness 在首页内联脚本前执行真实 `static/assets/time-utils.js`，生产代码未增加 fallback。
+- 后端原失败节点连同新增 P5 门禁定向测试 `6 passed`，前端原失败节点 `1 passed`；材质映射/P4 间接写入 `67 passed`；半成品前端 `25 passed`。`py_compile` 与 `git diff --check` 通过；未 commit、未 push、未写正式数据库。
+
+## 2026-07-17 | Alembic 客户账期迁移回滚链修复
+
+- 修复 `aq44v7w8x9m34` 在最新 head 回退时无法删除 `customers.statement_cycle_start_day` 的问题。真实根因是后续 SQLite batch recreate 将列级 CHECK 提升为表级约束；旧版原生 `DROP COLUMN` 会留下引用已删除列的约束。
+- `aq44` downgrade 改为 batch recreate，同时删除命名 CHECK 和字段；升级路径、正式业务模型和现有数据口径均未改变。
+- 新增 `head -> an41v7w8x9j31 -> head` 往返测试；客户账期、来料、三楼货位、成本快照、主数据版本、生产和 N031 会话迁移共 `39 passed`。
+- 往返后的 `integrity_check=ok`、`foreign_key_check=0`，Alembic 仍只有 `ba54v8x9z44` 一个 head。本轮只使用临时测试数据库，未连接或修改正式数据库。
+
+## 2026-07-17 N022 Phase C.1 | 模具位置现场试盘只读 dry-run（本地完成，待集成验收）
+
+- 独立 worktree：`D:\tm-worktrees\erp-mold-location-pilot-n022-c1`；分支：`feature/mold-location-pilot-n022-c1`。本轮只新增审计脚本、专项测试和操作文档，未修改 API、模型、前端、迁移或数据库。
+- `scripts/audit/mold_location_pilot.py` 要求显式 `--database`，以 SQLite `mode=ro + PRAGMA query_only=ON` 打开；没有 apply 模式，拒绝符号链接数据库及符号链接/正式 live 路径的报告写入。
+- dry-run 仅查询 `mold_tools`，稳定输出 JSON/CSV 差异和汇总；核对空位置、旧自由文本、非法 `3F-M`、启用模具的位置重复、模具编号重复及停用状态，绝不映射到三楼成品 `warehouse_locations`。
+- 定向测试验证数据库 SHA256、mtime、`mold_tools` 和 `warehouse_locations` 行数均不变，重复输出稳定，平放/竖放、非法/重复/旧文本均正确分类；`2 passed`、`py_compile`、`git diff --check` 已通过。
+
+## 2026-07-17 N027 Phase C.1 | 只读库存经营指标补全（待统一 UAT）
+
+- 指定 worktree：`D:\tm-worktrees\erp-inventory-insights-n027-c1`；分支：`feature/inventory-insights-n027-c1`。本轮只编辑库存洞察服务、仓库页面、相关测试和审计文档；未新增 migration，未修改库存写接口或任何数据库。
+- 库龄保持 `stock_date` 口径，新增最后异动和停滞天数仅用于解释；成品需求覆盖是只读汇总，半成品已确认候选关系只展示、不自动抵扣。
+- 成本覆盖拆为入库快照估算、当前材料报价估算、产品参考估算，明确不得将其称为实际现金成本覆盖；实际现金占用仍为待补。
+- 隔离临时库定向回归 `15 passed`；库存、预占、七层和半成品广泛回归 `133 passed, 2 failed`，两项失败已在干净基线复现，分别是旧材质批处理测试未适配 P5 二次确认、旧 Node 前端测试未注入共享时间工具，与本轮 C.1 无关。同时把两条已落后于现状的仓库页面断言更新为当前生产菜单顺序和唯一共享时间脚本。Python 编译和 `git diff --check` 通过；正式库未写入，待统一 UAT 后再决定推送与集成。
+
+## 2026-07-17 N016 P0 | PDF 草稿保存安全闸门 + 思迈尔重复 CPN fail-closed（未提交）
+
+- PDF 单份/批量预览签发 5 分钟 HS256 `preview_safety_token`，绑定操作员、来源文件名/哈希、识别状态、客户路由状态、客户匹配状态、完整性状态和已匹配客户。客户重匹配必须验证旧 token 及来源一致性，再按可信 claims 换签；篡改、过期、缺失、跨文件或跨操作员 token 均拒绝。
+- 保存链路只从签名 claims 读取安全状态，不信任客户端状态文字；签名完整性不是 `passed` 时 fail-closed。页面明确 boolean 确认后，后端仍重新校验客户状态、客户 token 绑定、每行既有常用箱归属、产品有效性和整数数量。`needs_confirmation/failed` 或客户路由未锁定的人工放行写 `OperationLog.action=PDF_SAFETY_OVERRIDE`，不要求无意义文字原因。
+- 思迈尔同一 CPN 多变体匹配改为 fail-closed：名称和规格必须存在，并综合变体参考号、名称、规格和销售单价；关键证据冲突、最高分低于 170 或领先分差小于 25 时保持 `unmatched/needs_confirmation`。普通天华/高泰和唯一编码仍沿用原有唯一最高分路径。
+- 预览候选返回变体编码、名称、规格、销售单价、总分、分项证据和领先分差；不返回成本。页面展示分数、分差和拒绝原因。客户单号/日期、产品、数量、单价、生产说明、删除、新产品切换、图纸及库存抵扣计划发生变化后统一将 `confirmed=false`；共享库存 helper 仅在 item 属于 `orderImportDrafts` 时失效确认，不影响普通新建订单。
+- 回归覆盖：签名 claims 与来源绑定、篡改/过期/缺失拒绝且零订单、完整性客户端伪造无效、重匹配换签、重复 CPN 正确变体及低分/小分差/冲突 fail-closed、编辑与库存计划确认失效、人工思迈尔选择并新鲜确认后保存记日志、天华/高泰、普通非 PDF 订单和预览零写入。
+- 验证结果：核心 PDF 导入与客户路由 `33 passed`；合并相关前端/库存回归共 `114 passed`；更宽订单创建与库存预占后端回归 `92 passed`；`py_compile` 与 `git diff --check` 通过。
+
 ## 2026-07-16 N016 | v0.22.6 思迈尔 PDF 安全识别收口（待人工验收，未提交）
 
 - 本轮从最新 `at47v7w8x9p37` 主线建立独立 worktree 重做 N016；旧的脏 worktree 仅作只读参考，未直接合并，也未新增 Alembic migration。
@@ -1326,3 +1389,66 @@ legacy_ruida_* 原始层
 - 副本模拟把天华产品 `22000107` 的 9 个成品一次入仓到 `A1-L01`，自动生成正式批次 `FG-20260716-24B8C08ACA` 和真实栈板；移到 `A1-L02` 再回移 `A1-L01` 后数量始终为 9，幂等重放仍只有 1 个正式批次、1 个关联物料。
 - 隔离验收地址为 `http://127.0.0.1:18056/warehouse.html`，仅连接上述副本；测试账号 `admin` 的副本密码为 `123456`，正式账号密码未修改。
 - 成品仓、三楼 API/前端/迁移、库存预占、来料、补库和更新脚本组合回归 `188 passed`；Python 编译、唯一 Alembic head `at47v7w8x9p37` 与 `git diff --check` 均通过。
+
+## 51. N-029 轻量生产完工与库存流转（2026-07-17）
+
+- 独立 worktree：`D:\tm-worktrees\erp-production-n029-v2`；分支：`feature/production-n029-v2`；基线已包含半成品批次款号硬绑定 `721b280` 与七层材质支持 `54f6db4`。本阶段未推送、未合并主功能分支。
+- 在来料与送货之间新增轻量生产任务：新订单按明细建立任务，材料满足后进入待完工；同一客户可批量确认，必须逐行选择“直接送货”或“转临时成品库”，系统不替员工猜测。
+- 转库存只允许三楼 `F12` / `F34` 临放位，复用正式成品库存、真实栈板、成本快照和库存预占；直接送货完工可在真实发货前转库存，发生任何有效 `dispatched` 发货后即使回单把累计数量调回 0 也禁止整批转库。
+- 生产完工会消费对应半成品预占；生产管理明细发货时不再重复消费半成品。若订单已有半成品预占，新增成品抵扣会返回 409，避免两类库存同时被占用。
+- 生产完工、转库存、发货、订单终止/删除/回退及来料撤销统一使用 `Order -> Delivery -> OrderItem` 锁序，并在持锁后重读状态；终态、强制关闭、已送货、过期版本和已有生产事实均由后端再次拦截。所有批量完工与转库存请求保留幂等键和请求内容哈希。
+- 半成品路径完工后禁止再叠加普通成品抵扣；存在活动生产完工成品预占时禁止强制结案。已经产生库存出库分配的送货单不能被 workflow rollback 直接删除，接口明确返回 409 并要求先撤销发货恢复库存，避免外键 500 和库存事实丢失。
+- 旧订单若没有 `production_tasks`，继续保持原来在发货阶段消费半成品的兼容路径；新订单必须完成生产任务后才能送货。N005 超送仍只显示黄色提醒，没有新增强制原因。
+- 新迁移 `ax51v8x9z41` 线性接在 `aw50v8x9y0s40` 后，仅新增 `production_tasks`、`production_completion_batches`、`production_completions`、`production_stock_transfers` 四张表；存在任何生产任务或完工事实时 downgrade 均会拒绝，避免新订单降级成可绕过生产的旧兼容订单。
+- 正式库副本 `D:\tm-uat\production_n029_20260717_034833\carton_erp_uat.sqlite3` 已在最终迁移代码下再次完成 `ax51 -> aw50 -> ax51` 演练，最终 `integrity_check=ok`、外键异常 0、唯一 head 为 `ax51v8x9z41`。正式数据库仍只读保持 `au48v8x9y0q38`，未迁移、未写入。
+- 自动验证：N029 迁移/服务/API/前端 `84 passed`；订单、来料、报料、权限及旧兼容分组 `145 passed`；订单与送货 `84 passed`；成品/半成品库存与送货分组 `78 passed`；系统版本接口 `16 passed`。Python 编译、内联 JavaScript 语法、唯一 Alembic head 和 `git diff --check` 均通过；独立最终审查结论为无 P0/P1。
+- 版本日志更新为 `v0.22.7 轻量生产与库存约束版`。本阶段尚未启动统一 UAT，需等后续 P4、N030、N031/PDF C、三楼 Phase B/P5/N033 全部收口后一次性人工验收。
+
+## 52. P4 主数据版本追溯与并发保护（2026-07-17）
+
+- 独立 worktree：`D:\tm-worktrees\erp-master-data-versioning-p4`；分支：`feature/master-data-versioning-p4`。提交链按计划依次包含半成品批次绑定、七层材质、N029 轻量生产，再接 P4；没有回滚其他阶段代码。
+- 迁移 `ay52v8x9z42`（ay52）线性接在 `ax51v8x9z41`（ax51）后，覆盖客户、常用箱/产品和材质主数据的版本历史、字段快照、修改原因与操作者追溯；并发冲突返回 409，异常变更要求二次确认，管理员恢复历史会作为新版本写入，敏感价格按权限脱敏。
+- 最终副本演练路径：`D:\tm-uat\master_data_p4_final_20260717_072226\carton_erp_uat.sqlite3`。已完成 `ay52 -> ax51 -> ay52` 往返演练；最终 head 为 `ay52v8x9z42`，`integrity_check=ok`，外键异常 0，不可变账本 UPDATE/DELETE 触发器均存在。现有客户 131 条、产品 3323 条、材质 387 条均初始化为 `version=1`。
+- 旧离线写脚本默认 fail-closed；只有显式 dry-run 可以读取并输出预览。系统批量更新采用预览、逐对象确认令牌和过期版本 409，避免绕过版本账本。
+- 本轮用完整业务依赖环境并追加纯测试工具路径实跑：P4 核心/写入/间接写入/迁移/前端/旧脚本守卫 `53 passed`；订单、报料、客户范围、产品生命周期 `119 passed`；材质映射、楞型映射、调价、系统更新、七层写入守卫 `165 passed`，合计 `337 passed`。独立审查发现的旧客户合并脚本绕过与已停用产品移入垃圾站不记版本问题均已补回归测试并通过。
+- 正式库未迁移、未写入；P4 仍需与后续阶段一起进入统一 UAT，统一验收通过后再 push、合并和单独批准正式迁移。
+
+## 53. P5 老板大字版与重点看板（2026-07-17）
+
+- 独立 worktree：`D:\tm-worktrees\erp-boss-large-ui-p5`；分支：`feature/boss-large-ui-p5`，线性接在 P4 的 `ay52v8x9z42` 之后，没有回滚前序阶段。
+- 新迁移 `az53v8x9z43` 为用户增加 `ui_mode=standard/large`；历史老板账号迁移为大字，其他账号保持标准，新建或晋升为老板时默认大字。所有用户均可在顶部切换，偏好持久化到账号并记录操作日志。
+- 大字模式正文 18px、标题 28px、标签 16px、按钮和输入框最小 48px，并为 1366×768/125% 与 1920×1080/150% 等常见显示组合提供响应式布局；普通角色的标准模式不受影响。
+- 老板首页固定显示待报料、待入库、待送货、应收、库存风险和经营异常六张业务卡；库存卡只返回待处理数量，不暴露单位成本或金额。老板页面隐藏系统维护和权限技术入口，仍受后端 `warehouse.view` 等权限控制。
+- 自动验证：P5/权限核心 27 项通过，完整 N028 权限与认证/P5 回归 64 项通过，独立认证回归 13 项通过；Python 编译、JavaScript 语法、Alembic 单一 head、迁移升降级和数据库完整性还需在最终副本演练中再次确认。
+- 本阶段只在隔离数据库副本验收，不迁移正式数据库，不 push；待后续 N033、N031 等计划阶段全部收口后统一人工验收。
+
+## 54. N033 北京时间一致性与时间边界保护（2026-07-17）
+
+- 独立 worktree：`D:\tm-worktrees\erp-beijing-time-n033`；分支：`feature/beijing-time-n033`，线性接在 P5 的 `az53v8x9z43` 之后。N033 不新增数据库表、字段或 Alembic migration，也不批量改写历史时间。
+- 新增统一时间契约：业务日期固定按北京时间（UTC+8）计算；数据库 `CURRENT_TIMESTAMP` 和新审计时间按 UTC-naive 保存；API 时间必须明确返回 `Z` 或 `+08:00`，业务日期继续使用 `YYYY-MM-DD`。
+- 北京业务日期筛选统一转换为半开 UTC 区间 `[前一日 16:00, 当日 16:00)`；修复凌晨 00:00 至 07:59 的记录被归入前一天、日期查询边界重复或漏查的问题。
+- 历史兼容不采用全表统一减 8 小时。正式库只读核对确认：产品手工修改/删除/清理时间、公司配置更新时间、三楼货位移动时间和供应商报料作废时间过去由 `datetime.now()` 写入，是北京时间 naive；这些字段继续按北京时间语义写入并返回 `+08:00`。数据库默认时间、库存账本、操作日志等 UTC 字段继续返回 `Z`。
+- 静态前端和 Vue 前端统一使用共享时间工具；UTC 时间先转换为北京时间再显示或提取日期，不再直接截取 UTC 字符串。订单默认交期继续按自然日增加，没有误改为工作日。
+- 最终自动验证：N033 时间契约、API、服务、前端、历史兼容和系统版本测试 `60 passed, 1 skipped`；订单、来料（排除已知旧迁移降级用例）、报料、送货相邻回归合计 `156 passed`；Python 编译和共享 JavaScript 语法通过。此前订单、来料、送货、报料、N029、P4、P5、N028 组合回归 `267 passed`，另有 1 个早于 N033 已存在的 SQLite 旧迁移降级测试失败（`aq44` 删除 `statement_cycle_start_day`），与 N033 无迁移改动无关，留待最终迁移集成阶段单独修复。
+- 隔离 UAT `http://127.0.0.1:18064/` 连接副本 `D:\tm-uat\beijing_n033_final_20260717_101256\carton_erp_uat.sqlite3`：来料订单创建时间和实收时间返回 `Z`，供应商报料单作废时间及三楼栈板移动时间返回 `+08:00`，仪表盘排序日期保持 `YYYY-MM-DD`；未连接或写入正式数据库。
+- 本阶段暂不 push、不迁移正式数据库；须先完成隔离副本 UAT 和最终独立审查，再进入 N031 安全远程访问底座。
+
+## 55. N031 安全访问底座与会话撤销保护（2026-07-17）
+
+- 独立 worktree：`D:\tm-worktrees\erp-security-remote-n031`；分支：`feature/security-remote-access-n031`；线性接在 N033 提交 `0951c13` 后。本阶段只建设安全访问底座，不开放公网端口、不修改路由器、防火墙、域名或证书。
+- 公开 `GET /api/health` 只返回最小可用状态，数据库异常返回 503，不再暴露数据库路径、记录数或内部错误；公开 `GET /api/system/version` 仅返回版本摘要，完整 `GET /api/system/version/changelog` 必须登录后读取。
+- 生产环境启用安全 Cookie、HTTPS 跳转、HSTS、可信主机、显式 HTTPS 跨域来源和明确的受信代理配置；生产默认只监听 `127.0.0.1`，必须提供至少 32 字符的会话密钥或预先配置密钥文件。开发与隔离 UAT 继续允许本机 HTTP 调试。
+- 会话令牌新增 `auth_version`。退出登录、修改密码、停用账号、调整角色、功能权限、客户范围或访问范围时递增认证版本，使旧会话立即失效；天华手机拿货等专用短期令牌保持独立用途，不混入后台登录会话。
+- 登录接口按“用户名 + 来源 IP”统计最近 15 分钟失败次数，连续 5 次失败后返回 429；失败与限流写入 `OperationLog`，不记录密码，不会因为共享办公网络锁住其他用户名。登录成功后该用户名与来源重新开始计数。
+- 新迁移 `ba54v8x9z44` 线性接在 `az53v8x9z43` 后，仅给用户表增加认证版本字段。隔离副本 `D:\tm-uat\security_n031_20260717_110044\carton_erp_uat.sqlite3` 已升级到 `ba54v8x9z44`，`integrity_check=ok`、外键异常 0；降级保护副本验证在已有账号时会 fail-closed，避免丢失会话撤销状态。
+- 最终自动验证：N031 安全、认证、迁移、启动脚本、系统页面与相邻回归 `125 passed`；订单、送货、报料与 N028 权限矩阵 `157 passed`；来料回归 `37 passed`，另有 1 个 N031 之前已存在的 `aq44` SQLite 降级触发器用例失败，留待迁移链收口阶段单独修复。
+- 隔离 UAT `http://127.0.0.1:18065/` 只连接 `D:\tm-uat\security_n031_20260717_110044\carton_erp_uat.sqlite3`：公开健康检查 200、匿名精确版本 401、登录后版本/日志 200、退出后旧 Cookie 401、重新登录成功、连续错误登录返回 `401 × 5 + 429`；服务日志确认未连接正式数据库。
+- 正式数据库尚未执行本迁移，分支尚未 push；后续正式迁移、反向代理或远程访问启用必须单独审批。
+
+## 56. N031 反向代理安全契约（2026-07-17）
+
+- 生产后端只监听 loopback；ERP_TRUSTED_PROXY_IPS 只能配置实际连接后端的 loopback TCP peer（127.0.0.1 或 ::1），不能填写 LAN 地址、公网地址或通配符。
+- 反向代理转发到 ERP 时必须覆盖（overwrite）而不是追加客户端传入的 Host、X-Forwarded-Proto、X-Forwarded-For。其中 Host 必须写为批准的外部主机，X-Forwarded-Proto 必须由 TLS 终止状态写为 https，X-Forwarded-For 必须由代理重建为实际客户端地址。
+- 禁止把客户端原有的上述头部拼接进转发值；否则 loopback 代理会把攻击者伪造内容当成可信来源。代理上线前必须验证不可信 TCP peer 的伪造头无效、loopback 代理覆盖后的头才生效。
+- 启动脚本只用 http://127.0.0.1:<port>/api/health 判断本机进程是否就绪；本机就绪后才单独检查外部 HTTPS。外部证书或代理异常只告警，不得把外部重定向当作本机就绪，也不得终止已经本机就绪的 ERP 进程。
+- 登录限流使用进程内按“规范化用户名 + 来源 IP”划分的细粒度锁；同一键的计数、门禁、验密和短审计写入有序，不同键可并行验密，且不再持有 SQLite 全库写锁跨越 bcrypt。该契约依赖单 worker：`ERP_WORKERS` 只能为 `1`，部署生成器与 Windows 启动器均强制该值；任何绕过项目启动器的部署同样必须只启动一个应用 worker。

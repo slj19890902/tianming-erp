@@ -6,6 +6,7 @@ from decimal import Decimal
 from io import BytesIO
 import json
 import socket
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,13 +21,20 @@ from app.api.deps import (
     RoleChecker,
     customer_scope_ids,
     get_db,
+    has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
+)
+from app.core.time_contract import (
+    beijing_date_bounds_utc_naive,
+    beijing_naive_to_api,
+    beijing_today,
+    utc_naive_to_api,
 )
 from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
-from app.models.mold_tool import MoldTool
+from app.models.mold_tool import MoldLocationMovement, MoldTool
 from app.models.product import Product
 from app.models.order import Order, OrderItem
 from app.models.warehouse_inventory import (
@@ -88,7 +96,14 @@ from app.services.warehouse_inventory import (
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
-from app.services.mold_location import describe_mold_location
+from app.services.mold_location import (
+    MoldLocationError,
+    MoldLocationMoveResult,
+    MoldLocationPreview,
+    confirm_mold_location_move,
+    describe_mold_location,
+    preview_mold_location_move,
+)
 
 
 router = APIRouter()
@@ -330,6 +345,39 @@ class MoldToolPayload(BaseModel):
     @classmethod
     def strip_mold_fields(cls, value: str) -> str:
         return value.strip()
+
+
+class MoldLocationPreviewPayload(BaseModel):
+    mold_code: str = Field(min_length=1, max_length=100)
+    target_location: str = Field(min_length=1, max_length=250)
+
+    @field_validator("mold_code", "target_location")
+    @classmethod
+    def strip_mold_location_preview_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class MoldLocationConfirmPayload(MoldLocationPreviewPayload):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    source: Literal["manual_input", "scanner_paste", "url_parameter", "api"] = (
+        "manual_input"
+    )
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_mold_location_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("幂等键去除首尾空白后至少需要 8 个字符")
+        return text
+
+    @field_validator("note")
+    @classmethod
+    def strip_mold_location_note(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
 
 
 class FinishedManualInPayload(BaseModel):
@@ -577,8 +625,9 @@ def _require_order_item_customer_access(
         .join(OrderItem, OrderItem.order_id == Order.id)
         .where(OrderItem.id == order_item_id)
     )
-    if customer_id is not None:
-        require_customer_access(customer_id, user, db)
+    if customer_id is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    require_customer_access(customer_id, user, db)
 
 
 def _require_requirement_customer_access(
@@ -587,8 +636,9 @@ def _require_requirement_customer_access(
     user: User,
 ) -> None:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
-    if requirement is not None:
-        require_customer_access(requirement.customer_id, user, db)
+    if requirement is None:
+        raise HTTPException(status_code=404, detail="半成品需求不存在")
+    require_customer_access(requirement.customer_id, user, db)
 
 
 def _require_reservation_customer_access(
@@ -599,6 +649,7 @@ def _require_reservation_customer_access(
     reservation = db.get(InventoryReservation, reservation_id)
     if reservation is None:
         return
+    _require_lot_customer_access(db, reservation.inventory_lot_id, user)
     customer_id = None
     if reservation.order_id is not None:
         customer_id = db.scalar(
@@ -674,7 +725,64 @@ def _floor3_item_visible(
 ) -> bool:
     if visible_customer_ids is None:
         return True
-    return row.customer_id is not None and row.customer_id in visible_customer_ids
+    if row.customer_id is None or row.customer_id not in visible_customer_ids:
+        return False
+
+    linked_lot = row.inventory_lot
+    if linked_lot is None:
+        # Preserve the existing scoped behavior for legal snapshot rows.  A
+        # dangling non-null lot id is not a legal snapshot and must fail closed.
+        return row.inventory_lot_id is None
+    if linked_lot.inventory_type != "finished":
+        # Floor-three semi-finished history keeps its existing customer check.
+        return True
+
+    detail = linked_lot.finished_detail
+    product = row.product
+    return bool(
+        row.item_type == "finished"
+        and detail is not None
+        and product is not None
+        and row.customer_id == detail.owner_customer_id
+        and row.product_id == detail.product_id
+        and product.customer_id == detail.owner_customer_id
+    )
+
+
+def _floor3_item_scope_condition(visible_customer_ids: set[int]):
+    """SQL equivalent of the scoped floor-three item visibility check."""
+
+    valid_finished_lot_ids = (
+        select(FinishedGoodsInventoryDetail.inventory_lot_id)
+        .join(
+            InventoryLot,
+            InventoryLot.id == FinishedGoodsInventoryDetail.inventory_lot_id,
+        )
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .where(
+            InventoryLot.inventory_type == "finished",
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                visible_customer_ids
+            ),
+            FinishedGoodsInventoryDetail.owner_customer_id
+            == InventoryPalletItem.customer_id,
+            FinishedGoodsInventoryDetail.product_id
+            == InventoryPalletItem.product_id,
+            Product.customer_id
+            == FinishedGoodsInventoryDetail.owner_customer_id,
+        )
+    )
+    non_finished_lot_ids = select(InventoryLot.id).where(
+        InventoryLot.inventory_type != "finished"
+    )
+    return and_(
+        InventoryPalletItem.customer_id.in_(visible_customer_ids),
+        or_(
+            InventoryPalletItem.inventory_lot_id.is_(None),
+            InventoryPalletItem.inventory_lot_id.in_(non_finished_lot_ids),
+            InventoryPalletItem.inventory_lot_id.in_(valid_finished_lot_ids),
+        ),
+    )
 
 
 def _floor3_item_dict(
@@ -710,8 +818,8 @@ def _floor3_item_dict(
         "unit": row.unit,
         "match_status": row.match_status,
         "remarks": row.remarks,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
     }
 
 
@@ -759,9 +867,11 @@ def _floor3_pallet_dict(
         "items": [
             _floor3_item_dict(item, customer_names) for item in visible_items
         ],
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-        "closed_at": row.closed_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
+        "closed_at": (
+            beijing_naive_to_api(row.closed_at) if row.closed_at else None
+        ),
     }
 
 
@@ -777,7 +887,9 @@ def _floor3_layout_dict(row: Floor3LocationLayout | None) -> dict | None:
         "z_index": row.z_index,
         "version": row.version,
         "source_type": row.source_type,
-        "updated_at": row.updated_at,
+        "updated_at": (
+            beijing_naive_to_api(row.updated_at) if row.updated_at else None
+        ),
     }
 
 
@@ -833,10 +945,13 @@ def _require_floor3_pallet_customer_access(
     inaccessible = [
         item
         for item in pallet.items
-        if item.customer_id is None or item.customer_id not in visible_customer_ids
+        if not _floor3_item_visible(item, visible_customer_ids)
     ]
     if inaccessible:
-        raise HTTPException(status_code=403, detail="当前栈板包含无权访问的客户内容")
+        raise HTTPException(
+            status_code=403,
+            detail="当前栈板包含无权访问或客户归属异常的内容",
+        )
 
 
 def _require_floor3_item_customer_access(
@@ -937,22 +1052,34 @@ def _lot_query():
 
 
 def _visible_lot_condition(visible_customer_ids: set[int]):
-    finished_lot_ids = select(
-        FinishedGoodsInventoryDetail.inventory_lot_id
-    ).where(
-        or_(
-            FinishedGoodsInventoryDetail.owner_customer_id.is_(None),
-            FinishedGoodsInventoryDetail.owner_customer_id.in_(visible_customer_ids),
+    finished_lot_ids = (
+        select(FinishedGoodsInventoryDetail.inventory_lot_id)
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .outerjoin(
+            InventoryPalletItem,
+            InventoryPalletItem.inventory_lot_id
+            == FinishedGoodsInventoryDetail.inventory_lot_id,
+        )
+        .where(
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                visible_customer_ids
+            ),
+            Product.customer_id
+            == FinishedGoodsInventoryDetail.owner_customer_id,
+            or_(
+                InventoryPalletItem.id.is_(None),
+                and_(
+                    InventoryPalletItem.customer_id
+                    == FinishedGoodsInventoryDetail.owner_customer_id,
+                    InventoryPalletItem.product_id
+                    == FinishedGoodsInventoryDetail.product_id,
+                ),
+            ),
         )
     )
     semi_finished_lot_ids = select(
         SemiFinishedInventoryDetail.inventory_lot_id
-    ).where(
-        or_(
-            SemiFinishedInventoryDetail.owner_customer_id.is_(None),
-            SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids),
-        )
-    )
+    ).where(SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids))
     return or_(
         InventoryLot.id.in_(finished_lot_ids),
         InventoryLot.id.in_(semi_finished_lot_ids),
@@ -974,8 +1101,24 @@ def _require_lot_customer_access(
         customer_id = lot.finished_detail.owner_customer_id
     elif lot.semi_finished_detail is not None:
         customer_id = lot.semi_finished_detail.owner_customer_id
-    if customer_id is not None:
-        require_customer_access(customer_id, user, db)
+    if has_unrestricted_customer_access(user, db):
+        return lot
+    if customer_id is None:
+        raise HTTPException(status_code=403, detail="无客户访问权限")
+    if lot.finished_detail is not None:
+        product_customer_id = db.scalar(
+            select(Product.customer_id).where(
+                Product.id == lot.finished_detail.product_id
+            )
+        )
+        if product_customer_id != customer_id:
+            raise HTTPException(status_code=403, detail="成品库存客户归属异常")
+        if lot.pallet_item is not None and (
+            lot.pallet_item.customer_id != customer_id
+            or lot.pallet_item.product_id != lot.finished_detail.product_id
+        ):
+            raise HTTPException(status_code=403, detail="三楼栈板客户归属异常")
+    require_customer_access(customer_id, user, db)
     return lot
 
 
@@ -1037,7 +1180,7 @@ def _lot_dict(row: InventoryLot) -> dict:
         "status": row.status,
         "source_type": row.source_type,
         "stock_date": row.stock_date,
-        "last_movement_at": row.last_movement_at,
+        "last_movement_at": utc_naive_to_api(row.last_movement_at),
         "version": row.version,
         "remarks": row.remarks,
         "floor3_binding": (
@@ -1079,7 +1222,7 @@ def _movement_dict(row: InventoryMovement) -> dict:
         "after_scrapped": row.after_scrapped,
         "reason": row.reason,
         "operator_id": row.operator_id,
-        "created_at": row.created_at,
+        "created_at": utc_naive_to_api(row.created_at),
     }
 
 
@@ -1125,8 +1268,8 @@ def _reservation_dict(
         "reservation_group_key": row.reservation_group_key,
         "status": row.status,
         "warning_codes": warning_codes,
-        "reserved_at": row.reserved_at,
-        "released_at": row.released_at,
+        "reserved_at": utc_naive_to_api(row.reserved_at) if row.reserved_at else None,
+        "released_at": utc_naive_to_api(row.released_at) if row.released_at else None,
         "release_reason": row.release_reason,
     }
 
@@ -1180,6 +1323,46 @@ def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
     }
 
 
+def _visible_finished_candidate_lots(
+    rows: list[InventoryLot], user: User, db: Session
+) -> list[InventoryLot]:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is None:
+        return rows
+    lot_ids = [lot.id for lot in rows]
+    if not lot_ids:
+        return []
+    visible_lot_ids = set(
+        db.scalars(
+            select(FinishedGoodsInventoryDetail.inventory_lot_id)
+            .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+            .where(
+                FinishedGoodsInventoryDetail.inventory_lot_id.in_(lot_ids),
+                FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                    visible_customer_ids
+                ),
+                Product.customer_id
+                == FinishedGoodsInventoryDetail.owner_customer_id,
+            )
+        ).all()
+    )
+    return [lot for lot in rows if lot.id in visible_lot_ids]
+
+
+def _visible_semi_candidates(
+    rows: list[SemiFinishedCandidate], user: User, db: Session
+) -> list[SemiFinishedCandidate]:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if row.lot.semi_finished_detail is not None
+        and row.lot.semi_finished_detail.owner_customer_id in visible_customer_ids
+    ]
+
+
 @router.get("/finished/candidates")
 def finished_candidates(
     order_item_id: int,
@@ -1193,6 +1376,7 @@ def finished_candidates(
             raise WarehouseInventoryError("订单明细不存在", 404)
         reserved = active_finished_reserved_qty(db, order_item_id)
         rows = finished_inventory_candidates(db, order_item_id)
+        rows = _visible_finished_candidate_lots(rows, user, db)
         return {
             "order_item_id": order_item_id,
             "order_quantity": item.quantity,
@@ -1229,7 +1413,7 @@ def finished_candidates(
                     ),
                     "quantity_available": lot.quantity_available,
                     "stock_date": lot.stock_date,
-                    "last_movement_at": lot.last_movement_at,
+                    "last_movement_at": utc_naive_to_api(lot.last_movement_at),
                     "warning_codes": (
                         ["GENERAL_FINISHED_STOCK"]
                         if lot.finished_detail.is_general
@@ -1255,6 +1439,7 @@ def create_finished_reservation(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_order_item_customer_access(db, payload.order_item_id, user)
+    _require_lot_customer_access(db, payload.inventory_lot_id, user)
     try:
         row = reserve_finished_inventory(
             db,
@@ -1283,6 +1468,7 @@ def list_reservations(
         _require_order_item_customer_access(db, order_item_id, user)
         query = query.where(InventoryReservation.order_item_id == order_item_id)
     if inventory_lot_id:
+        _require_lot_customer_access(db, inventory_lot_id, user)
         query = query.where(
             InventoryReservation.inventory_lot_id == inventory_lot_id
         )
@@ -1292,7 +1478,13 @@ def list_reservations(
     if visible_customer_ids is not None:
         query = query.join(
             Order, Order.id == InventoryReservation.order_id
-        ).where(Order.customer_id.in_(visible_customer_ids))
+        ).join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        ).where(
+            Order.customer_id.in_(visible_customer_ids),
+            _visible_lot_condition(visible_customer_ids),
+        )
     rows = db.scalars(
         query.order_by(InventoryReservation.id.desc()).limit(500)
     ).all()
@@ -1336,6 +1528,7 @@ def finished_product_candidates(
             customer_id=customer_id,
             product_id=product_id,
         )
+        rows = _visible_finished_candidate_lots(rows, user, db)
         return {
             "customer_id": customer_id,
             "product_id": product_id,
@@ -1408,6 +1601,7 @@ def semi_product_candidates(
             product_id=product_id,
             **payload.model_dump(),
         )
+        rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
             "items": [_semi_candidate_dict(row) for row in rows],
@@ -1430,6 +1624,7 @@ def semi_product_inventory_browser(
             product_id=product_id,
             **payload.model_dump(),
         )
+        rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
             "items": [_semi_candidate_dict(row) for row in rows],
@@ -1451,6 +1646,7 @@ def semi_requirement_candidates(
             raise WarehouseInventoryError("半成品需求不存在", 404)
         credited = active_semi_requirement_credited_quantity(db, requirement.id)
         rows = semi_finished_inventory_candidates(db, requirement.id)
+        rows = _visible_semi_candidates(rows, user, db)
         return {
             "requirement": _semi_requirement_dict(requirement),
             "credited_requirement_quantity": credited,
@@ -1472,6 +1668,7 @@ def semi_requirement_inventory_browser(
     _require_requirement_customer_access(db, requirement_id, user)
     try:
         rows = browse_semi_finished_inventory(db, requirement_id)
+        rows = _visible_semi_candidates(rows, user, db)
         return {"items": [_semi_candidate_dict(row) for row in rows]}
     except WarehouseInventoryError as error:
         _handle(error)
@@ -1485,6 +1682,7 @@ def confirm_semi_requirement_match(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_requirement_customer_access(db, requirement_id, user)
+    _require_lot_customer_access(db, payload.inventory_lot_id, user)
     try:
         result = confirm_semi_finished_match(
             db,
@@ -1516,6 +1714,8 @@ def reserve_semi_requirement(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_requirement_customer_access(db, requirement_id, user)
+    for lot in payload.lots:
+        _require_lot_customer_access(db, lot.lot_id, user)
     try:
         result = reserve_semi_finished_inventory(
             db,
@@ -1552,14 +1752,17 @@ def list_semi_requirement_reservations(
     user: User = Depends(can_view_reservations),
 ) -> dict:
     _require_requirement_customer_access(db, requirement_id, user)
-    rows = db.scalars(
-        select(InventoryReservation)
-        .where(
+    query = select(InventoryReservation).where(
             InventoryReservation.semi_requirement_id == requirement_id,
             InventoryReservation.reservation_type == "semi_order",
         )
-        .order_by(InventoryReservation.id)
-    ).all()
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        ).where(_visible_lot_condition(visible_customer_ids))
+    rows = db.scalars(query.order_by(InventoryReservation.id)).all()
     return {"items": [_reservation_dict(row, db) for row in rows]}
 
 
@@ -1861,7 +2064,10 @@ def _floor3_pallet_query():
     return select(InventoryPallet).options(
         selectinload(InventoryPallet.items).selectinload(
             InventoryPalletItem.inventory_lot
-        )
+        ).selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryPallet.items).selectinload(
+            InventoryPalletItem.product
+        ),
     )
 
 
@@ -2059,6 +2265,7 @@ def list_floor3_locations(
 ) -> dict:
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
+    visible_customer_ids = _visible_customer_ids(user, db)
 
     query = select(WarehouseLocation).options(
         selectinload(WarehouseLocation.floor3_layout)
@@ -2076,6 +2283,9 @@ def list_floor3_locations(
         InventoryPallet.location_id.is_not(None),
     )
     if customer_id is not None:
+        customer_item_condition = InventoryPalletItem.customer_id == customer_id
+        if visible_customer_ids is not None:
+            customer_item_condition = _floor3_item_scope_condition({customer_id})
         customer_location_ids = (
             select(InventoryPallet.location_id)
             .join(
@@ -2085,7 +2295,7 @@ def list_floor3_locations(
             .where(
                 InventoryPallet.is_current.is_(True),
                 InventoryPallet.location_id.is_not(None),
-                InventoryPalletItem.customer_id == customer_id,
+                customer_item_condition,
             )
         )
         query = query.where(WarehouseLocation.id.in_(customer_location_ids))
@@ -2096,7 +2306,6 @@ def list_floor3_locations(
     elif occupancy:
         raise HTTPException(status_code=400, detail="货位占用状态无效")
 
-    visible_customer_ids = _visible_customer_ids(user, db)
     keyword = (q or "").strip()
     if keyword:
         pattern = f"%{keyword}%"
@@ -2123,7 +2332,7 @@ def list_floor3_locations(
         )
         if visible_customer_ids is not None:
             matching_location_ids = matching_location_ids.where(
-                InventoryPalletItem.customer_id.in_(visible_customer_ids)
+                _floor3_item_scope_condition(visible_customer_ids)
             )
         query = query.where(
             or_(
@@ -2253,7 +2462,7 @@ def get_floor3_location(
                 "to_location_id": movement.to_location_id,
                 "to_location_code": location_codes.get(movement.to_location_id),
                 "operator_id": movement.operator_id,
-                "moved_at": movement.moved_at,
+                "moved_at": beijing_naive_to_api(movement.moved_at),
                 "remarks": movement.remarks,
             }
         )
@@ -2796,6 +3005,13 @@ def _mold_tool_dict(row: MoldTool) -> dict:
         "mold_name": row.mold_name,
         "rack_location": row.rack_location,
         "location_guide": describe_mold_location(row.rack_location),
+        "location_version": row.location_version,
+        "last_location_confirmed_at": (
+            utc_naive_to_api(row.last_location_confirmed_at)
+            if row.last_location_confirmed_at
+            else None
+        ),
+        "last_location_confirmed_by": row.last_location_confirmed_by,
         "remarks": row.remarks,
         "is_active": row.is_active,
         "product_count": len(products),
@@ -2822,8 +3038,8 @@ def _mold_tool_dict(row: MoldTool) -> dict:
             }
             for product in products
         ],
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
     }
 
 
@@ -2870,6 +3086,140 @@ def list_mold_tools(
         query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id).limit(limit)
     ).unique().all()
     return {"items": [_mold_tool_dict(row) for row in rows]}
+
+
+def _mold_location_preview_dict(preview: MoldLocationPreview) -> dict:
+    occupant = preview.occupant
+    return {
+        "mold": _mold_tool_dict(preview.mold),
+        "target_location": preview.target_location,
+        "target_guide": preview.target_guide,
+        "expected_version": preview.mold.location_version,
+        "same_location": preview.same_location,
+        "can_confirm": occupant is None,
+        "occupancy_conflict": (
+            {
+                "mold_tool_id": occupant.id,
+                "mold_code": occupant.mold_code,
+                "mold_name": occupant.mold_name,
+            }
+            if occupant is not None
+            else None
+        ),
+    }
+
+
+def _mold_location_movement_dict(row: MoldLocationMovement) -> dict:
+    return {
+        "id": row.id,
+        "mold_tool_id": row.mold_tool_id,
+        "mold_code": row.mold_code_snapshot,
+        "from_location": row.from_location,
+        "to_location": row.to_location,
+        "actor_id": row.actor_id,
+        "moved_at": utc_naive_to_api(row.moved_at),
+        "idempotency_key": row.idempotency_key,
+        "expected_version": row.expected_version,
+        "resulting_version": row.resulting_version,
+        "source": row.source,
+        "note": row.note,
+    }
+
+
+def _mold_location_move_response(result: MoldLocationMoveResult) -> dict:
+    return {
+        "message": (
+            "模具已在目标位置，无需移动"
+            if result.no_change
+            else "模具位置移动已确认"
+        ),
+        "mold": _mold_tool_dict(result.mold),
+        "movement": (
+            _mold_location_movement_dict(result.movement)
+            if result.movement is not None
+            else None
+        ),
+        "idempotent_replay": result.replayed,
+        "no_change": result.no_change,
+    }
+
+
+@router.post("/molds/location-movement/preview")
+def preview_mold_location_movement(
+    payload: MoldLocationPreviewPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    try:
+        return _mold_location_preview_dict(
+            preview_mold_location_move(
+                db,
+                mold_code=payload.mold_code,
+                target_location=payload.target_location,
+            )
+        )
+    except MoldLocationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/molds/location-movement/confirm")
+def confirm_mold_location_movement(
+    payload: MoldLocationConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        result = confirm_mold_location_move(
+            db,
+            mold_code=payload.mold_code,
+            target_location=payload.target_location,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor_id=user.id,
+            source=payload.source,
+            note=payload.note,
+        )
+        if not result.replayed and not result.no_change and result.movement is not None:
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="UPDATE",
+                    resource=f"warehouse/molds/{result.mold.id}/location",
+                    entity_type="mold_tool",
+                    entity_id=result.mold.id,
+                    description="双码确认模具位置移动",
+                    details=json.dumps(
+                        {
+                            "movement_id": result.movement.id,
+                            "mold_code": result.movement.mold_code_snapshot,
+                            "from_location": result.movement.from_location,
+                            "to_location": result.movement.to_location,
+                            "expected_version": result.movement.expected_version,
+                            "resulting_version": result.movement.resulting_version,
+                            "idempotency_key": result.movement.idempotency_key,
+                            "source": result.movement.source,
+                            "note": result.movement.note,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            )
+        db.commit()
+        return _mold_location_move_response(result)
+    except MoldLocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="模具位置已变化或幂等键冲突，请重新预览",
+        ) from error
 
 
 def _lan_ip() -> str:
@@ -2942,6 +3292,11 @@ def update_mold_tool(
     row = db.get(MoldTool, mold_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
+    if payload.rack_location.strip() != row.rack_location.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="模具位置不能在档案编辑中直接修改，请使用模具码 + 位置码双码移动确认",
+        )
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     row.updated_by = user.id
@@ -3178,7 +3533,7 @@ def list_lots(
         days = {"attention": 365, "handling": 548, "cleanup": 730}.get(stale_level)
         if days:
             query = query.where(
-                InventoryLot.stock_date <= date.today() - timedelta(days=days)
+                InventoryLot.stock_date <= beijing_today() - timedelta(days=days)
             )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     total = db.scalar(count_query) or 0
@@ -3190,18 +3545,195 @@ def list_lots(
     return {"items": [_lot_dict(row) for row in rows], "total": total}
 
 
+_INSIGHT_OPERATIONAL_TOP_FIELDS = frozenset(
+    {"generated_at", "as_of", "scope_notice", "recommendation_notice"}
+)
+_INSIGHT_OPERATIONAL_SUMMARY_FIELDS = frozenset(
+    {
+        "recorded_lots",
+        "available_lots",
+        "finished_available",
+        "semi_finished_available",
+        "total_reserved",
+        "total_damaged",
+        "total_scrapped",
+    }
+)
+_INSIGHT_OPERATIONAL_QUALITY_FIELDS = frozenset({"active_location_lots"})
+_INSIGHT_OPERATIONAL_TYPE_FIELDS = frozenset(
+    {"lots", "available", "reserved", "damaged", "scrapped"}
+)
+_INSIGHT_OPERATIONAL_AGE_FIELDS = frozenset(
+    {"key", "label", "lots", "finished_available", "semi_finished_available"}
+)
+_INSIGHT_OPERATIONAL_ACTION_FIELDS = frozenset(
+    {
+        "priority",
+        "lot_id",
+        "lot_number",
+        "inventory_type",
+        "status",
+        "location_code",
+        "quantity_available",
+        "unit",
+        "age_days",
+        "age_basis",
+        "last_movement_at",
+        "movement_stagnant_days",
+        "covered_demand_quantity",
+        "uncovered_demand_quantity",
+        "coverage_percent",
+        "coverage_basis",
+    }
+)
+_INSIGHT_OPERATIONAL_DETAIL_FIELDS = frozenset(
+    {
+        "customer_name",
+        "inventory_code",
+        "name",
+        "assigned_product_count",
+        "binding_scope",
+        "deduction_eligibility",
+        "candidate_relationship_read_only",
+    }
+)
+_INSIGHT_OPERATIONAL_PRODUCT_FIELDS = frozenset(
+    {"product_id", "inventory_code", "name"}
+)
+_INSIGHT_OPERATIONAL_DEMAND_FIELDS = frozenset(
+    {"demand_30", "demand_90", "demand_180", "open_demand"}
+)
+_INSIGHT_OPERATIONAL_REASON_CODES = frozenset(
+    {
+        "finished_stock_can_cover_order",
+        "finished_stock_exceeds_open_demand",
+        "no_demand_180",
+        "semi_stock_may_cover_demand",
+        "semi_product_assignment_missing",
+        "age_cleanup",
+        "age_handling",
+        "age_attention",
+        "age_slow",
+        "location_unavailable",
+    }
+)
+
+
+def _insight_allowed_fields(value: object, fields: frozenset[str]) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {key: value[key] for key in fields if key in value}
+
+
+def _redact_inventory_insight_costs(insights: dict) -> dict:
+    """Return an operational-only warehouse insight response.
+
+    ``cost.view`` is a data boundary, not merely a display preference.  Keep
+    stock age, quantities, locations and demand suggestions, while dropping
+    all monetary values, cost sources and cost-completeness metadata before
+    the response serializer sees them.
+    """
+
+    source = insights if isinstance(insights, dict) else {}
+    result = _insight_allowed_fields(source, _INSIGHT_OPERATIONAL_TOP_FIELDS)
+    result["summary"] = _insight_allowed_fields(
+        source.get("summary"), _INSIGHT_OPERATIONAL_SUMMARY_FIELDS
+    )
+    result["data_quality"] = _insight_allowed_fields(
+        source.get("data_quality"), _INSIGHT_OPERATIONAL_QUALITY_FIELDS
+    )
+    source_by_type = source.get("by_type")
+    result["by_type"] = {
+        inventory_type: _insight_allowed_fields(
+            source_by_type.get(inventory_type), _INSIGHT_OPERATIONAL_TYPE_FIELDS
+        )
+        for inventory_type in ("finished", "semi_finished")
+        if isinstance(source_by_type, dict)
+        and isinstance(source_by_type.get(inventory_type), dict)
+    }
+    source_age_buckets = source.get("age_buckets")
+    result["age_buckets"] = [
+        _insight_allowed_fields(bucket, _INSIGHT_OPERATIONAL_AGE_FIELDS)
+        for bucket in source_age_buckets
+        if isinstance(bucket, dict)
+    ] if isinstance(source_age_buckets, list) else []
+
+    action_items: list[dict] = []
+    source_action_items = source.get("action_items")
+    if not isinstance(source_action_items, list):
+        source_action_items = []
+    for source_item in source_action_items:
+        if not isinstance(source_item, dict):
+            continue
+        reasons: list[dict] = []
+        source_reasons = source_item.get("reasons")
+        if isinstance(source_reasons, list):
+            for reason in source_reasons:
+                if not isinstance(reason, dict):
+                    continue
+                code = reason.get("code")
+                if code not in _INSIGHT_OPERATIONAL_REASON_CODES:
+                    continue
+                safe_reason = {"code": code}
+                if isinstance(reason.get("text"), str):
+                    safe_reason["text"] = reason["text"]
+                reasons.append(safe_reason)
+        # A row whose only purpose was cost completion is not an operational
+        # action for users who cannot view costs.
+        if not reasons:
+            continue
+        item = _insight_allowed_fields(
+            source_item, _INSIGHT_OPERATIONAL_ACTION_FIELDS
+        )
+        detail = _insight_allowed_fields(
+            source_item.get("detail"), _INSIGHT_OPERATIONAL_DETAIL_FIELDS
+        )
+        source_products = (
+            source_item.get("detail", {}).get("assigned_products")
+            if isinstance(source_item.get("detail"), dict)
+            else None
+        )
+        if isinstance(source_products, list):
+            detail["assigned_products"] = [
+                _insight_allowed_fields(
+                    product, _INSIGHT_OPERATIONAL_PRODUCT_FIELDS
+                )
+                for product in source_products
+                if isinstance(product, dict)
+            ]
+        item["detail"] = detail
+        item["demand"] = _insight_allowed_fields(
+            source_item.get("demand"), _INSIGHT_OPERATIONAL_DEMAND_FIELDS
+        )
+        item["reasons"] = reasons
+        action_items.append(item)
+
+    result["action_items"] = action_items
+    result["action_item_count"] = len(action_items)
+    result["high_priority_action_item_count"] = sum(
+        1
+        for item in action_items
+        if isinstance(item.get("priority"), (int, float))
+        and item["priority"] <= 1
+    )
+    return result
+
+
 @router.get("/insights")
 def get_inventory_insights(
     as_of: date | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    if not has_unrestricted_customer_access(user, db):
-        raise HTTPException(
-            status_code=403,
-            detail="库存洞察暂不支持按客户范围安全聚合",
-        )
-    return build_inventory_insights(db, as_of=as_of)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    insights = build_inventory_insights(
+        db,
+        as_of=as_of,
+        customer_ids=visible_customer_ids,
+    )
+    if has_permission(user, "cost.view"):
+        return insights
+    return _redact_inventory_insight_costs(insights)
 
 
 @router.get("/lots/{lot_id}")
@@ -3278,9 +3810,11 @@ def list_movements(
     if movement_type:
         query = query.where(InventoryMovement.movement_type == movement_type)
     if date_from:
-        query = query.where(InventoryMovement.created_at >= datetime.combine(date_from, datetime.min.time()))
+        start_at, _ = beijing_date_bounds_utc_naive(date_from)
+        query = query.where(InventoryMovement.created_at >= start_at)
     if date_to:
-        query = query.where(InventoryMovement.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
+        _, end_at = beijing_date_bounds_utc_naive(date_to)
+        query = query.where(InventoryMovement.created_at < end_at)
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     rows = db.scalars(
         query.order_by(InventoryMovement.id.desc())
@@ -3312,6 +3846,8 @@ def semi_finished_manual_in(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    if payload.customer_id is None and not has_unrestricted_customer_access(user, db):
+        raise HTTPException(status_code=403, detail="受限账号不能创建无客户库存")
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, user, db)
     _reject_floor3_for_semi_finished_inventory(db, payload.location_id)

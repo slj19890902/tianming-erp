@@ -1128,6 +1128,14 @@ def consume_delivery_item_inventory(
     if remaining_finished > 0:
         raise WarehouseInventoryError("成品库存预占余额不足，无法完成发货", 409)
 
+    # N029 consumes semi-finished reservations when production is completed.
+    # Delivery must still consume finished reservations, but must not consume
+    # the same semi-finished reservations a second time.
+    from app.services.production_workflow import has_production_completion_facts
+
+    if has_production_completion_facts(db, [item.id]):
+        return
+
     semi_boxes = max(target_delivered - finished_coverage, 0)
     requirements = db.scalars(
         select(OrderItemSemiRequirement)
@@ -1289,6 +1297,13 @@ def reverse_delivery_item_inventory(
     if excess_finished > 0:
         raise WarehouseInventoryError("成品送货消耗记录不足，无法取消发货", 409)
 
+    # Production-time semi-finished consumption has no delivery allocation and
+    # is a completion fact, so cancelling a delivery must not reverse it.
+    from app.services.production_workflow import has_production_completion_facts
+
+    if has_production_completion_facts(db, [item.id]):
+        return
+
     semi_boxes = max(target_delivered - finished_coverage, 0)
     requirements = db.scalars(
         select(OrderItemSemiRequirement)
@@ -1445,6 +1460,31 @@ def reserve_semi_finished_inventory(
         requirement = db.get(OrderItemSemiRequirement, requirement_id)
         if requirement is None:
             raise WarehouseInventoryError("半成品需求不存在", 404)
+        item = db.get(OrderItem, requirement.order_item_id)
+        if item is None:
+            raise WarehouseInventoryError("订单明细不存在", 404)
+        from app.services.production_workflow import (
+            ProductionWorkflowError,
+            has_production_completion_facts,
+            lock_order_rows_for_production_transition,
+        )
+
+        try:
+            lock_order_rows_for_production_transition(db, [item.order_id])
+        except ProductionWorkflowError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+        requirement = db.scalar(
+            select(OrderItemSemiRequirement)
+            .where(OrderItemSemiRequirement.id == requirement_id)
+            .execution_options(populate_existing=True)
+        )
+        if requirement is None:
+            raise WarehouseInventoryError("半成品需求已被删除，请刷新后重试", 409)
+
+        if has_production_completion_facts(db, [requirement.order_item_id]):
+            raise WarehouseInventoryError(
+                "该订单明细已有生产完工事实，不能新增半成品预占", 409
+            )
         already_credited = active_semi_requirement_credited_quantity(
             db, requirement.id
         )
@@ -1574,6 +1614,9 @@ def reserve_semi_finished_inventory(
         if not reservations:
             raise WarehouseInventoryError("所选库存当前没有可预占数量", 409)
         db.flush()
+    from app.services.production_workflow import refresh_existing_production_task
+
+    refresh_existing_production_task(db, requirement.order_item_id)
     return SemiFinishedReservationBatch(
         reservations=tuple(reservations),
         requested_requirement_quantity=requested_requirement_quantity,
@@ -1657,6 +1700,14 @@ def release_semi_finished_reservation(
             raise WarehouseInventoryError("库存预占记录不存在", 404)
         if reservation.reservation_type != "semi_order":
             raise WarehouseInventoryError("该记录不是半成品订单预占")
+        from app.services.production_workflow import has_production_completion_facts
+
+        if reservation.order_item_id is not None and has_production_completion_facts(
+            db, [reservation.order_item_id]
+        ):
+            raise WarehouseInventoryError(
+                "该订单明细已有生产完工事实，不能释放半成品预占", 409
+            )
         remaining = (
             reservation.reserved_stock_quantity
             - reservation.consumed_stock_quantity
@@ -1723,6 +1774,9 @@ def release_semi_finished_reservation(
             related_order_item_id=reservation.order_item_id,
         )
         db.flush()
+    from app.services.production_workflow import refresh_existing_production_task
+
+    refresh_existing_production_task(db, reservation.order_item_id)
     return SemiFinishedReservationMutation(reservation, movement)
 
 
@@ -1774,6 +1828,7 @@ def consume_semi_finished_reservation(
     operator_id: int | None,
     idempotency_key: str,
     delivery_item_id: int | None = None,
+    reason: str = "送货出库消耗半成品预占",
 ) -> SemiFinishedReservationMutation:
     repeated = _idempotent_mutation(
         db,
@@ -1878,7 +1933,7 @@ def consume_semi_finished_reservation(
             quantity=stock_quantity,
             before=before,
             operator_id=operator_id,
-            reason="送货出库消耗半成品预占",
+            reason=reason,
             idempotency_key=idempotency_key,
             reservation_id=reservation.id,
             related_order_id=reservation.order_id,

@@ -314,7 +314,10 @@ def test_dashboard_hides_finance_data_and_empty_selected_scope_returns_zeroes(
             dashboard_only = db.get(User, ids["dashboard_only"])
             dashboard_only_kpi = dashboard_kpi(db, dashboard_only)
             dashboard_only_overview = dashboard_overview(db, dashboard_only)
-        assert dashboard_only_kpi == {"month": date.today().strftime("%Y-%m")}
+        assert dashboard_only_kpi == {
+            "month": date.today().strftime("%Y-%m"),
+            "today_pending_production_tasks": 0,
+        }
         assert dashboard_only_overview["cards"] == []
         assert dashboard_only_overview["todos"] == []
         assert dashboard_only_overview["summary"] == {"today_orders": 1}
@@ -338,7 +341,10 @@ def test_dashboard_hides_finance_data_and_empty_selected_scope_returns_zeroes(
     finally:
         event.remove(engine, "before_cursor_execute", record_sql)
 
-    assert empty_kpi == {"month": date.today().strftime("%Y-%m")}
+    assert empty_kpi == {
+        "month": date.today().strftime("%Y-%m"),
+        "today_pending_production_tasks": 0,
+    }
     assert empty_overview["cards"] == []
     assert empty_overview["todos"] == []
     assert empty_overview["summary"] == {"today_orders": 0}

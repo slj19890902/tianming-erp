@@ -107,11 +107,21 @@ def _values_match(truth: Any, parsed: Any) -> bool:
     return False
 
 
+def values_match(truth: Any, parsed: Any) -> bool:
+    """Public comparison used by lifecycle evidence checks and scoring alike."""
+    return _values_match(truth, parsed)
+
+
 def _parsed_top_value(parsed: dict, field_name: str) -> Any:
     """Keep the training schema tolerant of order-preview field names."""
     if field_name == "order_no":
         return parsed.get("order_no") or parsed.get("customer_po")
     return parsed.get(field_name)
+
+
+def parsed_top_value(parsed: dict, field_name: str) -> Any:
+    """Public parsed-value alias contract shared with lifecycle validation."""
+    return _parsed_top_value(parsed, field_name)
 
 
 def _parsed_item_value(parsed_row: dict, field_name: str) -> Any:
@@ -122,6 +132,11 @@ def _parsed_item_value(parsed_row: dict, field_name: str) -> Any:
             or parsed_row.get("raw_spec_model")
         )
     return parsed_row.get(field_name)
+
+
+def parsed_item_value(parsed_row: dict, field_name: str) -> Any:
+    """Public item alias contract (notably spec/specification/raw_spec_model)."""
+    return _parsed_item_value(parsed_row, field_name)
 
 
 # ---------------------------------------------------------------------------

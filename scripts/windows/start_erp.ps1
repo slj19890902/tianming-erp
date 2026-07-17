@@ -1,13 +1,20 @@
+param([switch]$NoBrowser)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$HealthUrl = "http://127.0.0.1:8000/api/health"
-$BrowserUrl = "http://127.0.0.1:8000/"
+$ExternalHealthUrl = $null
+$LocalHealthUrl = $null
+$BrowserUrl = $null
+$ErpPort = $null
+$BindHost = $null
+$RuntimeEnvironment = $null
 $LogDir = Join-Path $ProjectRoot "logs"
 $LogFile = Join-Path $LogDir "erp_startup.log"
 $ServerLog = Join-Path $LogDir "erp_server.log"
 $ServerErrorLog = Join-Path $LogDir "erp_server_error.log"
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$process = $null
 
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
@@ -18,16 +25,42 @@ function Write-Log {
     )
 }
 
-function Test-ErpRunning {
+function Test-LocalErpRunning {
     try {
-        $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 2
+        $response = Invoke-WebRequest -Uri $LocalHealthUrl -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 2
         return $response.StatusCode -eq 200
     } catch {
         return $false
     }
 }
 
+function Test-ExternalErpHealth {
+    try {
+        $response = Invoke-WebRequest -Uri $ExternalHealthUrl -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 5
+        return $response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+function Confirm-ProductionExternalHealth {
+    if ($RuntimeEnvironment -ne "production") { return }
+    # This check is deliberately advisory and runs only after loopback readiness.
+    # A reverse-proxy/certificate failure must not kill a healthy local ERP process.
+    if (Test-ExternalErpHealth) {
+        Write-Log "External production HTTPS health check succeeded."
+        return
+    }
+    $message = (
+        "ERP is ready on loopback, but external HTTPS health failed: {0}. " +
+        "Check the reverse proxy and certificate; the local ERP process remains running."
+    ) -f $ExternalHealthUrl
+    Write-Log $message
+    Write-Warning $message
+}
+
 function Open-Browser {
+    if ($NoBrowser) { return }
     Start-Process $BrowserUrl | Out-Null
 }
 
@@ -73,22 +106,52 @@ function Invoke-PythonCommand {
 try {
     Write-Log "Startup begin."
 
-    if (Test-ErpRunning) {
+    if (-not (Test-Path -LiteralPath $Python)) {
+        Write-Log "Python runtime not found."
+        throw "Python runtime not found. Please check the .venv folder."
+    }
+
+    $runtimeConfig = @(
+        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.health_url); print(s.browser_url)" 2>&1
+    )
+    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 6) {
+        $runtimeConfig | ForEach-Object { Write-Log $_ }
+        throw "ERP runtime configuration is invalid."
+    }
+    $BindHost = $runtimeConfig[-6].ToString().Trim()
+    $ErpPort = [int]$runtimeConfig[-5].ToString().Trim()
+    $Workers = [int]$runtimeConfig[-4].ToString().Trim()
+    $RuntimeEnvironment = $runtimeConfig[-3].ToString().Trim()
+    $ExternalHealthUrl = $runtimeConfig[-2].ToString().Trim()
+    $BrowserUrl = $runtimeConfig[-1].ToString().Trim()
+    if ($Workers -ne 1) {
+        throw "ERP must run with exactly one worker for atomic login throttling."
+    }
+    $LocalHealthUrl = "http://127.0.0.1:$ErpPort/api/health"
+    if ($RuntimeEnvironment -eq "production") {
+        # Production ERP_HEALTH_URL comes from load_settings and the project .env.
+        if ($ExternalHealthUrl -notlike "https://*") {
+            throw "Production requires ERP_HEALTH_URL to use the HTTPS reverse-proxy health endpoint."
+        }
+        # Production ERP_BROWSER_URL comes from load_settings and the project .env.
+        if ($BrowserUrl -notlike "https://*") {
+            throw "Production requires ERP_BROWSER_URL to use the HTTPS reverse-proxy ERP endpoint."
+        }
+    }
+    Write-Log ("Runtime bind: {0}:{1}" -f $BindHost, $ErpPort)
+
+    if (Test-LocalErpRunning) {
         Write-Log "ERP already running."
+        Confirm-ProductionExternalHealth
         Open-Browser
         Write-Host "ERP already running. Browser opened."
         exit 0
     }
 
-    $listening = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+    $listening = Get-NetTCPConnection -LocalPort $ErpPort -State Listen -ErrorAction SilentlyContinue
     if ($listening) {
-        Write-Log "Port 8000 is already in use."
-        throw "Port 8000 is already in use. ERP cannot start."
-    }
-
-    if (-not (Test-Path -LiteralPath $Python)) {
-        Write-Log "Python runtime not found."
-        throw "Python runtime not found. Please check the .venv folder."
+        Write-Log ("Port {0} is already in use." -f $ErpPort)
+        throw ("Port {0} is already in use. ERP cannot start." -f $ErpPort)
     }
 
     Write-Log "Running alembic upgrade head."
@@ -102,8 +165,9 @@ try {
         "-X", "utf8",
         "-m", "uvicorn",
         "app.main:app",
-        "--host", "0.0.0.0",
-        "--port", "8000",
+        "--app-dir", $ProjectRoot,
+        "--host", $BindHost,
+        "--port", $ErpPort.ToString(),
         "--workers", "1"
     )
     $process = Start-Process `
@@ -118,7 +182,7 @@ try {
     $ready = $false
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
-        if (Test-ErpRunning) {
+        if (Test-LocalErpRunning) {
             $ready = $true
             break
         }
@@ -131,11 +195,17 @@ try {
         throw "ERP did not become ready within 20 seconds."
     }
 
+    Confirm-ProductionExternalHealth
     Write-Log "ERP startup succeeded."
     Open-Browser
     Write-Host "ERP started. Browser opened."
     exit 0
 } catch {
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        try { $process.WaitForExit(5000) | Out-Null } catch { }
+        Write-Log ("Stopped failed ERP process PID={0}." -f $process.Id)
+    }
     Write-Log ("Startup failed: {0}" -f $_.Exception.Message)
     Write-Host $_.Exception.Message
     Write-Host "ERP startup failed. Please check logs\\erp_startup.log"

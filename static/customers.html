@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="/static/assets/time-utils.js"></script>
     <title>客户管理 - 三级纸箱厂 ERP</title>
     <style>
       :root {
@@ -1281,7 +1282,7 @@
         $("orderCustomerName").textContent = customerName;
         $("orderProductArchiveId").value = "";
         $("orderUnit").value = "只";
-        $("orderDeliveryDate").value = new Date().toISOString().slice(0, 10);
+        $("orderDeliveryDate").value = TmTime.beijingToday();
         state.selectedProduct = null;
         renderOrderProducts();
       }
@@ -1575,7 +1576,7 @@
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = `客户资料_${new Date().toISOString().slice(0, 10)}.csv`;
+        link.download = `客户资料_${TmTime.beijingToday()}.csv`;
         link.click();
         URL.revokeObjectURL(url);
       }

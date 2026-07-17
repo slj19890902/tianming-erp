@@ -28,15 +28,19 @@ Phase 18 / v0.18.0: PDF 订单识别训练样本库 REST API。
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel
-from sqlalchemy import func
+from pydantic import BaseModel, field_serializer
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_current_user, get_db
+from app.api.deps import PermissionChecker, get_db
+from app.core.time_contract import utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
 from app.models.pdf_training import (
     PdfOrderCorrectionLog,
@@ -46,25 +50,26 @@ from app.models.pdf_training import (
 )
 from app.models.user import User
 from app.services.order_pdf_import import (
-    extract_text_from_pdf_bytes,
+    TEMPLATE_CAPTURE_GROUP_MAX,
+    TEMPLATE_ITEM_FIELDS,
+    TEMPLATE_PATTERN_MAX_LENGTH,
     file_sha256,
-    merge_simair_text_and_ocr_drafts,
-    parse_purchase_order_text,
-    resolve_pdf_customer_route,
+    template_pattern_safety_error,
 )
-from app.services.pdf_customer_templates import load_active_pdf_template_rules
-from app.services.pdf_ocr import (
-    analyze_pdf_text_quality,
-    ocr_available,
-    ocr_engine_name,
-    ocr_pdf_bytes,
-    should_use_ocr,
+from app.services.pdf_customer_templates import (
+    activation_dry_run,
+    load_active_pdf_template_rules,
+    parse_and_validate_gold_ground_truth,
+    read_and_verify_sample_pdf,
 )
+from app.services.pdf_ocr import ocr_available, ocr_engine_name
+from app.services.pdf_parse_pipeline import PdfParsePipelineError, parse_pdf_bytes
 from app.services.pdf_scoring import compute_stats, correction_candidates, score_sample
 
 router = APIRouter()
 
-require_admin = RoleChecker(["admin"])
+require_pdf_training_view = PermissionChecker("pdf_training.view")
+require_pdf_training_manage = PermissionChecker("pdf_training.manage")
 
 # 训练样本本地存储目录（使用绝对路径，避免因启动目录不同而写错位置）
 # 本文件位于 app/api/pdf_training.py，parents[2] = 项目根目录
@@ -76,7 +81,7 @@ _SAMPLE_DIR = Path(__file__).resolve().parents[2] / "data" / "pdf_training_sampl
 # ---------------------------------------------------------------------------
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc).replace(tzinfo=None)
+    return utc_now_naive()
 
 
 def _log(db: Session, user: User, action: str, detail: str) -> None:
@@ -133,88 +138,19 @@ def _parse_pdf_sample_content(
     source_name: str,
 ) -> dict:
     template_rules = load_active_pdf_template_rules(db)
-
-    extracted_text: str | None = None
-    parser_result_json: str | None = None
-    parse_result: dict | None = None
-    parse_method = "failed"
-    text_quality = "image_only"
-    text_draft: dict | None = None
-    customer_route = resolve_pdf_customer_route("", template_rules)
-
     try:
-        extracted_text = extract_text_from_pdf_bytes(content)
-        if extracted_text and extracted_text.strip():
-            text_quality = str(analyze_pdf_text_quality(extracted_text)["status"])
-            customer_route = resolve_pdf_customer_route(extracted_text, template_rules)
-            try:
-                parse_result = parse_purchase_order_text(
-                    extracted_text,
-                    source_name=source_name,
-                    template_rules=template_rules,
-                    customer_route=customer_route,
-                )
-                customer_route = parse_result.get("customer_route") or customer_route
-                parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
-                parse_method = "text"
-                if text_quality == "garbled_text_layer" and parse_result.get("customer_type") == "simair":
-                    text_draft = parse_result
-                    parse_result = None
-            except ValueError:
-                parse_method = "failed"
-    except Exception:
-        parse_method = "failed"
-
-    ocr_text_raw: str | None = None
-    if text_quality == "garbled_text_layer" or should_use_ocr(extracted_text, parse_result):
-        ocr_text, ocr_method = (
-            ocr_pdf_bytes(content, dpi=300)
-            if text_draft is not None
-            and text_draft.get("customer_type") == "simair"
-            else ocr_pdf_bytes(content)
-        )
-        if ocr_text and ocr_method not in ("ocr_unavailable", "ocr_failed"):
-            ocr_text_raw = ocr_text
-            if text_quality != "readable_text" or parse_result is None or not parse_result.get("items"):
-                try:
-                    if customer_route.get("status") == "unmatched":
-                        customer_route = resolve_pdf_customer_route(ocr_text, template_rules)
-                    ocr_parse_text = ocr_text
-                    if text_draft and text_draft.get("customer_po"):
-                        exact_po = str(text_draft["customer_po"]).strip()
-                        if exact_po and exact_po.casefold() not in ocr_text.casefold():
-                            ocr_parse_text = f"{exact_po}\n{ocr_text}"
-                    ocr_parse = parse_purchase_order_text(
-                        ocr_parse_text,
-                        source_name=source_name,
-                        template_rules=template_rules,
-                        customer_route=customer_route,
-                    )
-                    parse_result = (
-                        merge_simair_text_and_ocr_drafts(text_draft, ocr_parse)
-                        if text_draft is not None and ocr_parse.get("customer_type") == "simair"
-                        else ocr_parse
-                    )
-                    parse_method = "mixed" if text_draft else ocr_method
-                except ValueError:
-                    parse_method = ocr_method
-            else:
-                parse_method = "mixed"
-        elif ocr_method in {"ocr_unavailable", "ocr_failed"}:
-            if text_quality != "readable_text" or parse_method == "failed":
-                parse_method = ocr_method
-            if text_draft is not None:
-                parse_result = text_draft
-                parse_result["recognition_status"] = "needs_confirmation"
-                parse_result["parse_status"] = "needs_confirmation"
-                parse_result.setdefault("warnings", []).append(
-                    "PDF 文本层异常且 OCR 当前不可用；草稿仅供人工确认。"
-                )
-
-    if parse_result is not None:
-        parse_result["source_text_quality"] = text_quality
-        parse_result["parse_method"] = parse_method
-        parser_result_json = json.dumps(parse_result, ensure_ascii=False, default=str)
+        outcome = parse_pdf_bytes(content, source_name, template_rules)
+        extracted_text = outcome.extracted_text
+        ocr_text_raw = outcome.ocr_text_raw
+        parser_result_json = json.dumps(outcome.draft, ensure_ascii=False, default=str)
+        parse_method = outcome.parse_method
+        text_quality = outcome.text_quality
+    except PdfParsePipelineError as error:
+        extracted_text = error.extracted_text
+        ocr_text_raw = error.ocr_text_raw
+        parser_result_json = None
+        parse_method = error.parse_method
+        text_quality = error.text_quality
 
     return {
         "extracted_text": extracted_text,
@@ -239,6 +175,10 @@ class BatchOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime) -> str:
+        return utc_naive_to_api(value)
+
 
 class BatchCreate(BaseModel):
     batch_name: str
@@ -255,10 +195,17 @@ class SampleSummary(BaseModel):
     parse_status: str
     parse_method: str
     score: float | None
+    gold_review_status: str
+    gold_reviewed_at: datetime | None
+    gold_reviewed_by: str | None
     created_at: datetime
     labeled_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "labeled_at", "gold_reviewed_at")
+    def serialize_timestamps(self, value: datetime | None) -> str | None:
+        return utc_naive_to_api(value) if value else None
 
 
 class SampleDetail(SampleSummary):
@@ -267,11 +214,17 @@ class SampleDetail(SampleSummary):
     extracted_text: str | None
     ocr_text_raw: str | None
     notes: str | None
+    gold_review_note: str | None
 
 
 class GroundTruthPayload(BaseModel):
     ground_truth_json: str         # JSON 字符串
     notes: str | None = None
+
+
+class GoldReviewPayload(BaseModel):
+    status: Literal["approved", "rejected"]
+    note: str | None = None
 
 
 class TemplateOut(BaseModel):
@@ -284,11 +237,26 @@ class TemplateOut(BaseModel):
     customer_name_pattern: str | None
     column_map_json: str | None
     is_active: bool
+    status: str
+    version: int
+    supersedes_template_id: int | None
     created_at: datetime
     updated_at: datetime | None
+    updated_by: str | None
+    activated_at: datetime | None
+    activated_by: str | None
+    activation_reason: str | None
+    evidence_json: str | None
+    retired_at: datetime | None
+    retired_by: str | None
+    retired_reason: str | None
     notes: str | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "updated_at", "activated_at", "retired_at")
+    def serialize_timestamps(self, value: datetime | None) -> str | None:
+        return utc_naive_to_api(value) if value else None
 
 
 class TemplateCreate(BaseModel):
@@ -300,6 +268,98 @@ class TemplateCreate(BaseModel):
     customer_name_pattern: str | None = None
     column_map_json: str | None = None
     notes: str | None = None
+
+
+class TemplateClonePayload(BaseModel):
+    template_name: str | None = None
+    notes: str | None = None
+
+
+class TemplateActivationPayload(BaseModel):
+    reason: str
+
+
+class TemplateRetirePayload(BaseModel):
+    reason: str
+
+
+def _validate_template_rule_payload(payload: TemplateCreate) -> None:
+    compiled_item_pattern: re.Pattern | None = None
+    for field_name, label in (
+        ("customer_name_pattern", "客户名称规则"),
+        ("order_no_pattern", "订单号规则"),
+        ("date_pattern", "日期规则"),
+        ("item_row_pattern", "明细行规则"),
+    ):
+        pattern = str(getattr(payload, field_name) or "").strip()
+        if not pattern:
+            continue
+        if len(pattern) > TEMPLATE_PATTERN_MAX_LENGTH:
+            raise HTTPException(status_code=422, detail=f"{label}过长，请缩短后再保存。")
+        try:
+            compiled = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+        except (RecursionError, re.error) as error:
+            raise HTTPException(status_code=422, detail=f"{label}无效：{error}") from error
+        if compiled.groups > TEMPLATE_CAPTURE_GROUP_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label}捕获组超过 {TEMPLATE_CAPTURE_GROUP_MAX} 个。",
+            )
+        safety_error = template_pattern_safety_error(pattern)
+        if safety_error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label}存在不安全正则结构：{safety_error}。",
+            )
+        if field_name == "item_row_pattern":
+            compiled_item_pattern = compiled
+
+    raw_mapping = str(payload.column_map_json or "").strip()
+    if not raw_mapping:
+        return
+    if len(raw_mapping.encode("utf-8")) > 20_000:
+        raise HTTPException(status_code=422, detail="字段映射 JSON 过大，请精简后再保存。")
+    try:
+        mapping_payload = json.loads(raw_mapping)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=f"字段映射 JSON 无效：{error}") from error
+    if not isinstance(mapping_payload, dict):
+        raise HTTPException(status_code=422, detail="字段映射 JSON 必须是对象。")
+
+    if "field_mapping" in mapping_payload:
+        field_mapping = mapping_payload.get("field_mapping")
+    elif "item_field_map" in mapping_payload:
+        field_mapping = mapping_payload.get("item_field_map")
+    else:
+        supported = {*TEMPLATE_ITEM_FIELDS, "specification", "production_notes", "reference_product_code"}
+        field_mapping = {
+            key: value for key, value in mapping_payload.items() if key in supported
+        }
+    if not isinstance(field_mapping, dict):
+        raise HTTPException(status_code=422, detail="field_mapping 必须是对象。")
+    supported = {*TEMPLATE_ITEM_FIELDS, "specification", "production_notes", "reference_product_code"}
+    for field_name, selector in field_mapping.items():
+        if field_name not in supported:
+            raise HTTPException(status_code=422, detail=f"字段映射不支持字段：{field_name}")
+        if not isinstance(selector, (str, int)) or isinstance(selector, bool):
+            raise HTTPException(status_code=422, detail=f"字段 {field_name} 的捕获组必须是名称或序号。")
+        selector_text = str(selector).strip()
+        if not selector_text:
+            raise HTTPException(status_code=422, detail=f"字段 {field_name} 的捕获组不能为空。")
+        if compiled_item_pattern is None:
+            continue
+        if selector_text.isdigit():
+            group_index = int(selector_text)
+            if group_index < 1 or group_index > compiled_item_pattern.groups:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"字段 {field_name} 指向不存在的捕获组 {group_index}。",
+                )
+        elif selector_text not in compiled_item_pattern.groupindex:
+            raise HTTPException(
+                status_code=422,
+                detail=f"字段 {field_name} 指向不存在的命名组 {selector_text}。",
+            )
 
 
 class ScoreOut(BaseModel):
@@ -328,7 +388,7 @@ class StatsOut(BaseModel):
 @router.get("/batches", response_model=list[BatchOut])
 def list_batches(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     batches = (
         db.query(PdfOrderTrainingBatch)
@@ -357,7 +417,7 @@ def list_batches(
 def create_batch(
     payload: BatchCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     batch = PdfOrderTrainingBatch(
         batch_name=payload.batch_name,
@@ -391,7 +451,7 @@ def list_samples(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     q = db.query(PdfOrderTrainingSample)
     if batch_id is not None:
@@ -417,7 +477,7 @@ def list_samples_legacy(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     return list_samples(batch_id, parse_status, customer_id, limit, offset, db, _user)
 
@@ -434,7 +494,7 @@ async def upload_sample(
     notes: str | None = Form(None),
     store_pdf: bool = Form(False),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """上传一个 PDF，立即运行解析器，保存样本记录。
 
@@ -508,7 +568,7 @@ async def upload_sample(
 def get_sample_legacy_detail(
     sample_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     sample, _ = _get_sample_or_404(db, sample_id)
     return sample
@@ -518,7 +578,7 @@ def get_sample_legacy_detail(
 def get_sample(
     sample_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     sample, _ = _get_sample_or_404(db, sample_id)
     return sample
@@ -529,7 +589,7 @@ def set_ground_truth(
     sample_id: str,
     payload: GroundTruthPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """写入人工标注 ground_truth_json，同时自动触发评分计算。"""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -543,12 +603,25 @@ def set_ground_truth(
             detail=f"ground_truth_json 格式错误: {exc}",
         ) from exc
 
+    ground_truth_changed = sample.ground_truth_json != payload.ground_truth_json
+    notes_changed = payload.notes is not None and sample.notes != payload.notes
+    if not ground_truth_changed and not notes_changed:
+        return sample
+
     sample.ground_truth_json = payload.ground_truth_json
     sample.parse_status = "labeled"
     sample.labeled_at = _now()
     sample.labeled_by = user.username
-    if payload.notes:
+    if payload.notes is not None:
         sample.notes = payload.notes
+
+    # A changed label invalidates every previous gold decision.  This is a
+    # state reset, never an implicit re-approval.
+    if ground_truth_changed:
+        sample.gold_review_status = "pending"
+        sample.gold_reviewed_at = None
+        sample.gold_reviewed_by = None
+        sample.gold_review_note = None
 
     # 自动评分
     sr = score_sample(sample.parser_result_json, sample.ground_truth_json)
@@ -585,11 +658,54 @@ def set_ground_truth(
     return sample
 
 
+@router.post("/samples/{sample_id}/gold-review", response_model=SampleDetail)
+def review_gold_sample(
+    sample_id: str,
+    payload: GoldReviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    """Approve/reject a sample for activation evidence, fail-closed on approval."""
+    sample, safe_sample_id = _get_sample_or_404(db, sample_id)
+    if payload.status == "approved":
+        try:
+            parse_and_validate_gold_ground_truth(sample.ground_truth_json)
+            read_and_verify_sample_pdf(sample)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"不能批准金样本: {exc}",
+            ) from exc
+
+    changed = (
+        sample.gold_review_status != payload.status
+        or sample.gold_review_note != payload.note
+        or sample.parse_status != "reviewed"
+    )
+    if not changed:
+        return sample
+
+    sample.gold_review_status = payload.status
+    sample.gold_reviewed_at = _now()
+    sample.gold_reviewed_by = user.username
+    sample.gold_review_note = payload.note
+    sample.parse_status = "reviewed"
+    _log(
+        db,
+        user,
+        "pdf_training.sample.gold_review",
+        f"金样本复核 {safe_sample_id}: {payload.status}",
+    )
+    db.commit()
+    db.refresh(sample)
+    return sample
+
+
 @router.post("/samples/{sample_id}/score", response_model=ScoreOut)
 def compute_sample_score(
     sample_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """（重新）计算并保存评分。要求样本已有 ground_truth_json。"""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -628,7 +744,7 @@ def compute_sample_score(
 def reparse_sample(
     sample_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     if not sample.file_path:
@@ -679,7 +795,7 @@ def reparse_sample(
 def delete_sample(
     sample_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     _log(db, user, "pdf_training.sample.delete", f"删除样本 {safe_sample_id}: {sample.file_name}")
@@ -710,6 +826,10 @@ class CorrectionOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_serializer("corrected_at")
+    def serialize_corrected_at(self, value: datetime) -> str:
+        return utc_naive_to_api(value)
+
 
 @router.post(
     "/samples/{sample_id}/corrections",
@@ -720,7 +840,7 @@ def add_correction(
     sample_id: str,
     payload: CorrectionCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_pdf_training_manage),
 ):
     """为样本新增字段纠错记录（不影响 ground_truth_json，仅记录差异）。"""
     _sample, safe_sample_id = _get_sample_or_404(db, sample_id)
@@ -743,7 +863,7 @@ def add_correction(
 def list_corrections(
     sample_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     _sample, safe_sample_id = _get_sample_or_404(db, sample_id)
     return (
@@ -758,19 +878,58 @@ def list_corrections(
 # 客户模板
 # ---------------------------------------------------------------------------
 
+def _template_next_version(db: Session, customer_id: int | None) -> int:
+    statement = select(func.coalesce(func.max(PdfOrderCustomerTemplate.version), 0) + 1)
+    if customer_id is None:
+        statement = statement.where(PdfOrderCustomerTemplate.customer_id.is_(None))
+    else:
+        statement = statement.where(PdfOrderCustomerTemplate.customer_id == customer_id)
+    return int(db.execute(statement).scalar_one())
+
+
+def _get_template_or_404(db: Session, template_id: int) -> PdfOrderCustomerTemplate:
+    template = db.get(PdfOrderCustomerTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return template
+
+
+def _require_draft(template: PdfOrderCustomerTemplate, action: str) -> None:
+    if template.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{template.status} 模板不能{action}；只有 draft 可操作",
+        )
+
+
+def _commit_template_change(db: Session, detail: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"模板生命周期约束拒绝该操作: {detail}",
+        ) from exc
+
+
 @router.get("/templates", response_model=list[TemplateOut])
 def list_templates(
     customer_id: int | None = Query(None),
     active_only: bool = Query(False),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     q = db.query(PdfOrderCustomerTemplate)
     if customer_id is not None:
         q = q.filter(PdfOrderCustomerTemplate.customer_id == customer_id)
     if active_only:
-        q = q.filter(PdfOrderCustomerTemplate.is_active.is_(True))
-    return q.order_by(PdfOrderCustomerTemplate.created_at.desc()).all()
+        q = q.filter(PdfOrderCustomerTemplate.status == "active")
+    return q.order_by(
+        PdfOrderCustomerTemplate.customer_id,
+        PdfOrderCustomerTemplate.version.desc(),
+        PdfOrderCustomerTemplate.id.desc(),
+    ).all()
 
 
 @router.post(
@@ -781,8 +940,10 @@ def list_templates(
 def create_template(
     payload: TemplateCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
+    """Create a non-routable draft.  Activation is evidence-gated separately."""
+    _validate_template_rule_payload(payload)
     tmpl = PdfOrderCustomerTemplate(
         customer_id=payload.customer_id,
         template_name=payload.template_name,
@@ -793,11 +954,13 @@ def create_template(
         column_map_json=payload.column_map_json,
         notes=payload.notes,
         created_by=user.username,
-        is_active=True,
+        is_active=False,
+        status="draft",
+        version=_template_next_version(db, payload.customer_id),
     )
     db.add(tmpl)
-    _log(db, user, "pdf_training.template.create", f"新建模板: {payload.template_name}")
-    db.commit()
+    _log(db, user, "pdf_training.template.create", f"新建 draft 模板: {payload.template_name}")
+    _commit_template_change(db, "版本号已存在")
     db.refresh(tmpl)
     return tmpl
 
@@ -807,35 +970,176 @@ def update_template(
     template_id: int,
     payload: TemplateCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
-    tmpl = db.get(PdfOrderCustomerTemplate, template_id)
-    if tmpl is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
-    for attr in (
-        "customer_id", "template_name", "order_no_pattern", "date_pattern",
-        "item_row_pattern", "customer_name_pattern", "column_map_json", "notes",
-    ):
+    tmpl = _get_template_or_404(db, template_id)
+    _require_draft(tmpl, "原地编辑")
+    _validate_template_rule_payload(payload)
+    if tmpl.customer_id != payload.customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="模板创建后不可更换客户；请 clone-draft 后维护新客户版本",
+        )
+    editable = (
+        "template_name", "order_no_pattern", "date_pattern", "item_row_pattern",
+        "customer_name_pattern", "column_map_json", "notes",
+    )
+    if all(getattr(tmpl, attr) == getattr(payload, attr) for attr in editable):
+        return tmpl
+    for attr in editable:
         setattr(tmpl, attr, getattr(payload, attr))
     tmpl.updated_at = _now()
-    _log(db, user, "pdf_training.template.update", f"更新模板 {template_id}: {payload.template_name}")
-    db.commit()
+    tmpl.updated_by = user.username
+    tmpl.is_active = False
+    _log(db, user, "pdf_training.template.update", f"更新 draft 模板 {template_id}: {payload.template_name}")
+    _commit_template_change(db, "草稿更新冲突")
     db.refresh(tmpl)
     return tmpl
+
+
+@router.post("/templates/{template_id}/clone-draft", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
+def clone_template_draft(
+    template_id: int,
+    payload: TemplateClonePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    source = _get_template_or_404(db, template_id)
+    clone = PdfOrderCustomerTemplate(
+        customer_id=source.customer_id,
+        template_name=payload.template_name or f"{source.template_name} v{source.version + 1}",
+        order_no_pattern=source.order_no_pattern,
+        date_pattern=source.date_pattern,
+        item_row_pattern=source.item_row_pattern,
+        customer_name_pattern=source.customer_name_pattern,
+        column_map_json=source.column_map_json,
+        notes=source.notes if payload.notes is None else payload.notes,
+        created_by=user.username,
+        is_active=False,
+        status="draft",
+        version=_template_next_version(db, source.customer_id),
+        supersedes_template_id=source.id,
+    )
+    db.add(clone)
+    _log(db, user, "pdf_training.template.clone", f"从模板 {source.id} 创建 draft 版本")
+    _commit_template_change(db, "并发创建了相同客户版本")
+    db.refresh(clone)
+    return clone
+
+
+@router.post("/templates/{template_id}/activation-dry-run")
+def template_activation_dry_run(
+    template_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_pdf_training_manage),
+):
+    return activation_dry_run(db, _get_template_or_404(db, template_id))
+
+
+@router.post("/templates/{template_id}/activate", response_model=TemplateOut)
+def activate_template(
+    template_id: int,
+    payload: TemplateActivationPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    candidate = _get_template_or_404(db, template_id)
+    _require_draft(candidate, "激活")
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="激活原因不能为空")
+    evidence = activation_dry_run(db, candidate)
+    if not evidence["can_activate"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "金样本 dry-run 未通过，模板未激活", "evidence": evidence},
+        )
+
+    active = db.execute(
+        select(PdfOrderCustomerTemplate)
+        .where(
+            PdfOrderCustomerTemplate.customer_id == candidate.customer_id,
+            PdfOrderCustomerTemplate.status == "active",
+        )
+        .with_for_update()
+    ).scalars().all()
+    now = _now()
+    for old in active:
+        old.status = "retired"
+        old.is_active = False
+        old.retired_at = now
+        old.retired_by = user.username
+        old.retired_reason = f"被模板 {candidate.id} 激活替换: {reason}"
+        old.updated_at = now
+        old.updated_by = user.username
+    if active:
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="模板生命周期约束拒绝退役旧 active 模板",
+            ) from exc
+    candidate.status = "active"
+    candidate.is_active = True
+    candidate.activated_at = now
+    candidate.activated_by = user.username
+    candidate.activation_reason = reason
+    candidate.evidence_json = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+    candidate.updated_at = now
+    candidate.updated_by = user.username
+    _log(db, user, "pdf_training.template.activate", f"激活模板 {candidate.id}: {reason}")
+    _commit_template_change(db, "同客户已经有 active 模板")
+    db.refresh(candidate)
+    return candidate
+
+
+@router.post("/templates/{template_id}/retire", response_model=TemplateOut)
+def retire_template(
+    template_id: int,
+    payload: TemplateRetirePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    template = _get_template_or_404(db, template_id)
+    if template.status != "active":
+        raise HTTPException(status_code=409, detail="只有 active 模板可以退役")
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="退役原因不能为空")
+    now = _now()
+    template.status = "retired"
+    template.is_active = False
+    template.retired_at = now
+    template.retired_by = user.username
+    template.retired_reason = reason
+    template.updated_at = now
+    template.updated_by = user.username
+    _log(db, user, "pdf_training.template.retire", f"退役模板 {template.id}: {reason}")
+    _commit_template_change(db, "模板退役冲突")
+    db.refresh(template)
+    return template
 
 
 @router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_template(
     template_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_pdf_training_manage),
 ):
-    tmpl = db.get(PdfOrderCustomerTemplate, template_id)
-    if tmpl is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
-    _log(db, user, "pdf_training.template.delete", f"删除模板 {template_id}: {tmpl.template_name}")
+    tmpl = _get_template_or_404(db, template_id)
+    _require_draft(tmpl, "物理删除")
+    has_successor = db.execute(
+        select(PdfOrderCustomerTemplate.id).where(
+            PdfOrderCustomerTemplate.supersedes_template_id == tmpl.id
+        )
+    ).first()
+    if has_successor:
+        raise HTTPException(status_code=409, detail="已有后继版本引用该模板，不能物理删除")
+    _log(db, user, "pdf_training.template.delete", f"删除 draft 模板 {template_id}: {tmpl.template_name}")
     db.delete(tmpl)
-    db.commit()
+    _commit_template_change(db, "模板已被其他版本引用")
 
 
 # ---------------------------------------------------------------------------
@@ -843,7 +1147,7 @@ def delete_template(
 # ---------------------------------------------------------------------------
 
 @router.get("/ocr-status")
-def get_ocr_status(_user: User = Depends(get_current_user)):
+def get_ocr_status(_user: User = Depends(require_pdf_training_view)):
     """返回当前服务器 OCR 能力状态。"""
     return {
         "available": ocr_available(),
@@ -862,7 +1166,7 @@ def get_ocr_status(_user: User = Depends(get_current_user)):
 @router.get("/stats", response_model=StatsOut)
 def get_stats(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_pdf_training_view),
 ):
     samples = db.query(PdfOrderTrainingSample).all()
     stats = compute_stats(samples)

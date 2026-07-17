@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
+from threading import Lock
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.api.deps import (
     ADMIN_ONLY_PERMISSIONS,
@@ -20,6 +24,7 @@ from app.api.deps import (
     get_db,
 )
 from app.core.config import load_settings
+from app.core.password_policy import normalize_username, password_policy_issues
 from app.core.security import create_session_token, hash_password, verify_password
 from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
@@ -28,6 +33,15 @@ from app.models.user import USER_ROLES, User
 
 
 router = APIRouter()
+
+
+# OperationLog is the shared persistence layer for this lightweight guard.  A
+# short process-local gate serializes only committed audit count/write steps;
+# bcrypt always runs outside the gate.
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_IP_FAILURE_LIMIT = 30
+LOGIN_FAILURE_WINDOW = timedelta(minutes=15)
+_LOGIN_AUDIT_GATE = Lock()
 
 
 PERMISSION_LABELS: dict[str, tuple[str, str]] = {
@@ -68,14 +82,32 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=72)
     remember_me: bool = False
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username_input(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_username(value)
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("密码 UTF-8 编码后不能超过 72 字节")
+        return value
 
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class UiModeRequest(BaseModel):
+    ui_mode: Literal["standard", "large"]
 
 
 class ResetPasswordRequest(BaseModel):
@@ -125,6 +157,7 @@ class UserResponse(BaseModel):
     display_name: str | None
     must_change_password: bool
     customer_access_mode: str
+    ui_mode: Literal["standard", "large"]
 
 
 def _user_payload(user: User) -> dict:
@@ -160,6 +193,251 @@ def _permission_catalog_payload(user: User) -> list[dict]:
     return rows
 
 
+def _permission_override_values(db: Session, user_id: int) -> list[tuple[str, bool]]:
+    return [
+        (row.permission_code, bool(row.is_allowed))
+        for row in db.scalars(
+            select(UserPermissionOverride)
+            .where(UserPermissionOverride.user_id == user_id)
+            .order_by(UserPermissionOverride.permission_code)
+        ).all()
+    ]
+
+
+def _effective_permission_values(
+    user: User,
+    overrides: list[tuple[str, bool]],
+) -> list[str]:
+    if user.role == "admin":
+        return sorted(PERMISSION_CATALOG)
+    permissions = set(ROLE_DEFAULT_PERMISSIONS.get(user.role, frozenset()))
+    for permission_code, is_allowed in overrides:
+        if permission_code not in PERMISSION_CATALOG:
+            continue
+        if is_allowed:
+            permissions.add(permission_code)
+        else:
+            permissions.discard(permission_code)
+    permissions.difference_update(ADMIN_ONLY_PERMISSIONS)
+    return sorted(permissions)
+
+
+def _access_audit_snapshot_from_values(
+    user: User,
+    *,
+    overrides: list[tuple[str, bool]],
+    access_mode: str,
+    customer_ids: list[int],
+) -> dict:
+    return {
+        "permission_overrides": [
+            {
+                "code": permission_code,
+                "decision": "allow" if is_allowed else "deny",
+            }
+            for permission_code, is_allowed in overrides
+        ],
+        "effective_permissions": _effective_permission_values(user, overrides),
+        "customer_access_mode": access_mode,
+        "customer_ids": sorted(customer_ids),
+    }
+
+
+def _current_access_values(
+    db: Session,
+    user: User,
+) -> tuple[list[tuple[str, bool]], str, list[int]]:
+    return (
+        _permission_override_values(db, user.id),
+        user.customer_access_mode,
+        sorted(customer_scope_ids(user, db)),
+    )
+
+
+def _access_audit_snapshot(db: Session, user: User) -> dict:
+    overrides, access_mode, customer_ids = _current_access_values(db, user)
+    return _access_audit_snapshot_from_values(
+        user,
+        overrides=overrides,
+        access_mode=access_mode,
+        customer_ids=customer_ids,
+    )
+
+
+def _desired_permission_override_values(
+    user: User,
+    overrides: dict[str, bool],
+) -> list[tuple[str, bool]]:
+    if user.role == "admin":
+        return []
+    return sorted(
+        (permission_code, bool(is_allowed))
+        for permission_code, is_allowed in overrides.items()
+    )
+
+
+def _desired_customer_scope_values(
+    user: User,
+    *,
+    mode: str,
+    customer_ids: set[int],
+) -> tuple[str, list[int]]:
+    desired_mode = "all" if user.role in {"admin", "boss"} else mode
+    desired_ids = sorted(customer_ids) if desired_mode == "selected" else []
+    return desired_mode, desired_ids
+
+
+def _replace_permission_overrides(
+    db: Session,
+    *,
+    user: User,
+    overrides: dict[str, bool],
+    actor_id: int,
+) -> None:
+    desired = _desired_permission_override_values(user, overrides)
+    if _permission_override_values(db, user.id) == desired:
+        return
+    db.execute(
+        delete(UserPermissionOverride).where(UserPermissionOverride.user_id == user.id)
+    )
+    db.add_all(
+        [
+            UserPermissionOverride(
+                user_id=user.id,
+                permission_code=permission_code,
+                is_allowed=is_allowed,
+                granted_by=actor_id,
+            )
+            for permission_code, is_allowed in desired
+        ]
+    )
+
+
+def _replace_customer_scopes(
+    db: Session,
+    *,
+    user: User,
+    mode: str,
+    customer_ids: set[int],
+    actor_id: int,
+) -> None:
+    desired_mode, desired_ids = _desired_customer_scope_values(
+        user,
+        mode=mode,
+        customer_ids=customer_ids,
+    )
+    current_ids = sorted(customer_scope_ids(user, db))
+    if user.customer_access_mode == desired_mode and current_ids == desired_ids:
+        return
+    db.execute(delete(UserCustomerScope).where(UserCustomerScope.user_id == user.id))
+    user.customer_access_mode = desired_mode
+    db.add_all(
+        [
+            UserCustomerScope(
+                user_id=user.id,
+                customer_id=customer_id,
+                assigned_by=actor_id,
+            )
+            for customer_id in desired_ids
+        ]
+    )
+
+
+def _claim_access_auth_version(
+    db: Session,
+    *,
+    target: User,
+    expected_auth_version: int,
+    increment: bool,
+) -> None:
+    claimed_auth_version = expected_auth_version + 1 if increment else expected_auth_version
+    try:
+        result = db.execute(
+            update(User)
+            .where(
+                User.id == target.id,
+                User.auth_version == expected_auth_version,
+            )
+            .values(auth_version=claimed_auth_version)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        if "locked" in str(error).lower():
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="用户访问配置已被其他管理员修改，请刷新后重试",
+            ) from error
+        raise
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="用户访问配置已被其他管理员修改，请刷新后重试",
+        )
+    set_committed_value(target, "auth_version", claimed_auth_version)
+
+
+def _commit_access_audit(
+    db: Session,
+    *,
+    actor: User,
+    target: User,
+    action: str,
+    description: str,
+    before: dict,
+    expected_after: dict,
+    before_auth_version: int,
+    changed: bool,
+    request: Request,
+) -> None:
+    try:
+        db.flush()
+        after = _access_audit_snapshot(db, target)
+        if after != expected_after:
+            raise RuntimeError("access configuration audit snapshot mismatch")
+        db.add(
+            OperationLog(
+                user_id=actor.id,
+                action=action,
+                resource="UserAccess",
+                details=json.dumps(
+                    {
+                        "action": action,
+                        "actor": {
+                            "user_id": actor.id,
+                            "username": actor.username,
+                            "role": actor.role,
+                        },
+                        "target_user_id": target.id,
+                        "target_username": target.username,
+                        "result": "changed" if changed else "no_change",
+                        "before": before,
+                        "after": after,
+                        "auth_version": {
+                            "before": before_auth_version,
+                            "after": target.auth_version,
+                        },
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                ip_address=request.client.host if request.client else None,
+                username=actor.username,
+                role=actor.role,
+                entity_type="user",
+                entity_id=target.id,
+                description=description,
+                user_agent=request.headers.get("user-agent"),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(target)
+
+
 def _get_user_or_404(db: Session, user_id: int) -> User:
     user = db.get(User, user_id)
     if user is None:
@@ -175,21 +453,16 @@ def _validate_role(role: str) -> str:
 
 
 def _validate_username(username: str) -> str:
-    normalized = username.strip()
-    if not normalized:
-        raise HTTPException(status_code=400, detail="用户名不能为空")
-    if len(normalized) > 50:
-        raise HTTPException(status_code=400, detail="用户名长度不能超过 50")
-    return normalized
+    try:
+        return normalize_username(username)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-def _validate_new_password(password: str) -> None:
-    if len(password) < 10:
-        raise HTTPException(status_code=400, detail="新密码至少需要 10 位")
-    if not any(char.isalpha() for char in password) or not any(
-        char.isdigit() for char in password
-    ):
-        raise HTTPException(status_code=400, detail="新密码必须同时包含字母和数字")
+def _validate_new_password(password: str, *, username: str | None = None) -> None:
+    issues = password_policy_issues(password, username=username)
+    if issues:
+        raise HTTPException(status_code=400, detail=f"密码不符合要求：{'；'.join(issues)}")
 
 
 def _password_log(
@@ -217,6 +490,168 @@ def _password_log(
     )
 
 
+def _login_request_metadata(request: Request, username: str) -> dict[str, str | None]:
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    if user_agent is not None:
+        user_agent = user_agent[:256]
+    return {
+        "attempted_username": username,
+        "ip_address": ip_address,
+        "user_agent": user_agent,
+    }
+
+
+def _login_attempt_log(
+    *,
+    action: str,
+    request: Request,
+    username: str,
+) -> OperationLog:
+    metadata = _login_request_metadata(request, username)
+    return OperationLog(
+        action=action,
+        resource="User",
+        details=json.dumps(metadata, ensure_ascii=False),
+        ip_address=metadata["ip_address"],
+        username=username,
+        description=(
+            "\u767b\u5f55\u5931\u8d25" if action == "LOGIN_FAILED" else "\u767b\u5f55\u8bf7\u6c42\u88ab\u9650\u6d41"
+        ),
+        user_agent=metadata["user_agent"],
+    )
+
+
+def _recent_failed_login_count(db: Session, *, username: str, ip_address: str | None) -> int:
+    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    last_success_id = db.scalar(
+        select(func.max(OperationLog.id)).where(
+            OperationLog.action == "LOGIN",
+            OperationLog.username == username,
+            OperationLog.ip_address == ip_address,
+        )
+    )
+    filters = [
+        OperationLog.action == "LOGIN_FAILED",
+        OperationLog.username == username,
+        OperationLog.ip_address == ip_address,
+        OperationLog.created_at >= cutoff,
+    ]
+    if last_success_id is not None:
+        filters.append(OperationLog.id > last_success_id)
+    return db.scalar(select(func.count(OperationLog.id)).where(*filters)) or 0
+
+
+def _recent_ip_failed_login_count(db: Session, *, ip_address: str | None) -> int:
+    if ip_address is None:
+        return 0
+    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    return (
+        db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action == "LOGIN_FAILED",
+                OperationLog.ip_address == ip_address,
+                OperationLog.created_at >= cutoff,
+            )
+        )
+        or 0
+    )
+
+
+def _throttle_log_exists(
+    db: Session,
+    *,
+    username: str,
+    ip_address: str | None,
+    ip_throttled: bool,
+) -> bool:
+    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    filters = [
+        OperationLog.action == "LOGIN_THROTTLED",
+        OperationLog.ip_address == ip_address,
+        OperationLog.created_at >= cutoff,
+    ]
+    if not ip_throttled:
+        filters.append(OperationLog.username == username)
+    return db.scalar(select(OperationLog.id).where(*filters).limit(1)) is not None
+
+
+def _login_throttle_state(
+    db: Session,
+    *,
+    username: str,
+    ip_address: str | None,
+) -> tuple[bool, bool]:
+    username_throttled = (
+        _recent_failed_login_count(
+            db,
+            username=username,
+            ip_address=ip_address,
+        )
+        >= LOGIN_FAILURE_LIMIT
+    )
+    ip_throttled = (
+        ip_address is not None
+        and _recent_ip_failed_login_count(db, ip_address=ip_address)
+        >= LOGIN_IP_FAILURE_LIMIT
+    )
+    return username_throttled, ip_throttled
+
+
+def _raise_login_throttled(
+    db: Session,
+    *,
+    request: Request,
+    username: str,
+    ip_address: str | None,
+    ip_throttled: bool,
+) -> None:
+    if not _throttle_log_exists(
+        db,
+        username=username,
+        ip_address=ip_address,
+        ip_throttled=ip_throttled,
+    ):
+        db.add(
+            _login_attempt_log(
+                action="LOGIN_THROTTLED",
+                request=request,
+                username=username,
+            )
+        )
+    db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="\u767b\u5f55\u5c1d\u8bd5\u8fc7\u591a\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5",
+    )
+
+
+def _reject_committed_throttle(
+    db: Session,
+    *,
+    request: Request,
+    username: str,
+    ip_address: str | None,
+) -> None:
+    # This gate is deliberately held only around committed audit reads/writes.
+    # Password verification is performed after it is released.
+    with _LOGIN_AUDIT_GATE:
+        username_throttled, ip_throttled = _login_throttle_state(
+            db,
+            username=username,
+            ip_address=ip_address,
+        )
+        if username_throttled or ip_throttled:
+            _raise_login_throttled(
+                db,
+                request=request,
+                username=username,
+                ip_address=ip_address,
+                ip_throttled=ip_throttled,
+            )
+        db.rollback()
+
+
 @router.post("/login")
 def login(
     payload: LoginRequest,
@@ -224,13 +659,60 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ) -> dict:
-    username = payload.username.strip()
+    username = normalize_username(payload.username)
+    ip_address = request.client.host if request.client else None
+    _reject_committed_throttle(
+        db,
+        request=request,
+        username=username,
+        ip_address=ip_address,
+    )
     user = db.scalar(select(User).where(User.username == username))
-    if (
-        user is None
-        or not user.is_active
-        or not verify_password(payload.password, user.password_hash)
-    ):
+    user_snapshot = (
+        {
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "is_active": user.is_active,
+            "password_hash": user.password_hash,
+            "auth_version": user.auth_version,
+        }
+        if user is not None
+        else None
+    )
+    # Release SQLite's read transaction before bcrypt.  Different login keys
+    # may verify concurrently; only the short audit INSERT holds a write lock.
+    db.rollback()
+    password_valid = (
+        user_snapshot is not None
+        and user_snapshot["is_active"]
+        and verify_password(payload.password, user_snapshot["password_hash"])
+    )
+    if not password_valid:
+        # Recheck and record under one short process-local gate.  Concurrent
+        # failures therefore cannot all pass a stale count snapshot.
+        with _LOGIN_AUDIT_GATE:
+            username_throttled, ip_throttled = _login_throttle_state(
+                db,
+                username=username,
+                ip_address=ip_address,
+            )
+            if username_throttled or ip_throttled:
+                _raise_login_throttled(
+                    db,
+                    request=request,
+                    username=username,
+                    ip_address=ip_address,
+                    ip_throttled=ip_throttled,
+                )
+            db.add(
+                _login_attempt_log(
+                    action="LOGIN_FAILED",
+                    request=request,
+                    username=username,
+                )
+            )
+            db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
@@ -239,7 +721,8 @@ def login(
     current = load_settings()
     remember_seconds = 30 * 24 * 60 * 60
     token = create_session_token(
-        user.id,
+        user_snapshot["id"],
+        auth_version=user_snapshot["auth_version"],
         expires_minutes=(
             remember_seconds // 60
             if payload.remember_me
@@ -257,30 +740,50 @@ def login(
     if payload.remember_me:
         cookie_options["max_age"] = remember_seconds
     response.set_cookie(**cookie_options)
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="LOGIN",
-            resource="User",
-            details=json.dumps(
-                {"username": user.username, "role": user.role},
-                ensure_ascii=False,
-            ),
-            ip_address=request.client.host if request.client else None,
-            username=user.username,
-            role=user.role,
-            entity_type="user",
-            entity_id=user.id,
-            description="用户登录",
-            user_agent=request.headers.get("user-agent"),
+    # SQLite accepts one writer at a time.  Serialize only this short audit
+    # commit; all password checks above remain fully concurrent.
+    with _LOGIN_AUDIT_GATE:
+        db.add(
+            OperationLog(
+                user_id=user_snapshot["id"],
+                action="LOGIN",
+                resource="User",
+                details=json.dumps(
+                    {
+                        "username": user_snapshot["username"],
+                        "role": user_snapshot["role"],
+                    },
+                    ensure_ascii=False,
+                ),
+                ip_address=request.client.host if request.client else None,
+                username=user_snapshot["username"],
+                role=user_snapshot["role"],
+                entity_type="user",
+                entity_id=user_snapshot["id"],
+                description="用户登录",
+                user_agent=request.headers.get("user-agent"),
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    user = db.get(User, user_snapshot["id"])
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误",
+        )
     return _auth_payload(user, db)
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict[str, bool]:
+def logout(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    # The intentionally coarse-grained first implementation revokes every
+    # browser session for this user, including the one that made this request.
+    current_user.auth_version += 1
+    db.commit()
     current = load_settings()
     response.delete_cookie(
         key=current.session_cookie_name,
@@ -300,6 +803,42 @@ def me(
     return _auth_payload(current_user, db)
 
 
+@router.put("/me/ui-mode")
+def change_ui_mode(
+    payload: UiModeRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    previous_ui_mode = current_user.ui_mode
+    current_user.ui_mode = payload.ui_mode
+    db.add(
+        OperationLog(
+            user_id=current_user.id,
+            action="CHANGE_UI_MODE",
+            resource="User",
+            details=json.dumps(
+                {
+                    "target_user_id": current_user.id,
+                    "old_ui_mode": previous_ui_mode,
+                    "new_ui_mode": payload.ui_mode,
+                },
+                ensure_ascii=False,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=current_user.username,
+            role=current_user.role,
+            entity_type="user",
+            entity_id=current_user.id,
+            description="切换界面模式",
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+    db.refresh(current_user)
+    return {"ok": True, "user": _user_payload(current_user)}
+
+
 @router.put("/password")
 def change_password(
     payload: ChangePasswordRequest,
@@ -309,12 +848,13 @@ def change_password(
 ) -> dict:
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="当前密码错误")
-    _validate_new_password(payload.new_password)
+    _validate_new_password(payload.new_password, username=current_user.username)
     if verify_password(payload.new_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
 
     current_user.password_hash = hash_password(payload.new_password)
     current_user.must_change_password = False
+    current_user.auth_version += 1
     db.add(
         _password_log(
             actor=current_user,
@@ -346,15 +886,17 @@ def create_user(
     username = _validate_username(payload.username)
     if db.scalar(select(User.id).where(User.username == username)) is not None:
         raise HTTPException(status_code=409, detail="用户名已存在")
-    _validate_new_password(payload.password)
+    _validate_new_password(payload.password, username=username)
+    role = _validate_role(payload.role)
     user = User(
         username=username,
         password_hash=hash_password(payload.password),
-        role=_validate_role(payload.role),
+        role=role,
         real_name=payload.real_name.strip() or username,
         display_name=payload.display_name.strip() if payload.display_name else None,
         is_active=payload.is_active,
         must_change_password=payload.must_change_password,
+        ui_mode="large" if role == "boss" else "standard",
     )
     db.add(user)
     db.flush()
@@ -404,7 +946,10 @@ def update_user(
             raise HTTPException(status_code=409, detail="用户名已存在")
         user.username = username
     if "role" in changes and changes["role"] is not None:
-        user.role = _validate_role(changes["role"])
+        new_role = _validate_role(changes["role"])
+        if user.role != "boss" and new_role == "boss":
+            user.ui_mode = "large"
+        user.role = new_role
     if "real_name" in changes and changes["real_name"] is not None:
         user.real_name = changes["real_name"].strip() or user.username
     if "display_name" in changes:
@@ -416,10 +961,12 @@ def update_user(
     if "must_change_password" in changes:
         user.must_change_password = changes["must_change_password"]
     if "password" in changes and changes["password"] is not None:
-        _validate_new_password(changes["password"])
+        _validate_new_password(changes["password"], username=user.username)
         user.password_hash = hash_password(changes["password"])
         if "must_change_password" not in changes:
             user.must_change_password = True
+    if {"role", "is_active", "password"}.intersection(changes):
+        user.auth_version += 1
     db.add(
         OperationLog(
             user_id=admin.id,
@@ -465,6 +1012,7 @@ def get_permission_overrides(
 def save_permission_overrides(
     user_id: int,
     payload: PermissionOverridesRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -476,21 +1024,50 @@ def save_permission_overrides(
         payload.overrides.get(code) is True for code in ADMIN_ONLY_PERMISSIONS
     ):
         raise HTTPException(status_code=400, detail="仅管理员可以使用系统备份或用户权限管理权限")
-    db.execute(delete(UserPermissionOverride).where(UserPermissionOverride.user_id == user.id))
-    if user.role != "admin":
-        db.add_all(
-            [
-                UserPermissionOverride(
-                    user_id=user.id,
-                    permission_code=permission_code,
-                    is_allowed=is_allowed,
-                    granted_by=admin.id,
-                )
-                for permission_code, is_allowed in sorted(payload.overrides.items())
-            ]
+    current_overrides, current_mode, current_ids = _current_access_values(db, user)
+    desired_overrides = _desired_permission_override_values(user, payload.overrides)
+    before = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    expected_after = _access_audit_snapshot_from_values(
+        user,
+        overrides=desired_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    changed = before != expected_after
+    before_auth_version = user.auth_version
+    try:
+        _claim_access_auth_version(
+            db,
+            target=user,
+            expected_auth_version=before_auth_version,
+            increment=changed,
         )
-    db.commit()
-    db.refresh(user)
+        _replace_permission_overrides(
+            db,
+            user=user,
+            overrides=payload.overrides,
+            actor_id=admin.id,
+        )
+        _commit_access_audit(
+            db,
+            actor=admin,
+            target=user,
+            action="UPDATE_PERMISSION_OVERRIDES",
+            description="更新用户权限覆盖",
+            before=before,
+            expected_after=expected_after,
+            before_auth_version=before_auth_version,
+            changed=changed,
+            request=request,
+        )
+    except Exception:
+        db.rollback()
+        raise
     return get_permission_overrides(user.id, admin, db)
 
 
@@ -513,6 +1090,7 @@ def get_customer_scopes(
 def save_customer_scopes(
     user_id: int,
     payload: CustomerScopesRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -528,20 +1106,55 @@ def save_customer_scopes(
     missing_ids = sorted(customer_ids.difference(existing_ids))
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"客户不存在: {', '.join(map(str, missing_ids))}")
-    db.execute(delete(UserCustomerScope).where(UserCustomerScope.user_id == user.id))
-    user.customer_access_mode = "all" if user.role in {"admin", "boss"} else payload.mode
-    if user.customer_access_mode == "selected":
-        db.add_all(
-            [
-                UserCustomerScope(
-                    user_id=user.id,
-                    customer_id=customer_id,
-                    assigned_by=admin.id,
-                )
-                for customer_id in sorted(customer_ids)
-            ]
+    current_overrides, current_mode, current_ids = _current_access_values(db, user)
+    desired_mode, desired_ids = _desired_customer_scope_values(
+        user,
+        mode=payload.mode,
+        customer_ids=customer_ids,
+    )
+    before = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    expected_after = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=desired_mode,
+        customer_ids=desired_ids,
+    )
+    changed = before != expected_after
+    before_auth_version = user.auth_version
+    try:
+        _claim_access_auth_version(
+            db,
+            target=user,
+            expected_auth_version=before_auth_version,
+            increment=changed,
         )
-    db.commit()
+        _replace_customer_scopes(
+            db,
+            user=user,
+            mode=payload.mode,
+            customer_ids=customer_ids,
+            actor_id=admin.id,
+        )
+        _commit_access_audit(
+            db,
+            actor=admin,
+            target=user,
+            action="UPDATE_CUSTOMER_SCOPES",
+            description="更新用户客户范围",
+            before=before,
+            expected_after=expected_after,
+            before_auth_version=before_auth_version,
+            changed=changed,
+            request=request,
+        )
+    except Exception:
+        db.rollback()
+        raise
     return get_customer_scopes(user.id, admin, db)
 
 
@@ -549,6 +1162,7 @@ def save_customer_scopes(
 def save_user_access(
     user_id: int,
     payload: UserAccessRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -576,55 +1190,62 @@ def save_user_access(
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"客户不存在: {', '.join(map(str, missing_ids))}")
 
-    db.execute(delete(UserPermissionOverride).where(UserPermissionOverride.user_id == user.id))
-    if user.role != "admin":
-        db.add_all(
-            [
-                UserPermissionOverride(
-                    user_id=user.id,
-                    permission_code=permission_code,
-                    is_allowed=is_allowed,
-                    granted_by=admin.id,
-                )
-                for permission_code, is_allowed in sorted(payload.overrides.items())
-            ]
-        )
-    db.execute(delete(UserCustomerScope).where(UserCustomerScope.user_id == user.id))
-    user.customer_access_mode = "all" if user.role in {"admin", "boss"} else payload.mode
-    if user.customer_access_mode == "selected":
-        db.add_all(
-            [
-                UserCustomerScope(
-                    user_id=user.id,
-                    customer_id=customer_id,
-                    assigned_by=admin.id,
-                )
-                for customer_id in sorted(customer_ids)
-            ]
-        )
-    db.add(
-        OperationLog(
-            user_id=admin.id,
-            action="UPDATE_USER_ACCESS",
-            resource="User",
-            details=json.dumps(
-                {
-                    "target_user_id": user.id,
-                    "permission_count": len(payload.overrides),
-                    "customer_access_mode": user.customer_access_mode,
-                    "customer_scope_count": len(customer_ids),
-                },
-                ensure_ascii=False,
-            ),
-            username=admin.username,
-            role=admin.role,
-            entity_type="user",
-            entity_id=user.id,
-            description="更新用户权限与客户范围",
-        )
+    current_overrides, current_mode, current_ids = _current_access_values(db, user)
+    desired_overrides = _desired_permission_override_values(user, payload.overrides)
+    desired_mode, desired_ids = _desired_customer_scope_values(
+        user,
+        mode=payload.mode,
+        customer_ids=customer_ids,
     )
-    db.commit()
-    db.refresh(user)
+    before = _access_audit_snapshot_from_values(
+        user,
+        overrides=current_overrides,
+        access_mode=current_mode,
+        customer_ids=current_ids,
+    )
+    expected_after = _access_audit_snapshot_from_values(
+        user,
+        overrides=desired_overrides,
+        access_mode=desired_mode,
+        customer_ids=desired_ids,
+    )
+    changed = before != expected_after
+    before_auth_version = user.auth_version
+    try:
+        _claim_access_auth_version(
+            db,
+            target=user,
+            expected_auth_version=before_auth_version,
+            increment=changed,
+        )
+        _replace_permission_overrides(
+            db,
+            user=user,
+            overrides=payload.overrides,
+            actor_id=admin.id,
+        )
+        _replace_customer_scopes(
+            db,
+            user=user,
+            mode=payload.mode,
+            customer_ids=customer_ids,
+            actor_id=admin.id,
+        )
+        _commit_access_audit(
+            db,
+            actor=admin,
+            target=user,
+            action="UPDATE_USER_ACCESS",
+            description="更新用户权限与客户范围",
+            before=before,
+            expected_after=expected_after,
+            before_auth_version=before_auth_version,
+            changed=changed,
+            request=request,
+        )
+    except Exception:
+        db.rollback()
+        raise
     return {
         "ok": True,
         "permission_access": get_permission_overrides(user.id, admin, db),
@@ -640,13 +1261,15 @@ def reset_password(
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
-    target = db.scalar(select(User).where(User.username == username.strip()))
+    normalized_username = _validate_username(username)
+    target = db.scalar(select(User).where(User.username == normalized_username))
     if target is None:
         raise HTTPException(status_code=404, detail="账号不存在")
-    _validate_new_password(payload.new_password)
+    _validate_new_password(payload.new_password, username=target.username)
 
     target.password_hash = hash_password(payload.new_password)
     target.must_change_password = True
+    target.auth_version += 1
     db.add(
         _password_log(
             actor=admin,

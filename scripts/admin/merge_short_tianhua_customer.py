@@ -6,6 +6,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from sqlalchemy import create_engine
+
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -13,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from app.core.config import load_settings
 from app.core.database import backup_to_nas
+from scripts.master_data_write_guard import reject_legacy_master_data_write_if_versioned
 
 
 SOURCE_NAME = "天华"
@@ -132,6 +135,16 @@ def run_merge(
     database = database.resolve()
     if not database.is_file():
         raise FileNotFoundError(f"数据库不存在：{database}")
+
+    if apply:
+        guard_engine = create_engine(f"sqlite+pysqlite:///{database.as_posix()}")
+        try:
+            reject_legacy_master_data_write_if_versioned(
+                guard_engine,
+                script_name="scripts/admin/merge_short_tianhua_customer.py",
+            )
+        finally:
+            guard_engine.dispose()
 
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")

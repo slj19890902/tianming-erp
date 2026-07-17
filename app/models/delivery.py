@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -37,6 +39,10 @@ class Delivery(Base):
             "status IN ('pending', 'dispatched')",
             name="ck_sales_deliveries_status",
         ),
+        CheckConstraint(
+            "loading_status IN ('normal', 'warning', 'over_capacity', 'data_pending', 'not_evaluated')",
+            name="ck_sales_deliveries_loading_status",
+        ),
         UniqueConstraint(
             "delivery_number",
             name="uq_sales_deliveries_delivery_number",
@@ -44,6 +50,7 @@ class Delivery(Base):
         Index("ix_sales_deliveries_customer_id", "customer_id"),
         Index("ix_sales_deliveries_delivery_date", "delivery_date"),
         Index("ix_sales_deliveries_status", "status"),
+        Index("ix_sales_deliveries_vehicle_id", "vehicle_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -54,6 +61,16 @@ class Delivery(Base):
     )
     delivery_date: Mapped[date] = mapped_column(Date, nullable=False)
     vehicle_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("delivery_vehicles.id", ondelete="RESTRICT"), nullable=True)
+    vehicle_capacity_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    loading_total_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estimated_total_volume_m3: Mapped[Decimal | None] = mapped_column(Numeric(14, 8), nullable=True)
+    load_rate_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    loading_status: Mapped[str] = mapped_column(String(30), nullable=False, default="not_evaluated", server_default="not_evaluated")
+    loading_calculation_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    loading_confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    loading_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    loading_confirmed_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(
         String(20),
         default="pending",
@@ -115,6 +132,8 @@ class DeliveryItem(Base):
     )
     delivered_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estimated_volume_m3: Mapped[Decimal | None] = mapped_column(Numeric(14, 8), nullable=True)
+    loading_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),

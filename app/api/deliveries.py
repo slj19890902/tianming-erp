@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.delivery_loading import DeliveryVehicle, ProductLoadingProfile
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionTask
@@ -36,6 +38,12 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.delivery_loading import (
+    calculate_loading,
+    effective_volume_m3,
+    recalculate_delivery_loading,
+    stored_delivery_loading,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
@@ -225,6 +233,7 @@ class DeliveryCreate(BaseModel):
     customer_id: int
     delivery_date: date | None = None
     vehicle_number: str | None = None
+    vehicle_id: int | None = Field(default=None, gt=0)
     items: list[DeliveryLineCreate]
 
     @field_validator("items")
@@ -241,6 +250,7 @@ class DeliveryCreate(BaseModel):
 class DeliveryUpdate(BaseModel):
     delivery_date: date | None = None
     vehicle_number: str | None = None
+    vehicle_id: int | None = Field(default=None, gt=0)
     items: list[DeliveryLineCreate]
 
     @field_validator("items")
@@ -252,6 +262,63 @@ class DeliveryUpdate(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("同一订单明细不能重复选择")
         return value
+
+
+class DeliveryVehiclePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    vehicle_type: str | None = Field(default=None, max_length=100)
+    plate_number: str = Field(min_length=1, max_length=50)
+    cargo_length_mm: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    cargo_width_mm: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    cargo_height_mm: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    safety_load_factor: Decimal = Field(default=Decimal("1.0"), gt=0, le=1, max_digits=6, decimal_places=4)
+    yellow_threshold_pct: Decimal = Field(default=Decimal("80"), gt=0, max_digits=6, decimal_places=2)
+    red_threshold_pct: Decimal = Field(default=Decimal("100"), gt=0, max_digits=6, decimal_places=2)
+    is_active: bool = True
+    remarks: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("name", "plate_number")
+    @classmethod
+    def trim_required(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("车辆名称和车牌不能为空")
+        return value
+
+    @field_validator("vehicle_type", "remarks")
+    @classmethod
+    def trim_optional(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
+
+class ProductLoadingProfilePayload(BaseModel):
+    mode: str
+    manual_unit_m3: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=8)
+    package_piece_count: int | None = Field(default=None, gt=0)
+    package_length_mm: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    package_width_mm: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    package_height_mm: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    source_note: str | None = Field(default=None, max_length=1000)
+    confirmed: bool | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        value = value.strip()
+        if value not in {"theoretical_box", "manual_unit", "package"}:
+            raise ValueError("mode 必须是 theoretical_box、manual_unit 或 package")
+        return value
+
+
+class DeliveryLoadingPreviewPayload(BaseModel):
+    customer_id: int = Field(gt=0)
+    vehicle_id: int | None = Field(default=None, gt=0)
+    items: list[DeliveryLineCreate]
+
+
+class DeliveryDispatchRequest(BaseModel):
+    loading_confirmation: bool = False
+    expected_loading_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class ForceCloseRequest(BaseModel):
@@ -740,6 +807,8 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
             DeliveryItem.order_item_id,
             DeliveryItem.delivered_quantity,
             DeliveryItem.remarks,
+            DeliveryItem.estimated_volume_m3,
+            DeliveryItem.loading_snapshot_json,
             Order.id.label("order_id"),
             Order.order_number,
             Order.customer_po,
@@ -769,6 +838,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "customer_name": customer.name if customer else None,
         "delivery_date": delivery.delivery_date,
         "vehicle_number": delivery.vehicle_number,
+        "vehicle_id": delivery.vehicle_id,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
         "dispatched_at": (
@@ -785,6 +855,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
+        "loading": stored_delivery_loading(delivery),
         "items": [
             {
                 **dict(row._mapping),
@@ -967,6 +1038,264 @@ def _collect_delivery_lines(
         built.append((order_item, line))
         total_quantity += line.delivered_quantity
     return built, total_quantity, warnings
+
+
+def _vehicle_or_404(db: Session, vehicle_id: int, *, require_active: bool) -> DeliveryVehicle:
+    vehicle = db.get(DeliveryVehicle, vehicle_id)
+    if vehicle is None:
+        raise HTTPException(status_code=400, detail="车辆不存在")
+    if require_active and not vehicle.is_active:
+        raise HTTPException(status_code=400, detail="车辆已停用，不能用于新的送货草稿")
+    return vehicle
+
+
+def _vehicle_dict(vehicle: DeliveryVehicle) -> dict:
+    return {
+        "id": vehicle.id,
+        "name": vehicle.name,
+        "vehicle_type": vehicle.vehicle_type,
+        "plate_number": vehicle.plate_number,
+        "cargo_length_mm": vehicle.cargo_length_mm,
+        "cargo_width_mm": vehicle.cargo_width_mm,
+        "cargo_height_mm": vehicle.cargo_height_mm,
+        "safety_load_factor": vehicle.safety_load_factor,
+        "effective_volume_m3": effective_volume_m3(vehicle),
+        "yellow_threshold_pct": vehicle.yellow_threshold_pct,
+        "red_threshold_pct": vehicle.red_threshold_pct,
+        "is_active": vehicle.is_active,
+        "remarks": vehicle.remarks,
+        "created_by": vehicle.created_by,
+        "updated_by": vehicle.updated_by,
+        "created_at": utc_naive_to_api(vehicle.created_at) if vehicle.created_at else None,
+        "updated_at": utc_naive_to_api(vehicle.updated_at) if vehicle.updated_at else None,
+    }
+
+
+def _apply_vehicle_payload(vehicle: DeliveryVehicle, payload: DeliveryVehiclePayload, user: User) -> None:
+    if payload.yellow_threshold_pct > payload.red_threshold_pct:
+        raise HTTPException(status_code=422, detail="黄色阈值不能大于红色阈值")
+    vehicle.name = payload.name
+    vehicle.vehicle_type = payload.vehicle_type
+    vehicle.plate_number = payload.plate_number
+    vehicle.cargo_length_mm = payload.cargo_length_mm
+    vehicle.cargo_width_mm = payload.cargo_width_mm
+    vehicle.cargo_height_mm = payload.cargo_height_mm
+    vehicle.safety_load_factor = payload.safety_load_factor
+    vehicle.yellow_threshold_pct = payload.yellow_threshold_pct
+    vehicle.red_threshold_pct = payload.red_threshold_pct
+    vehicle.is_active = payload.is_active
+    vehicle.remarks = payload.remarks
+    vehicle.updated_by = user.id
+
+
+def _profile_dict(profile: ProductLoadingProfile) -> dict:
+    return {
+        "id": profile.id,
+        "product_id": profile.product_id,
+        "mode": profile.mode,
+        "manual_unit_m3": profile.manual_unit_m3,
+        "package_piece_count": profile.package_piece_count,
+        "package_length_mm": profile.package_length_mm,
+        "package_width_mm": profile.package_width_mm,
+        "package_height_mm": profile.package_height_mm,
+        "source_note": profile.source_note,
+        "confirmed": profile.confirmed_at is not None,
+        "confirmed_by": profile.confirmed_by,
+        "confirmed_at": utc_naive_to_api(profile.confirmed_at) if profile.confirmed_at else None,
+        "updated_by": profile.updated_by,
+        "updated_at": utc_naive_to_api(profile.updated_at) if profile.updated_at else None,
+    }
+
+
+def _profile_lookup_dict(
+    product: Product,
+    customer: Customer,
+    profile: ProductLoadingProfile | None,
+) -> dict:
+    return {
+        "product_id": product.id,
+        "customer_id": product.customer_id,
+        "customer_name": customer.name,
+        "product_code": product.product_code,
+        "product_name": product.product_name,
+        "profile": _profile_dict(profile) if profile else None,
+    }
+
+
+def _apply_profile_payload(profile: ProductLoadingProfile, payload: ProductLoadingProfilePayload, user: User) -> None:
+    if payload.mode == "manual_unit" and payload.manual_unit_m3 is None:
+        raise HTTPException(status_code=422, detail="manual_unit 模式必须填写单只折算体积")
+    if payload.mode == "package" and (
+        payload.package_piece_count is None
+        or payload.package_length_mm is None
+        or payload.package_width_mm is None
+        or payload.package_height_mm is None
+    ):
+        raise HTTPException(status_code=422, detail="package 模式必须填写每包只数和包装长宽高")
+    source_note = (
+        payload.source_note.strip() if payload.source_note else None
+    ) if "source_note" in payload.model_fields_set else profile.source_note
+    next_manual_unit_m3 = payload.manual_unit_m3 if payload.mode == "manual_unit" else None
+    next_package_piece_count = payload.package_piece_count if payload.mode == "package" else None
+    next_package_length_mm = payload.package_length_mm if payload.mode == "package" else None
+    next_package_width_mm = payload.package_width_mm if payload.mode == "package" else None
+    next_package_height_mm = payload.package_height_mm if payload.mode == "package" else None
+    confirmation_inputs_changed = any(
+        (
+            profile.mode != payload.mode,
+            profile.manual_unit_m3 != next_manual_unit_m3,
+            profile.package_piece_count != next_package_piece_count,
+            profile.package_length_mm != next_package_length_mm,
+            profile.package_width_mm != next_package_width_mm,
+            profile.package_height_mm != next_package_height_mm,
+            profile.source_note != source_note,
+        )
+    )
+    will_be_confirmed = (
+        payload.confirmed
+        if payload.confirmed is not None
+        else bool(profile.confirmed_at) and not confirmation_inputs_changed
+    )
+    if will_be_confirmed and not source_note:
+        raise HTTPException(status_code=422, detail="确认装载参数时必须填写来源说明")
+    profile.mode = payload.mode
+    profile.manual_unit_m3 = next_manual_unit_m3
+    profile.package_piece_count = next_package_piece_count
+    profile.package_length_mm = next_package_length_mm
+    profile.package_width_mm = next_package_width_mm
+    profile.package_height_mm = next_package_height_mm
+    profile.source_note = source_note
+    if payload.confirmed is not None:
+        profile.confirmed_by = user.id if payload.confirmed else None
+        profile.confirmed_at = _utc_now() if payload.confirmed else None
+    elif confirmation_inputs_changed:
+        profile.confirmed_by = None
+        profile.confirmed_at = None
+    profile.updated_by = user.id
+
+
+@router.get("/vehicles")
+def list_delivery_vehicles(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    query = select(DeliveryVehicle).order_by(DeliveryVehicle.is_active.desc(), DeliveryVehicle.plate_number)
+    if not include_inactive:
+        query = query.where(DeliveryVehicle.is_active.is_(True))
+    return {"items": [_vehicle_dict(row) for row in db.scalars(query).all()]}
+
+
+@router.post("/vehicles", status_code=status.HTTP_201_CREATED)
+def create_delivery_vehicle(
+    payload: DeliveryVehiclePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    vehicle = DeliveryVehicle(name=payload.name, plate_number=payload.plate_number, cargo_length_mm=payload.cargo_length_mm, cargo_width_mm=payload.cargo_width_mm, cargo_height_mm=payload.cargo_height_mm, created_by=user.id)
+    _apply_vehicle_payload(vehicle, payload, user)
+    db.add(vehicle)
+    try:
+        db.flush()
+        _write_audit(db, user=user, action="CREATE_VEHICLE", resource="DeliveryVehicle", entity_id=vehicle.id, details={"plate_number": vehicle.plate_number}, description="创建送货车辆")
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="车辆车牌重复") from error
+    return _vehicle_dict(vehicle)
+
+
+@router.put("/vehicles/{vehicle_id}")
+def update_delivery_vehicle(
+    vehicle_id: int,
+    payload: DeliveryVehiclePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    vehicle = _vehicle_or_404(db, vehicle_id, require_active=False)
+    _apply_vehicle_payload(vehicle, payload, user)
+    try:
+        _write_audit(db, user=user, action="UPDATE_VEHICLE", resource="DeliveryVehicle", entity_id=vehicle.id, details={"plate_number": vehicle.plate_number, "is_active": vehicle.is_active}, description="更新送货车辆")
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="车辆车牌重复") from error
+    return _vehicle_dict(vehicle)
+
+
+@router.get("/loading-profiles/search")
+def search_loading_profiles(
+    keyword: str = Query(default="", max_length=150),
+    customer_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    query = (
+        select(Product, Customer, ProductLoadingProfile)
+        .join(Customer, Customer.id == Product.customer_id)
+        .outerjoin(
+            ProductLoadingProfile,
+            ProductLoadingProfile.product_id == Product.id,
+        )
+    )
+    if customer_id is not None:
+        query = query.where(Product.customer_id == customer_id)
+    visible_ids = _visible_customer_ids(user, db)
+    if visible_ids is not None:
+        query = query.where(Product.customer_id.in_(visible_ids))
+    term = keyword.strip()
+    if term:
+        query = query.where(or_(Product.product_code.like(f"%{term}%"), Product.product_name.like(f"%{term}%")))
+    rows = db.execute(query.order_by(Product.product_code).limit(100)).all()
+    return {
+        "items": [
+            _profile_lookup_dict(product, customer, profile)
+            for product, customer, profile in rows
+        ]
+    }
+
+
+@router.get("/loading-profiles/{product_id}")
+def get_loading_profile(product_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    require_customer_access(product.customer_id, user, db)
+    customer = db.get(Customer, product.customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    profile = db.scalar(select(ProductLoadingProfile).where(ProductLoadingProfile.product_id == product_id))
+    return _profile_lookup_dict(product, customer, profile)
+
+
+@router.put("/loading-profiles/{product_id}")
+def put_loading_profile(product_id: int, payload: ProductLoadingProfilePayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    require_customer_access(product.customer_id, user, db)
+    customer = db.get(Customer, product.customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    profile = db.scalar(select(ProductLoadingProfile).where(ProductLoadingProfile.product_id == product_id))
+    if profile is None:
+        profile = ProductLoadingProfile(product_id=product_id, mode=payload.mode, updated_by=user.id)
+        db.add(profile)
+    _apply_profile_payload(profile, payload, user)
+    db.flush()
+    _write_audit(db, user=user, action="UPSERT_LOADING_PROFILE", resource="ProductLoadingProfile", entity_id=profile.id, details={"product_id": product_id, "mode": profile.mode, "confirmed": bool(profile.confirmed_at)}, description="维护产品装载参数")
+    db.commit()
+    return _profile_lookup_dict(product, customer, profile)
+
+
+@router.post("/loading-preview")
+def preview_delivery_loading(payload: DeliveryLoadingPreviewPayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    require_customer_access(payload.customer_id, user, db)
+    built, _total, _warnings = _collect_delivery_lines(db, customer_id=payload.customer_id, lines=payload.items)
+    vehicle = _vehicle_or_404(db, payload.vehicle_id, require_active=True) if payload.vehicle_id else None
+    return calculate_loading(db, vehicle=vehicle, lines=[(item.id, line.delivered_quantity) for item, line in built])
 
 
 @router.get("/route-suggestions")
@@ -1283,12 +1612,14 @@ def create_delivery(
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     delivery_date = payload.delivery_date or beijing_today()
+    vehicle = _vehicle_or_404(db, payload.vehicle_id, require_active=True) if payload.vehicle_id else None
     try:
         delivery = Delivery(
             delivery_number=_next_delivery_number(db, delivery_date),
             customer_id=payload.customer_id,
             delivery_date=delivery_date,
-            vehicle_number=(payload.vehicle_number or "").strip() or None,
+            vehicle_number=(vehicle.plate_number if vehicle else (payload.vehicle_number or "").strip() or None),
+            vehicle_id=vehicle.id if vehicle else None,
             status="pending",
             total_quantity=0,
             created_by=user.id,
@@ -1310,6 +1641,8 @@ def create_delivery(
                 )
             )
         delivery.total_quantity = total_quantity
+        db.flush()
+        loading = recalculate_delivery_loading(db, delivery, vehicle)
         _write_audit(
             db,
             user=user,
@@ -1320,6 +1653,8 @@ def create_delivery(
                 "delivery_number": delivery.delivery_number,
                 "item_count": len(payload.items),
                 "total_quantity": total_quantity,
+                "loading_status": loading["status"],
+                "loading_hash": loading["hash"],
             },
             description="创建待发货送货单",
         )
@@ -1341,12 +1676,48 @@ def create_delivery(
 @router.put("/{delivery_id}/dispatch")
 def dispatch_delivery(
     delivery_id: int,
+    payload: DeliveryDispatchRequest | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    _delivery_for_user(db, delivery_id, user)
+    delivery = _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
     try:
+        if delivery.vehicle_id and delivery.loading_status != "normal":
+            expected_hash = delivery.loading_calculation_hash
+            if payload is None or not payload.loading_confirmation:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "LOADING_CONFIRMATION_REQUIRED",
+                        "message": "当前装载状态需要人工确认后才能发货；确认不自动拆单或阻止超载发货。",
+                        "loading": stored_delivery_loading(delivery),
+                        "expected_loading_hash": expected_hash,
+                    },
+                )
+            if payload.expected_loading_hash != expected_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "LOADING_HASH_EXPIRED",
+                        "message": "Loading calculation changed; refresh and confirm again.",
+                        "loading": stored_delivery_loading(delivery),
+                        "expected_loading_hash": expected_hash,
+                        "received_loading_hash": payload.expected_loading_hash,
+                    },
+                )
+            delivery.loading_confirmed_by = user.id
+            delivery.loading_confirmed_at = dispatched_at
+            delivery.loading_confirmed_hash = expected_hash
+            _write_audit(
+                db,
+                user=user,
+                action="CONFIRM_LOADING",
+                resource="Delivery",
+                entity_id=delivery.id,
+                details={"loading_status": delivery.loading_status, "loading_hash": expected_hash},
+                description="人工确认送货装载预警",
+            )
         order_ids = list(
             db.scalars(
                 select(OrderItem.order_id)
@@ -1562,6 +1933,16 @@ def update_delivery(
                 detail="送货单已确认发货，不能编辑，请先取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        vehicle = None
+        if "vehicle_id" in payload.model_fields_set:
+            vehicle = _vehicle_or_404(db, payload.vehicle_id, require_active=True) if payload.vehicle_id else None
+            delivery.vehicle_id = vehicle.id if vehicle else None
+            if vehicle:
+                delivery.vehicle_number = vehicle.plate_number
+            elif "vehicle_number" not in payload.model_fields_set:
+                delivery.vehicle_number = None
+        elif delivery.vehicle_id:
+            vehicle = _vehicle_or_404(db, delivery.vehicle_id, require_active=False)
         built, total_quantity, warnings = _collect_delivery_lines(
             db,
             customer_id=delivery.customer_id,
@@ -1582,9 +1963,15 @@ def update_delivery(
             )
         if payload.delivery_date is not None:
             delivery.delivery_date = payload.delivery_date
-        if payload.vehicle_number is not None:
-            delivery.vehicle_number = payload.vehicle_number.strip() or None
+        if "vehicle_number" in payload.model_fields_set:
+            delivery.vehicle_number = (
+                vehicle.plate_number
+                if vehicle
+                else (payload.vehicle_number.strip() or None if payload.vehicle_number else None)
+            )
         delivery.total_quantity = total_quantity
+        db.flush()
+        loading = recalculate_delivery_loading(db, delivery, vehicle)
         _write_audit(
             db,
             user=user,
@@ -1595,6 +1982,8 @@ def update_delivery(
                 "delivery_number": delivery.delivery_number,
                 "item_count": len(built),
                 "total_quantity": total_quantity,
+                "loading_status": loading["status"],
+                "loading_hash": loading["hash"],
             },
             description="编辑待发货送货单",
         )

@@ -1,5 +1,13 @@
 # Codex 项目交接
 
+## 2026-07-17 N032 | 车辆装载估算与人工确认（本地完成，待统一隔离 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-vehicle-loading-n032`；分支：`feature/vehicle-loading-n032`；基线：`0fb454e`。本阶段未连接、迁移或写入正式数据库，也没有自动拆单或修改订单、送货、对账数量。
+- 新增车辆主档，记录车型、车牌、车厢有效长宽高、安全系数、黄色/红色阈值与启停状态；送货草稿兼容选择车辆主档和临时车辆。产品装箱资料支持理论尺寸、人工经验尺寸和整包尺寸三种来源，来源未确认或数据不全时返回 `data_pending`。
+- 保存送货草稿时固化车辆快照、产品装箱资料快照、每行估算体积、整单装载率、风险状态与确认 hash。警告/超载状态需要对当前 hash 人工确认；车辆、数量或资料变化后旧确认失效。系统只提供风险提示，不自动拆单，不改变业务数量。
+- 线性迁移：`bd57v8x9z47`，接在 `bc56v8x9z46` 后。副本演练目录：`C:\Users\Administrator\Documents\天明ERP系统搭建\artifacts\n032_migration_rehearsal_20260717_230758`；迁移前备份 SHA-256：`81BE96EAF679E7E0EFCA2DDEA8DCD7BB387ABA6ABC7F9F4BACAD42EFAC732C20`。副本已完成 `bc56 -> bd57 -> bc56 -> bd57`，各阶段 `integrity_check=ok`、外键异常 0；存在车辆主数据时 downgrade 按预期拒绝且数据保留。
+- 自动验证：N032 专项、送货回归与状态流共 `63 passed`；相关 Python 编译、`alembic heads`（单一 `bd57v8x9z47`）和 `git diff --check` 通过。版本更新为 `v0.22.15 车辆装载估算与人工确认`。
+
 ## 2026-07-17 P2/P3 | PDF 预览客户范围隔离与成本脱敏（已集成，待统一隔离 UAT）
 
 - P2 独立分支 `feature/pdf-preview-customer-scope-p2` 提交 `06d0489`，合并提交 `6652b77`；P3 独立分支 `feature/pdf-preview-cost-redaction-p3` 提交 `87e9d46`，合并提交 `a791da0`。本轮没有新增 migration，没有连接或写入正式数据库，也没有创建正式订单。

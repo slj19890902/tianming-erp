@@ -409,6 +409,16 @@
       .status.gray { background: #f3f4f6; color: #4b5563; }
       .row-voided { opacity: 0.5; text-decoration: line-through; }
       .status.blue { background: var(--blue-soft); color: var(--primary-dark); }
+      .loading-preview-card { margin: 12px 0; padding: 12px; border: 2px solid #d1d5db; border-radius: 10px; background: #f9fafb; }
+      .loading-preview-card.loading-normal { border-color: #86efac; background: #f0fdf4; }
+      .loading-preview-card.loading-warning { border-color: #fcd34d; background: #fffbeb; }
+      .loading-preview-card.loading-over-capacity { border-color: #fca5a5; background: #fef2f2; }
+      .loading-preview-card.loading-data-pending { border-color: #fcd34d; background: #fffbeb; }
+      .loading-metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin-top:10px; }
+      .loading-metric { padding:8px 10px; border-radius:8px; background:rgba(255,255,255,.78); }
+      .loading-metric strong { display:block; font-size:16px; margin-top:3px; }
+      .loading-maintenance-grid { display:grid; grid-template-columns:minmax(260px, .8fr) minmax(420px, 1.2fr); gap:16px; }
+      @media (max-width: 900px) { .loading-maintenance-grid { grid-template-columns:1fr; } }
 
       /* Dashboard cards */
       .cards { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 14px; }
@@ -1660,10 +1670,10 @@
 
             <template v-else-if="activePage === 'deliveries'">
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
-              <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button v-if="canDelivery" class="btn" @click="openVehicleLoadingMaintenance">车辆与装载参数</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
-                <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
+                <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>装载</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
+                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || row.loading?.vehicle?.plate_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.is_printed" class="status green">已打印</span></td><td><span :class="['status', loadingStatusClass(row.loading?.status)]">{{ loadingStatusText(row.loading?.status) }}</span><div class="muted" style="font-size:11px">{{ loadingRateText(row.loading) }}</div></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">确认发货并打印</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
               </data-panel>
               <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
@@ -3246,12 +3256,68 @@
                 </tbody></table>
               </div>
             </div>
+            <div v-else-if="modal.type === 'vehicleLoadingMaintenance'">
+              <div class="loading-maintenance-grid">
+                <div>
+                  <div class="section-title">受管车辆</div>
+                  <div class="toolbar-group" style="margin-bottom:8px"><button class="btn small primary" type="button" @click="newDeliveryVehicle">新增车辆</button><button class="btn small" type="button" @click="loadDeliveryVehicles">刷新</button></div>
+                  <div v-if="!deliveryVehicles.length" class="empty">暂无受管车辆，可新增后在送货单中选择。</div>
+                  <div v-for="vehicle in deliveryVehicles" :key="vehicle.id" class="panel" style="margin-bottom:8px;padding:10px;cursor:pointer" :style="deliveryVehicleForm.id === vehicle.id ? {borderColor:'var(--primary)',background:'#eff6ff'} : {}" @click="editDeliveryVehicle(vehicle)">
+                    <div style="display:flex;justify-content:space-between;gap:8px"><strong>{{ vehicle.plate_number }}</strong><span :class="['status', vehicle.is_active === false ? 'gray' : 'green']">{{ vehicle.is_active === false ? '停用' : '启用' }}</span></div>
+                    <div class="muted">{{ vehicle.name }}<span v-if="vehicle.vehicle_type">｜{{ vehicle.vehicle_type }}</span></div>
+                    <div class="muted">有效容积 {{ vehicle.effective_volume_m3 || loadingVehicleEffectiveVolume(vehicle) }} m³</div>
+                  </div>
+                </div>
+                <div>
+                  <div class="section-title">车辆参数</div>
+                  <div class="form-grid">
+                    <div class="field"><label>车辆名称 *</label><input class="input" v-model.trim="deliveryVehicleForm.name" placeholder="例如：厢式货车" /></div>
+                    <div class="field"><label>车牌号 *</label><input class="input" v-model.trim="deliveryVehicleForm.plate_number" placeholder="例如：苏E·12345" /></div>
+                    <div class="field"><label>车辆类型</label><input class="input" v-model.trim="deliveryVehicleForm.vehicle_type" placeholder="例如：4.2米厢式" /></div>
+                    <div class="field"><label>长（mm）*</label><input class="input" type="number" min="1" v-model.number="deliveryVehicleForm.cargo_length_mm" /></div>
+                    <div class="field"><label>宽（mm）*</label><input class="input" type="number" min="1" v-model.number="deliveryVehicleForm.cargo_width_mm" /></div>
+                    <div class="field"><label>高（mm）*</label><input class="input" type="number" min="1" v-model.number="deliveryVehicleForm.cargo_height_mm" /></div>
+                    <div class="field"><label>安全装载系数</label><input class="input" type="number" min="0.01" max="1" step="0.01" v-model.number="deliveryVehicleForm.safety_load_factor" /><div class="muted">用于计算有效容积，0~1。</div></div>
+                    <div class="field"><label>黄色提示阈值（%）</label><input class="input" type="number" min="1" v-model.number="deliveryVehicleForm.yellow_threshold_pct" /></div>
+                    <div class="field"><label>红色超容阈值（%）</label><input class="input" type="number" min="1" v-model.number="deliveryVehicleForm.red_threshold_pct" /></div>
+                    <div class="field wide"><label>备注</label><textarea class="textarea" rows="2" v-model.trim="deliveryVehicleForm.remarks" placeholder="记录车辆来源或使用限制"></textarea></div>
+                    <label class="remember-line wide"><input type="checkbox" v-model="deliveryVehicleForm.is_active" /> 启用车辆（停用车辆不出现在送货单选择框）</label>
+                  </div>
+                  <div class="toolbar-group" style="margin-top:10px"><button class="btn primary" type="button" :disabled="loading" @click="saveDeliveryVehicle">{{ deliveryVehicleForm.id ? '保存车辆修改' : '新增车辆' }}</button><span class="muted">保存后可立即用于装载预览。</span></div>
+                </div>
+              </div>
+              <hr style="margin:18px 0;border:0;border-top:1px solid var(--line)" />
+              <div class="section-title">产品装载参数</div>
+              <div class="toolbar-group" style="margin-bottom:8px;flex-wrap:wrap"><select class="select" v-model="loadingProfileSearch.customer_id"><option :value="null">全部客户</option><option v-for="customer in activeCustomerOptions" :key="customer.id" :value="customer.id">{{ customer.name }}</option></select><input class="input" style="min-width:280px" v-model.trim="loadingProfileSearch.keyword" @keyup.enter="searchLoadingProfiles" placeholder="按存货编码或产品名称搜索" /><button class="btn small" type="button" :disabled="loadingProfileSearch.loading" @click="searchLoadingProfiles">{{ loadingProfileSearch.loading ? '查询中...' : '搜索产品' }}</button></div>
+              <div v-if="loadingProfileSearch.message" class="muted" style="margin-bottom:8px">{{ loadingProfileSearch.message }}</div>
+              <div v-if="loadingProfileSearch.items.length" class="panel" style="margin-bottom:10px;max-height:220px;overflow:auto"><table><thead><tr><th>客户</th><th>存货编码</th><th>产品名称</th><th>当前模式</th><th>操作</th></tr></thead><tbody><tr v-for="product in loadingProfileSearch.items" :key="product.product_id || product.id"><td>{{ product.customer_name || customerName(product.customer_id) || '-' }}</td><td><strong>{{ product.product_code || '-' }}</strong></td><td>{{ product.product_name || '-' }}</td><td>{{ loadingProfileModeText(product.profile?.mode || product.mode) }}</td><td><button class="btn small" type="button" @click="selectLoadingProfileProduct(product)">编辑参数</button></td></tr></tbody></table></div>
+              <div v-if="loadingProfileForm.product_id" class="panel" style="padding:12px">
+                <div style="margin-bottom:8px"><strong>{{ loadingProfileForm.product_code }}</strong>｜{{ loadingProfileForm.product_name }}<span class="muted" style="margin-left:8px">{{ loadingProfileForm.customer_name || '-' }}</span></div>
+                <div class="form-grid">
+                  <div class="field"><label>计算模式 *</label><select class="select" v-model="loadingProfileForm.mode"><option value="theoretical_box">理论箱体体积</option><option value="manual_unit">手工单件体积</option><option value="package">包装体积 / 件数</option></select></div>
+                  <div v-if="loadingProfileForm.mode === 'manual_unit'" class="field"><label>单件体积（m³）*</label><input class="input" type="number" min="0.00000001" step="0.00000001" v-model.number="loadingProfileForm.manual_unit_m3" /></div>
+                  <div v-if="loadingProfileForm.mode === 'package'" class="field"><label>包装件数 *</label><input class="input" type="number" min="1" step="1" v-model.number="loadingProfileForm.package_piece_count" /></div>
+                  <div v-if="loadingProfileForm.mode === 'package'" class="field"><label>包装长（mm）*</label><input class="input" type="number" min="1" v-model.number="loadingProfileForm.package_length_mm" /></div>
+                  <div v-if="loadingProfileForm.mode === 'package'" class="field"><label>包装宽（mm）*</label><input class="input" type="number" min="1" v-model.number="loadingProfileForm.package_width_mm" /></div>
+                  <div v-if="loadingProfileForm.mode === 'package'" class="field"><label>包装高（mm）*</label><input class="input" type="number" min="1" v-model.number="loadingProfileForm.package_height_mm" /></div>
+                  <div class="field wide"><label>来源说明（确认时必填）</label><textarea class="textarea" rows="2" v-model.trim="loadingProfileForm.source_note" placeholder="例如：按产品实测 / 客户包装资料 / 理论尺寸待确认"></textarea></div>
+                </div>
+                <div class="toolbar-group" style="margin-top:8px"><button class="btn" type="button" :disabled="loading" @click="saveLoadingProfile(false)">仅保存待确认</button><button class="btn primary" type="button" :disabled="loading" @click="saveLoadingProfile(true)">确认并用于装载计算</button><span :class="['status', loadingProfileForm.confirmed ? 'green' : 'gray']">{{ loadingProfileForm.confirmed ? '已确认' : '待确认' }}</span><span class="muted">关键参数修改后旧确认自动失效；装载结论仅作提示，不自动拆单。</span></div>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"><option :value="null">请选择客户</option><option v-for="c in deliveryCustomers" :value="c.id">{{ c.name }}</option></select></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
-                <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
+                <div class="field"><label>受管车辆</label><select class="select" v-model="deliveryForm.vehicle_id" @change="onDeliveryVehicleChange"><option :value="null">临时车号 / 未选择车辆</option><option v-for="vehicle in activeDeliveryVehicles" :key="vehicle.id" :value="vehicle.id">{{ vehicle.name }}｜{{ vehicle.plate_number }}</option></select><div v-if="deliveryForm.vehicle_id" class="muted" style="margin-top:5px">车牌自动显示：<strong>{{ deliveryForm.vehicle_number || '-' }}</strong></div><input v-else class="input" style="margin-top:6px" v-model.trim="deliveryForm.vehicle_number" @input="deliveryForm.vehicle_id=null" placeholder="临时车号，可留空" /></div>
               </div>
+              <div v-if="deliveryForm.loadingPreview" :class="['loading-preview-card', 'loading-' + loadingStatusClass(deliveryForm.loadingPreview.status).replace('orange','warning').replace('red','over-capacity').replace('gray','data-pending')]">
+                <div class="toolbar" style="align-items:center"><div><strong>装载提示</strong><span :class="['status', loadingStatusClass(deliveryForm.loadingPreview.status)]" style="margin-left:8px">{{ loadingStatusText(deliveryForm.loadingPreview.status) }}</span></div><button class="btn primary" type="button" :disabled="deliveryForm.loadingPreviewLoading" @click="previewDeliveryLoading">{{ deliveryForm.loadingPreviewLoading ? '计算中...' : '重新计算装载' }}</button></div>
+                <div class="muted" style="margin-top:6px">仅提示，不自动拆单；数据待补时不显示确定的容量结论，请先维护产品装载参数。</div>
+                <div class="loading-metric-grid"><div class="loading-metric"><span class="muted">预计体积</span><strong>{{ loadingVolumeText(deliveryForm.loadingPreview) }}</strong></div><div class="loading-metric"><span class="muted">有效容积</span><strong>{{ loadingCapacityText(deliveryForm.loadingPreview) }}</strong></div><div class="loading-metric"><span class="muted">装载率</span><strong>{{ loadingRateText(deliveryForm.loadingPreview) }}</strong></div><div class="loading-metric"><span class="muted">来源覆盖</span><strong>{{ loadingCoverageText(deliveryForm.loadingPreview) }}</strong></div></div>
+                <div v-if="loadingMissingProducts(deliveryForm.loadingPreview).length" class="status gray" style="display:block;margin-top:8px;white-space:normal">缺失产品参数：{{ loadingMissingProducts(deliveryForm.loadingPreview).join('、') }}。状态为“数据待补”，不显示伪精确结论。</div>
+              </div>
+              <div v-else class="loading-preview-card"><div class="toolbar" style="align-items:center"><strong>装载提示尚未计算</strong><button class="btn primary" type="button" :disabled="deliveryForm.loadingPreviewLoading" @click="previewDeliveryLoading">重新计算装载</button></div><div class="muted" style="margin-top:6px">仅提示，不自动拆单；可在送货明细或数量变化后重新计算。</div></div>
               <div class="toolbar-group" style="margin-bottom:10px">
                 <button class="btn small" type="button" @click="addDeliveryLines(1)">新增一行</button>
                 <button class="btn small" type="button" @click="addDeliveryLines(5)">新增5行</button>
@@ -3275,7 +3341,7 @@
                 <div v-if="deliveryBatchPicker.message" :class="deliveryBatchPicker.error ? 'status orange' : 'muted'" style="display:block;margin-bottom:8px">{{ deliveryBatchPicker.message }}</div>
                 <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" v-model="deliveryBatchPicker.selected[item.order_item_id]" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
-              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超送 {{ Number(line.delivered_quantity)-Number(line.remaining_quantity) }}，请核对数量</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
+              <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>规格 / 材质</th><th>未送数量</th><th>本次送货</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line); markDeliveryLoadingStale()">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key); markDeliveryLoadingStale()"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value); markDeliveryLoadingStale()"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}</td><td>{{ line.specification || "-" }}<div class="muted">{{ line.material_display || "-" }}</div></td><td>{{ line.remaining_quantity ?? "-" }}</td><td><input class="input" style="width:110px" type="number" min="1" v-model.number="line.delivered_quantity" @input="markDeliveryLoadingStale" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超送 {{ Number(line.delivered_quantity)-Number(line.remaining_quantity) }}，请核对数量</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="可选" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key); markDeliveryLoadingStale()">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -4117,7 +4183,11 @@
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
-            deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_number: "", lines: [] },
+            deliveryForm: { editingId: null, customer_id: null, delivery_date: today(), vehicle_id: null, vehicle_number: "", lines: [], loadingPreview: null, loadingPreviewLoading: false },
+            deliveryVehicles: [],
+            deliveryVehicleForm: { id: null, name: "", vehicle_type: "", plate_number: "", cargo_length_mm: null, cargo_width_mm: null, cargo_height_mm: null, safety_load_factor: 1, yellow_threshold_pct: 80, red_threshold_pct: 100, is_active: true, remarks: "" },
+            loadingProfileSearch: { customer_id: null, keyword: "", items: [], loading: false, message: "" },
+            loadingProfileForm: { product_id: null, customer_id: null, customer_name: "", product_code: "", product_name: "", mode: "theoretical_box", manual_unit_m3: null, package_piece_count: null, package_length_mm: null, package_width_mm: null, package_height_mm: null, source_note: "" },
             deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false },
             tianhuaPreimport: { file:null, fileName:"", preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
@@ -4340,6 +4410,7 @@
           },
           canFinance() { return this.hasPermission("finance.execute"); },
           canDelivery() { return this.hasPermission("deliveries.execute"); },
+          activeDeliveryVehicles() { return (this.deliveryVehicles || []).filter(vehicle => vehicle.is_active !== false); },
           canRequisition() { return this.hasPermission("requisition.execute"); },
           permissionGroups() {
             const groups = {};
@@ -7128,10 +7199,16 @@
           async loadDeliveries() {
             const [list, pending] = await Promise.all([
               axios.get("/api/deliveries", { params: { page: this.pages.deliveries, page_size: this.pageSize } }),
-              axios.get("/api/deliveries/pending_items")
+              axios.get("/api/deliveries/pending_items"),
+              this.canDelivery ? this.loadDeliveryVehicles().catch(() => null) : Promise.resolve(null),
             ]);
             this.deliveries = list.data.items; this.deliveriesTotal = list.data.total;
             this.pendingDeliveryItems = pending.data.items;
+          },
+          async loadDeliveryVehicles() {
+            const { data } = await axios.get("/api/deliveries/vehicles");
+            this.deliveryVehicles = Array.isArray(data) ? data : (data.items || []);
+            return this.deliveryVehicles;
           },
           async loadFinance() {
             const [statements, invoices] = await Promise.all([
@@ -9914,6 +9991,125 @@
             const isConfirmed = receipt?.status === "confirmed";
             this.modal={type:"receipt",title: isConfirmed ? "编辑送货回单（进入对账后锁定）" : "确认送货回单"};
           },
+          loadingStatusClass(status) {
+            return ({normal:"green", warning:"orange", over_capacity:"red", data_pending:"gray", not_evaluated:"gray"})[status] || "gray";
+          },
+          loadingStatusText(status) {
+            return ({normal:"正常", warning:"接近阈值", over_capacity:"超容", data_pending:"数据待补", not_evaluated:"未计算"})[status] || "未计算";
+          },
+          loadingRateText(loading) {
+            if (!loading || loading.status === "not_evaluated" || loading.status === "data_pending" || loading.load_rate_pct === null || loading.load_rate_pct === undefined) return "暂不判定";
+            const rate = Number(loading.load_rate_pct);
+            return Number.isFinite(rate) ? `约 ${rate.toFixed(1)}%` : "暂不判定";
+          },
+          loadingVolumeText(loading) {
+            const volume = Number(loading?.estimated_total_volume_m3);
+            return Number.isFinite(volume) ? `${volume.toFixed(3)} m³` : "数据待补";
+          },
+          loadingCapacityText(loading) {
+            const volume = Number(loading?.vehicle?.effective_volume_m3);
+            return Number.isFinite(volume) ? `${volume.toFixed(3)} m³` : "未选择车辆";
+          },
+          loadingCoverageText(loading) {
+            const items = loading?.items || [];
+            if (!items.length) return "无明细";
+            const usable = items.filter(item => !item.data_pending && item.unit_volume_m3 !== null && item.unit_volume_m3 !== undefined).length;
+            return `${usable}/${items.length} 条参数可计算`;
+          },
+          loadingMissingProducts(loading) {
+            return (loading?.items || []).filter(item => item.data_pending || item.unit_volume_m3 === null || item.unit_volume_m3 === undefined).map(item => item.product_name || item.product_code || `产品#${item.product_id || "?"}`);
+          },
+          loadingProfileModeText(mode) {
+            return ({theoretical_box:"理论箱体体积", manual_unit:"手工单件体积", package:"包装体积 / 件数"})[mode] || "未设置";
+          },
+          loadingVehicleEffectiveVolume(vehicle) {
+            const length = Number(vehicle?.cargo_length_mm), width = Number(vehicle?.cargo_width_mm), height = Number(vehicle?.cargo_height_mm), factor = Number(vehicle?.safety_load_factor || 1);
+            if (![length, width, height, factor].every(value => Number.isFinite(value) && value > 0)) return "待补";
+            return (length * width * height / 1000000000 * factor).toFixed(3);
+          },
+          markDeliveryLoadingStale() {
+            if (this.deliveryForm?.loadingPreview) this.deliveryForm.loadingPreview = {...this.deliveryForm.loadingPreview, _stale: true};
+          },
+          onDeliveryVehicleChange() {
+            const vehicle = this.activeDeliveryVehicles.find(item => Number(item.id) === Number(this.deliveryForm.vehicle_id));
+            this.deliveryForm.vehicle_number = vehicle?.plate_number || (this.deliveryForm.vehicle_id ? "" : this.deliveryForm.vehicle_number || "");
+            this.markDeliveryLoadingStale();
+          },
+          deliveryLoadingItems() {
+            return (this.deliveryForm.lines || []).filter(line => this.deliveryLineHasInput(line) && line.order_item_id).map(line => ({order_item_id:Number(line.order_item_id), delivered_quantity:Number(line.delivered_quantity)}));
+          },
+          async previewDeliveryLoading() {
+            const items = this.deliveryLoadingItems();
+            if (!items.length) {
+              this.deliveryForm.loadingPreview = {status:"not_evaluated", estimated_total_volume_m3:null, load_rate_pct:null, items:[], vehicle:null, hash:null};
+              this.showToast("请先选择送货明细并填写数量", true);
+              return;
+            }
+            this.deliveryForm.loadingPreviewLoading = true;
+            try {
+              const {data} = await axios.post("/api/deliveries/loading-preview", {customer_id:this.deliveryForm.customer_id, vehicle_id:this.deliveryForm.vehicle_id || null, items});
+              this.deliveryForm.loadingPreview = {...data, _stale:false};
+            } catch (error) {
+              this.showToast("装载计算失败：" + this.errorMessage(error), true);
+            } finally { this.deliveryForm.loadingPreviewLoading = false; }
+          },
+          newDeliveryVehicle() {
+            this.deliveryVehicleForm = {id:null,name:"",vehicle_type:"",plate_number:"",cargo_length_mm:null,cargo_width_mm:null,cargo_height_mm:null,safety_load_factor:1,yellow_threshold_pct:80,red_threshold_pct:100,is_active:true,remarks:""};
+          },
+          editDeliveryVehicle(vehicle) {
+            this.deliveryVehicleForm = {...this.deliveryVehicleForm,...vehicle,id:vehicle.id};
+          },
+          async saveDeliveryVehicle() {
+            const form = this.deliveryVehicleForm;
+            if (!String(form.name || "").trim() || !String(form.plate_number || "").trim()) return this.showToast("请填写车辆名称和车牌号", true);
+            if (![form.cargo_length_mm,form.cargo_width_mm,form.cargo_height_mm].every(value => Number(value) > 0)) return this.showToast("请填写有效的车辆货厢长宽高", true);
+            if (Number(form.yellow_threshold_pct) > Number(form.red_threshold_pct)) return this.showToast("黄色提示阈值不能高于红色超容阈值", true);
+            const payload = {name:String(form.name).trim(),vehicle_type:String(form.vehicle_type || "").trim() || null,plate_number:String(form.plate_number).trim(),cargo_length_mm:Number(form.cargo_length_mm),cargo_width_mm:Number(form.cargo_width_mm),cargo_height_mm:Number(form.cargo_height_mm),safety_load_factor:Number(form.safety_load_factor || 1),yellow_threshold_pct:Number(form.yellow_threshold_pct || 80),red_threshold_pct:Number(form.red_threshold_pct || 100),is_active:!!form.is_active,remarks:String(form.remarks || "").trim() || null};
+            this.loading = true;
+            try { if (form.id) await axios.put(`/api/deliveries/vehicles/${form.id}`, payload); else await axios.post("/api/deliveries/vehicles", payload); await this.loadDeliveryVehicles(); this.newDeliveryVehicle(); this.showToast("车辆参数已保存"); }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          resetLoadingProfileForm() {
+            this.loadingProfileForm = {product_id:null,customer_id:null,customer_name:"",product_code:"",product_name:"",mode:"theoretical_box",manual_unit_m3:null,package_piece_count:null,package_length_mm:null,package_width_mm:null,package_height_mm:null,source_note:"",confirmed:false};
+          },
+          async searchLoadingProfiles() {
+            this.loadingProfileSearch.loading = true;
+            try {
+              const keyword = String(this.loadingProfileSearch.keyword || "").trim();
+              const {data} = await axios.get(`/api/deliveries/loading-profiles/search?keyword=${encodeURIComponent(keyword)}`, {params:{customer_id:this.loadingProfileSearch.customer_id || undefined}});
+              this.loadingProfileSearch.items = data.items || [];
+              this.loadingProfileSearch.message = this.loadingProfileSearch.items.length ? `找到 ${this.loadingProfileSearch.items.length} 个产品，请选择后编辑参数。` : "未找到匹配的客户、存货编码或产品名称";
+            } catch (error) { this.loadingProfileSearch.items = []; this.loadingProfileSearch.message = this.errorMessage(error); }
+            finally { this.loadingProfileSearch.loading = false; }
+          },
+          async selectLoadingProfileProduct(product) {
+            try {
+              const productId = product.product_id || product.id;
+              const {data} = await axios.get(`/api/deliveries/loading-profiles/${productId}`);
+              const profile = data.profile || data;
+              this.loadingProfileForm = {...this.loadingProfileForm,...product,...profile,product_id:productId,customer_id:product.customer_id || profile.customer_id || null,customer_name:product.customer_name || this.customerName(product.customer_id),product_code:product.product_code || profile.product_code || "",product_name:product.product_name || profile.product_name || "",mode:profile.mode || "theoretical_box",source_note:profile.source_note || ""};
+            } catch (error) { this.showToast("读取产品装载参数失败：" + this.errorMessage(error), true); }
+          },
+          async saveLoadingProfile(confirmProfile = false) {
+            const form = this.loadingProfileForm;
+            if (!form.product_id) return this.showToast("请先选择产品", true);
+            if (confirmProfile && !String(form.source_note || "").trim()) return this.showToast("确认用于装载计算前，请填写来源说明", true);
+            if (form.mode === "manual_unit" && !(Number(form.manual_unit_m3) > 0)) return this.showToast("手工单件体积必须大于 0", true);
+            if (form.mode === "package" && (!(Number(form.package_piece_count) > 0) || ![form.package_length_mm,form.package_width_mm,form.package_height_mm].every(value => Number(value) > 0))) return this.showToast("包装模式请填写件数和包装长宽高", true);
+            const payload = {mode:form.mode,manual_unit_m3:form.mode === "manual_unit" ? Number(form.manual_unit_m3) : null,package_piece_count:form.mode === "package" ? Number(form.package_piece_count) : null,package_length_mm:form.mode === "package" ? Number(form.package_length_mm) : null,package_width_mm:form.mode === "package" ? Number(form.package_width_mm) : null,package_height_mm:form.mode === "package" ? Number(form.package_height_mm) : null,source_note:String(form.source_note || "").trim() || null,confirmed:!!confirmProfile};
+            this.loading = true;
+            try { const {data} = await axios.put(`/api/deliveries/loading-profiles/${form.product_id}`, payload); this.loadingProfileForm = {...this.loadingProfileForm,...(data.profile || {}),confirmed:!!data.profile?.confirmed}; this.showToast(confirmProfile ? "产品装载参数已确认" : "产品装载参数已保存为待确认"); await this.searchLoadingProfiles(); }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async openVehicleLoadingMaintenance() {
+            if (!this.canDelivery) return;
+            this.modal = {type:"vehicleLoadingMaintenance",title:"车辆与装载参数"};
+            this.newDeliveryVehicle(); this.resetLoadingProfileForm();
+            this.loadingProfileSearch = {customer_id:null,keyword:"",items:[],loading:false,message:""};
+            try { await this.loadDeliveryVehicles(); } catch (error) { this.showToast("车辆列表加载失败：" + this.errorMessage(error), true); }
+          },
           createDeliveryLine(overrides = {}) {
             return {
               key: `delivery-line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -10065,6 +10261,7 @@
           onDeliveryCustomerChange() {
             if (this.deliveryForm.editingId) return;
             this.resetDeliveryLines();
+            this.deliveryForm.loadingPreview = null;
             this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
           },
           deliveryLineHasInput(line) {
@@ -10233,10 +10430,11 @@
               candidate_message: "已带出待送货明细",
               candidate_error: false,
             }));
+            this.markDeliveryLoadingStale();
           },
           async openDelivery() {
             await this.loadDeliveries();
-            this.deliveryForm = { editingId:null, customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", lines:[] };
+            this.deliveryForm = { editingId:null, customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_id:null, vehicle_number:"", lines:[], loadingPreview:null, loadingPreviewLoading:false };
             this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
             this.resetDeliveryLines();
             this.modal = { type:"delivery", title:"新增送货单" };
@@ -10716,9 +10914,9 @@
                   }));
                 let data;
                 if (this.deliveryForm.editingId) {
-                  ({ data } = await axios.put(`/api/deliveries/${this.deliveryForm.editingId}`, { delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
+                  ({ data } = await axios.put(`/api/deliveries/${this.deliveryForm.editingId}`, { delivery_date:this.deliveryForm.delivery_date, vehicle_id:this.deliveryForm.vehicle_id || null, vehicle_number:this.deliveryForm.vehicle_number || null, items }));
                 } else {
-                  ({ data } = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_number:this.deliveryForm.vehicle_number, items }));
+                  ({ data } = await axios.post("/api/deliveries", { customer_id:this.deliveryForm.customer_id, delivery_date:this.deliveryForm.delivery_date, vehicle_id:this.deliveryForm.vehicle_id || null, vehicle_number:this.deliveryForm.vehicle_number || null, items }));
                   this.pages.deliveries = 1;
                 }
                 await this.loadDeliveries();
@@ -10782,17 +10980,61 @@
             }
             finally { this.loading = false; }
           },
+          deliveryLoadingConfirmText(loading) {
+            const status = this.loadingStatusText(loading?.status);
+            const rate = this.loadingRateText(loading);
+            if (loading?.status === "data_pending") return `装载提示为“数据待补”，当前仅作提示，不自动拆单。${this.loadingMissingProducts(loading).length ? `缺失产品参数：${this.loadingMissingProducts(loading).join("、")}。` : ""}\n仍要确认发货吗？`;
+            if (loading?.status === "over_capacity") return `装载提示为“超容”（${rate}），当前仅作提示，不自动拆单。\n仍要确认发货吗？`;
+            if (loading?.status === "warning") return `装载提示为“接近阈值”（${rate}），当前仅作提示，不自动拆单。\n仍要确认发货吗？`;
+            return `装载提示：${status}（${rate}）。当前仅作提示，不自动拆单。\n仍要确认发货吗？`;
+          },
+          isLoadingHashExpired(error) {
+            const detail = error?.response?.data?.detail;
+            const code = typeof detail === "object" ? detail.code : "";
+            const message = typeof detail === "string" ? detail : (detail?.message || "");
+            return Number(error?.response?.status) === 409 && ["LOADING_HASH_EXPIRED","LOADING_CONFIRMATION_STALE","LOADING_PREVIEW_STALE"].includes(code) || (Number(error?.response?.status) === 409 && /装载.*(过期|变化|hash)|hash.*(过期|变化)/i.test(message));
+          },
+          async refreshDeliveryRowLoading(row) {
+            const items = (row.items || []).map(item => ({order_item_id:Number(item.order_item_id),delivered_quantity:Number(item.delivered_quantity)})).filter(item => item.order_item_id && item.delivered_quantity > 0);
+            const {data} = await axios.post("/api/deliveries/loading-preview", {customer_id:row.customer_id, vehicle_id:row.vehicle_id || row.loading?.vehicle?.vehicle_id || null, items});
+            row.loading = data;
+            return data;
+          },
           async dispatchDelivery(row) {
+            let loading = row.loading || null;
+            try {
+              if (!loading) loading = (await axios.get(`/api/deliveries/${row.id}`)).data.loading || null;
+              row.loading = loading;
+            } catch (error) { /* loading is advisory; preserve the existing dispatch action if preview data cannot be read */ }
             if (!confirm(`确认发货并打印 ${row.delivery_number} 吗？`)) return;
+            let loadingConfirmation = !!loading && loading.status !== "normal";
+            if (loadingConfirmation && !confirm(this.deliveryLoadingConfirmText(loading))) return;
+            let expectedLoadingHash = loading?.hash || loading?.loading_calculation_hash || null;
             const printWindow = window.open("about:blank", "_blank");
             try {
-              await axios.put(`/api/deliveries/${row.id}/dispatch`);
+              await axios.put(`/api/deliveries/${row.id}/dispatch`, {loading_confirmation:loadingConfirmation,expected_loading_hash:expectedLoadingHash});
               await axios.put(`/api/deliveries/${row.id}/printed`);
               if (printWindow) printWindow.location = `/delivery-print.html?id=${row.id}`;
               await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
               this.showToast("发货成功，打印页已打开");
             }
-            catch (error) { this.showToast(this.errorMessage(error), true); }
+            catch (error) {
+              if (this.isLoadingHashExpired(error)) {
+                try {
+                  loading = await this.refreshDeliveryRowLoading(row);
+                  if (!confirm(`装载计算已过期，已刷新为“${this.loadingStatusText(loading.status)}”（${this.loadingRateText(loading)}）。当前仅作提示，不自动拆单。\n请再次确认发货吗？`)) return;
+                  loadingConfirmation = loading.status !== "normal";
+                  expectedLoadingHash = loading.hash || null;
+                  await axios.put(`/api/deliveries/${row.id}/dispatch`, {loading_confirmation:loadingConfirmation,expected_loading_hash:expectedLoadingHash});
+                  await axios.put(`/api/deliveries/${row.id}/printed`);
+                  if (printWindow) printWindow.location = `/delivery-print.html?id=${row.id}`;
+                  await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
+                  this.showToast("装载已刷新并发货成功，打印页已打开");
+                  return;
+                } catch (refreshError) { this.showToast(this.errorMessage(refreshError), true); return; }
+              }
+              this.showToast(this.errorMessage(error), true);
+            }
           },
           printDelivery(row) { window.open(`/delivery-print.html?id=${row.id}`, "_blank"); },
           async editDelivery(row) {
@@ -10819,7 +11061,8 @@
               });
             });
             while (lines.length < 5) lines.push(this.createDeliveryLine());
-            this.deliveryForm = { editingId: row.id, customer_id: row.customer_id, delivery_date: row.delivery_date, vehicle_number: row.vehicle_number || "", lines };
+            const selectedVehicle = row.vehicle_id || this.deliveryVehicles.find(vehicle => String(vehicle.plate_number || "") === String(row.vehicle_number || ""))?.id || null;
+            this.deliveryForm = { editingId: row.id, customer_id: row.customer_id, delivery_date: row.delivery_date, vehicle_id:selectedVehicle, vehicle_number: row.vehicle_number || row.loading?.vehicle?.plate_number || "", lines, loadingPreview:row.loading || null, loadingPreviewLoading:false };
             this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },

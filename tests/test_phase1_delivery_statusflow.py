@@ -34,6 +34,7 @@ def delivery_api_app(tmp_path: Path):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
+    from app.models.access_control import UserPermissionOverride
     from app.models.customer import Customer
     from app.models.order import Order, OrderItem
     from app.models.product import Product
@@ -70,6 +71,19 @@ def delivery_api_app(tmp_path: Path):
         )
         session.add_all([*users, customer, other_customer])
         session.flush()
+        admin_user = next(user for user in users if user.role == "admin")
+        sales_user = next(user for user in users if user.role == "sales")
+        session.add_all(
+            [
+                UserPermissionOverride(
+                    user_id=sales_user.id,
+                    permission_code=permission_code,
+                    is_allowed=True,
+                    granted_by=admin_user.id,
+                )
+                for permission_code in ("deliveries.view", "deliveries.execute")
+            ]
+        )
         products = [
             Product(
                 customer_id=customer.id,

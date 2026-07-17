@@ -113,6 +113,53 @@ def test_logout_revokes_all_browser_sessions_and_clears_cookie(auth_revocation_c
     assert _auth_version(session_factory, "workshop") == 2
 
 
+def test_production_login_cookie_is_secure(
+    auth_revocation_context,
+    monkeypatch,
+) -> None:
+    from app.api import auth as auth_api
+    from app.core.config import load_settings
+    from app.main import CookieOriginCSRFMiddleware
+
+    monkeypatch.setenv("ERP_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "ERP_SECRET_KEY",
+        "n031-secure-cookie-test-secret-longer-than-32-characters",
+    )
+    monkeypatch.setenv("ERP_ALLOWED_ORIGINS", "https://erp.example.com")
+    monkeypatch.setenv("ERP_TRUSTED_HOSTS", "erp.example.com")
+    monkeypatch.setenv("ERP_TRUSTED_PROXY_IPS", "127.0.0.1")
+    monkeypatch.setenv("ERP_HEALTH_URL", "https://erp.example.com/api/health")
+    monkeypatch.setenv("ERP_BROWSER_URL", "https://erp.example.com/")
+    current = load_settings()
+    monkeypatch.setattr(auth_api, "load_settings", lambda: current)
+
+    app, _ = auth_revocation_context
+    app.add_middleware(
+        CookieOriginCSRFMiddleware,
+        allowed_origins=current.allowed_origins,
+        session_cookie_name=current.session_cookie_name,
+    )
+    with TestClient(app, base_url="https://erp.example.com") as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "AdminPass123!"},
+        )
+        missing_origin = client.post("/api/auth/logout")
+        logout = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://erp.example.com"},
+        )
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"]
+    assert "Secure" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert missing_origin.status_code == 403
+    assert logout.status_code == 200
+
+
 def test_security_relevant_user_updates_revoke_target_sessions(auth_revocation_context) -> None:
     app, session_factory = auth_revocation_context
     with TestClient(app) as admin_client, TestClient(app) as target_client:

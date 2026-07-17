@@ -207,13 +207,19 @@ def request_json(
     *,
     method: str = "GET",
     payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any] | None]:
     data = None
-    headers = {}
+    request_headers = dict(headers or {})
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        request_headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers=request_headers,
+    )
     try:
         with opener.open(req, timeout=15) as resp:
             raw = resp.read()
@@ -236,7 +242,15 @@ def verify_login(base_url: str, username: str, password: str) -> LoginCheck:
     if login_status != 200:
         return LoginCheck(login_status, None, None, None, None)
     me_status, me_body = request_json(opener, f"{base_url}/api/auth/me")
-    logout_status, _ = request_json(opener, f"{base_url}/api/auth/logout", method="POST", payload={})
+    parsed_base_url = urlsplit(base_url)
+    origin = f"{parsed_base_url.scheme}://{parsed_base_url.netloc}"
+    logout_status, _ = request_json(
+        opener,
+        f"{base_url}/api/auth/logout",
+        method="POST",
+        payload={},
+        headers={"Origin": origin},
+    )
     after_logout_status, _ = request_json(opener, f"{base_url}/api/auth/me")
     user_payload = (me_body or {}).get("user") if me_body else None
     return LoginCheck(

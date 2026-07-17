@@ -6,6 +6,7 @@ from decimal import Decimal
 from io import BytesIO
 import json
 import socket
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -32,7 +33,7 @@ from app.core.time_contract import (
 from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
-from app.models.mold_tool import MoldTool
+from app.models.mold_tool import MoldLocationMovement, MoldTool
 from app.models.product import Product
 from app.models.order import Order, OrderItem
 from app.models.warehouse_inventory import (
@@ -94,7 +95,14 @@ from app.services.warehouse_inventory import (
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
-from app.services.mold_location import describe_mold_location
+from app.services.mold_location import (
+    MoldLocationError,
+    MoldLocationMoveResult,
+    MoldLocationPreview,
+    confirm_mold_location_move,
+    describe_mold_location,
+    preview_mold_location_move,
+)
 
 
 router = APIRouter()
@@ -336,6 +344,39 @@ class MoldToolPayload(BaseModel):
     @classmethod
     def strip_mold_fields(cls, value: str) -> str:
         return value.strip()
+
+
+class MoldLocationPreviewPayload(BaseModel):
+    mold_code: str = Field(min_length=1, max_length=100)
+    target_location: str = Field(min_length=1, max_length=250)
+
+    @field_validator("mold_code", "target_location")
+    @classmethod
+    def strip_mold_location_preview_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class MoldLocationConfirmPayload(MoldLocationPreviewPayload):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    source: Literal["manual_input", "scanner_paste", "url_parameter", "api"] = (
+        "manual_input"
+    )
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_mold_location_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("幂等键去除首尾空白后至少需要 8 个字符")
+        return text
+
+    @field_validator("note")
+    @classmethod
+    def strip_mold_location_note(cls, value: str | None) -> str | None:
+        text = (value or "").strip()
+        return text or None
 
 
 class FinishedManualInPayload(BaseModel):
@@ -2806,6 +2847,13 @@ def _mold_tool_dict(row: MoldTool) -> dict:
         "mold_name": row.mold_name,
         "rack_location": row.rack_location,
         "location_guide": describe_mold_location(row.rack_location),
+        "location_version": row.location_version,
+        "last_location_confirmed_at": (
+            utc_naive_to_api(row.last_location_confirmed_at)
+            if row.last_location_confirmed_at
+            else None
+        ),
+        "last_location_confirmed_by": row.last_location_confirmed_by,
         "remarks": row.remarks,
         "is_active": row.is_active,
         "product_count": len(products),
@@ -2882,6 +2930,140 @@ def list_mold_tools(
     return {"items": [_mold_tool_dict(row) for row in rows]}
 
 
+def _mold_location_preview_dict(preview: MoldLocationPreview) -> dict:
+    occupant = preview.occupant
+    return {
+        "mold": _mold_tool_dict(preview.mold),
+        "target_location": preview.target_location,
+        "target_guide": preview.target_guide,
+        "expected_version": preview.mold.location_version,
+        "same_location": preview.same_location,
+        "can_confirm": occupant is None,
+        "occupancy_conflict": (
+            {
+                "mold_tool_id": occupant.id,
+                "mold_code": occupant.mold_code,
+                "mold_name": occupant.mold_name,
+            }
+            if occupant is not None
+            else None
+        ),
+    }
+
+
+def _mold_location_movement_dict(row: MoldLocationMovement) -> dict:
+    return {
+        "id": row.id,
+        "mold_tool_id": row.mold_tool_id,
+        "mold_code": row.mold_code_snapshot,
+        "from_location": row.from_location,
+        "to_location": row.to_location,
+        "actor_id": row.actor_id,
+        "moved_at": utc_naive_to_api(row.moved_at),
+        "idempotency_key": row.idempotency_key,
+        "expected_version": row.expected_version,
+        "resulting_version": row.resulting_version,
+        "source": row.source,
+        "note": row.note,
+    }
+
+
+def _mold_location_move_response(result: MoldLocationMoveResult) -> dict:
+    return {
+        "message": (
+            "模具已在目标位置，无需移动"
+            if result.no_change
+            else "模具位置移动已确认"
+        ),
+        "mold": _mold_tool_dict(result.mold),
+        "movement": (
+            _mold_location_movement_dict(result.movement)
+            if result.movement is not None
+            else None
+        ),
+        "idempotent_replay": result.replayed,
+        "no_change": result.no_change,
+    }
+
+
+@router.post("/molds/location-movement/preview")
+def preview_mold_location_movement(
+    payload: MoldLocationPreviewPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    try:
+        return _mold_location_preview_dict(
+            preview_mold_location_move(
+                db,
+                mold_code=payload.mold_code,
+                target_location=payload.target_location,
+            )
+        )
+    except MoldLocationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/molds/location-movement/confirm")
+def confirm_mold_location_movement(
+    payload: MoldLocationConfirmPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        result = confirm_mold_location_move(
+            db,
+            mold_code=payload.mold_code,
+            target_location=payload.target_location,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            actor_id=user.id,
+            source=payload.source,
+            note=payload.note,
+        )
+        if not result.replayed and not result.no_change and result.movement is not None:
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="UPDATE",
+                    resource=f"warehouse/molds/{result.mold.id}/location",
+                    entity_type="mold_tool",
+                    entity_id=result.mold.id,
+                    description="双码确认模具位置移动",
+                    details=json.dumps(
+                        {
+                            "movement_id": result.movement.id,
+                            "mold_code": result.movement.mold_code_snapshot,
+                            "from_location": result.movement.from_location,
+                            "to_location": result.movement.to_location,
+                            "expected_version": result.movement.expected_version,
+                            "resulting_version": result.movement.resulting_version,
+                            "idempotency_key": result.movement.idempotency_key,
+                            "source": result.movement.source,
+                            "note": result.movement.note,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            )
+        db.commit()
+        return _mold_location_move_response(result)
+    except MoldLocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="模具位置已变化或幂等键冲突，请重新预览",
+        ) from error
+
+
 def _lan_ip() -> str:
     connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -2952,6 +3134,11 @@ def update_mold_tool(
     row = db.get(MoldTool, mold_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
+    if payload.rack_location.strip() != row.rack_location.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="模具位置不能在档案编辑中直接修改，请使用模具码 + 位置码双码移动确认",
+        )
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     row.updated_by = user.id

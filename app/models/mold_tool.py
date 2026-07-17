@@ -3,13 +3,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
 
 if TYPE_CHECKING:
     from app.models.product import Product
+    from app.models.user import User
 
 
 class MoldTool(Base):
@@ -25,6 +37,20 @@ class MoldTool(Base):
     mold_code: Mapped[str] = mapped_column(String(100), nullable=False)
     mold_name: Mapped[str] = mapped_column(String(200), nullable=False)
     rack_location: Mapped[str] = mapped_column(String(250), nullable=False)
+    location_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
+    last_location_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    last_location_confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[int | None] = mapped_column(
@@ -44,3 +70,71 @@ class MoldTool(Base):
         back_populates="mold_tool",
         passive_deletes=True,
     )
+    location_movements: Mapped[list["MoldLocationMovement"]] = relationship(
+        back_populates="mold_tool",
+        passive_deletes=True,
+        order_by="MoldLocationMovement.id",
+    )
+    last_location_confirmer: Mapped["User | None"] = relationship(
+        foreign_keys=[last_location_confirmed_by],
+    )
+
+
+class MoldLocationMovement(Base):
+    """Immutable audit ledger for confirmed mold-location changes."""
+
+    __tablename__ = "mold_location_movements"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_mold_location_movements_idempotency_key",
+        ),
+        CheckConstraint(
+            "expected_version >= 1",
+            name="ck_mold_location_movements_expected_version",
+        ),
+        CheckConstraint(
+            "resulting_version = expected_version + 1",
+            name="ck_mold_location_movements_resulting_version",
+        ),
+        CheckConstraint(
+            "from_location <> to_location",
+            name="ck_mold_location_movements_actual_change",
+        ),
+        Index(
+            "ix_mold_location_movements_mold_time",
+            "mold_tool_id",
+            "moved_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mold_tool_id: Mapped[int] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    mold_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    from_location: Mapped[str] = mapped_column(String(250), nullable=False)
+    to_location: Mapped[str] = mapped_column(String(250), nullable=False)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    moved_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    resulting_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(30),
+        default="manual_input",
+        server_default="manual_input",
+        nullable=False,
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    mold_tool: Mapped["MoldTool"] = relationship(back_populates="location_movements")
+    actor: Mapped["User | None"] = relationship(foreign_keys=[actor_id])

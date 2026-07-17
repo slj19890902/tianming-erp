@@ -65,6 +65,14 @@ def n028_customer_scope_app(tmp_path: Path):
             must_change_password=False,
             customer_access_mode="selected",
         )
+        all_sales = User(
+            username="n028-all-sales",
+            password_hash=hash_password("AllSalesPass123!"),
+            role="sales",
+            real_name="All Sales",
+            must_change_password=False,
+            customer_access_mode="all",
+        )
         customer = Customer(
             customer_number=1,
             customer_code="N028-A",
@@ -75,7 +83,9 @@ def n028_customer_scope_app(tmp_path: Path):
             customer_code="N028-B",
             name="N028 Other Customer",
         )
-        db.add_all([admin, boss, sales, empty_sales, customer, other_customer])
+        db.add_all(
+            [admin, boss, sales, empty_sales, all_sales, customer, other_customer]
+        )
         db.flush()
         product = Product(
             customer_id=customer.id,
@@ -88,16 +98,17 @@ def n028_customer_scope_app(tmp_path: Path):
             board_price=Decimal("3.00"),
             suggested_price=Decimal("4.00"),
         )
+        other_product = Product(
+            customer_id=other_customer.id,
+            product_code="N028-OTHER",
+            customer_material_code="N028-OTHER",
+            product_name="N028 other carton",
+            box_category="normal",
+        )
         db.add_all(
             [
                 product,
-                Product(
-                    customer_id=other_customer.id,
-                    product_code="N028-OTHER",
-                    customer_material_code="N028-OTHER",
-                    product_name="N028 other carton",
-                    box_category="normal",
-                ),
+                other_product,
                 UserCustomerScope(user_id=sales.id, customer_id=customer.id),
                 UserPermissionOverride(
                     user_id=sales.id,
@@ -183,6 +194,7 @@ def n028_customer_scope_app(tmp_path: Path):
             "customer": customer.id,
             "other_customer": other_customer.id,
             "product": product.id,
+            "other_product": other_product.id,
         }
 
     app = FastAPI()
@@ -238,6 +250,429 @@ def _overwrite_order_payload(customer_id: int, product_id: int) -> dict:
             }
         ],
     }
+
+
+def _locked_pdf_draft(
+    filename: str,
+    *,
+    customer_id: int,
+    customer_name: str,
+    product_code: str,
+) -> dict:
+    return {
+        "source_name": filename,
+        "source_type": "purchase_order_pdf",
+        "customer_name": customer_name,
+        "customer_name_raw": customer_name,
+        "customer_type": "generic",
+        "customer_po": f"PO-{product_code}",
+        "recognition_status": "recognized",
+        "parse_status": "recognized",
+        "customer_route": {
+            "status": "locked",
+            "template_customer_id": customer_id,
+            "customer_name": customer_name,
+        },
+        "integrity_check": {
+            "integrity_status": "passed",
+            "integrity_errors": [],
+            "integrity_warnings": [],
+        },
+        "item_count": 1,
+        "items": [
+            {
+                "line_no": 1,
+                "product_code": product_code,
+                "quantity": 10,
+                "unit_price": "8.00",
+            }
+        ],
+        "warnings": [],
+    }
+
+
+def _manual_pdf_draft(filename: str) -> dict:
+    return {
+        "source_name": filename,
+        "source_type": "purchase_order_pdf",
+        "recognition_status": "needs_confirmation",
+        "parse_status": "needs_confirmation",
+        "customer_route": {"status": "needs_confirmation", "candidates": []},
+        "integrity_check": {
+            "integrity_status": "passed",
+            "integrity_errors": [],
+            "integrity_warnings": [],
+        },
+        "item_count": 1,
+        "items": [
+            {
+                "line_no": 1,
+                "product_code": "N028-BASE",
+                "quantity": 10,
+                "unit_price": "8.00",
+            }
+        ],
+        "warnings": [],
+    }
+
+
+def _assert_scope_denied_pdf_preview(payload: dict) -> None:
+    assert payload["recognition_status"] == "needs_confirmation"
+    assert payload["customer_route"] == {"status": "needs_confirmation"}
+    assert payload["item_count"] == 0
+    assert payload["items"] == []
+    assert payload["integrity_check"]["integrity_status"] == "unknown"
+    assert payload["preview_safety_token"]
+    forbidden_keys = {
+        "customer_id",
+        "customer_name",
+        "customer_name_raw",
+        "customer_type",
+        "matched_customer_id",
+        "customer_candidates",
+        "matched_product_id",
+        "product_candidates",
+        "material_candidates",
+        "matched_material_id",
+        "estimated_cost",
+        "cost_status",
+        "standard_match",
+    }
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            assert forbidden_keys.isdisjoint(value)
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    visit(payload)
+
+
+def test_pdf_preview_customer_scope_fails_closed_before_product_matching(
+    n028_customer_scope_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.orders as orders_api
+    from app.models.order import Order
+
+    app, ids, factory = n028_customer_scope_app
+    other_name_draft = _locked_pdf_draft(
+        "other-name.pdf",
+        customer_id=ids["other_customer"],
+        customer_name="N028 Other Customer",
+        product_code="N028-OTHER",
+    )
+    other_name_draft.pop("customer_route")
+    drafts = {
+        b"own": _locked_pdf_draft(
+            "own.pdf",
+            customer_id=ids["customer"],
+            customer_name="N028 Customer",
+            product_code="N028-BASE",
+        ),
+        b"other": _locked_pdf_draft(
+            "other.pdf",
+            customer_id=ids["other_customer"],
+            customer_name="N028 Other Customer",
+            product_code="N028-OTHER",
+        ),
+        b"other-name": other_name_draft,
+    }
+    monkeypatch.setattr(
+        orders_api,
+        "_parse_order_pdf_preview",
+        lambda content, _filename, _rules: dict(drafts[content]),
+    )
+    original_match = orders_api.match_import_draft
+    matched_customer_ids: list[int | None] = []
+
+    def record_match(db, draft, customer_id=None):
+        matched_customer_ids.append(customer_id)
+        return original_match(db, draft, customer_id=customer_id)
+
+    monkeypatch.setattr(orders_api, "match_import_draft", record_match)
+    with factory() as db:
+        before_orders = db.scalar(select(func.count()).select_from(Order))
+
+    with TestClient(app) as client:
+        _login(client, "n028-sales", "SalesPass123!")
+        own = client.post(
+            "/api/orders/pdf-preview",
+            files={"file": ("own.pdf", b"own", "application/pdf")},
+        )
+        denied = client.post(
+            "/api/orders/pdf-preview",
+            files={"file": ("other.pdf", b"other", "application/pdf")},
+        )
+        denied_name_match = client.post(
+            "/api/orders/pdf-preview",
+            files={
+                "file": ("other-name.pdf", b"other-name", "application/pdf")
+            },
+        )
+        client.post("/api/auth/logout")
+        _login(client, "n028-empty-sales", "EmptySalesPass123!")
+        empty_scope = client.post(
+            "/api/orders/pdf-preview",
+            files={"file": ("own.pdf", b"own", "application/pdf")},
+        )
+
+    assert own.status_code == 200, own.text
+    assert own.json()["matched_customer_id"] == ids["customer"]
+    assert own.json()["items"][0]["matched_product_id"] == ids["product"]
+    assert denied.status_code == 200, denied.text
+    _assert_scope_denied_pdf_preview(denied.json())
+    assert "N028 Other Customer" not in denied.text
+    assert "N028-OTHER" not in denied.text
+    assert denied_name_match.status_code == 200, denied_name_match.text
+    _assert_scope_denied_pdf_preview(denied_name_match.json())
+    assert "N028 Other Customer" not in denied_name_match.text
+    assert "N028-OTHER" not in denied_name_match.text
+    assert empty_scope.status_code == 200, empty_scope.text
+    _assert_scope_denied_pdf_preview(empty_scope.json())
+    assert matched_customer_ids == [ids["customer"]]
+
+    matched_customer_ids.clear()
+    with TestClient(app) as client:
+        for username, password in (
+            ("n028-admin", "AdminPass123!"),
+            ("n028-boss", "BossPass123!"),
+            ("n028-all-sales", "AllSalesPass123!"),
+        ):
+            _login(client, username, password)
+            unrestricted = client.post(
+                "/api/orders/pdf-preview",
+                files={"file": ("other.pdf", b"other", "application/pdf")},
+            )
+            assert unrestricted.status_code == 200, unrestricted.text
+            assert unrestricted.json()["matched_customer_id"] == ids["other_customer"]
+            assert unrestricted.json()["items"][0]["matched_product_id"] == ids["other_product"]
+            client.post("/api/auth/logout")
+
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Order)) == before_orders
+
+
+def test_pdf_preview_locked_route_without_template_id_resolves_only_in_scope(
+    n028_customer_scope_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.orders as orders_api
+    from app.models.order import Order
+
+    app, ids, factory = n028_customer_scope_app
+    own_draft = _locked_pdf_draft(
+        "own-legacy-route.pdf",
+        customer_id=ids["customer"],
+        customer_name="N028 Customer",
+        product_code="N028-BASE",
+    )
+    own_draft["customer_route"]["template_customer_id"] = None
+    other_draft = _locked_pdf_draft(
+        "other-legacy-route.pdf",
+        customer_id=ids["other_customer"],
+        customer_name="N028 Other Customer",
+        product_code="N028-OTHER",
+    )
+    other_draft["customer_route"]["template_customer_id"] = None
+    drafts = {b"own-legacy": own_draft, b"other-legacy": other_draft}
+    monkeypatch.setattr(
+        orders_api,
+        "_parse_order_pdf_preview",
+        lambda content, _filename, _rules: dict(drafts[content]),
+    )
+    original_match = orders_api.match_import_draft
+    matched_customer_ids: list[int | None] = []
+
+    def record_match(db, draft, customer_id=None):
+        matched_customer_ids.append(customer_id)
+        return original_match(db, draft, customer_id=customer_id)
+
+    monkeypatch.setattr(orders_api, "match_import_draft", record_match)
+    with factory() as db:
+        before_orders = db.scalar(select(func.count()).select_from(Order))
+
+    with TestClient(app) as client:
+        _login(client, "n028-sales", "SalesPass123!")
+        own = client.post(
+            "/api/orders/pdf-preview",
+            files={
+                "file": (
+                    "own-legacy-route.pdf",
+                    b"own-legacy",
+                    "application/pdf",
+                )
+            },
+        )
+        denied = client.post(
+            "/api/orders/pdf-preview",
+            files={
+                "file": (
+                    "other-legacy-route.pdf",
+                    b"other-legacy",
+                    "application/pdf",
+                )
+            },
+        )
+
+    assert own.status_code == 200, own.text
+    assert own.json()["matched_customer_id"] == ids["customer"]
+    assert own.json()["items"][0]["matched_product_id"] == ids["product"]
+    assert denied.status_code == 200, denied.text
+    _assert_scope_denied_pdf_preview(denied.json())
+    assert "N028 Other Customer" not in denied.text
+    assert "N028-OTHER" not in denied.text
+    assert matched_customer_ids == [ids["customer"]]
+
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Order)) == before_orders
+
+
+def test_pdf_batch_preview_applies_customer_scope_per_file_without_order_writes(
+    n028_customer_scope_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.orders as orders_api
+    from app.models.order import Order
+
+    app, ids, factory = n028_customer_scope_app
+    drafts = {
+        b"own-batch": _locked_pdf_draft(
+            "own-batch.pdf",
+            customer_id=ids["customer"],
+            customer_name="N028 Customer",
+            product_code="N028-BASE",
+        ),
+        b"other-batch": _locked_pdf_draft(
+            "other-batch.pdf",
+            customer_id=ids["other_customer"],
+            customer_name="N028 Other Customer",
+            product_code="N028-OTHER",
+        ),
+    }
+    monkeypatch.setattr(
+        orders_api,
+        "_parse_order_pdf_preview",
+        lambda content, _filename, _rules: dict(drafts[content]),
+    )
+    original_match = orders_api.match_import_draft
+    matched_customer_ids: list[int | None] = []
+
+    def record_match(db, draft, customer_id=None):
+        matched_customer_ids.append(customer_id)
+        return original_match(db, draft, customer_id=customer_id)
+
+    monkeypatch.setattr(orders_api, "match_import_draft", record_match)
+    with factory() as db:
+        before_orders = db.scalar(select(func.count()).select_from(Order))
+
+    files = [
+        ("files", ("own-batch.pdf", b"own-batch", "application/pdf")),
+        ("files", ("other-batch.pdf", b"other-batch", "application/pdf")),
+    ]
+    with TestClient(app) as client:
+        _login(client, "n028-sales", "SalesPass123!")
+        response = client.post("/api/orders/pdf-preview-batch", files=files)
+
+    assert response.status_code == 200, response.text
+    own, denied = response.json()["drafts"]
+    assert own["matched_customer_id"] == ids["customer"]
+    assert own["items"][0]["matched_product_id"] == ids["product"]
+    _assert_scope_denied_pdf_preview(denied)
+    assert "N028 Other Customer" not in response.text
+    assert "N028-OTHER" not in response.text
+    assert matched_customer_ids == [ids["customer"]]
+
+    matched_customer_ids.clear()
+    with TestClient(app) as client:
+        _login(client, "n028-empty-sales", "EmptySalesPass123!")
+        empty_response = client.post("/api/orders/pdf-preview-batch", files=files)
+    assert empty_response.status_code == 200, empty_response.text
+    for draft in empty_response.json()["drafts"]:
+        _assert_scope_denied_pdf_preview(draft)
+    assert matched_customer_ids == []
+
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Order)) == before_orders
+
+
+def test_pdf_rematch_reuses_customer_scope_gate_and_never_writes_order(
+    n028_customer_scope_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.orders as orders_api
+    from app.models.order import Order
+
+    app, ids, factory = n028_customer_scope_app
+    monkeypatch.setattr(
+        orders_api,
+        "_parse_order_pdf_preview",
+        lambda _content, filename, _rules: _manual_pdf_draft(filename),
+    )
+    original_match = orders_api.match_import_draft
+    matched_customer_ids: list[int | None] = []
+
+    def record_match(db, draft, customer_id=None):
+        matched_customer_ids.append(customer_id)
+        return original_match(db, draft, customer_id=customer_id)
+
+    monkeypatch.setattr(orders_api, "match_import_draft", record_match)
+    with factory() as db:
+        before_orders = db.scalar(select(func.count()).select_from(Order))
+
+    with TestClient(app) as client:
+        _login(client, "n028-sales", "SalesPass123!")
+        preview = client.post(
+            "/api/orders/pdf-preview",
+            files={"file": ("manual.pdf", b"manual", "application/pdf")},
+        )
+        assert preview.status_code == 200, preview.text
+        draft = preview.json()
+        own = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": draft,
+                "customer_id": ids["customer"],
+                "preview_safety_token": draft["preview_safety_token"],
+            },
+        )
+        denied = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": draft,
+                "customer_id": ids["other_customer"],
+                "preview_safety_token": draft["preview_safety_token"],
+            },
+        )
+        client.post("/api/auth/logout")
+        _login(client, "n028-empty-sales", "EmptySalesPass123!")
+        empty_preview = client.post(
+            "/api/orders/pdf-preview",
+            files={"file": ("empty.pdf", b"empty", "application/pdf")},
+        ).json()
+        empty_denied = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": empty_preview,
+                "customer_id": ids["customer"],
+                "preview_safety_token": empty_preview["preview_safety_token"],
+            },
+        )
+
+    assert own.status_code == 200, own.text
+    assert own.json()["matched_customer_id"] == ids["customer"]
+    assert own.json()["items"][0]["matched_product_id"] == ids["product"]
+    assert denied.status_code == 403
+    assert denied.json() == {"detail": "无客户访问权限"}
+    assert empty_denied.status_code == 403
+    assert empty_denied.json() == {"detail": "无客户访问权限"}
+    assert ids["other_customer"] not in matched_customer_ids
+
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Order)) == before_orders
 
 
 def test_empty_selected_scope_returns_no_customer_product_or_order_rows(

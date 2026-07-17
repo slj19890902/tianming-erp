@@ -28,15 +28,16 @@ Phase 18 / v0.18.0: PDF 订单识别训练样本库 REST API。
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_current_user, get_db
+from app.core.time_contract import utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
 from app.models.pdf_training import (
     PdfOrderCorrectionLog,
@@ -76,7 +77,7 @@ _SAMPLE_DIR = Path(__file__).resolve().parents[2] / "data" / "pdf_training_sampl
 # ---------------------------------------------------------------------------
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc).replace(tzinfo=None)
+    return utc_now_naive()
 
 
 def _log(db: Session, user: User, action: str, detail: str) -> None:
@@ -239,6 +240,10 @@ class BatchOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime) -> str:
+        return utc_naive_to_api(value)
+
 
 class BatchCreate(BaseModel):
     batch_name: str
@@ -259,6 +264,10 @@ class SampleSummary(BaseModel):
     labeled_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "labeled_at")
+    def serialize_timestamps(self, value: datetime | None) -> str | None:
+        return utc_naive_to_api(value) if value else None
 
 
 class SampleDetail(SampleSummary):
@@ -289,6 +298,10 @@ class TemplateOut(BaseModel):
     notes: str | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_timestamps(self, value: datetime | None) -> str | None:
+        return utc_naive_to_api(value) if value else None
 
 
 class TemplateCreate(BaseModel):
@@ -709,6 +722,10 @@ class CorrectionOut(BaseModel):
     note: str | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("corrected_at")
+    def serialize_corrected_at(self, value: datetime) -> str:
+        return utc_naive_to_api(value)
 
 
 @router.post(

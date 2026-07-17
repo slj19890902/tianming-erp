@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,6 +18,7 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -59,7 +60,7 @@ can_operate = PermissionChecker("deliveries.execute")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utc_now_naive()
 
 
 def _print_product_code(value: str | None) -> str:
@@ -770,9 +771,15 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "vehicle_number": delivery.vehicle_number,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
-        "dispatched_at": delivery.dispatched_at,
+        "dispatched_at": (
+            utc_naive_to_api(delivery.dispatched_at)
+            if delivery.dispatched_at
+            else None
+        ),
         "is_printed": delivery.printed_at is not None,
-        "printed_at": delivery.printed_at,
+        "printed_at": (
+            utc_naive_to_api(delivery.printed_at) if delivery.printed_at else None
+        ),
         "printed_by": delivery.printed_by,
         "return_receipt_id": return_receipt.id if return_receipt else None,
         "return_receipt_status": (
@@ -1275,7 +1282,7 @@ def create_delivery(
     require_customer_access(payload.customer_id, user, db)
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
-    delivery_date = payload.delivery_date or date.today()
+    delivery_date = payload.delivery_date or beijing_today()
     try:
         delivery = Delivery(
             delivery_number=_next_delivery_number(db, delivery_date),
@@ -1957,7 +1964,7 @@ def get_delivery_print_data(
         "vehicle_number": delivery.vehicle_number,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
-        "created_at": delivery.created_at,
+        "created_at": utc_naive_to_api(delivery.created_at),
         "customer": {
             "name": customer.name if customer else "",
             "contact_person": customer.contact_person if customer else None,

@@ -26,6 +26,11 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    beijing_now_naive,
+    utc_naive_to_api,
+)
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
 from app.models.material import Material
@@ -426,13 +431,24 @@ def _response(product: Product, user: User) -> dict:
         **_product_payload_snapshot(product),
         "id": product.id,
         "manual_modified": product.manual_modified,
-        "manual_modified_at": product.manual_modified_at,
-        "deleted_at": product.deleted_at,
+        "manual_modified_at": (
+            beijing_naive_to_api(product.manual_modified_at)
+            if product.manual_modified_at
+            else None
+        ),
+        "deleted_at": (
+            beijing_naive_to_api(product.deleted_at) if product.deleted_at else None
+        ),
         "deleted_by": product.deleted_by,
-        "purged_at": product.purged_at,
+        "purged_at": (
+            beijing_naive_to_api(product.purged_at) if product.purged_at else None
+        ),
         "version": product.version,
         "drawings": [
-            ProductDrawingResponse.model_validate(drawing).model_dump()
+            {
+                **ProductDrawingResponse.model_validate(drawing).model_dump(),
+                "uploaded_at": utc_naive_to_api(drawing.uploaded_at),
+            }
             for drawing in product.drawings
         ],
     }
@@ -461,10 +477,10 @@ def _response(product: Product, user: User) -> dict:
         data["mold_tool"] = None
     if product.deleted_at is not None:
         expires_at = product.deleted_at + timedelta(days=30)
-        data["deleted_expires_at"] = expires_at
+        data["deleted_expires_at"] = beijing_naive_to_api(expires_at)
         data["trash_days_remaining"] = max(
             0,
-            (expires_at - datetime.now()).total_seconds() / 86400,
+            (expires_at - beijing_now_naive()).total_seconds() / 86400,
         )
     if not has_permission(user, "cost.view"):
         for field in {"cost_unit_price", "board_price", "suggested_price"}:
@@ -899,7 +915,7 @@ def create_product(
         customer_material_code=clean_code(payload.customer_material_code),
         product_name=payload.product_name.strip(),
         manual_modified=True,
-        manual_modified_at=datetime.now(),
+        manual_modified_at=beijing_now_naive(),
     )
     product = Product(**data)
     try:
@@ -976,7 +992,7 @@ def update_product(
             confirmation_token=payload.confirmation_token,
         )
         product.manual_modified = True
-        product.manual_modified_at = datetime.now()
+        product.manual_modified_at = beijing_now_naive()
         if changed:
             audit_master_change(
                 db,
@@ -1375,7 +1391,7 @@ def delete_product(
             confirmation_token=payload.confirmation_token,
             force_version=True,
         )
-        product.deleted_at = datetime.now()
+        product.deleted_at = beijing_now_naive()
         product.deleted_by = user.id
         product.purged_at = None
         audit_master_change(

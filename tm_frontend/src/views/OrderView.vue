@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { masterDataApi, type Customer, type Product } from '../api/masterData'
+import { addCalendarDays, beijingToday } from '../utils/time'
 
 interface OrderLine {
   id: number
@@ -29,7 +30,7 @@ const customers = ref<Customer[]>([])
 const allProducts = ref<Product[]>([])
 const customerId = ref<number | null>(null)
 const customerPo = ref('UAT-ORDER-001')
-const orderDate = ref(new Date().toISOString().slice(0, 10))
+const orderDate = ref(beijingToday())
 const deliveryDate = ref(defaultDeliveryDate())
 const note = ref('')
 const lines = ref<OrderLine[]>([])
@@ -60,9 +61,7 @@ const totalAmount = computed(() =>
 )
 
 function defaultDeliveryDate() {
-  const date = new Date()
-  date.setDate(date.getDate() + 7)
-  return date.toISOString().slice(0, 10)
+  return addCalendarDays(beijingToday(), 7)
 }
 
 function emptyLine(): OrderLine {

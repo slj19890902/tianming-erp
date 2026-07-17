@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date
 from hashlib import sha256
 import json
 import re
@@ -11,6 +11,7 @@ from uuid import uuid4
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
 from app.models.customer import Customer
 from app.models.delivery import DeliveryItem
 from app.models.material import Material
@@ -63,8 +64,8 @@ class FinishedReservationMutation:
     allocation: DeliveryInventoryAllocation | None = None
 
 
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+# Compatibility export for service modules outside N033's write scope.
+utc_now = utc_now_naive
 
 
 def normalize_material_code(value: str | None) -> str:
@@ -76,7 +77,7 @@ def normalize_material_code(value: str | None) -> str:
 
 
 def inventory_age_warning(lot: InventoryLot, *, today: date | None = None) -> AgeWarning:
-    current = today or date.today()
+    current = today or beijing_today()
     days = max((current - lot.stock_date).days, 0)
     if days >= 730:
         return AgeWarning(days, "cleanup", "库龄超过2年，请盘点并处理")
@@ -88,7 +89,7 @@ def inventory_age_warning(lot: InventoryLot, *, today: date | None = None) -> Ag
 
 
 def _number(prefix: str) -> str:
-    return f"{prefix}-{datetime.now():%Y%m%d}-{uuid4().hex[:10].upper()}"
+    return f"{prefix}-{beijing_now_naive():%Y%m%d}-{uuid4().hex[:10].upper()}"
 
 
 def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLocation:
@@ -215,7 +216,7 @@ def manual_finished_in(
         raise WarehouseInventoryError("产品不存在", 404)
     if product.customer_id != customer_id:
         raise WarehouseInventoryError("所选产品不属于该客户")
-    now = utc_now()
+    now = utc_now_naive()
     material_code = (
         product.material.code if product.material is not None else product.default_material_code
     ) or product.legacy_material_text
@@ -530,7 +531,7 @@ def reserve_finished_inventory(
     if quantity > lot.quantity_available:
         raise WarehouseInventoryError("抵扣数量不能超过库存可用数量", 409)
     before = _balances(lot)
-    now = utc_now()
+    now = utc_now_naive()
     result = db.execute(
         update(InventoryLot)
         .where(
@@ -664,7 +665,7 @@ def reserve_completed_finished_inventory(
     if int(lot.quantity_available or 0) != quantity:
         raise WarehouseInventoryError("完工库存数量与冻结生产数量不一致", 409)
     before = _balances(lot)
-    now = utc_now()
+    now = utc_now_naive()
     result = db.execute(
         update(InventoryLot)
         .where(
@@ -818,7 +819,7 @@ def consume_finished_reservation(
         if lot.quantity_reserved < stock_quantity:
             raise WarehouseInventoryError("成品库存预占余额异常，请联系管理员", 409)
         before = _balances(lot)
-        now = utc_now()
+        now = utc_now_naive()
         result = db.execute(
             update(InventoryLot)
             .where(
@@ -916,7 +917,7 @@ def reverse_finished_consumption(
         if lot.quantity_consumed < stock_quantity:
             raise WarehouseInventoryError("成品库存累计消耗余额异常", 409)
         before = _balances(lot)
-        now = utc_now()
+        now = utc_now_naive()
         result = db.execute(
             update(InventoryLot)
             .where(
@@ -1038,7 +1039,7 @@ def release_finished_reservation(
     if lot.quantity_reserved < quantity:
         raise WarehouseInventoryError("库存预占余额异常，请联系管理员处理", 409)
     before = _balances(lot)
-    now = utc_now()
+    now = utc_now_naive()
     result = db.execute(
         update(InventoryLot)
         .where(
@@ -1185,7 +1186,7 @@ def manual_semi_finished_in(
     customer = db.get(Customer, customer_id) if customer_id else None
     if customer_id and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)
-    now = utc_now()
+    now = utc_now_naive()
     lot = InventoryLot(
         lot_number=_number("SI"),
         inventory_type="semi_finished",
@@ -1369,7 +1370,7 @@ def replace_semi_finished_lot_allowed_products(
     if current == desired:
         return lot
 
-    now = utc_now()
+    now = utc_now_naive()
     updated = db.execute(
         update(InventoryLot)
         .where(
@@ -1448,7 +1449,7 @@ def edit_semi_finished_lot_customer(
         reason = SEMI_FINISHED_UNASSIGN_CUSTOMER_REASON
 
     before = _balances(lot)
-    now = utc_now()
+    now = utc_now_naive()
     updated_lot = db.execute(update(InventoryLot).where(
         InventoryLot.id == lot_id,
         InventoryLot.inventory_type == "semi_finished",
@@ -1499,7 +1500,7 @@ def void_semi_finished_lot(
     if reservation_id is not None:
         raise WarehouseInventoryError("批次已有订单或报料预占记录，不能删除", 409)
     before = _balances(lot)
-    now = utc_now()
+    now = utc_now_naive()
     audit_note = f"作废原因：{normalized_reason}"
     lot_remarks = "\n".join(part for part in ((lot.remarks or "").strip(), audit_note) if part)
     updated = db.execute(update(InventoryLot).where(
@@ -1761,7 +1762,7 @@ def edit_finished_lot(
         if occupied is not None and (pallet is None or occupied.id != pallet.id):
             raise WarehouseInventoryError("目标三楼货位已被其它真实栈板占用", 409)
 
-    now = utc_now()
+    now = utc_now_naive()
     if location_changed and pallet is not None:
         from app.services.floor3_locations import Floor3LocationError, move_pallet
 
@@ -1911,7 +1912,10 @@ def mutate_lot(
     if operation in {"adjust", "damage", "scrap", "transfer_to_general"} and lot.status != "active":
         raise WarehouseInventoryError("冻结库存不能执行数量或归属调整", 409)
     before = _balances(lot)
-    values: dict[str, object] = {"version": lot.version + 1, "last_movement_at": utc_now()}
+    values: dict[str, object] = {
+        "version": lot.version + 1,
+        "last_movement_at": utc_now_naive(),
+    }
     movement_quantity = quantity
     if operation == "freeze":
         if lot.status != "active":

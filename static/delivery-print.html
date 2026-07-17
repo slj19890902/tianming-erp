@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="/static/assets/time-utils.js"></script>
   <title>送货单打印</title>
   <style>
     * { box-sizing: border-box; }
@@ -252,7 +253,7 @@
         document.getElementById("vehicleNumber").textContent = data.vehicle_number || "";
         document.getElementById("totalQuantity").textContent = data.total_quantity ?? 0;
         document.getElementById("createdAt").textContent = data.created_at
-          ? new Date(`${data.created_at}Z`).toLocaleString("zh-CN", { hour12: false })
+          ? TmTime.formatBeijingDateTime(data.created_at)
           : "";
         document.getElementById("itemRows").innerHTML = data.items.map((item) => {
           const description = item.product_code || "";

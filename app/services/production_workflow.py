@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 from math import ceil
@@ -11,6 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
@@ -94,10 +94,6 @@ class CompletionBatchResult:
 class StockTransferResult:
     transfer: ProductionStockTransfer
     replayed: bool
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _stable_key(*parts: object, max_length: int = 100) -> str:
@@ -267,7 +263,7 @@ def refresh_production_task(
     finished_coverage = min(
         max(active_finished_reserved_qty(db, item.id), 0), order_quantity
     )
-    now = utc_now()
+    now = utc_now_naive()
     if finished_coverage >= order_quantity:
         next_status = NOT_REQUIRED
         planned_quantity = 0
@@ -589,7 +585,7 @@ def _stock_completion_lot(
         product_id=item.product_id,
         location_id=location.id,
         quantity=int(completion.quantity),
-        stock_date=date.today(),
+        stock_date=beijing_today(),
         source_type="production_surplus",
         source_ref_type="production_completion",
         source_ref_id=completion.id,
@@ -734,7 +730,7 @@ def complete_production_batch(
                 db, command.location_id, pallet_id=command.pallet_id
             )
 
-    now = utc_now()
+    now = utc_now_naive()
     batch = ProductionCompletionBatch(
         idempotency_key=key,
         request_hash=request_hash,
@@ -902,7 +898,7 @@ def transfer_direct_completion_to_stock(
         idempotency_key=key,
         request_hash=request_hash,
         transferred_by=operator_id,
-        transferred_at=utc_now(),
+        transferred_at=utc_now_naive(),
     )
     db.add(transfer)
     db.flush()
@@ -969,7 +965,7 @@ def list_production_tasks(
             "planned_quantity": int(task.planned_quantity),
             "finished_coverage_snapshot": int(task.finished_coverage_snapshot),
             "readiness_basis": task.readiness_basis,
-            "ready_at": task.ready_at,
+            "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
             "version": int(task.version),
             "production_ready_quantity": production_ready_quantity(db, item),
         }
@@ -1062,7 +1058,11 @@ def list_production_completions(
                 "remarks": completion.remarks,
                 "completed_by": completion.completed_by,
                 "completed_by_name": user.real_name if user is not None else None,
-                "completed_at": completion.completed_at,
+                "completed_at": (
+                    utc_naive_to_api(completion.completed_at)
+                    if completion.completed_at
+                    else None
+                ),
                 "stock_transfer_id": transfer.id if transfer is not None else None,
                 "can_transfer_to_stock": (
                     completion.initial_disposition == "direct"

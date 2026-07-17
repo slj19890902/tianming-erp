@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
@@ -15,6 +15,7 @@ from app.api.deps import (
     has_unrestricted_customer_access,
 )
 from app.api.incoming import _rows as incoming_rows
+from app.core.time_contract import beijing_today, utc_naive_to_beijing_date
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.customer import Customer
 from app.models.finance import (
@@ -43,8 +44,18 @@ def _safe_int(value) -> int:
     return int(value or 0)
 
 
-def _coalesce_date(value):
-    return value or date.max
+def _business_date_string(value: date | datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return utc_naive_to_beijing_date(value).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _coalesce_date(value: str | None) -> str:
+    return value or date.max.isoformat()
 
 
 def _delivery_ready_filter():
@@ -211,7 +222,7 @@ def dashboard_kpi(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    today = date.today()
+    today = beijing_today()
     month = today.strftime("%Y-%m")
     visible_customer_ids = (
         None
@@ -330,7 +341,7 @@ def dashboard_overview(
     user: User = Depends(can_read),
 ) -> dict:
     raw_db = db
-    today = date.today()
+    today = beijing_today()
     month = today.strftime("%Y-%m")
     visible_customer_ids = (
         None
@@ -756,7 +767,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": None,
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "requisition",
                 "action_text": "去报料",
@@ -774,7 +787,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": row.get("product_code"),
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "incoming",
                 "action_text": "去入库",
@@ -792,7 +807,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": row["snapshot_product_code"],
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "production",
                 "action_text": "去生产确认",
@@ -810,7 +827,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["order_number"],
                 "first_item_no": row["snapshot_product_code"],
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "deliveries",
                 "action_text": "去送货",
@@ -828,7 +847,9 @@ def dashboard_overview(
                 "count": 0,
                 "first_order_no": row["delivery_number"],
                 "first_item_no": None,
-                "sort_date": row["delivery_date"] or row["created_at"],
+                "sort_date": _business_date_string(
+                    row["delivery_date"] or row["created_at"]
+                ),
                 "message": "",
                 "target": "deliveries",
                 "action_text": "去回单",
@@ -877,7 +898,9 @@ def dashboard_overview(
                 "amount": amount,
                 "first_order_no": None,
                 "first_item_no": None,
-                "sort_date": row["first_received_date"] or row["first_created_at"],
+                "sort_date": _business_date_string(
+                    row["first_received_date"] or row["first_created_at"]
+                ),
                 "message": (
                     f"该客户 {month_label} 有 {item_count} 条送货明细待生成月结对账单，"
                     f"合计 {amount} 元。"
@@ -899,7 +922,7 @@ def dashboard_overview(
                 "month": row["statement_month"],
                 "first_order_no": None,
                 "first_item_no": None,
-                "sort_date": row["created_at"],
+                "sort_date": _business_date_string(row["created_at"]),
                 "message": "",
                 "target": "finance",
                 "action_text": "去收款/对账",

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from datetime import date, datetime
 from uuid import uuid4
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import (
+    beijing_now_naive,
+    beijing_today,
+    utc_naive_to_api,
+    utc_now_naive,
+)
 from app.models.product import Product
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
@@ -25,7 +30,6 @@ from app.services.warehouse_inventory import (
     manual_finished_in,
     manual_semi_finished_in,
     normalize_material_code,
-    utc_now,
 )
 
 
@@ -139,7 +143,7 @@ def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
         "supplier_name": policy.supplier_name,
         "remark": policy.remark,
         "active": policy.active,
-        "updated_at": policy.updated_at,
+        "updated_at": utc_naive_to_api(policy.updated_at) if policy.updated_at else None,
     }
 
 
@@ -202,7 +206,7 @@ def validate_stock_policy(db: Session, policy: InventoryStockPolicy) -> None:
 
 
 def next_replenishment_order_number() -> str:
-    return f"SR-{datetime.now():%Y%m%d}-{uuid4().hex[:8].upper()}"
+    return f"SR-{beijing_now_naive():%Y%m%d}-{uuid4().hex[:8].upper()}"
 
 
 def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
@@ -261,7 +265,7 @@ def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
             else None
         ),
         "remark": item.remark,
-        "stocked_at": item.stocked_at,
+        "stocked_at": utc_naive_to_api(item.stocked_at) if item.stocked_at else None,
     }
 
 
@@ -275,9 +279,11 @@ def replenishment_order_dict(order: StockReplenishmentOrder) -> dict:
         "source_type": order.source_type,
         "status": order.status,
         "remark": order.remark,
-        "created_at": order.created_at,
-        "confirmed_at": order.confirmed_at,
-        "stocked_at": order.stocked_at,
+        "created_at": utc_naive_to_api(order.created_at) if order.created_at else None,
+        "confirmed_at": (
+            utc_naive_to_api(order.confirmed_at) if order.confirmed_at else None
+        ),
+        "stocked_at": utc_naive_to_api(order.stocked_at) if order.stocked_at else None,
         "total_quantity": sum(item.quantity for item in order.items),
         "stocked_quantity": sum(item.stocked_quantity for item in order.items),
         "items": [replenishment_item_dict(item) for item in order.items],
@@ -295,7 +301,7 @@ def stock_replenishment_order(
     if order.status == "stocked":
         return order
 
-    now = utc_now()
+    now = utc_now_naive()
     for item in order.items:
         if item.stocked_quantity >= item.quantity:
             continue
@@ -307,7 +313,7 @@ def stock_replenishment_order(
         common = {
             "location_id": item.location_id,
             "quantity": quantity,
-            "stock_date": date.today(),
+            "stock_date": beijing_today(),
             "source_type": "replenishment",
             "remarks": f"补库单 {order.order_number}；{item.remark or ''}".strip("；"),
             "operator_id": operator_id,

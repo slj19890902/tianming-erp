@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.warehouse_inventory import InventoryLot
@@ -85,7 +86,7 @@ def build_inventory_insights(
 ) -> dict:
     """Build a read-only inventory view; it never reserves or mutates stock."""
 
-    as_of = as_of or date.today()
+    as_of = as_of or beijing_today()
     lots = list(
         db.scalars(
             select(InventoryLot)
@@ -296,7 +297,7 @@ def build_inventory_insights(
     )
     missing_cost_lots = max(available_lots - cost_ready_lots, 0)
     return {
-        "generated_at": datetime.now(),
+        "generated_at": utc_naive_to_api(utc_now_naive()),
         "as_of": as_of,
         "scope_notice": "当前看板只统计已录入 ERP 的库存，不代表现场尚未盘点的库存。",
         "recommendation_notice": "所有少报、先消耗或清理建议仅供人工判断，本接口不会修改库存、订单、预占或报料。",

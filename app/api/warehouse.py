@@ -23,6 +23,12 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.core.time_contract import (
+    beijing_date_bounds_utc_naive,
+    beijing_naive_to_api,
+    beijing_today,
+    utc_naive_to_api,
+)
 from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -710,8 +716,8 @@ def _floor3_item_dict(
         "unit": row.unit,
         "match_status": row.match_status,
         "remarks": row.remarks,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
     }
 
 
@@ -759,9 +765,11 @@ def _floor3_pallet_dict(
         "items": [
             _floor3_item_dict(item, customer_names) for item in visible_items
         ],
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-        "closed_at": row.closed_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
+        "closed_at": (
+            beijing_naive_to_api(row.closed_at) if row.closed_at else None
+        ),
     }
 
 
@@ -777,7 +785,9 @@ def _floor3_layout_dict(row: Floor3LocationLayout | None) -> dict | None:
         "z_index": row.z_index,
         "version": row.version,
         "source_type": row.source_type,
-        "updated_at": row.updated_at,
+        "updated_at": (
+            beijing_naive_to_api(row.updated_at) if row.updated_at else None
+        ),
     }
 
 
@@ -1037,7 +1047,7 @@ def _lot_dict(row: InventoryLot) -> dict:
         "status": row.status,
         "source_type": row.source_type,
         "stock_date": row.stock_date,
-        "last_movement_at": row.last_movement_at,
+        "last_movement_at": utc_naive_to_api(row.last_movement_at),
         "version": row.version,
         "remarks": row.remarks,
         "floor3_binding": (
@@ -1079,7 +1089,7 @@ def _movement_dict(row: InventoryMovement) -> dict:
         "after_scrapped": row.after_scrapped,
         "reason": row.reason,
         "operator_id": row.operator_id,
-        "created_at": row.created_at,
+        "created_at": utc_naive_to_api(row.created_at),
     }
 
 
@@ -1125,8 +1135,8 @@ def _reservation_dict(
         "reservation_group_key": row.reservation_group_key,
         "status": row.status,
         "warning_codes": warning_codes,
-        "reserved_at": row.reserved_at,
-        "released_at": row.released_at,
+        "reserved_at": utc_naive_to_api(row.reserved_at) if row.reserved_at else None,
+        "released_at": utc_naive_to_api(row.released_at) if row.released_at else None,
         "release_reason": row.release_reason,
     }
 
@@ -1229,7 +1239,7 @@ def finished_candidates(
                     ),
                     "quantity_available": lot.quantity_available,
                     "stock_date": lot.stock_date,
-                    "last_movement_at": lot.last_movement_at,
+                    "last_movement_at": utc_naive_to_api(lot.last_movement_at),
                     "warning_codes": (
                         ["GENERAL_FINISHED_STOCK"]
                         if lot.finished_detail.is_general
@@ -2253,7 +2263,7 @@ def get_floor3_location(
                 "to_location_id": movement.to_location_id,
                 "to_location_code": location_codes.get(movement.to_location_id),
                 "operator_id": movement.operator_id,
-                "moved_at": movement.moved_at,
+                "moved_at": beijing_naive_to_api(movement.moved_at),
                 "remarks": movement.remarks,
             }
         )
@@ -2822,8 +2832,8 @@ def _mold_tool_dict(row: MoldTool) -> dict:
             }
             for product in products
         ],
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
     }
 
 
@@ -3178,7 +3188,7 @@ def list_lots(
         days = {"attention": 365, "handling": 548, "cleanup": 730}.get(stale_level)
         if days:
             query = query.where(
-                InventoryLot.stock_date <= date.today() - timedelta(days=days)
+                InventoryLot.stock_date <= beijing_today() - timedelta(days=days)
             )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     total = db.scalar(count_query) or 0
@@ -3278,9 +3288,11 @@ def list_movements(
     if movement_type:
         query = query.where(InventoryMovement.movement_type == movement_type)
     if date_from:
-        query = query.where(InventoryMovement.created_at >= datetime.combine(date_from, datetime.min.time()))
+        start_at, _ = beijing_date_bounds_utc_naive(date_from)
+        query = query.where(InventoryMovement.created_at >= start_at)
     if date_to:
-        query = query.where(InventoryMovement.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
+        _, end_at = beijing_date_bounds_utc_naive(date_to)
+        query = query.where(InventoryMovement.created_at < end_at)
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
     rows = db.scalars(
         query.order_by(InventoryMovement.id.desc())

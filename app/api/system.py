@@ -15,6 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import PermissionChecker, RoleChecker, get_db
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    beijing_now_naive,
+    utc_naive_to_api,
+)
 from app.core.config import load_settings, normalize_path
 from app.core.database import (
     backup_to_nas,
@@ -215,9 +220,9 @@ def list_backups(
             items.append(
                 {
                     "filename": path.name,
-                    "created_at": datetime.fromtimestamp(
-                        stat.st_mtime
-                    ).isoformat(timespec="seconds"),
+                    "created_at": utc_naive_to_api(
+                        datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(tzinfo=None)
+                    ),
                     "size": stat.st_size,
                     "is_protected": is_protected,
                 }
@@ -254,9 +259,11 @@ def create_backup(
         ) from error
     return {
         "filename": result.path.name,
-        "created_at": datetime.fromtimestamp(
-            result.path.stat().st_mtime
-        ).isoformat(timespec="seconds"),
+        "created_at": utc_naive_to_api(
+            datetime.fromtimestamp(
+                result.path.stat().st_mtime, timezone.utc
+            ).replace(tzinfo=None)
+        ),
         "size": result.size,
         "sha256": result.sha256,
         "integrity_check": result.integrity_check,
@@ -283,8 +290,8 @@ def cleanup_preview(
         stat = path.stat()
         entry = {
             "filename": path.name,
-            "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(
-                timespec="seconds"
+            "created_at": utc_naive_to_api(
+                datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(tzinfo=None)
             ),
             "size": stat.st_size,
         }
@@ -759,7 +766,7 @@ def list_material_mapping(
             "review_note": c.review_note,
             "source_file": c.source_file,
             "source_row_number": c.source_row_number,
-            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "created_at": utc_naive_to_api(c.created_at),
             "hit_count": hit_counts.get(c.old_code, 0),
         })
 
@@ -1298,7 +1305,11 @@ def _company_dict(row: CompanyConfig | None) -> dict:
         "bank_account": row.bank_account if row else None,
         "contact_person": row.contact_person if row else None,
         "contact_phone": row.contact_phone if row else None,
-        "updated_at": row.updated_at.isoformat() if row and row.updated_at else None,
+        "updated_at": (
+            beijing_naive_to_api(row.updated_at)
+            if row and row.updated_at
+            else None
+        ),
     }
 
 
@@ -1330,7 +1341,7 @@ def update_company(
     row.bank_account = body.bank_account.strip() if body.bank_account else None
     row.contact_person = body.contact_person.strip() if body.contact_person else None
     row.contact_phone = body.contact_phone.strip() if body.contact_phone else None
-    row.updated_at = datetime.now()
+    row.updated_at = beijing_now_naive()
     db.add(
         OperationLog(
             user_id=user.id,

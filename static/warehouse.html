@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script src="/static/assets/time-utils.js"></script>
   <title>仓库库存管理 - 天明ERP</title>
   <style>
     :root{--blue:#2563eb;--line:#dbe3ef;--bg:#f3f6fb;--text:#182235;--muted:#64748b;--red:#b91c1c}
@@ -367,7 +368,8 @@
     async function api(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});let body={};try{body=await r.json()}catch{}if(!r.ok){const error=new Error(apiErrorMessage(body,r.status,url));error.status=r.status;throw error}return body}
     function queryString(values){const p=new URLSearchParams();Object.entries(values).forEach(([key,value])=>{if(value!==""&&value!==null&&value!==undefined)p.set(key,value)});return p.toString()}
     function toast(text,error=false){const el=$("message");el.textContent=text;el.style.background=error?"#991b1b":"#172033";el.classList.remove("hidden");setTimeout(()=>el.classList.add("hidden"),3500)}
-    function today(){const value=new Date(),pad=number=>String(number).padStart(2,"0");return `${value.getFullYear()}-${pad(value.getMonth()+1)}-${pad(value.getDate())}`}
+    function today(){return TmTime.beijingToday()}
+    function formatDateTime(value){return value?TmTime.formatBeijingDateTime(value):"-"}
     function options(select,items,placeholder){select.innerHTML=`<option value="">${h(placeholder)}</option>`+items.map(x=>`<option value="${h(x.id)}">${h(x.label)}</option>`).join("")}
     function h(value){return String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char])}
     function showPageError(message){
@@ -674,7 +676,7 @@
       try{
         const data=await api(`/api/warehouse/reservations?inventory_lot_id=${lotId}`);
         $("reservationTitle").textContent=`${lotNumber} 成品库存预占记录`;
-        $("reservationBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${x.reserved_at?new Date(x.reserved_at).toLocaleString():"-"}</td><td>${x.order_number||"-"}</td><td>${x.customer_name||"-"}<br>${x.product_name||"-"}</td><td><b>${x.reserved_stock_quantity}</b> 个</td><td>${labels[x.status]||x.status}</td><td>${x.released_at?new Date(x.released_at).toLocaleString():"-"}<br>${x.release_reason||""}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无预占记录</td></tr>`;
+       $("reservationBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${x.reserved_at?formatDateTime(x.reserved_at):"-"}</td><td>${x.order_number||"-"}</td><td>${x.customer_name||"-"}<br>${x.product_name||"-"}</td><td><b>${x.reserved_stock_quantity}</b> 个</td><td>${labels[x.status]||x.status}</td><td>${x.released_at?formatDateTime(x.released_at):"-"}<br>${x.release_reason||""}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无预占记录</td></tr>`;
         $("reservationPanel").classList.remove("hidden");
       }catch(err){toast(err.message,true)}
     }
@@ -761,7 +763,7 @@
     async function loadMovements(){
       const p=queryString({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"});
       const data=await api("/api/warehouse/movements?"+p);
-      $("movementBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库存流水</td></tr>`;
+       $("movementBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${formatDateTime(x.created_at)}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库存流水</td></tr>`;
     }
     async function loadMolds(){
       try{

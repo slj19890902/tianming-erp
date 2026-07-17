@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from io import BytesIO
 from uuid import uuid4
 
@@ -19,6 +19,11 @@ from app.api.deps import (
     get_db,
     has_unrestricted_customer_access,
     require_customer_access,
+)
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    utc_naive_to_api,
+    utc_now_naive,
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -58,7 +63,7 @@ can_operate = PermissionChecker("incoming.execute")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utc_now_naive()
 
 
 def _refresh_production_after_material_change(
@@ -717,7 +722,11 @@ def _item_response(db: Session, item_id: int) -> dict:
         "requisition_status": item.requisition_status,
         "requisition_qty": item.requisition_qty,
         "incoming_quantity": item.requisition_qty or item.quantity,
-        "material_received_at": item.material_received_at,
+        "material_received_at": (
+            utc_naive_to_api(item.material_received_at)
+            if item.material_received_at
+            else None
+        ),
         "material_received_by": item.material_received_by,
     }
 
@@ -739,7 +748,11 @@ def _component_response(db: Session, requisition_item_id: int) -> dict:
         "requisition_status": order_item.requisition_status,
         "requisition_qty": requisition_item.requisition_qty,
         "incoming_quantity": requisition_item.requisition_qty,
-        "material_received_at": order_item.material_received_at,
+        "material_received_at": (
+            utc_naive_to_api(order_item.material_received_at)
+            if order_item.material_received_at
+            else None
+        ),
         "material_received_by": order_item.material_received_by,
         "component_status": requisition_item.status,
     }
@@ -1132,6 +1145,23 @@ def _received_rows(
 
 
 
+def _incoming_row_response(row: dict) -> dict:
+    """Serialize incoming-list datetime fields using their storage contracts."""
+
+    response = dict(row)
+    if response.get("created_at"):
+        response["created_at"] = utc_naive_to_api(response["created_at"])
+    if response.get("supplier_delivery_time"):
+        response["supplier_delivery_time"] = beijing_naive_to_api(
+            response["supplier_delivery_time"]
+        )
+    if response.get("material_received_at"):
+        response["material_received_at"] = utc_naive_to_api(
+            response["material_received_at"]
+        )
+    return response
+
+
 @router.get("/surplus-locations")
 def surplus_inventory_locations(
     db: Session = Depends(get_db),
@@ -1164,7 +1194,12 @@ def pending_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    return {"items": _rows(db, user=user)}
+    return {
+        "items": [
+            _incoming_row_response(row)
+            for row in _rows(db, user=user)
+        ]
+    }
 
 
 @router.get("/received")
@@ -1173,11 +1208,14 @@ def recently_received_items(
     user: User = Depends(can_read),
 ) -> dict:
     return {
-        "items": _received_rows(
-            db,
-            user=user,
-            received_since=_utc_now() - timedelta(hours=24),
-        )
+        "items": [
+            _incoming_row_response(row)
+            for row in _received_rows(
+                db,
+                user=user,
+                received_since=_utc_now() - timedelta(hours=24),
+            )
+        ]
     }
 
 
@@ -1190,12 +1228,15 @@ def history_received_items(
     # received_since=epoch_start 表示"从最早时间起"即不过滤
     epoch_start = datetime(2000, 1, 1)
     return {
-        "items": _received_rows(
-            db,
-            user=user,
-            received_since=epoch_start,
-            include_reversed=True,
-        )
+        "items": [
+            _incoming_row_response(row)
+            for row in _received_rows(
+                db,
+                user=user,
+                received_since=epoch_start,
+                include_reversed=True,
+            )
+        ]
     }
 
 

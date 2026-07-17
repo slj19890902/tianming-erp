@@ -3,13 +3,19 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import cv2
 import numpy as np
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.core.time_contract import (
+    beijing_now_naive,
+    beijing_today,
+    utc_naive_to_api,
+    utc_now_naive,
+)
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
@@ -159,7 +165,7 @@ def preprocess_row(
     row: RecognizedRow,
     pre_delivery_date: date | None = None,
 ) -> dict:
-    target_date = pre_delivery_date or (date.today() + timedelta(days=1))
+    target_date = pre_delivery_date or (beijing_today() + timedelta(days=1))
     image_order_no = _image_order_no(row)
     data=dict(row_no=row.row_no,raw_text=row.raw_text,stock_code=row.stock_code,image_qty=row.image_qty,image_order_no=image_order_no,product_id=None,product_name=None,order_item_id=None,order_id=None,order_number=None,customer_order_no=None,match_reason=None,match_score=None,candidate_count=0,system_pending_qty=None,available_qty=None,suggested_qty=row.image_qty,final_delivery_qty=row.image_qty,status="ocr_failed",warning="未能同时识别 8 位存货编码和最右侧整数数量。",selected=False)
     if row.stock_code is None or row.image_qty is None: return data
@@ -195,7 +201,7 @@ def preprocess_row(
     if ruida_excluded:
         reason += "；已排除 RUIDA 历史订单"
     data.update(product_id=p.id,product_name=p.product_name,order_item_id=oi.id,order_id=o.id,order_number=o.order_number,customer_order_no=o.customer_po,match_reason=reason,match_score=score,candidate_count=candidate_count,system_pending_qty=available,available_qty=available)
-    dup=db.execute(select(Delivery.delivery_number,Delivery.delivery_date).join(DeliveryItem,DeliveryItem.delivery_id==Delivery.id).join(OrderItem,OrderItem.id==DeliveryItem.order_item_id).where(Delivery.customer_id==o.customer_id,Delivery.status=="dispatched",Delivery.delivery_date>=date.today()-timedelta(days=7),OrderItem.product_id==p.id,DeliveryItem.delivered_quantity==row.image_qty).limit(1)).one_or_none()
+    dup=db.execute(select(Delivery.delivery_number,Delivery.delivery_date).join(DeliveryItem,DeliveryItem.delivery_id==Delivery.id).join(OrderItem,OrderItem.id==DeliveryItem.order_item_id).where(Delivery.customer_id==o.customer_id,Delivery.status=="dispatched",Delivery.delivery_date>=beijing_today()-timedelta(days=7),OrderItem.product_id==p.id,DeliveryItem.delivered_quantity==row.image_qty).limit(1)).one_or_none()
     multi_warning=f"该存货编码存在 {candidate_count} 个未送订单，请核对匹配订单号。" if candidate_count>1 else ""
     if available<row.image_qty: data.update(status="stock_shortage",warning=f"当前可送数量 {available}，小于图片数量 {row.image_qty}；订单可能尚未入库或库存不足。")
     elif dup: data.update(status="duplicate_warning",warning=f"相同编码和数量最近 7 天已送过：{dup.delivery_number}（{dup.delivery_date}）。")
@@ -206,13 +212,13 @@ def preprocess_row(
 
 
 def item_dict(i, draft_item=None):
-    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"image_order_no":i.image_order_no,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"match_reason":i.match_reason,"match_score":i.match_score,"candidate_count":i.candidate_count,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"delivery_item_id":draft_item.delivery_item_id if draft_item else None,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item and draft_item.mobile_picked_at else None}
+    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"image_order_no":i.image_order_no,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"match_reason":i.match_reason,"match_score":i.match_score,"candidate_count":i.candidate_count,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"delivery_item_id":draft_item.delivery_item_id if draft_item else None,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":utc_naive_to_api(draft_item.mobile_picked_at) if draft_item and draft_item.mobile_picked_at else None}
 
 
 def draft_dict(db,draft):
     items=db.scalars(select(TianhuaPreDeliveryDraftItem).where(TianhuaPreDeliveryDraftItem.draft_id==draft.id).order_by(TianhuaPreDeliveryDraftItem.row_no)).all()
     delivery=db.get(Delivery,draft.delivery_id) if draft.delivery_id else None
-    return {"draft_id":draft.id,"draft_number":draft.draft_number,"batch_id":draft.batch_id,"status":draft.status,"remark":draft.remark,"delivery_id":delivery.id if delivery else None,"delivery_number":delivery.delivery_number if delivery else None,"delivery_status":delivery.status if delivery else None,"delivery_total_quantity":delivery.total_quantity if delivery else 0,"items":[{"item_id":i.id,"import_item_id":i.import_item_id,"row_no":i.row_no,"stock_code":i.stock_code,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"delivery_item_id":i.delivery_item_id,"delivery_qty":i.delivery_qty,"warning":i.warning or "","mobile_pick_status":i.mobile_pick_status,"mobile_picked_qty":i.mobile_picked_qty,"mobile_pick_note":i.mobile_pick_note or "","mobile_picked_at":i.mobile_picked_at.isoformat() if i.mobile_picked_at else None} for i in items]}
+    return {"draft_id":draft.id,"draft_number":draft.draft_number,"batch_id":draft.batch_id,"status":draft.status,"remark":draft.remark,"delivery_id":delivery.id if delivery else None,"delivery_number":delivery.delivery_number if delivery else None,"delivery_status":delivery.status if delivery else None,"delivery_total_quantity":delivery.total_quantity if delivery else 0,"items":[{"item_id":i.id,"import_item_id":i.import_item_id,"row_no":i.row_no,"stock_code":i.stock_code,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"delivery_item_id":i.delivery_item_id,"delivery_qty":i.delivery_qty,"warning":i.warning or "","mobile_pick_status":i.mobile_pick_status,"mobile_picked_qty":i.mobile_picked_qty,"mobile_pick_note":i.mobile_pick_note or "","mobile_picked_at":utc_naive_to_api(i.mobile_picked_at) if i.mobile_picked_at else None} for i in items]}
 
 
 def batch_dict(db,batch):
@@ -230,13 +236,13 @@ def batch_dict(db,batch):
 
 
 def create_batch(db,content,filename,user_id,pre_delivery_date=None):
-    target_date=pre_delivery_date or (date.today()+timedelta(days=1))
+    target_date=pre_delivery_date or (beijing_today()+timedelta(days=1))
     processed=[preprocess_row(db,r,target_date) for r in recognize_tianhua_image(content)]
     product_id=next((x["product_id"] for x in processed if x["product_id"]),None)
     product=db.get(Product,product_id) if product_id else None
     customer=db.get(Customer,product.customer_id) if product else db.scalar(select(Customer).where(or_(Customer.name.contains("天华"),Customer.customer_code=="天华")).order_by(Customer.id.desc()))
     if customer is None: raise ValueError("系统中未找到天华客户资料")
-    batch=TianhuaPreDeliveryImportBatch(batch_number=f"TH-{datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}",filename=filename,customer_id=customer.id,customer_name=customer.name,pre_delivery_date=target_date,total_rows=len(processed),created_by=user_id)
+    batch=TianhuaPreDeliveryImportBatch(batch_number=f"TH-{beijing_now_naive():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}",filename=filename,customer_id=customer.id,customer_name=customer.name,pre_delivery_date=target_date,total_rows=len(processed),created_by=user_id)
     db.add(batch); db.flush()
     for x in processed: db.add(TianhuaPreDeliveryImportItem(batch_id=batch.id,**x))
     db.commit(); db.refresh(batch); return batch
@@ -292,12 +298,12 @@ def ensure_draft_delivery(
             db.execute(delete(DeliveryItem).where(DeliveryItem.delivery_id == delivery.id))
             db.delete(delivery)
         draft.delivery_id = None
-        draft.updated_at = datetime.utcnow()
+        draft.updated_at = utc_now_naive()
         db.flush()
         return None
 
     if delivery is None:
-        delivery_date = batch.pre_delivery_date or date.today()
+        delivery_date = batch.pre_delivery_date or beijing_today()
         delivery = Delivery(
             delivery_number=_next_delivery_number(db, delivery_date),
             customer_id=batch.customer_id,
@@ -362,7 +368,7 @@ def ensure_draft_delivery(
             db.delete(delivery_item)
     db.flush()
     delivery.total_quantity = _delivery_total(db, delivery.id)
-    draft.updated_at = datetime.utcnow()
+    draft.updated_at = utc_now_naive()
     return delivery
 
 
@@ -420,10 +426,10 @@ def save_draft(db,batch,submitted,remark,user_id,update_existing=False):
     selected=_selection(db,batch.id,submitted,zero_allowed)
     if draft: db.execute(delete(TianhuaPreDeliveryDraftItem).where(TianhuaPreDeliveryDraftItem.draft_id==draft.id))
     else:
-        draft=TianhuaPreDeliveryDraft(draft_number=f"THYSH-{datetime.now():%Y%m%d-%H%M%S}-{batch.id}",batch_id=batch.id,customer_id=batch.customer_id,created_by=user_id)
+        draft=TianhuaPreDeliveryDraft(draft_number=f"THYSH-{beijing_now_naive():%Y%m%d-%H%M%S}-{batch.id}",batch_id=batch.id,customer_id=batch.customer_id,created_by=user_id)
         db.add(draft); db.flush(); batch.status="draft_created"
     draft.remark=f"来源：天华预送货图片导入，批次 ID：{batch.id}"+(f"；{remark.strip()}" if remark and remark.strip() else "")
-    draft.updated_at=datetime.utcnow()
+    draft.updated_at=utc_now_naive()
     for item,qty in selected:
         old=previous.get(item.id)
         db.add(TianhuaPreDeliveryDraftItem(draft_id=draft.id,import_item_id=item.id,row_no=item.row_no,stock_code=item.stock_code or "",product_id=item.product_id,order_item_id=item.order_item_id,order_id=item.order_id,order_number=item.order_number or "",customer_order_no=item.customer_order_no,delivery_item_id=old.delivery_item_id if old else None,delivery_qty=qty,warning=item.warning,mobile_pick_status=old.mobile_pick_status if old else "pending",mobile_picked_qty=old.mobile_picked_qty if old else None,mobile_pick_note=old.mobile_pick_note if old else None,mobile_picked_at=old.mobile_picked_at if old else None,mobile_picked_by=old.mobile_picked_by if old else None))

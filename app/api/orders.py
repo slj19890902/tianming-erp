@@ -22,6 +22,12 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    beijing_now_naive,
+    beijing_today,
+    utc_naive_to_api,
+)
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
@@ -1039,7 +1045,11 @@ def _order_response(
                 "unit_price": item.unit_price,
                 "subtotal": item.subtotal,
                 "material_status": item.material_status,
-                "material_received_at": item.material_received_at,
+                "material_received_at": (
+                    utc_naive_to_api(item.material_received_at)
+                    if item.material_received_at
+                    else None
+                ),
                 "snapshot_product_code": item.snapshot_product_code,
                 "snapshot_product_name": item.snapshot_product_name,
                 "snapshot_spec": item.snapshot_spec,
@@ -1096,7 +1106,11 @@ def _order_response(
                 "requisition_spec": item.requisition_spec,
                 "cardboard_len": item.cardboard_len,
                 "cardboard_width": item.cardboard_width,
-                "supplier_delivery_time": item.supplier_delivery_time,
+                "supplier_delivery_time": (
+                    beijing_naive_to_api(item.supplier_delivery_time)
+                    if item.supplier_delivery_time
+                    else None
+                ),
                 **cost_reference,
         }
         if may_view_cost and item_data.get("estimated_cost") is not None:
@@ -1389,7 +1403,7 @@ def get_order_number_preview(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
-    preview_date = order_date or date.today()
+    preview_date = order_date or beijing_today()
     main_number = preview_next_order_number(db, preview_date)
     return {
         "order_number": main_number,
@@ -1962,7 +1976,7 @@ def _rollback_supplier_requisition_items(
         ]
         if not remaining_items:
             supplier_order.status = "voided"
-            supplier_order.voided_at = supplier_order.voided_at or datetime.now()
+            supplier_order.voided_at = supplier_order.voided_at or beijing_now_naive()
             action = "void_supplier_order"
         else:
             for source_item in source_items:
@@ -2844,7 +2858,7 @@ def create_order(
                         detail="系统中已存在相同客户、客户单号和明细的订单，未重复生成。",
                     )
 
-        order_date = payload.order_date or date.today()
+        order_date = payload.order_date or beijing_today()
         order = Order(
             order_number=reserve_next_order_number(db, order_date),
             customer_id=customer.id,

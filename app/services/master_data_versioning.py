@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import load_settings
+from app.core.time_contract import utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.master_data_object_version import MasterDataObjectVersion
@@ -264,9 +265,8 @@ def normalize_json_value(value: Any) -> Any:
         return _decimal_text(value)
     if isinstance(value, datetime):
         if value.tzinfo is not None:
-            value = value.astimezone(timezone.utc)
-            return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
-        return value.isoformat(timespec="microseconds")
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return utc_naive_to_api(value)
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, float):
@@ -499,7 +499,7 @@ def _confirmation_claims(
     restored_from_version: int | None,
     user: User,
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = utc_now_naive().replace(tzinfo=timezone.utc)
     return {
         "sub": _token_actor(user),
         "type": "master_data_change_confirmation",
@@ -679,6 +679,7 @@ def _new_operation_log(
         entity_type=object_type,
         entity_id=object_id,
         description=f"{action_name} {object_type}#{object_id}",
+        created_at=utc_now_naive(),
     )
 
 
@@ -715,6 +716,7 @@ def _new_revision(
         actor_username_snapshot=username,
         reason=reason,
         source=source,
+        created_at=utc_now_naive(),
     )
 
 
@@ -890,7 +892,7 @@ def apply_versioned_update(
     )
     baseline_needed = current_version == 1 and has_v1 is None
 
-    changed_at = datetime.now()
+    changed_at = utc_now_naive()
     new_version = current_version + 1
     cas_result = db.execute(
         update(spec.model)
@@ -1158,5 +1160,5 @@ def serialize_revision(revision: MasterDataObjectVersion) -> dict[str, Any]:
         "actor_username": revision.actor_username_snapshot,
         "reason": revision.reason,
         "source": revision.source,
-        "created_at": revision.created_at,
+        "created_at": utc_naive_to_api(revision.created_at),
     }

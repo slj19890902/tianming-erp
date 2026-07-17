@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import PermissionChecker, RoleChecker, get_db, has_permission
 from app.api.master_data_common import audit_master_change, clean_code
+from app.core.time_contract import utc_naive_to_api
 from app.models.material import Material
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.material_price_history import (
@@ -522,7 +523,7 @@ def list_price_adjustment_batches(
                 "affected_count": b.affected_count,
                 "remark": b.remark,
                 "operator": b.operator,
-                "created_at": b.created_at.isoformat() if b.created_at else None,
+                "created_at": utc_naive_to_api(b.created_at),
             }
             for b in rows
         ]
@@ -588,8 +589,8 @@ def _rule_dict(r: SupplierFlutePriceRule) -> dict:
         "effective_date": r.effective_date.isoformat() if r.effective_date else None,
         "remark": r.remark,
         "is_active": bool(r.is_active),
-        "created_at": r.created_at.isoformat() if r.created_at else None,
-        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        "created_at": utc_naive_to_api(r.created_at),
+        "updated_at": utc_naive_to_api(r.updated_at) if r.updated_at else None,
     }
 
 
@@ -752,8 +753,8 @@ def _paper_code_dict(row: SupplierPaperCode) -> dict:
         "paper_role": row.paper_role,
         "remark": row.remark,
         "is_active": row.is_active,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": utc_naive_to_api(row.created_at),
+        "updated_at": utc_naive_to_api(row.updated_at) if row.updated_at else None,
     }
 
 
@@ -1181,7 +1182,7 @@ def get_material_price_history(
                 "adjust_reason": h.adjust_reason,
                 "operator": h.operator,
                 "batch_id": h.batch_id,
-                "created_at": h.created_at.isoformat() if h.created_at else None,
+                "created_at": utc_naive_to_api(h.created_at),
             }
             for h in rows
         ],

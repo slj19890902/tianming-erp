@@ -1,6 +1,6 @@
 import base64
 import socket
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 
 import qrcode
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import PermissionChecker, get_db, require_customer_access
 from app.api.deliveries import _inventory_sources_for_order_item
+from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.core.security import create_tianhua_pick_token, decode_tianhua_pick_token
 from app.models.order import OrderItem
 from app.models.product import Product
@@ -68,7 +69,7 @@ async def upload(file:UploadFile=File(...),pre_delivery_date:date|None=Form(defa
     if not content: raise HTTPException(400,"上传图片为空")
     if len(content)>12*1024*1024: raise HTTPException(413,"图片不能超过 12MB")
     try:
-        batch=create_batch(db,content,filename,user.id,pre_delivery_date or date.today()+timedelta(days=1))
+        batch=create_batch(db,content,filename,user.id,pre_delivery_date or beijing_today()+timedelta(days=1))
         try:
             require_customer_access(batch.customer_id,user,db)
         except HTTPException:
@@ -187,7 +188,11 @@ def _mobile_items(db:Session,draft:TianhuaPreDeliveryDraft) -> list[dict]:
             "mobile_picked_qty":draft_item.mobile_picked_qty,
             "mobile_pick_status":draft_item.mobile_pick_status,
             "mobile_pick_note":draft_item.mobile_pick_note or "",
-            "mobile_picked_at":draft_item.mobile_picked_at.isoformat() if draft_item.mobile_picked_at else None,
+            "mobile_picked_at":(
+                utc_naive_to_api(draft_item.mobile_picked_at)
+                if draft_item.mobile_picked_at
+                else None
+            ),
             "status":import_item.status,
             "status_label":STATUS_LABELS.get(import_item.status,import_item.status),
             "warning":import_item.warning or "",
@@ -214,7 +219,7 @@ def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),
     image=qrcode.make(url)
     buffer=BytesIO()
     image.save(buffer,format="PNG")
-    return {"token":token,"url":url,"expires_at":expires.isoformat(),"qr_data_url":f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"}
+    return {"token":token,"url":url,"expires_at":utc_naive_to_api(expires.astimezone(timezone.utc).replace(tzinfo=None)),"qr_data_url":f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"}
 
 
 @mobile_router.get("/tianhua-pick")
@@ -242,7 +247,7 @@ def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(g
     item.mobile_pick_status=actual_status
     item.mobile_picked_qty=qty
     item.mobile_pick_note=(payload.mobile_pick_note or "").strip() or None
-    item.mobile_picked_at=datetime.utcnow()
+    item.mobile_picked_at=utc_now_naive()
     item.delivery_qty=qty
     import_item.final_delivery_qty=qty
     try:

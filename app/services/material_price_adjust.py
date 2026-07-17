@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import load_settings
+from app.core.time_contract import beijing_now_naive
 from app.models.material import Material
 from app.models.material_price_history import (
     MaterialPriceAdjustmentBatch,
@@ -146,7 +147,7 @@ def backup_database() -> Path:
     db_path = load_settings().database_path
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = beijing_now_naive().strftime("%Y%m%d_%H%M%S")
     dest = backup_dir / f"carton_erp_BEFORE_SUPPLIER_PRICE_ADJUST_{stamp}.sqlite3"
     shutil.copy2(db_path, dest)
     if not dest.exists():

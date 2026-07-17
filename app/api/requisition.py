@@ -11,6 +11,13 @@ from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import PermissionChecker, get_db, has_permission
+from app.core.time_contract import (
+    beijing_naive_to_api,
+    beijing_now_naive,
+    beijing_today,
+    utc_naive_to_api,
+    utc_now_naive,
+)
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -1102,7 +1109,11 @@ def _item_response(item: OrderItem, db: Session | None = None) -> dict:
         "cardboard_len": item.cardboard_len,
         "cardboard_width": item.cardboard_width,
         "requisition_date": item.requisition_date,
-        "supplier_delivery_time": item.supplier_delivery_time,
+        "supplier_delivery_time": (
+            beijing_naive_to_api(item.supplier_delivery_time)
+            if item.supplier_delivery_time
+            else None
+        ),
         "supplier_order_number": item.supplier_order_number,
         "remark": item.requisition_remark,
     }
@@ -2353,7 +2364,7 @@ def _create_supplier_order_for_pending_entries(
     )
     db.add(order)
     db.flush()
-    requisition_date = date.today()
+    requisition_date = beijing_today()
     for entry in entries:
         order_item: OrderItem = entry["order_item"]
         req_item: RequisitionItem | None = entry["req_item"]
@@ -2760,7 +2771,7 @@ def create_batch(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    requisition_date = date.today()
+    requisition_date = beijing_today()
     try:
         batch = Requisition(
             requisition_number=_next_number(db, requisition_date),
@@ -3538,7 +3549,7 @@ def create_stock_replenishment_order(
             remark=payload.remark,
             created_by=user.id,
             confirmed_by=user.id,
-            confirmed_at=datetime.now(),
+            confirmed_at=utc_now_naive(),
         )
         order.items = items
         db.add(order)
@@ -3852,7 +3863,7 @@ def create_merge_group(
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
-    requisition_date = date.today()
+    requisition_date = beijing_today()
     try:
         group = Requisition(
             requisition_number=_next_number(db, requisition_date),
@@ -4076,7 +4087,7 @@ def create_supplier_order_from_merge_group(
     try:
         db.add(order)
         db.flush()
-        requisition_date = date.today()
+        requisition_date = beijing_today()
         for (
             req_item,
             order_item,
@@ -4288,8 +4299,7 @@ class SupplierOrderCreatePayload(BaseModel):
 
 def _supplier_order_number(db: Session) -> str:
     """生成供应商报料单号，格式：SRO-YYYYMMDD-NNNN"""
-    from datetime import date as _date
-    today_str = _date.today().strftime("%Y%m%d")
+    today_str = beijing_today().strftime("%Y%m%d")
     prefix = f"SRO-{today_str}-"
     count = db.scalar(
         select(func.count(SupplierRequisitionOrder.id)).where(
@@ -4511,8 +4521,10 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "requisition_qty": order.requisition_qty,
         "remark": order.remark,
         "status": order.status,
-        "created_at": order.created_at,
-        "voided_at": order.voided_at,
+        "created_at": utc_naive_to_api(order.created_at) if order.created_at else None,
+        "voided_at": (
+            beijing_naive_to_api(order.voided_at) if order.voided_at else None
+        ),
         "lines": purchase_lines,
         "items": purchase_lines,
         "source_items": source_items,
@@ -5044,7 +5056,20 @@ def list_reported_documents(
         ),
         reverse=True,
     )
-    return {"total": len(documents), "items": documents}
+    return {
+        "total": len(documents),
+        "items": [
+            {
+                **document,
+                "created_at": (
+                    utc_naive_to_api(document["created_at"])
+                    if document["created_at"]
+                    else None
+                ),
+            }
+            for document in documents
+        ],
+    }
 
 
 @router.get("/supplier-orders/{order_id}")
@@ -5065,7 +5090,6 @@ def void_supplier_order(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    from datetime import datetime as _datetime
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="供应商报料单不存在")
@@ -5073,7 +5097,7 @@ def void_supplier_order(
         raise HTTPException(status_code=400, detail="该报料单已作废")
 
     order.status = "voided"
-    order.voided_at = _datetime.now()
+    order.voided_at = beijing_now_naive()
 
     for item in order.items:
         if item.order_item_id:

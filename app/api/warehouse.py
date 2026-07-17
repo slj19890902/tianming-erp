@@ -624,8 +624,9 @@ def _require_order_item_customer_access(
         .join(OrderItem, OrderItem.order_id == Order.id)
         .where(OrderItem.id == order_item_id)
     )
-    if customer_id is not None:
-        require_customer_access(customer_id, user, db)
+    if customer_id is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    require_customer_access(customer_id, user, db)
 
 
 def _require_requirement_customer_access(
@@ -634,8 +635,9 @@ def _require_requirement_customer_access(
     user: User,
 ) -> None:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
-    if requirement is not None:
-        require_customer_access(requirement.customer_id, user, db)
+    if requirement is None:
+        raise HTTPException(status_code=404, detail="半成品需求不存在")
+    require_customer_access(requirement.customer_id, user, db)
 
 
 def _require_reservation_customer_access(
@@ -646,6 +648,7 @@ def _require_reservation_customer_access(
     reservation = db.get(InventoryReservation, reservation_id)
     if reservation is None:
         return
+    _require_lot_customer_access(db, reservation.inventory_lot_id, user)
     customer_id = None
     if reservation.order_id is not None:
         customer_id = db.scalar(
@@ -721,7 +724,64 @@ def _floor3_item_visible(
 ) -> bool:
     if visible_customer_ids is None:
         return True
-    return row.customer_id is not None and row.customer_id in visible_customer_ids
+    if row.customer_id is None or row.customer_id not in visible_customer_ids:
+        return False
+
+    linked_lot = row.inventory_lot
+    if linked_lot is None:
+        # Preserve the existing scoped behavior for legal snapshot rows.  A
+        # dangling non-null lot id is not a legal snapshot and must fail closed.
+        return row.inventory_lot_id is None
+    if linked_lot.inventory_type != "finished":
+        # Floor-three semi-finished history keeps its existing customer check.
+        return True
+
+    detail = linked_lot.finished_detail
+    product = row.product
+    return bool(
+        row.item_type == "finished"
+        and detail is not None
+        and product is not None
+        and row.customer_id == detail.owner_customer_id
+        and row.product_id == detail.product_id
+        and product.customer_id == detail.owner_customer_id
+    )
+
+
+def _floor3_item_scope_condition(visible_customer_ids: set[int]):
+    """SQL equivalent of the scoped floor-three item visibility check."""
+
+    valid_finished_lot_ids = (
+        select(FinishedGoodsInventoryDetail.inventory_lot_id)
+        .join(
+            InventoryLot,
+            InventoryLot.id == FinishedGoodsInventoryDetail.inventory_lot_id,
+        )
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .where(
+            InventoryLot.inventory_type == "finished",
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                visible_customer_ids
+            ),
+            FinishedGoodsInventoryDetail.owner_customer_id
+            == InventoryPalletItem.customer_id,
+            FinishedGoodsInventoryDetail.product_id
+            == InventoryPalletItem.product_id,
+            Product.customer_id
+            == FinishedGoodsInventoryDetail.owner_customer_id,
+        )
+    )
+    non_finished_lot_ids = select(InventoryLot.id).where(
+        InventoryLot.inventory_type != "finished"
+    )
+    return and_(
+        InventoryPalletItem.customer_id.in_(visible_customer_ids),
+        or_(
+            InventoryPalletItem.inventory_lot_id.is_(None),
+            InventoryPalletItem.inventory_lot_id.in_(non_finished_lot_ids),
+            InventoryPalletItem.inventory_lot_id.in_(valid_finished_lot_ids),
+        ),
+    )
 
 
 def _floor3_item_dict(
@@ -884,10 +944,13 @@ def _require_floor3_pallet_customer_access(
     inaccessible = [
         item
         for item in pallet.items
-        if item.customer_id is None or item.customer_id not in visible_customer_ids
+        if not _floor3_item_visible(item, visible_customer_ids)
     ]
     if inaccessible:
-        raise HTTPException(status_code=403, detail="当前栈板包含无权访问的客户内容")
+        raise HTTPException(
+            status_code=403,
+            detail="当前栈板包含无权访问或客户归属异常的内容",
+        )
 
 
 def _require_floor3_item_customer_access(
@@ -988,22 +1051,34 @@ def _lot_query():
 
 
 def _visible_lot_condition(visible_customer_ids: set[int]):
-    finished_lot_ids = select(
-        FinishedGoodsInventoryDetail.inventory_lot_id
-    ).where(
-        or_(
-            FinishedGoodsInventoryDetail.owner_customer_id.is_(None),
-            FinishedGoodsInventoryDetail.owner_customer_id.in_(visible_customer_ids),
+    finished_lot_ids = (
+        select(FinishedGoodsInventoryDetail.inventory_lot_id)
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .outerjoin(
+            InventoryPalletItem,
+            InventoryPalletItem.inventory_lot_id
+            == FinishedGoodsInventoryDetail.inventory_lot_id,
+        )
+        .where(
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                visible_customer_ids
+            ),
+            Product.customer_id
+            == FinishedGoodsInventoryDetail.owner_customer_id,
+            or_(
+                InventoryPalletItem.id.is_(None),
+                and_(
+                    InventoryPalletItem.customer_id
+                    == FinishedGoodsInventoryDetail.owner_customer_id,
+                    InventoryPalletItem.product_id
+                    == FinishedGoodsInventoryDetail.product_id,
+                ),
+            ),
         )
     )
     semi_finished_lot_ids = select(
         SemiFinishedInventoryDetail.inventory_lot_id
-    ).where(
-        or_(
-            SemiFinishedInventoryDetail.owner_customer_id.is_(None),
-            SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids),
-        )
-    )
+    ).where(SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids))
     return or_(
         InventoryLot.id.in_(finished_lot_ids),
         InventoryLot.id.in_(semi_finished_lot_ids),
@@ -1025,8 +1100,24 @@ def _require_lot_customer_access(
         customer_id = lot.finished_detail.owner_customer_id
     elif lot.semi_finished_detail is not None:
         customer_id = lot.semi_finished_detail.owner_customer_id
-    if customer_id is not None:
-        require_customer_access(customer_id, user, db)
+    if has_unrestricted_customer_access(user, db):
+        return lot
+    if customer_id is None:
+        raise HTTPException(status_code=403, detail="无客户访问权限")
+    if lot.finished_detail is not None:
+        product_customer_id = db.scalar(
+            select(Product.customer_id).where(
+                Product.id == lot.finished_detail.product_id
+            )
+        )
+        if product_customer_id != customer_id:
+            raise HTTPException(status_code=403, detail="成品库存客户归属异常")
+        if lot.pallet_item is not None and (
+            lot.pallet_item.customer_id != customer_id
+            or lot.pallet_item.product_id != lot.finished_detail.product_id
+        ):
+            raise HTTPException(status_code=403, detail="三楼栈板客户归属异常")
+    require_customer_access(customer_id, user, db)
     return lot
 
 
@@ -1231,6 +1322,46 @@ def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
     }
 
 
+def _visible_finished_candidate_lots(
+    rows: list[InventoryLot], user: User, db: Session
+) -> list[InventoryLot]:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is None:
+        return rows
+    lot_ids = [lot.id for lot in rows]
+    if not lot_ids:
+        return []
+    visible_lot_ids = set(
+        db.scalars(
+            select(FinishedGoodsInventoryDetail.inventory_lot_id)
+            .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+            .where(
+                FinishedGoodsInventoryDetail.inventory_lot_id.in_(lot_ids),
+                FinishedGoodsInventoryDetail.owner_customer_id.in_(
+                    visible_customer_ids
+                ),
+                Product.customer_id
+                == FinishedGoodsInventoryDetail.owner_customer_id,
+            )
+        ).all()
+    )
+    return [lot for lot in rows if lot.id in visible_lot_ids]
+
+
+def _visible_semi_candidates(
+    rows: list[SemiFinishedCandidate], user: User, db: Session
+) -> list[SemiFinishedCandidate]:
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if row.lot.semi_finished_detail is not None
+        and row.lot.semi_finished_detail.owner_customer_id in visible_customer_ids
+    ]
+
+
 @router.get("/finished/candidates")
 def finished_candidates(
     order_item_id: int,
@@ -1244,6 +1375,7 @@ def finished_candidates(
             raise WarehouseInventoryError("订单明细不存在", 404)
         reserved = active_finished_reserved_qty(db, order_item_id)
         rows = finished_inventory_candidates(db, order_item_id)
+        rows = _visible_finished_candidate_lots(rows, user, db)
         return {
             "order_item_id": order_item_id,
             "order_quantity": item.quantity,
@@ -1306,6 +1438,7 @@ def create_finished_reservation(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_order_item_customer_access(db, payload.order_item_id, user)
+    _require_lot_customer_access(db, payload.inventory_lot_id, user)
     try:
         row = reserve_finished_inventory(
             db,
@@ -1334,6 +1467,7 @@ def list_reservations(
         _require_order_item_customer_access(db, order_item_id, user)
         query = query.where(InventoryReservation.order_item_id == order_item_id)
     if inventory_lot_id:
+        _require_lot_customer_access(db, inventory_lot_id, user)
         query = query.where(
             InventoryReservation.inventory_lot_id == inventory_lot_id
         )
@@ -1343,7 +1477,13 @@ def list_reservations(
     if visible_customer_ids is not None:
         query = query.join(
             Order, Order.id == InventoryReservation.order_id
-        ).where(Order.customer_id.in_(visible_customer_ids))
+        ).join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        ).where(
+            Order.customer_id.in_(visible_customer_ids),
+            _visible_lot_condition(visible_customer_ids),
+        )
     rows = db.scalars(
         query.order_by(InventoryReservation.id.desc()).limit(500)
     ).all()
@@ -1387,6 +1527,7 @@ def finished_product_candidates(
             customer_id=customer_id,
             product_id=product_id,
         )
+        rows = _visible_finished_candidate_lots(rows, user, db)
         return {
             "customer_id": customer_id,
             "product_id": product_id,
@@ -1459,6 +1600,7 @@ def semi_product_candidates(
             product_id=product_id,
             **payload.model_dump(),
         )
+        rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
             "items": [_semi_candidate_dict(row) for row in rows],
@@ -1481,6 +1623,7 @@ def semi_product_inventory_browser(
             product_id=product_id,
             **payload.model_dump(),
         )
+        rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
             "items": [_semi_candidate_dict(row) for row in rows],
@@ -1502,6 +1645,7 @@ def semi_requirement_candidates(
             raise WarehouseInventoryError("半成品需求不存在", 404)
         credited = active_semi_requirement_credited_quantity(db, requirement.id)
         rows = semi_finished_inventory_candidates(db, requirement.id)
+        rows = _visible_semi_candidates(rows, user, db)
         return {
             "requirement": _semi_requirement_dict(requirement),
             "credited_requirement_quantity": credited,
@@ -1523,6 +1667,7 @@ def semi_requirement_inventory_browser(
     _require_requirement_customer_access(db, requirement_id, user)
     try:
         rows = browse_semi_finished_inventory(db, requirement_id)
+        rows = _visible_semi_candidates(rows, user, db)
         return {"items": [_semi_candidate_dict(row) for row in rows]}
     except WarehouseInventoryError as error:
         _handle(error)
@@ -1536,6 +1681,7 @@ def confirm_semi_requirement_match(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_requirement_customer_access(db, requirement_id, user)
+    _require_lot_customer_access(db, payload.inventory_lot_id, user)
     try:
         result = confirm_semi_finished_match(
             db,
@@ -1567,6 +1713,8 @@ def reserve_semi_requirement(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_requirement_customer_access(db, requirement_id, user)
+    for lot in payload.lots:
+        _require_lot_customer_access(db, lot.lot_id, user)
     try:
         result = reserve_semi_finished_inventory(
             db,
@@ -1603,14 +1751,17 @@ def list_semi_requirement_reservations(
     user: User = Depends(can_view_reservations),
 ) -> dict:
     _require_requirement_customer_access(db, requirement_id, user)
-    rows = db.scalars(
-        select(InventoryReservation)
-        .where(
+    query = select(InventoryReservation).where(
             InventoryReservation.semi_requirement_id == requirement_id,
             InventoryReservation.reservation_type == "semi_order",
         )
-        .order_by(InventoryReservation.id)
-    ).all()
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        ).where(_visible_lot_condition(visible_customer_ids))
+    rows = db.scalars(query.order_by(InventoryReservation.id)).all()
     return {"items": [_reservation_dict(row, db) for row in rows]}
 
 
@@ -1912,7 +2063,10 @@ def _floor3_pallet_query():
     return select(InventoryPallet).options(
         selectinload(InventoryPallet.items).selectinload(
             InventoryPalletItem.inventory_lot
-        )
+        ).selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryPallet.items).selectinload(
+            InventoryPalletItem.product
+        ),
     )
 
 
@@ -2110,6 +2264,7 @@ def list_floor3_locations(
 ) -> dict:
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
+    visible_customer_ids = _visible_customer_ids(user, db)
 
     query = select(WarehouseLocation).options(
         selectinload(WarehouseLocation.floor3_layout)
@@ -2127,6 +2282,9 @@ def list_floor3_locations(
         InventoryPallet.location_id.is_not(None),
     )
     if customer_id is not None:
+        customer_item_condition = InventoryPalletItem.customer_id == customer_id
+        if visible_customer_ids is not None:
+            customer_item_condition = _floor3_item_scope_condition({customer_id})
         customer_location_ids = (
             select(InventoryPallet.location_id)
             .join(
@@ -2136,7 +2294,7 @@ def list_floor3_locations(
             .where(
                 InventoryPallet.is_current.is_(True),
                 InventoryPallet.location_id.is_not(None),
-                InventoryPalletItem.customer_id == customer_id,
+                customer_item_condition,
             )
         )
         query = query.where(WarehouseLocation.id.in_(customer_location_ids))
@@ -2147,7 +2305,6 @@ def list_floor3_locations(
     elif occupancy:
         raise HTTPException(status_code=400, detail="货位占用状态无效")
 
-    visible_customer_ids = _visible_customer_ids(user, db)
     keyword = (q or "").strip()
     if keyword:
         pattern = f"%{keyword}%"
@@ -2174,7 +2331,7 @@ def list_floor3_locations(
         )
         if visible_customer_ids is not None:
             matching_location_ids = matching_location_ids.where(
-                InventoryPalletItem.customer_id.in_(visible_customer_ids)
+                _floor3_item_scope_condition(visible_customer_ids)
             )
         query = query.where(
             or_(
@@ -3393,12 +3550,12 @@ def get_inventory_insights(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    if not has_unrestricted_customer_access(user, db):
-        raise HTTPException(
-            status_code=403,
-            detail="库存洞察暂不支持按客户范围安全聚合",
-        )
-    return build_inventory_insights(db, as_of=as_of)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    return build_inventory_insights(
+        db,
+        as_of=as_of,
+        customer_ids=visible_customer_ids,
+    )
 
 
 @router.get("/lots/{lot_id}")
@@ -3511,6 +3668,8 @@ def semi_finished_manual_in(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    if payload.customer_id is None and not has_unrestricted_customer_access(user, db):
+        raise HTTPException(status_code=403, detail="受限账号不能创建无客户库存")
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, user, db)
     _reject_floor3_for_semi_finished_inventory(db, payload.location_id)

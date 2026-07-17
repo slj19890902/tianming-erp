@@ -3839,6 +3839,7 @@
           },
           // 楞型筛选 tab：三层 B/E/A；五层 AB/BE；七层无
           materialFluteTabs() {
+            if (this.materialLayerFilter === 7) return [];
             if (this.materialLayerFilter === 5) {
               return [{ value: "AB", label: "AB瓦" }, { value: "BE", label: "BE瓦" }];
             }

@@ -155,8 +155,8 @@
         <p class="muted">按实际物理张/片记录。未分切大张按实际长宽和张数入库；本阶段不做一开几换算，也不旋转尺寸匹配。</p>
         <div class="grid">
           <div class="field"><label>材质代码</label><input id="siMaterial" required></div>
-          <div class="field"><label>层数</label><select id="siLayer"><option value="3">三层</option><option value="5">五层</option></select></div>
-          <div class="field"><label>楞型</label><select id="siFlute"></select></div>
+          <div class="field"><label>层数</label><select id="siLayer"><option value="3">三层</option><option value="5">五层</option><option value="7">七层</option></select></div>
+          <div class="field"><label>楞型</label><select id="siFlute" required></select></div>
           <div class="field"><label>实际长（mm）</label><input id="siLength" type="number" min="1" required></div>
           <div class="field"><label>实际宽（mm）</label><input id="siWidth" type="number" min="1" required></div>
           <div class="field"><label>实际张/片数</label><input id="siQuantity" type="number" min="1" required></div>
@@ -614,7 +614,12 @@
       const lotId=state.lotEdit.lotId,sessionId=state.lotEdit.sessionId;state.lotEdit.saving=true;$("lotEditSave").disabled=true;$("lotEditSave").textContent="保存中…";
       try{const saved=await api(`/api/warehouse/lots/${lotId}/edit-finished`,{method:"POST",body:JSON.stringify({expected_version:state.lotEdit.version,is_general:isGeneral,customer_id:isGeneral?null:customerId,product_id:productId,quantity_available:quantity,location_id:locationId,stock_date:stockDate,idempotency_key:createIdempotencyKey()})});if(state.lotEdit.sessionId===sessionId&&state.lotEdit.lotId===lotId)closeLotEditor();toast(`已更新批次 ${saved.lot_number||""}`);await loadLots();await loadFloor3Locations()}catch(error){if(state.lotEdit.sessionId===sessionId)toast(error.message,true)}finally{if(state.lotEdit.sessionId===sessionId){state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改"}}
     }
-    function updateFlutes(){$("siFlute").innerHTML=($("siLayer").value==="3"?["A","B","E"]:["AB","BE"]).map(x=>`<option>${x}</option>`).join("")}
+    function updateFlutes(){
+      const layer=$("siLayer").value;
+      const flutes=layer==="3"?["A","B","E"]:layer==="5"?["AB","BE"]:["AAA","ABC"];
+      const placeholder=layer==="7"?'<option value="">请选择楞型</option>':"";
+      $("siFlute").innerHTML=placeholder+flutes.map(x=>`<option>${x}</option>`).join("");
+    }
     async function saveFinished(e){
       e.preventDefault();const customerId=Number($("fgCustomer").value),productId=Number($("fgProduct").value),locationId=Number($("fgLocation").value),quantity=Number($("fgQuantity").value);
       if(!customerId){toast("请先选择客户",true);return}if(!productId){toast("请先输入存货编码或产品名称，并点击选择匹配候选",true);return}if(!Number.isFinite(quantity)||quantity<=0){toast("实际成品数量必须大于 0",true);return}if(!locationId){toast("请选择三楼具体货位",true);return}

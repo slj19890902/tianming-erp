@@ -2365,12 +2365,12 @@
                   <div class="field"><label>识别客户原文</label><div>{{ draft.customer_name_raw || draft.customer_name || "-" }}</div></div>
                   <div class="field"><label>系统匹配客户</label><div :class="{'danger-text':!draft.matched_customer_id}">{{ importCustomerMatchText(draft) }}</div></div>
                   <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" @change="rematchImportDraft(draftIndex)"></search-select></div>
-                  <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft.customer_po" /></div>
+                  <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <div v-if="draft.source_text_quality === 'garbled_text_layer'" class="field wide">
                     <div class="notice danger" style="margin:0">思迈尔 PDF 已使用文本层与 OCR 合并；客户订单号已保留。未匹配或多候选明细必须人工确认后才能保存。</div>
                   </div>
-                  <div class="field"><label>下单日期</label><input class="input" type="date" v-model="draft.order_date" /></div>
-                  <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" /></div>
+                  <div class="field"><label>下单日期</label><input class="input" type="date" v-model="draft.order_date" @input="invalidateImportDraftConfirmation(draft)" /></div>
+                  <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <div class="field"><label>保存状态</label><span :class="['status',draft.confirmed ? 'green' : 'orange']">{{ draft.confirmed ? "已加入批量保存" : "待核对" }}</span></div>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
@@ -2434,7 +2434,7 @@
                       <!-- 存货编码 + 名称 -->
                       <td style="padding:4px 6px;vertical-align:top">
                         <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
-                          <input v-if="item.is_new_product" class="input compact-input" style="width:110px" v-model.trim="item.raw_product_code" placeholder="存货编码" />
+                          <input v-if="item.is_new_product" class="input compact-input" style="width:110px" v-model.trim="item.raw_product_code" placeholder="存货编码" @input="invalidateImportDraftConfirmation(draft)" />
                           <span v-else class="sys-num" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
                         </div>
                         <!-- 名称：匹配常用箱时显示常用箱名称，否则 PDF 名称 -->
@@ -2444,12 +2444,12 @@
                                style="font-size:10px;color:#6b7280;margin-top:1px">PDF识别：{{ item.standard_match.pdf_product_name }}</div>
                         </div>
                         <div v-else style="font-size:13px">
-                          <input v-if="item.is_new_product" class="input" style="width:100%" v-model.trim="item.raw_product_name" placeholder="产品名称" />
+                          <input v-if="item.is_new_product" class="input" style="width:100%" v-model.trim="item.raw_product_name" placeholder="产品名称" @input="invalidateImportDraftConfirmation(draft)" />
                           <span v-else>{{ item.raw_product_name || "-" }}</span>
                         </div>
                         <!-- 无匹配时允许新建 -->
                         <label v-if="!item.matched_product_id" style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px;cursor:pointer">
-                          <input type="checkbox" v-model="item.is_new_product" @change="toggleNewProduct(item)" style="margin:0" /> 新产品（系统新建）
+                          <input type="checkbox" v-model="item.is_new_product" @change="toggleNewProduct(draft,item)" style="margin:0" /> 新产品（系统新建）
                         </label>
                       </td>
                       <!-- 材质+楞型（常用箱） -->
@@ -2462,16 +2462,16 @@
                       <!-- 规格（常用箱） -->
                       <td style="font-size:12px;padding:4px 6px;vertical-align:top">
                         <span v-if="item.matched_product_id && !item.is_new_product">{{ item.specification || item.raw_spec_model || "-" }}</span>
-                        <input v-else class="input" style="width:100%" v-model.trim="item.raw_spec_model" placeholder="规格" />
+                        <input v-else class="input" style="width:100%" v-model.trim="item.raw_spec_model" placeholder="规格" @input="invalidateImportDraftConfirmation(draft)" />
                       </td>
                       <!-- 数量 -->
                       <td style="padding:4px 6px;vertical-align:top">
-                        <div class="order-quantity-inventory"><input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:8ch" @input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div>
+                        <div class="order-quantity-inventory"><input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:8ch" @input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div>
                         <div v-if="!Number.isInteger(Number(item.quantity))" style="font-size:10px;color:#dc2626;margin-top:2px">数量不是整数，请人工确认</div>
                       </td>
                       <!-- 客户单价 + 冲突提示 -->
                       <td class="sensitive-price" style="padding:4px 6px;vertical-align:top">
-                        <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" style="width:75px" />
+                        <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" style="width:75px" @input="invalidateImportDraftConfirmation(draft)" />
                         <div v-if="item.price_conflict" style="font-size:10px;color:#d97706;margin-top:2px">
                           ⚠ 常用箱默认 {{ money(item.price_conflict.product_default_price) }}
                         </div>
@@ -2487,12 +2487,12 @@
                         <label class="btn small" style="cursor:pointer;display:inline-block;font-size:11px">
                           上传图纸
                           <input type="file" accept="image/*,.pdf" style="display:none"
-                            @change="uploadImportDraftDrawing(item,$event)" />
+                            @change="uploadImportDraftDrawing(draft,item,$event)" />
                         </label>
                       </td>
                       <!-- 操作 -->
                       <td style="padding:4px 6px;vertical-align:top">
-                        <button class="btn small danger" @click="draft.items.splice(draft.items.indexOf(item),1)">删除</button>
+                        <button class="btn small danger" @click="removeImportDraftItem(draft,item)">删除</button>
                         <button v-if="item.matched_product_id && !item.is_new_product && !item._editing"
                                 class="btn small"
                                 style="margin-top:4px"
@@ -2504,10 +2504,15 @@
                       <td colspan="8" style="padding:4px 6px 7px">
                         <div style="display:flex;gap:8px;align-items:center">
                           <label style="font-size:12px;font-weight:600;white-space:nowrap">匹配候选（只选择常用箱，不会改写 PDF 存货编码）</label>
-                          <select class="select" v-model="item.matched_product_id" @change="selectImportProduct(item)" style="font-size:12px;flex:1;min-width:0">
+                          <select class="select" v-model="item.matched_product_id" @change="selectImportProduct(draft,item)" style="font-size:12px;flex:1;min-width:0">
                             <option :value="null">请选择候选产品</option>
                             <option v-for="p in item.product_candidates" :key="p.id" :value="p.id">{{ importProductCandidateLabel(draft, p) }}</option>
                           </select>
+                        </div>
+                        <div v-if="item.match_evidence" style="font-size:11px;margin-top:4px" :class="item.match_evidence.decision === 'matched' ? 'muted' : 'danger-text'">
+                          匹配证据：最高分 {{ item.match_evidence.top_score || 0 }}；领先分差 {{ item.match_evidence.margin || 0 }}
+                          <span v-if="item.match_evidence.minimum_score">；阈值 {{ item.match_evidence.minimum_score }} / 最小分差 {{ item.match_evidence.minimum_margin }}</span>
+                          <span v-if="item.match_evidence.reasons?.length">；{{ item.match_evidence.reasons.join('；') }}</span>
                         </div>
                       </td>
                     </tr>
@@ -2593,7 +2598,7 @@
                       </td>
                       <td colspan="3" v-else></td>
                       <td colspan="5" style="padding:2px 6px 6px">
-                        <input class="input" style="width:100%" v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" />
+                        <input class="input" style="width:100%" v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" @input="invalidateImportDraftConfirmation(draft)" />
                       </td>
                      </tr>
                      <tr v-if="item.matched_product_id && item._inventory && inventoryComponents(item).some(component => generalSemiFinishedCandidates(item._inventory.semi[component]).length)">
@@ -2612,7 +2617,7 @@
                 </table>
                 </div>
                 <div class="toolbar-group" style="margin-top:8px">
-                  <button class="btn small" :disabled="!canConfirmImportDraft(draft)" @click="applyPdfDraftToOrderForm(draft)">带入新建订单</button>
+                  <button class="btn small" :disabled="!draft.confirmed || !canConfirmImportDraft(draft)" @click="applyPdfDraftToOrderForm(draft)">带入新建订单</button>
                   <button class="btn primary small" :disabled="!draft.confirmed || !canConfirmImportDraft(draft)" @click="saveConfirmedImportDrafts()">直接保存订单</button>
                 </div>
               </div>
@@ -5582,7 +5587,10 @@
               if (!candidates.length) return;
               part.selected_candidates = candidates; part.selected = candidates[0]; part.allocations = []; part.skipped = false; changed = true;
             });
-            if (changed) this.reallocateAllDraftInventory();
+            if (changed) {
+              this.invalidatePdfDraftForItem?.(line);
+              this.reallocateAllDraftInventory();
+            }
           },
           inventorySourcesText(sources) {
             return (sources || []).map(source => `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${source.location_code || source.location_name || "库位未标注"} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? 0}`).join("；");
@@ -5631,6 +5639,7 @@
             if (line.product_id || line.matched_product_id) this.loadOrderLineInventory(line, customerId);
           },
           async loadOrderLineInventory(line, customerId) {
+            this.invalidatePdfDraftForItem?.(line);
             const productId = Number(line.product_id || line.matched_product_id || 0);
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
             if (!productId || !customerId) return;
@@ -5693,13 +5702,15 @@
             const candidates = manual || general ? [candidate].filter(Boolean) : this.safeSystemInventoryCandidates(line, component);
             if (!candidates.length) { this.showToast("没有可一键确认的安全系统推荐；风险候选需人工核对或选择本次不用库存", true); return; }
             state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false;
+            this.invalidatePdfDraftForItem?.(line);
             this.reallocateAllDraftInventory();
           },
           skipOrderLineInventory(line, component) {
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
-            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state.general_confirmation = false; this.reallocateAllDraftInventory();
+            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state.general_confirmation = false; this.invalidatePdfDraftForItem?.(line); this.reallocateAllDraftInventory();
           },
           rechooseOrderLineInventory(line, component, customerId) {
+            this.invalidatePdfDraftForItem?.(line);
             this.invalidateLineInventory(line); this.loadOrderLineInventory(line, customerId || this.inventoryCustomerForLine(line));
           },
           reallocateDraftInventorySequentially(lines) {
@@ -8463,6 +8474,7 @@
               item.crease_left_mm = edit.crease_left_mm;
               item.crease_middle_mm = edit.crease_middle_mm;
               item.crease_right_mm = edit.crease_right_mm;
+              this.invalidateImportDraftConfirmation(draft);
               await this.rematchImportDraft(draftIndex);
               item._editing = false;
               item._edit = null;
@@ -8709,6 +8721,7 @@
             if (this.isSimairImportCustomer(draft)) {
               parts.splice(1, 0, `思迈尔变体参考号 ${candidate?.customer_material_code || "-"}`);
             }
+            if (candidate?.match_score !== undefined) parts.push(`评分 ${candidate.match_score}`);
             return parts.join(" / ");
           },
           canConfirmImportDraft(draft) {
@@ -8716,10 +8729,11 @@
           },
           importDraftBlockReasons(draft) {
             const reasons = [];
+            if (!draft?.preview_safety_token) reasons.push("PDF预览安全确认缺失，请重新识别。");
             if (!draft?.matched_customer_id) reasons.push("客户未确认。");
             if (!draft?.items?.length) reasons.push("没有识别到明细。");
             if (draft?.duplicate_status === "duplicate_skipped") reasons.push("重复订单已跳过。");
-            if (draft?.integrity_check?.integrity_status === "failed") reasons.push("PDF识别存在漏行或合计不一致，请先处理完整性异常。");
+            if (draft?.integrity_check?.integrity_status !== "passed") reasons.push("PDF识别完整性未通过或缺失，请重新识别并处理完整性异常。");
             if (this.hasImportDraftQuantityReview(draft)) reasons.push("存在非整数数量，不能直接保存，请人工修改后再保存。");
             (draft?.items || []).forEach(item => {
               const inventoryReason = this.inventoryDecisionRequired(item);
@@ -8748,7 +8762,20 @@
             const shouldConfirm = !confirmable.every(draft => draft.confirmed);
             confirmable.forEach(draft => { draft.confirmed = shouldConfirm; });
           },
-          toggleNewProduct(item) {
+          invalidateImportDraftConfirmation(draft) {
+            if (draft) draft.confirmed = false;
+          },
+          invalidatePdfDraftForItem(item) {
+            const draft = this.orderImportDrafts.find(row => (row.items || []).includes(item));
+            if (draft) this.invalidateImportDraftConfirmation(draft);
+          },
+          removeImportDraftItem(draft, item) {
+            this.invalidateImportDraftConfirmation(draft);
+            const index = (draft?.items || []).indexOf(item);
+            if (index >= 0) draft.items.splice(index, 1);
+          },
+          toggleNewProduct(draft, item) {
+            this.invalidateImportDraftConfirmation(draft);
             if (item.is_new_product) {
               item.matched_product_id = null;
               item.cost_status = "pending";
@@ -8760,18 +8787,26 @@
           async rematchImportDraft(index) {
             const draft = this.orderImportDrafts[index];
             if (!draft?.matched_customer_id) return;
+            this.invalidateImportDraftConfirmation(draft);
             const preserved = draft.items.map(item => ({
               raw_product_code:item.raw_product_code, raw_product_name:item.raw_product_name,
               raw_spec_model:item.raw_spec_model, quantity:item.quantity, unit_price:item.unit_price
             }));
-            const { data } = await axios.post("/api/orders/draft-rematch", { draft, customer_id:draft.matched_customer_id });
+            const { data } = await axios.post("/api/orders/draft-rematch", {
+              draft,
+              customer_id:draft.matched_customer_id,
+              preview_safety_token:draft.preview_safety_token,
+            });
             data.items.forEach((item,itemIndex) => Object.assign(item, preserved[itemIndex] || {}));
             this.orderImportDrafts[index] = {...data, confirmed:false, items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))};
             await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
-          async selectImportProduct(item) {
+          async selectImportProduct(draft, item) {
+            this.invalidateImportDraftConfirmation(draft);
             const candidate = (item.product_candidates || []).find(row => row.id === item.matched_product_id);
             if (candidate) {
+              item.match_status = "matched";
+              item.manual_product_selected = true;
               item.matched_material_id = candidate.material_id || null;
               if (!item.unit_price && candidate.sale_unit_price !== null) item.unit_price = candidate.sale_unit_price;
               // 切换候选后重新拉取常用箱详情（名称/规格/材质/生产说明）
@@ -8809,7 +8844,7 @@
             if (supplier) parts.push(supplier);
             return parts.join("｜") || "-";
           },
-          async uploadImportDraftDrawing(item, event) {
+          async uploadImportDraftDrawing(draft, item, event) {
             const file = event.target.files?.[0];
             if (!file) return;
             const formData = new FormData();
@@ -8817,6 +8852,7 @@
             try {
               const resp = await axios.post("/api/orders/draft-drawing", formData);
               item.temp_drawing_file = resp.data.temp_path;
+              this.invalidateImportDraftConfirmation(draft);
               this.showToast("图纸上传成功");
             } catch (err) {
               this.showToast(this.errorMessage(err), true);
@@ -8867,6 +8903,10 @@
               import_draft: true,
               import_integrity_status: draft.integrity_check?.integrity_status || null,
               import_integrity_errors: draft.integrity_check?.integrity_errors || [],
+              pdf_import_confirmation: {
+                preview_safety_token: draft.preview_safety_token,
+                confirmed: !!draft.confirmed,
+              },
               // 每条明细使用常用箱字段（PDF只提供数量/单价/交期）
               items: (draft.items || []).map(item => ({
                 product_id: item.is_new_product ? null : (item.matched_product_id || null),
@@ -8932,8 +8972,13 @@
                     customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
                     order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
                     remark:`PDF识别草稿：${draft.source_name}`,
+                    import_draft:true,
                     import_integrity_status:draft.integrity_check?.integrity_status || null,
                     import_integrity_errors:draft.integrity_check?.integrity_errors || [],
+                    pdf_import_confirmation: {
+                      preview_safety_token:draft.preview_safety_token,
+                      confirmed:!!draft.confirmed,
+                    },
                     items:draft.items.map(item => {
                       // 优先使用常用箱数据，回退到 PDF 原始识别
                       const useStd = !!(item.matched_product_id && !item.is_new_product);

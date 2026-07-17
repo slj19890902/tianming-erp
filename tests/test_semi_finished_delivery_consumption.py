@@ -30,6 +30,7 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     manual_finished_in,
     manual_semi_finished_in,
+    replace_semi_finished_lot_allowed_products,
     release_active_finished_reservations_for_items,
     replace_semi_finished_lot_allowed_products,
 )

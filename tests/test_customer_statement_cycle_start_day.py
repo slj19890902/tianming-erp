@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -190,3 +191,47 @@ def test_customer_statement_cycle_start_day_migration_upgrade_and_downgrade(
 
     assert "statement_cycle_start_day" not in columns
     assert version == "an41v7w8x9j31"
+
+
+def test_customer_statement_cycle_start_day_round_trip_through_head(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "customer_statement_cycle_round_trip.sqlite3"
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("ERP_SECRET_KEY", "customer-statement-cycle-round-trip")
+    project_root = Path(__file__).resolve().parents[1]
+    config = Config(str(project_root / "alembic.ini"))
+    current_head = ScriptDirectory.from_config(config).get_current_head()
+    assert current_head is not None
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "an41v7w8x9j31")
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(customers)")
+        }
+        version = connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    assert "statement_cycle_start_day" not in columns
+    assert version == "an41v7w8x9j31"
+
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(customers)")
+        }
+        version = connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    assert "statement_cycle_start_day" in columns
+    assert version == current_head

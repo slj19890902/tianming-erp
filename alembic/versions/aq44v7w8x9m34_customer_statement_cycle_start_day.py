@@ -32,4 +32,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("customers", "statement_cycle_start_day")
+    # ay52 later recreates customers on SQLite, which promotes this named
+    # column check to a table-level constraint.  Native DROP COLUMN then
+    # leaves the check behind and fails schema validation.  Recreate the
+    # table here so the constraint and its column are removed together.
+    with op.batch_alter_table("customers", recreate="always") as batch_op:
+        batch_op.drop_constraint(
+            "ck_customers_statement_cycle_start_day", type_="check"
+        )
+        batch_op.drop_column("statement_cycle_start_day")

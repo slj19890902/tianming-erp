@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-07-17 | Alembic 客户账期迁移回滚链修复
+
+- 修复 `aq44v7w8x9m34` 在最新 head 回退时无法删除 `customers.statement_cycle_start_day` 的问题。真实根因是后续 SQLite batch recreate 将列级 CHECK 提升为表级约束；旧版原生 `DROP COLUMN` 会留下引用已删除列的约束。
+- `aq44` downgrade 改为 batch recreate，同时删除命名 CHECK 和字段；升级路径、正式业务模型和现有数据口径均未改变。
+- 新增 `head -> an41v7w8x9j31 -> head` 往返测试；客户账期、来料、三楼货位、成本快照、主数据版本、生产和 N031 会话迁移共 `39 passed`。
+- 往返后的 `integrity_check=ok`、`foreign_key_check=0`，Alembic 仍只有 `ba54v8x9z44` 一个 head。本轮只使用临时测试数据库，未连接或修改正式数据库。
+
 ## 2026-07-16 N016 | v0.22.6 思迈尔 PDF 安全识别收口（待人工验收，未提交）
 
 - 本轮从最新 `at47v7w8x9p37` 主线建立独立 worktree 重做 N016；旧的脏 worktree 仅作只读参考，未直接合并，也未新增 Alembic migration。

@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-07-17 N022 Phase C.1 | 模具位置现场试盘只读 dry-run（本地完成，待集成验收）
+
+- 独立 worktree：`D:\tm-worktrees\erp-mold-location-pilot-n022-c1`；分支：`feature/mold-location-pilot-n022-c1`。本轮只新增审计脚本、专项测试和操作文档，未修改 API、模型、前端、迁移或数据库。
+- `scripts/audit/mold_location_pilot.py` 要求显式 `--database`，以 SQLite `mode=ro + PRAGMA query_only=ON` 打开；没有 apply 模式，拒绝符号链接数据库及符号链接/正式 live 路径的报告写入。
+- dry-run 仅查询 `mold_tools`，稳定输出 JSON/CSV 差异和汇总；核对空位置、旧自由文本、非法 `3F-M`、启用模具的位置重复、模具编号重复及停用状态，绝不映射到三楼成品 `warehouse_locations`。
+- 定向测试验证数据库 SHA256、mtime、`mold_tools` 和 `warehouse_locations` 行数均不变，重复输出稳定，平放/竖放、非法/重复/旧文本均正确分类；`2 passed`、`py_compile`、`git diff --check` 已通过。
+
 ## 2026-07-16 N016 | v0.22.6 思迈尔 PDF 安全识别收口（待人工验收，未提交）
 
 - 本轮从最新 `at47v7w8x9p37` 主线建立独立 worktree 重做 N016；旧的脏 worktree 仅作只读参考，未直接合并，也未新增 Alembic migration。

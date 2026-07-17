@@ -14,6 +14,13 @@
 - dry-run 仅查询 `mold_tools`，稳定输出 JSON/CSV 差异和汇总；核对空位置、旧自由文本、非法 `3F-M`、启用模具的位置重复、模具编号重复及停用状态，绝不映射到三楼成品 `warehouse_locations`。
 - 定向测试验证数据库 SHA256、mtime、`mold_tools` 和 `warehouse_locations` 行数均不变，重复输出稳定，平放/竖放、非法/重复/旧文本均正确分类；`2 passed`、`py_compile`、`git diff --check` 已通过。
 
+## 2026-07-17 N027 Phase C.1 | 只读库存经营指标补全（待统一 UAT）
+
+- 指定 worktree：`D:\tm-worktrees\erp-inventory-insights-n027-c1`；分支：`feature/inventory-insights-n027-c1`。本轮只编辑库存洞察服务、仓库页面、相关测试和审计文档；未新增 migration，未修改库存写接口或任何数据库。
+- 库龄保持 `stock_date` 口径，新增最后异动和停滞天数仅用于解释；成品需求覆盖是只读汇总，半成品已确认候选关系只展示、不自动抵扣。
+- 成本覆盖拆为入库快照估算、当前材料报价估算、产品参考估算，明确不得将其称为实际现金成本覆盖；实际现金占用仍为待补。
+- 隔离临时库定向回归 `15 passed`；库存、预占、七层和半成品广泛回归 `133 passed, 2 failed`，两项失败已在干净基线复现，分别是旧材质批处理测试未适配 P5 二次确认、旧 Node 前端测试未注入共享时间工具，与本轮 C.1 无关。同时把两条已落后于现状的仓库页面断言更新为当前生产菜单顺序和唯一共享时间脚本。Python 编译和 `git diff --check` 通过；正式库未写入，待统一 UAT 后再决定推送与集成。
+
 ## 2026-07-16 N016 | v0.22.6 思迈尔 PDF 安全识别收口（待人工验收，未提交）
 
 - 本轮从最新 `at47v7w8x9p37` 主线建立独立 worktree 重做 N016；旧的脏 worktree 仅作只读参考，未直接合并，也未新增 Alembic migration。

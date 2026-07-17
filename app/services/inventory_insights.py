@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
@@ -39,7 +39,23 @@ def _money(value: Decimal | None) -> str | None:
 
 
 def _age_days(lot: InventoryLot, as_of: date) -> int:
+    """Keep inventory age tied to the original stock date, never movements."""
     return max((as_of - lot.stock_date).days, 0)
+
+
+def _movement_stagnant_days(
+    last_movement_at: datetime | None,
+    as_of: date,
+) -> int | None:
+    if last_movement_at is None:
+        return None
+    return max((as_of - last_movement_at.date()).days, 0)
+
+
+def _coverage_percent(covered: int, demand: int) -> float | None:
+    if demand <= 0:
+        return None
+    return round(covered * 100 / demand, 1)
 
 
 def _age_bucket(days: int) -> tuple[str, str]:
@@ -103,11 +119,18 @@ def build_inventory_insights(
         for lot in lots
         if lot.finished_detail is not None
     }
+    for lot in lots:
+        if lot.semi_finished_detail is not None:
+            product_ids.update(semi_finished_lot_assigned_product_ids(db, lot.id))
     products = {
         row.id: row
         for row in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     } if product_ids else {}
     demand = _demand_by_product(db, as_of)
+    finished_available_by_product: dict[int, int] = defaultdict(int)
+    for lot in lots:
+        if lot.quantity_available > 0 and lot.finished_detail is not None:
+            finished_available_by_product[lot.finished_detail.product_id] += lot.quantity_available
 
     bucket_map = {
         key: {
@@ -127,6 +150,7 @@ def build_inventory_insights(
     available_lots = 0
     active_location_lots = 0
     cost_ready_lots = 0
+    estimate_source_lots = defaultdict(int)
     estimated_value = Decimal("0")
 
     for lot in lots:
@@ -155,6 +179,12 @@ def build_inventory_insights(
         estimated_unit_cost: Decimal | None = None
         estimated_cost_status = "pending"
         demand_metrics = {"demand_30": 0, "demand_90": 0, "demand_180": 0, "open_demand": 0}
+        coverage = {
+            "covered_demand_quantity": None,
+            "uncovered_demand_quantity": None,
+            "coverage_percent": None,
+            "coverage_basis": "not_applicable",
+        }
 
         if lot.finished_detail is not None:
             row = lot.finished_detail
@@ -165,6 +195,15 @@ def build_inventory_insights(
                 "inventory_code": row.inventory_code_snapshot,
                 "name": row.product_name_snapshot,
             }
+            total_available = finished_available_by_product[row.product_id]
+            open_demand = demand_metrics["open_demand"]
+            covered_demand = min(total_available, open_demand)
+            coverage = {
+                "covered_demand_quantity": covered_demand,
+                "uncovered_demand_quantity": max(open_demand - total_available, 0),
+                "coverage_percent": _coverage_percent(covered_demand, open_demand),
+                "coverage_basis": "finished_available_vs_open_order_demand",
+            }
             if demand_metrics["open_demand"] > 0:
                 reasons.append(
                     {
@@ -173,6 +212,14 @@ def build_inventory_insights(
                     }
                 )
                 priority = min(priority, 1)
+            if total_available > open_demand and open_demand > 0:
+                reasons.append(
+                    {
+                        "code": "finished_stock_exceeds_open_demand",
+                        "text": f"当前可用量比未完成需求多 {total_available - open_demand} 个；仅供人工核对是否存在超额库存。",
+                    }
+                )
+                priority = min(priority, 2)
             if demand_metrics["demand_180"] <= 0:
                 reasons.append(
                     {
@@ -204,13 +251,28 @@ def build_inventory_insights(
                         else "ineligible_no_product_binding"
                     )
                 ),
+                "assigned_products": [
+                    {
+                        "product_id": product_id,
+                        "inventory_code": products[product_id].product_code if product_id in products else None,
+                        "name": products[product_id].product_name if product_id in products else None,
+                    }
+                    for product_id in assigned_ids
+                ],
+                "candidate_relationship_read_only": True,
             }
             demand_metrics["open_demand"] = assigned_open_demand
+            coverage = {
+                "covered_demand_quantity": None,
+                "uncovered_demand_quantity": None,
+                "coverage_percent": None,
+                "coverage_basis": "semi_finished_candidate_relationship_read_only",
+            }
             if assigned_open_demand > 0:
                 reasons.append(
                     {
                         "code": "semi_stock_may_cover_demand",
-                        "text": f"已分配成品款号存在 {assigned_open_demand} 个未完成需求，请到合并报料中人工核对抵扣。",
+                        "text": f"已分配成品款号存在 {assigned_open_demand} 个未完成需求；候选关系只读展示，请到合并报料中人工核对抵扣。",
                     }
                 )
                 priority = min(priority, 1)
@@ -260,6 +322,7 @@ def build_inventory_insights(
             reasons.append({"code": "cost_pending", "text": "库存成本待补，暂不计算现金占用。"})
         else:
             cost_ready_lots += 1
+            estimate_source_lots[estimated_cost_status] += 1
             estimated_value += estimated_unit_cost * lot.quantity_available
 
         if reasons:
@@ -274,8 +337,16 @@ def build_inventory_insights(
                     "quantity_available": lot.quantity_available,
                     "unit": lot.unit,
                     "age_days": days,
+                    "age_basis": "stock_date",
+                    "last_movement_at": utc_naive_to_api(lot.last_movement_at)
+                    if lot.last_movement_at is not None
+                    else None,
+                    "movement_stagnant_days": _movement_stagnant_days(
+                        lot.last_movement_at, as_of
+                    ),
                     "detail": detail,
                     "demand": demand_metrics,
+                    **coverage,
                     "cost_status": estimated_cost_status,
                     "estimated_unit_cost": _money(estimated_unit_cost),
                     "estimated_value": _money(
@@ -296,6 +367,16 @@ def build_inventory_insights(
         and item["priority"] <= 1
     )
     missing_cost_lots = max(available_lots - cost_ready_lots, 0)
+    source_coverage = {
+        status: round(estimate_source_lots[status] * 100 / available_lots, 1)
+        if available_lots
+        else None
+        for status in (
+            "estimated_snapshot",
+            "estimated_current_material_quote",
+            "estimated_product_cost",
+        )
+    }
     return {
         "generated_at": utc_naive_to_api(utc_now_naive()),
         "as_of": as_of,
@@ -317,8 +398,11 @@ def build_inventory_insights(
             "cost_ready_lots": cost_ready_lots,
             "missing_cost_lots": missing_cost_lots,
             "cost_coverage_percent": round(cost_ready_lots * 100 / available_lots, 1) if available_lots else None,
+            "snapshot_estimate_coverage": source_coverage["estimated_snapshot"],
+            "current_quote_coverage": source_coverage["estimated_current_material_quote"],
+            "product_reference_coverage": source_coverage["estimated_product_cost"],
             "actual_cost_supported": False,
-            "actual_cost_message": "库存批次尚无实际单位成本快照，实际现金占用不可计算。",
+            "actual_cost_message": "库存批次尚无实际单位成本快照；所有覆盖率仅表示估算来源，不代表实际现金成本覆盖。",
         },
         "by_type": by_type,
         "age_buckets": list(bucket_map.values()),

@@ -117,7 +117,7 @@ N-027 目前不能直接给出“仓库占用了多少现金”的可信数字�
 - 549～730 天：超过 1.5 年
 - 731 天以上：清理候选
 
-库龄以 `last_movement_at` 为主；没有有效流水时退回 `stock_date`，并标明计算来源。
+库龄严格以 `stock_date` 为准；最后异动不重置库龄。看板另行显示 `last_movement_at` 和 `movement_stagnant_days`，用于说明停滞情况；若最后异动时间缺失，停滞天数显示为待补而不推断。
 
 ### 4.3 成品库存需求覆盖
 
@@ -232,3 +232,11 @@ AI 结果必须显示依据，并由人工决定；不得自动执行。
 自动验证共 `130 passed`，覆盖库存洞察、库存基础、成品预占、共享半成品、配送消耗和补库；Python 编译和 `git diff --check` 通过。  
 隔离验收服务：`http://127.0.0.1:18040/`；浏览器已确认 2 条行动项、库龄分布和成本待补正常，控制台无错误。页面明确声明只统计已录入 ERP 的库存、所有建议只供人工判断，且没有自动抵扣、自动少报、自动清理、自动报损或一键清理入口。  
 人工验收清单：`docs/warehouse_reports/N027_PHASE_A_UAT_CHECKLIST_20260712.md`。
+
+## 9. Phase C.1 只读指标补全（2026-07-17）
+
+- 每个行动项新增 `age_basis=stock_date`、`last_movement_at` 和 `movement_stagnant_days`：库龄与停滞分栏说明，任何预占、释放、盘点或其他最后异动均不会重置库龄。
+- 成品按产品汇总可用量与未完成订单需求，输出 `covered_demand_quantity`、`uncovered_demand_quantity` 和 `coverage_percent`；零未完成需求的覆盖率为不适用，不伪称 100%。这是只读计算，不创建预占、不扣减库存。
+- 半成品仅列出已确认的成品候选关系及其关联需求，明确标记 `semi_finished_candidate_relationship_read_only`；不把候选关系算作已覆盖需求，也不自动抵扣报料。
+- 成本数据质量拆分为 `snapshot_estimate_coverage`、`current_quote_coverage` 与 `product_reference_coverage`，分母均为可用批次数。三者都是估算来源覆盖，不能解释为实际现金成本覆盖；实际现金占用仍保持待补。
+- 页面明确区分库龄、停滞、需求覆盖和三类估算来源；AI/行动建议仅作解释和人工核对，不提供执行入口。

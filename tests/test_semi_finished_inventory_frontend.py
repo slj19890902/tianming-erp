@@ -22,7 +22,7 @@ def test_shared_inventory_order_payload_uses_idempotent_client_lines() -> None:
 
 def test_quantity_input_debounces_inventory_candidate_refresh() -> None:
     assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
-    assert '@input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
+    assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
     assert "scheduleOrderLineInventoryRefresh(line, customerId)" in INDEX
     assert "line._inventory_refresh_timer = setTimeout" in INDEX
 
@@ -258,7 +258,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
   const confirmedState = multi[0]._inventory;
   confirmedState.context = {{product_id:99,customer_id:5,quantity:7}};
   let reloads = 0;
-  const draft = {{matched_customer_id:5,items:[{{matched_product_id:99,quantity:7,unit_price:"1",product_name:"PDF产品",_inventory:confirmedState,_inventory_product:{{id:99}},client_line_id:"pdf-line"}}]}};
+  const draft = {{matched_customer_id:5,order_date:"2026-07-17",delivery_date:"2026-07-24",items:[{{matched_product_id:99,quantity:7,unit_price:"1",product_name:"PDF产品",_inventory:confirmedState,_inventory_product:{{id:99}},client_line_id:"pdf-line"}}]}};
   const pdfContext = {{
     orderImportDrafts:[draft], orderForm:{{items:[]}}, newOrderInventoryState:methods.newOrderInventoryState,
     inventoryStateMatchesLine:methods.inventoryStateMatchesLine, searchOrderProducts:async () => {{}},
@@ -278,7 +278,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
 
 def test_pdf_customer_fallback_and_confirmed_state_preservation_are_explicit() -> None:
     assert INDEX.count("customerId = Number(customerId || this.inventoryCustomerForLine(line));") == 2
-    select_start = INDEX.index("async selectImportProduct(item)")
+    select_start = INDEX.index("async selectImportProduct(draft, item)")
     select_end = INDEX.index("pdfItemMaterialText(item)", select_start)
     assert "this.refreshOrderLineInventory(item);" in INDEX[select_start:select_end]
     apply_start = INDEX.index("async applyPdfDraftToOrderForm")
@@ -339,7 +339,7 @@ def test_new_and_pdf_order_quantity_cells_share_safe_inventory_confirmation() ->
     assert INDEX.count('@click="confirmSafeOrderLineInventoryRecommendations(item)"') == 2
     assert INDEX.count('v-if="hasSafeOrderLineInventoryRecommendation(item)"') == 2
     assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
-    assert '@input="scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
+    assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
     confirm = INDEX.split("confirmOrderLineInventory(line, component", 1)[1].split(
         "skipOrderLineInventory", 1
     )[0]

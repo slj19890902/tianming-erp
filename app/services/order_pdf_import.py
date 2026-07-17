@@ -1806,35 +1806,134 @@ def _code_match_score(product: Product, item_code: str, *, strong: int) -> int:
     return 0
 
 
-def _score_product(product: Product, item: dict) -> int:
+def _product_match_evidence(product: Product, item: dict) -> dict:
     primary_code = _preferred_item_product_code(item)
     reference_code = str(item.get("reference_product_code") or "").strip()
     name = _normalized_text(item.get("raw_product_name") or item.get("product_name"))
     spec = _normalized_text(item.get("raw_spec_model") or item.get("specification"))
     material = _normalized_text(item.get("raw_material"))
-    score = _code_match_score(product, reference_code, strong=180)
-    score += _code_match_score(product, primary_code, strong=100)
+    reference_score = _code_match_score(product, reference_code, strong=180)
+    primary_score = _code_match_score(product, primary_code, strong=100)
+    name_score = 0
+    spec_score = 0
+    material_score = 0
+    price_score = 0
     product_name = _normalized_text(product.product_name)
     if name and product_name:
         if name == product_name:
-            score += 50
+            name_score = 50
         elif len(name) >= 5 and (name in product_name or product_name in name):
-            score += 25
+            name_score = 25
     product_spec = _normalized_text(_product_spec(product))
     if spec and product_spec and (spec in product_spec or product_spec in spec):
-        score += 35
+        spec_score = 35
         product_material = _normalized_text(
             product.material.code if product.material else product.legacy_material_text
         )
         if material and product_material and material == product_material:
-            score += 5
+            material_score = 5
     if item.get("unit_price") not in (None, "") and product.sale_unit_price is not None:
         try:
             if (Decimal(str(item["unit_price"])) - product.sale_unit_price).copy_abs() <= Decimal("0.0001"):
-                score += 15
+                price_score = 15
         except (ValueError, TypeError, ArithmeticError):
             pass
-    return score
+    score = (
+        reference_score
+        + primary_score
+        + name_score
+        + spec_score
+        + material_score
+        + price_score
+    )
+    return {
+        "variant_code": product.customer_material_code or product.product_code,
+        "product_code": product.product_code,
+        "product_name": product.product_name,
+        "specification": _product_spec(product),
+        "sale_unit_price": (
+            str(product.sale_unit_price) if product.sale_unit_price is not None else None
+        ),
+        "score": score,
+        "signals": {
+            "reference_code": reference_score,
+            "primary_code": primary_score,
+            "name": name_score,
+            "specification": spec_score,
+            "material": material_score,
+            "unit_price": price_score,
+        },
+    }
+
+
+def _score_product(product: Product, item: dict) -> int:
+    return int(_product_match_evidence(product, item)["score"])
+
+
+def _simair_duplicate_cpn_decision(
+    item: dict,
+    scored: list[tuple[Product, dict]],
+) -> tuple[Product | None, dict]:
+    """Fail closed when one Simair CPN maps to multiple product variants."""
+    minimum_score = 170
+    minimum_margin = 25
+    ranked = sorted(scored, key=lambda pair: (-int(pair[1]["score"]), pair[0].id))
+    top_product, top_evidence = ranked[0]
+    runner_up_score = int(ranked[1][1]["score"]) if len(ranked) > 1 else 0
+    top_score = int(top_evidence["score"])
+    margin = top_score - runner_up_score
+    reasons: list[str] = []
+
+    primary_code = _normalized_text(_preferred_item_product_code(item))
+    name = _normalized_text(item.get("raw_product_name") or item.get("product_name"))
+    spec = _normalized_text(item.get("raw_spec_model") or item.get("specification"))
+    if not name or name == primary_code:
+        reasons.append("缺少可用于变体消歧的产品名称")
+    if not spec:
+        reasons.append("缺少可用于变体消歧的规格")
+
+    discriminating_fields = ("reference_code", "name", "specification", "unit_price")
+    field_winners: dict[str, int] = {}
+    for field in discriminating_fields:
+        best = max(int(evidence["signals"][field]) for _product, evidence in ranked)
+        if best <= 0:
+            continue
+        winners = [
+            product.id
+            for product, evidence in ranked
+            if int(evidence["signals"][field]) == best
+        ]
+        if len(winners) == 1:
+            field_winners[field] = winners[0]
+    conflicting_fields = [
+        field for field, product_id in field_winners.items() if product_id != top_product.id
+    ]
+    if conflicting_fields:
+        reasons.append("名称、规格、变体参考号或单价证据指向不同候选")
+
+    top_signals = top_evidence["signals"]
+    supporting_fields = [
+        field for field in discriminating_fields if int(top_signals[field]) > 0
+    ]
+    if len(supporting_fields) < 2:
+        reasons.append("独立变体证据不足")
+    if top_score < minimum_score:
+        reasons.append(f"最高分 {top_score} 低于自动匹配阈值 {minimum_score}")
+    if margin < minimum_margin:
+        reasons.append(f"领先分差 {margin} 小于自动匹配阈值 {minimum_margin}")
+
+    decision = "matched" if not reasons else "needs_confirmation"
+    return (top_product if not reasons else None), {
+        "policy": "simair_duplicate_cpn_fail_closed",
+        "decision": decision,
+        "top_score": top_score,
+        "runner_up_score": runner_up_score,
+        "margin": margin,
+        "minimum_score": minimum_score,
+        "minimum_margin": minimum_margin,
+        "supporting_fields": supporting_fields,
+        "reasons": reasons,
+    }
 
 
 def _cost_reference(product: Product, material: Material | None = None) -> dict:
@@ -1971,16 +2070,68 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
     matched_items = []
     for raw in draft.get("items", []):
         item = dict(raw)
-        scored = [(product, _score_product(product, item)) for product in products]
-        scored = [(product, score) for product, score in scored if score > 0]
-        scored.sort(key=lambda pair: (-pair[1], pair[0].id))
-        top_score = scored[0][1] if scored else 0
-        top = [product for product, score in scored if score == top_score]
-        candidates = [_product_candidate(product) for product, _score in scored[:20]]
+        scored_with_evidence = [
+            (product, _product_match_evidence(product, item)) for product in products
+        ]
+        scored_with_evidence = [
+            (product, evidence)
+            for product, evidence in scored_with_evidence
+            if int(evidence["score"]) > 0
+        ]
+        scored_with_evidence.sort(
+            key=lambda pair: (-int(pair[1]["score"]), pair[0].id)
+        )
+        candidates = []
+        for product, evidence in scored_with_evidence[:20]:
+            candidate = _product_candidate(product)
+            candidate["match_score"] = evidence["score"]
+            candidate["match_evidence"] = evidence["signals"]
+            candidates.append(candidate)
         item["product_candidates"] = candidates
-        item["matched_product_id"] = top[0].id if len(top) == 1 else None
-        item["match_status"] = "matched" if len(top) == 1 else "unmatched"
+        top_score = (
+            int(scored_with_evidence[0][1]["score"]) if scored_with_evidence else 0
+        )
+        top = [
+            product
+            for product, evidence in scored_with_evidence
+            if int(evidence["score"]) == top_score
+        ]
         selected = top[0] if len(top) == 1 else None
+        runner_up_score = (
+            int(scored_with_evidence[1][1]["score"])
+            if len(scored_with_evidence) > 1
+            else 0
+        )
+        item["match_evidence"] = {
+            "policy": "standard_unique_top_score",
+            "decision": "matched" if selected is not None else "needs_confirmation",
+            "top_score": top_score,
+            "runner_up_score": runner_up_score,
+            "margin": top_score - runner_up_score,
+            "reasons": (
+                []
+                if selected is not None
+                else ["最高分候选不唯一或没有匹配证据"]
+            ),
+        }
+        common_cpn = _leading_cpn_code(_preferred_item_product_code(item))
+        duplicate_cpn_scored = [
+            (product, evidence)
+            for product, evidence in scored_with_evidence
+            if common_cpn
+            and common_cpn
+            in {
+                _leading_cpn_code(product.product_code),
+                _leading_cpn_code(product.customer_material_code),
+            }
+        ]
+        if draft.get("customer_type") == "simair" and len(duplicate_cpn_scored) > 1:
+            selected, decision_evidence = _simair_duplicate_cpn_decision(
+                item, duplicate_cpn_scored
+            )
+            item["match_evidence"] = decision_evidence
+        item["matched_product_id"] = selected.id if selected is not None else None
+        item["match_status"] = "matched" if selected is not None else "unmatched"
         item["matched_material_id"] = selected.material_id if selected else None
         item["material_candidates"] = material_candidates
         item.update(_cost_reference(selected) if selected else {"cost_status": "pending", "estimated_cost": None})

@@ -464,9 +464,9 @@ def test_order_pdf_multi_candidate_picker_uses_full_width_subrow() -> None:
     assert f'colspan="{column_count}"' in candidate_row
     assert "匹配候选（只选择常用箱，不会改写 PDF 存货编码）" in candidate_row
     assert 'v-model="item.matched_product_id"' in candidate_row
-    assert '@change="selectImportProduct(item)"' in candidate_row
+    assert '@change="selectImportProduct(draft,item)"' in candidate_row
     assert "importProductCandidateLabel(draft, p)" in candidate_row
-    assert '@change="selectImportProduct(item)"' not in main_row
+    assert '@change="selectImportProduct(draft,item)"' not in main_row
 
 
 def test_order_and_pdf_general_semi_finished_candidates_keep_source_and_confirmation_gate() -> None:

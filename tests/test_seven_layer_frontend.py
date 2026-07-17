@@ -9,6 +9,9 @@ import tempfile
 HTML = (Path(__file__).resolve().parent.parent / "static" / "index.html").read_text(
     encoding="utf-8"
 )
+WAREHOUSE_HTML = (
+    Path(__file__).resolve().parent.parent / "static" / "warehouse.html"
+).read_text(encoding="utf-8")
 
 
 def _inline_scripts():
@@ -30,6 +33,12 @@ def _axios_payload(source, endpoint):
 
 
 class TestSevenLayerControls:
+    def test_warehouse_manual_in_supports_seven_layers_without_default_flute(self):
+        assert '<option value="7">七层</option>' in WAREHOUSE_HTML
+        assert 'layer==="5"?["AB","BE"]:["AAA","ABC"]' in WAREHOUSE_HTML
+        assert "layer===\"7\"?'<option value=\"\">请选择楞型</option>'" in WAREHOUSE_HTML
+        assert '<select id="siFlute" required>' in WAREHOUSE_HTML
+
     def test_composer_accepts_seven_digit_code(self):
         assert '<option :value="7">七层</option>' in HTML
         assert ':maxlength="materialComposer.layer_count"' in HTML
@@ -68,6 +77,7 @@ class TestSevenLayerControls:
         )
         assert "layer_count: null" in quotation
         assert 'flute_type: ""' in quotation
+        assert "if (this.materialLayerFilter === 7) return [];" in HTML
 
     def test_layer_changes_clear_invalid_composer_flute(self):
         handler = _source_between(

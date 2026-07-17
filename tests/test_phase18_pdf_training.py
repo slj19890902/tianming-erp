@@ -348,7 +348,8 @@ class TestPdfTrainingApi:
         assert r["status"] == 201, f"create template failed: {r['body']}"
         body = json.loads(r["body"])
         assert body["template_name"] == "测试模板"
-        assert body["is_active"] is True
+        assert body["is_active"] is False
+        assert body["status"] == "draft"
         return body["id"]
 
     def test_sample_not_found(self):

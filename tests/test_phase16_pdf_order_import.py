@@ -618,10 +618,10 @@ def test_pdf_preview_endpoint_returns_draft_without_writing_order(
     tmp_path: Path,
 ) -> None:
     app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "extract_text_from_pdf_bytes",
         lambda _content: SAMPLE_PO_TEXT,
     )
@@ -1080,11 +1080,11 @@ def test_pdf_preview_uses_ocr_fallback_for_gaotai_image_pdf(
     tmp_path: Path,
 ) -> None:
     app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
-    monkeypatch.setattr(orders_api, "extract_text_from_pdf_bytes", lambda _content: "")
+    monkeypatch.setattr(pdf_pipeline, "extract_text_from_pdf_bytes", lambda _content: "")
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "ocr_pdf_bytes",
         lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
     )
@@ -1174,15 +1174,15 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
     tmp_path: Path,
 ) -> None:
     app = _order_import_app(tmp_path)
-    import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "extract_text_from_pdf_bytes",
         lambda content: SAMPLE_PO_TEXT if content == b"good" else "",
     )
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "ocr_pdf_bytes",
         lambda _content: (None, "ocr_failed"),
     )
@@ -1214,10 +1214,11 @@ def test_batch_pdf_preview_uses_ocr_fallback_without_saving_order(
 ) -> None:
     app = _order_import_app(tmp_path)
     import app.api.orders as orders_api
+    import app.services.pdf_parse_pipeline as pdf_pipeline
 
-    monkeypatch.setattr(orders_api, "extract_text_from_pdf_bytes", lambda _content: "")
+    monkeypatch.setattr(pdf_pipeline, "extract_text_from_pdf_bytes", lambda _content: "")
     monkeypatch.setattr(
-        orders_api,
+        pdf_pipeline,
         "ocr_pdf_bytes",
         lambda _content: (GAOTAI_OCR_TEXT, "ocr_easyocr"),
     )

@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -149,6 +150,16 @@ class PdfOrderTrainingSample(Base):
         String(20), nullable=False, default="unknown"
     )
 
+    # Gold review is deliberately independent from the legacy parse_status.
+    # Existing "reviewed" samples are migrated to pending, never implicitly
+    # trusted as activation evidence.
+    gold_review_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", index=True
+    )
+    gold_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    gold_reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    gold_review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # 原始提取文本（PDF 文本层，供调试）
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -180,10 +191,21 @@ class PdfOrderCustomerTemplate(Base):
     """客户级 PDF 解析模板。
 
     为特定客户存储定制化的正则表达式模式，覆盖全局默认规则。
-    同一客户可有多个版本模板，通过 is_active 控制当前生效版本。
+    同一客户可有多个版本模板。status 是唯一的生命周期真相；is_active
+    保留为兼容旧调用方的镜像，所有新写入必须同步两者。
     """
 
     __tablename__ = "pdf_order_customer_templates"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'active', 'retired')",
+            name="ck_pdf_template_status",
+        ),
+        CheckConstraint("version >= 1", name="ck_pdf_template_version"),
+        UniqueConstraint(
+            "customer_id", "version", name="uq_pdf_templates_customer_version"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
@@ -204,13 +226,32 @@ class PdfOrderCustomerTemplate(Base):
     # 字段列号映射（JSON 字符串，如 {"product_code": 1, "quantity": 4}）
     column_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=False, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    supersedes_template_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("pdf_order_customer_templates.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    activation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    retired_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

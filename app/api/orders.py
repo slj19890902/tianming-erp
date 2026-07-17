@@ -57,7 +57,8 @@ from app.services.history_orders import (
 )
 from app.services.flute_mapping import (
     normalize_flute_type,
-    validate_flute_consistency,
+    seven_layer_code_error,
+    validate_flute_for_write,
 )
 from app.services.order_numbering import (
     format_item_order_number,
@@ -327,6 +328,20 @@ def _validated_order_quantity(value: int | float, index: int) -> int:
             detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
         )
     return int(decimal_value)
+
+
+def _validated_order_layer_flute(
+    layer_count: int | None,
+    flute_type: str | None,
+    *,
+    detail_prefix: str = "",
+) -> str | None:
+    """Validate the effective business flute before writing order snapshots."""
+    normalized_flute = normalize_flute_type(flute_type)
+    error = validate_flute_for_write(normalized_flute, layer_count)
+    if error:
+        raise HTTPException(status_code=400, detail=f"{detail_prefix}{error}")
+    return normalized_flute
 
 
 def _preflight_semi_signature(
@@ -2472,6 +2487,10 @@ def create_order(
         new_product_cache: dict[str, Product] = {}
         resolved_products: dict[int, Product] = {}
         validated_quantities: dict[int, int] = {}
+        validated_layer_flutes: dict[
+            int,
+            tuple[int | None, str | None, int | None, Material | None],
+        ] = {}
         for index, item_payload in enumerate(payload.items, start=1):
             validated_quantities[index] = _validated_order_quantity(
                 item_payload.quantity,
@@ -2539,6 +2558,69 @@ def create_order(
                         "请先在常用箱中确认报料宽和压线尺寸后再下单"
                     ),
                 )
+            selected_material_id = (
+                item_payload.material_id
+                if item_payload.material_id is not None
+                else product.material_id
+            )
+            selected_material = (
+                db.get(Material, selected_material_id)
+                if selected_material_id is not None
+                else None
+            )
+            if selected_material_id is not None and selected_material is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第{index}条明细材质不存在",
+                )
+            if (
+                selected_material is not None
+                and item_payload.layer_count is not None
+                and item_payload.layer_count != selected_material.layer_count
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第{index}条明细请求层数与所选材质真实层数不一致",
+                )
+            snapshot_layer_count = (
+                selected_material.layer_count
+                if selected_material is not None
+                else (
+                    item_payload.layer_count
+                    if item_payload.layer_count is not None
+                    else product.layer_count
+                )
+            )
+            material_code_error = seven_layer_code_error(
+                selected_material.code
+                if selected_material is not None
+                else (
+                    (item_payload.material or "").strip()
+                    or product.default_material_code
+                    or product.legacy_material_text
+                ),
+                snapshot_layer_count,
+            )
+            if material_code_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第{index}条明细{material_code_error}",
+                )
+            snapshot_flute_type = _validated_order_layer_flute(
+                snapshot_layer_count,
+                (item_payload.flute_type or "").strip() or product.flute_type,
+                detail_prefix=f"第{index}条明细",
+            )
+            validated_layer_flutes[index] = (
+                snapshot_layer_count,
+                snapshot_flute_type,
+                selected_material_id,
+                selected_material,
+            )
+            if item_payload.is_new_product:
+                product.material_id = selected_material_id
+                product.layer_count = snapshot_layer_count
+                product.flute_type = snapshot_flute_type
             resolved_products[index] = product
 
         reservation_plan_states = _preflight_reservation_plans(
@@ -2620,6 +2702,12 @@ def create_order(
 
             product = resolved_products[index]
             quantity = validated_quantities[index]
+            (
+                snapshot_layer_count,
+                snapshot_flute_type,
+                selected_material_id,
+                selected_material,
+            ) = validated_layer_flutes[index]
 
             subtotal = (
                 Decimal(quantity) * unit_price
@@ -2650,8 +2738,8 @@ def create_order(
                 snapshot_material=(
                     (item_payload.material or "").strip()
                     or (
-                        product.material.code
-                        if product.material is not None
+                        selected_material.code
+                        if selected_material is not None
                         else product.legacy_material_text
                     )
                 ),
@@ -2662,21 +2750,18 @@ def create_order(
                     (item_payload.production_notes or "").strip() or None
                 ),  # v0.19.2-A: 生产/印刷说明
                 # v0.19.2-B: 常用箱层数/楞型/材质/供应商/克重 — 优先前端传值，否则从product取
-                layer_count=(
-                    item_payload.layer_count
-                    or product.layer_count
-                ),
-                flute_type=(
-                    (item_payload.flute_type or "").strip().upper() or product.flute_type or None
-                ),
-                material_id=(
-                    item_payload.material_id or product.material_id
-                ),
+                layer_count=snapshot_layer_count,
+                flute_type=snapshot_flute_type,
+                material_id=selected_material_id,
                 snapshot_supplier_name=(
-                    product.material.supplier_name if product.material is not None else None
+                    selected_material.supplier_name
+                    if selected_material is not None
+                    else None
                 ),
                 snapshot_weight=(
-                    product.material.basis_weight_description if product.material is not None else None
+                    selected_material.basis_weight_description
+                    if selected_material is not None
+                    else None
                 ),
                 # v0.19.2-B: 报料快照（从常用箱复制，历史不回填）
                 snapshot_report_length_mm=product.report_length_mm,
@@ -2885,6 +2970,87 @@ def update_order_item(
     if unit_price < 0:
         raise HTTPException(status_code=400, detail="单价不能为负数")
     order = db.get(Order, item.order_id)
+    selected_material_id = (
+        payload.material_id if payload.material_id is not None else item.material_id
+    )
+    selected_material = (
+        db.get(Material, selected_material_id)
+        if selected_material_id is not None
+        else None
+    )
+    if selected_material_id is not None and selected_material is None:
+        raise HTTPException(status_code=400, detail="订单明细材质不存在")
+    if (
+        selected_material is not None
+        and payload.layer_count is not None
+        and payload.layer_count != selected_material.layer_count
+    ):
+        raise HTTPException(status_code=400, detail="订单明细请求层数与所选材质真实层数不一致")
+    prospective_item_layer = (
+        selected_material.layer_count
+        if selected_material is not None
+        else (
+            payload.layer_count
+            if payload.layer_count is not None
+            else item.layer_count
+        )
+    )
+    material_code_error = seven_layer_code_error(
+        selected_material.code
+        if selected_material is not None
+        else (payload.material or item.snapshot_material),
+        prospective_item_layer,
+    )
+    if material_code_error:
+        raise HTTPException(status_code=400, detail=f"订单明细{material_code_error}")
+    prospective_item_flute = _validated_order_layer_flute(
+        prospective_item_layer,
+        payload.flute_type if payload.flute_type is not None else item.flute_type,
+        detail_prefix="订单明细",
+    )
+    product_to_sync: Product | None = None
+    prospective_product_layer: int | None = None
+    prospective_product_flute: str | None = None
+    if payload.sync_product and item.product_id:
+        product_to_sync = db.get(Product, item.product_id)
+        if product_to_sync is None:
+            raise HTTPException(status_code=409, detail="关联常用箱不存在，订单明细未保存")
+        product_material_id = (
+            payload.material_id
+            if payload.material_id is not None
+            else product_to_sync.material_id
+        )
+        product_material = (
+            db.get(Material, product_material_id)
+            if product_material_id is not None
+            else None
+        )
+        if product_material_id is not None and product_material is None:
+            raise HTTPException(status_code=400, detail="关联常用箱材质不存在")
+        if (
+            product_material is not None
+            and payload.layer_count is not None
+            and payload.layer_count != product_material.layer_count
+        ):
+            raise HTTPException(status_code=400, detail="关联常用箱请求层数与所选材质真实层数不一致")
+        prospective_product_layer = (
+            product_material.layer_count
+            if product_material is not None
+            else (
+                payload.layer_count
+                if payload.layer_count is not None
+                else product_to_sync.layer_count
+            )
+        )
+        prospective_product_flute = _validated_order_layer_flute(
+            prospective_product_layer,
+            (
+                payload.flute_type
+                if payload.flute_type is not None
+                else product_to_sync.flute_type
+            ),
+            detail_prefix="关联常用箱",
+        )
     report_field_mapping = {
         "snapshot_report_length_mm": "report_length_mm",
         "snapshot_report_width_mm": "report_width_mm",
@@ -3026,15 +3192,11 @@ def update_order_item(
         )
     # v0.19.2-B: 材质联动字段
     if payload.material_id is not None:
-        item.material_id = payload.material_id
-        mat = db.get(Material, payload.material_id)
-        if mat is not None:
-            item.snapshot_supplier_name = mat.supplier_name
-            item.snapshot_weight = mat.basis_weight_description
-    if payload.layer_count is not None:
-        item.layer_count = payload.layer_count
-    if payload.flute_type is not None:
-        item.flute_type = (payload.flute_type or "").strip().upper() or None
+        item.material_id = selected_material_id
+        item.snapshot_supplier_name = selected_material.supplier_name
+        item.snapshot_weight = selected_material.basis_weight_description
+    item.layer_count = prospective_item_layer
+    item.flute_type = prospective_item_flute
     # v0.19.2-B: 报料快照
     if payload.snapshot_report_length_mm is not None:
         item.snapshot_report_length_mm = payload.snapshot_report_length_mm
@@ -3070,32 +3232,12 @@ def update_order_item(
         item.snapshot_pieces_per_box = payload.snapshot_pieces_per_box
     if payload.snapshot_flap_mm is not None:
         item.snapshot_flap_mm = payload.snapshot_flap_mm
-    if payload.sync_product and item.product_id:
-        product = db.get(Product, item.product_id)
-        if product is None:
-            raise HTTPException(status_code=409, detail="关联常用箱不存在，订单明细未保存")
-        prospective_layer = (
-            payload.layer_count
-            if payload.layer_count is not None
-            else product.layer_count
-        )
-        prospective_flute = (
-            normalize_flute_type(payload.flute_type)
-            if payload.flute_type is not None
-            else normalize_flute_type(product.flute_type)
-        )
-        if payload.layer_count is not None or payload.flute_type is not None:
-            flute_error = validate_flute_consistency(
-                prospective_flute, prospective_layer
-            )
-            if flute_error:
-                raise HTTPException(status_code=400, detail=flute_error)
+    if product_to_sync is not None:
+        product = product_to_sync
         if payload.material_id is not None:
-            product.material_id = payload.material_id
-        if payload.layer_count is not None:
-            product.layer_count = payload.layer_count
-        if payload.flute_type is not None:
-            product.flute_type = prospective_flute
+            product.material_id = selected_material_id
+        product.layer_count = prospective_product_layer
+        product.flute_type = prospective_product_flute
         for field_name in (
             "box_style",
             "length_mm",

@@ -11,7 +11,13 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, ".")
 
 import app.models  # noqa: F401
-from app.api.requisition import _format_supplier_material
+from app.api.requisition import (
+    StockReplenishmentItemPayload,
+    _build_replenishment_item,
+    _clean_supplier_material_code,
+    _format_supplier_material,
+    _purchase_line_key,
+)
 
 
 @pytest.mark.parametrize(
@@ -23,6 +29,8 @@ from app.api.requisition import _format_supplier_material
         ("A6A", 3, "E", "A6A / E"),
         ("A414B-AB/EB", 5, "AB", "A414B / AB"),
         ("CCC-B", 3, None, "CCC"),
+        ("A12345B", 7, "AAA", "A12345B / AAA"),
+        ("B76543C-ABC", 7, "ABC", "B76543C / ABC"),
     ],
 )
 def test_supplier_material_display_rules(raw_code, layer_count, flute_type, expected):
@@ -34,6 +42,43 @@ def test_supplier_material_display_rejects_flute_combinations_as_material_code()
     assert displayed == "E"
     assert "AB/BE" not in displayed
     assert "B/E" not in displayed
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "layer_count", "expected"),
+    [
+        ("A6A-EXTRA", 3, "A6A"),
+        ("A416D-EXTRA", 5, "A416D"),
+        ("A12345B-EXTRA", 7, "A12345B"),
+    ],
+)
+def test_supplier_material_code_uses_layer_specific_length(
+    raw_code,
+    layer_count,
+    expected,
+):
+    assert _clean_supplier_material_code(raw_code, layer_count) == expected
+
+
+def test_supplier_purchase_line_key_keeps_aaa_and_abc_separate():
+    base_spec = {
+        "material_id": 7,
+        "material_code": "A12345B",
+        "material_display": "A12345B / AAA",
+        "layer_count": 7,
+        "flute_type": "AAA",
+        "report_length_mm": 1000,
+        "report_width_mm": 800,
+    }
+    abc_spec = {
+        **base_spec,
+        "material_display": "A12345B / ABC",
+        "flute_type": "ABC",
+    }
+    assert _purchase_line_key("七层供应商", base_spec) != _purchase_line_key(
+        "七层供应商",
+        abc_spec,
+    )
 
 
 def test_supplier_order_frontend_uses_clean_material_display():
@@ -113,6 +158,69 @@ def admin_cookies(client, session_factory):
     r = client.post("/api/auth/login", json={"username": "admin_so", "password": "pw123"})
     assert r.status_code in (200, 201), r.text
     return r.cookies
+
+
+@pytest.mark.parametrize("flute_type", ["AAA", "ABC"])
+def test_replenishment_item_preserves_seven_layer_material(
+    session_factory,
+    flute_type,
+):
+    db = session_factory()
+    try:
+        item = _build_replenishment_item(
+            db,
+            StockReplenishmentItemPayload(
+                target_inventory_type="semi_finished",
+                product_name=f"七层库存片料-{flute_type}",
+                material_code="A12345B",
+                layer_count=7,
+                flute_type=flute_type.lower(),
+                report_length_mm=1000,
+                report_width_mm=800,
+                crease_type="净料",
+                quantity=10,
+            ),
+        )
+        assert item.material_code_snapshot == "A12345B"
+        assert item.normalized_material_code == "A12345B"
+        assert item.layer_count == 7
+        assert item.flute_type == flute_type
+    finally:
+        db.rollback()
+        db.close()
+
+
+@pytest.mark.parametrize("flute_type", [None, "", "A", "B", "E", "AB", "BE"])
+def test_replenishment_item_rejects_invalid_seven_layer_flute(
+    session_factory,
+    flute_type,
+):
+    from app.services.stock_replenishment import StockReplenishmentError
+
+    db = session_factory()
+    try:
+        with pytest.raises(StockReplenishmentError) as exc_info:
+            _build_replenishment_item(
+                db,
+                StockReplenishmentItemPayload(
+                    target_inventory_type="semi_finished",
+                    product_name="七层无效楞型库存片料",
+                    material_code="A12345B",
+                    layer_count=7,
+                    flute_type=flute_type,
+                    report_length_mm=1000,
+                    report_width_mm=800,
+                    crease_type="净料",
+                    quantity=10,
+                ),
+            )
+        detail = str(exc_info.value)
+        assert "楞型" in detail
+        if flute_type:
+            assert "AAA" in detail and "ABC" in detail
+    finally:
+        db.rollback()
+        db.close()
 
 
 _created_id = None
@@ -259,3 +367,64 @@ class TestSupplierOrders:
         r = client.get("/api/requisition/supplier-orders?status=confirmed", cookies=admin_cookies)
         assert r.status_code == 200
         assert r.json()["total"] == 0
+
+
+def test_supplier_order_preserves_seven_layer_code_and_flute(
+    client,
+    admin_cookies,
+    session_factory,
+):
+    from app.models.material import Material
+
+    with session_factory() as db:
+        material = Material(
+            code="A12345B",
+            layer_count=7,
+            flute_type=None,
+            supplier_name="七层供应商",
+            is_active=True,
+        )
+        db.add(material)
+        db.commit()
+        material_id = material.id
+
+    payload = {
+        "supplier_name": "七层供应商",
+        "material_id": material_id,
+        "flute_type": "aaa",
+        "report_length_mm": 1000,
+        "report_width_mm": 800,
+        "members": [
+            {
+                "order_number": "TM-SEVEN-001",
+                "product_code": "SEVEN-001",
+                "product_name": "七层纸箱",
+                "quantity": 10,
+                "pieces_per_box": 1,
+            }
+        ],
+    }
+    response = client.post(
+        "/api/requisition/supplier-orders",
+        json=payload,
+        cookies=admin_cookies,
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["material_code"] == "A12345B"
+    assert data["material_display"] == "A12345B / AAA"
+    assert data["layer_count"] == 7
+    assert data["flute_type"] == "AAA"
+    assert data["lines"][0]["material_code"] == "A12345B"
+    assert data["lines"][0]["flute_type"] == "AAA"
+
+    for invalid_flute in (None, "", "A", "B", "E", "AB", "BE"):
+        invalid_payload = {**payload, "flute_type": invalid_flute}
+        invalid = client.post(
+            "/api/requisition/supplier-orders",
+            json=invalid_payload,
+            cookies=admin_cookies,
+        )
+        assert invalid.status_code == 400
+        detail = invalid.json()["detail"]
+        assert "AAA" in detail and "ABC" in detail

@@ -28,6 +28,7 @@ from app.models.warehouse_inventory import (
     SemiFinishedLotAllowedProduct,
     WarehouseLocation,
 )
+from app.services.flute_mapping import seven_layer_code_error
 from app.services.inventory_cost_snapshot import (
     apply_cost_snapshot,
     estimate_finished_product_cost,
@@ -39,6 +40,13 @@ class WarehouseInventoryError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
+    3: frozenset({"A", "B", "E"}),
+    5: frozenset({"AB", "BE"}),
+    7: frozenset({"AAA", "ABC"}),
+}
 
 
 @dataclass(frozen=True)
@@ -956,16 +964,6 @@ def manual_semi_finished_in(
         raise WarehouseInventoryError("半成品组件仅允许整片、天地盖盖片或底片")
     if pieces_per_box <= 0 or stock_yield_per_sheet <= 0:
         raise WarehouseInventoryError("每箱片数和每库存张产出片数必须大于0")
-    valid_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
-    flute = flute_type.strip().upper()
-    if layer_count not in valid_flutes or flute not in valid_flutes[layer_count]:
-        raise WarehouseInventoryError("三层仅支持A/B/E楞，五层仅支持AB/BE楞")
-    if sheet_type not in {"raw_board", "net_sheet", "creased_sheet"}:
-        raise WarehouseInventoryError("片料类型无效")
-    _location(db, location_id, "semi_finished")
-    customer = db.get(Customer, customer_id) if customer_id else None
-    if customer_id and customer is None:
-        raise WarehouseInventoryError("客户不存在", 404)
     material = db.get(Material, material_id) if material_id else None
     if material_id and (material is None or not material.is_active):
         raise WarehouseInventoryError("材质主数据不存在或已停用", 404)
@@ -973,6 +971,23 @@ def manual_semi_finished_in(
         material_code = material.code
         if material.layer_count is not None:
             layer_count = material.layer_count
+    code_error = seven_layer_code_error(material_code, layer_count)
+    if code_error:
+        raise WarehouseInventoryError(code_error)
+    flute = flute_type.strip().upper()
+    if (
+        layer_count not in SEMI_FINISHED_FLUTES_BY_LAYER
+        or flute not in SEMI_FINISHED_FLUTES_BY_LAYER[layer_count]
+    ):
+        raise WarehouseInventoryError(
+            "三层仅支持A/B/E楞，五层仅支持AB/BE楞，七层仅支持AAA/ABC楞"
+        )
+    if sheet_type not in {"raw_board", "net_sheet", "creased_sheet"}:
+        raise WarehouseInventoryError("片料类型无效")
+    _location(db, location_id, "semi_finished")
+    customer = db.get(Customer, customer_id) if customer_id else None
+    if customer_id and customer is None:
+        raise WarehouseInventoryError("客户不存在", 404)
     now = utc_now()
     lot = InventoryLot(
         lot_number=_number("SI"),

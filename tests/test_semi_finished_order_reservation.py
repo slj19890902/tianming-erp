@@ -910,6 +910,7 @@ def test_external_version_conflict_rolls_back_order_product_rule_and_reservation
         "product_name": "自动产品回滚测试",
         "specification": "800×600×200mm",
         "material": "A416D",
+        "layer_count": 3,
         "flute_type": "B",
         "quantity": 5,
         "unit_price": "1",

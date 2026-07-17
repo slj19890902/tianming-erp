@@ -21,6 +21,7 @@ Phase 17 / v0.17.1: 楞型识别与批量补全服务。
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -35,7 +36,12 @@ from app.models.product import Product
 
 VALID_FLUTE_FOR_3LAYER: frozenset[str] = frozenset(["A", "B", "E"])
 VALID_FLUTE_FOR_5LAYER: frozenset[str] = frozenset(["AB", "BE"])
-ALL_VALID_FLUTE: frozenset[str] = VALID_FLUTE_FOR_3LAYER | VALID_FLUTE_FOR_5LAYER
+VALID_FLUTE_FOR_7LAYER: frozenset[str] = frozenset(["AAA", "ABC"])
+ALL_VALID_FLUTE: frozenset[str] = (
+    VALID_FLUTE_FOR_3LAYER
+    | VALID_FLUTE_FOR_5LAYER
+    | VALID_FLUTE_FOR_7LAYER
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +106,27 @@ def normalize_flute_type(flute_type: str | None) -> str | None:
     return normalized or None
 
 
+def seven_layer_code_error(
+    material_code: str | None,
+    layer_count: int | None,
+) -> str | None:
+    """Reject a seven-character board code disguised as another layer count.
+
+    Legacy material descriptions may contain separators and prose, so this
+    guard deliberately applies only to a clean seven-character dictionary
+    code. Seven-layer entries themselves must use exactly seven alphanumeric
+    paper-layer characters.
+    """
+    code = unicodedata.normalize("NFKC", str(material_code or "")).strip().upper()
+    code = re.sub(r"\s+", "", code)
+    is_seven_code = re.fullmatch(r"[A-Z0-9]{7}", code) is not None
+    if is_seven_code and layer_count != 7:
+        return "7位材质代码必须按七层保存，不能声明为三层、五层或空层数"
+    if layer_count == 7 and not is_seven_code:
+        return "七层材质代码必须是7个字母或数字"
+    return None
+
+
 def validate_flute_consistency(flute_type: str | None, layer_count: int | None) -> str | None:
     """
     校验楞型与层数的一致性。
@@ -118,7 +145,30 @@ def validate_flute_consistency(flute_type: str | None, layer_count: int | None) 
             f"五层瓦楞只能是 AB / BE，当前楞型 {flute_type!r} 不合法。"
             "（A/B/E 是三层单楞）"
         )
+    if layer_count == 7 and flute_type not in VALID_FLUTE_FOR_7LAYER:
+        return (
+            f"七层瓦楞只能是 AAA / ABC，当前楞型 {flute_type!r} 不合法。"
+            "（七层楞型需由业务页面人工选择）"
+        )
     return None
+
+
+def validate_flute_for_write(
+    flute_type: str | None,
+    layer_count: int | None,
+) -> str | None:
+    """Strict write-time validation while keeping legacy reads permissive.
+
+    ``validate_flute_consistency`` intentionally accepts missing historical
+    values. New writes additionally require an explicit AAA/ABC choice for
+    seven-layer board and never infer a flute when the layer count is unknown.
+    """
+    normalized_flute = normalize_flute_type(flute_type)
+    if layer_count == 7 and normalized_flute is None:
+        return "七层瓦楞必须明确选择 AAA 或 ABC，楞型不能为空"
+    if layer_count not in {3, 5, 7} and normalized_flute is not None:
+        return "层数为空或未知时不能写入楞型，请先明确材质层数"
+    return validate_flute_consistency(normalized_flute, layer_count)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +227,13 @@ def parse_flute_from_text(text: str | None) -> FluteParseResult:
         return FluteParseResult(
             flute_type="A",
             layer_count=3,
+            surface_paper_type=surface,
+            source="weight_count",
+        )
+    if seg_count == 7:
+        # 七层没有默认楞型；仅识别层数，保留给业务页面人工选择 AAA/ABC。
+        return FluteParseResult(
+            layer_count=7,
             surface_paper_type=surface,
             source="weight_count",
         )
@@ -309,6 +366,11 @@ def _resolve_product_flute(product: Product) -> FluteParseResult:
     if product.material is not None:
         result = parse_flute_from_material(product.material)
         if result.flute_type:
+            return result
+        # The material dictionary intentionally does not store a default flute
+        # for seven-layer board. Do not fall back to stale legacy text and
+        # silently downgrade the product to a three/five-layer flute.
+        if result.layer_count == 7:
             return result
 
     result = parse_flute_from_text(product.legacy_material_text)

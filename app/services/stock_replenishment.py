@@ -18,7 +18,9 @@ from app.models.warehouse_inventory import (
     SemiFinishedInventoryDetail,
     WarehouseLocation,
 )
+from app.services.flute_mapping import seven_layer_code_error
 from app.services.warehouse_inventory import (
+    SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
     manual_finished_in,
     manual_semi_finished_in,
@@ -164,9 +166,22 @@ def validate_stock_policy(db: Session, policy: InventoryStockPolicy) -> None:
             raise StockReplenishmentError(
                 "半成品库存预警必须填写材质、层数、楞型和报料长宽。"
             )
-        valid_flutes = {3: {"A", "B", "E"}, 5: {"AB", "BE"}}
-        if policy.layer_count not in valid_flutes or policy.flute_type not in valid_flutes[policy.layer_count]:
-            raise StockReplenishmentError("三层只允许A/B/E楞，五层只允许AB/BE楞。")
+        code_error = seven_layer_code_error(
+            policy.material_code_snapshot,
+            policy.layer_count,
+        )
+        if code_error:
+            raise StockReplenishmentError(code_error)
+        flute_type = str(policy.flute_type or "").strip().upper()
+        if (
+            policy.layer_count not in SEMI_FINISHED_FLUTES_BY_LAYER
+            or flute_type
+            not in SEMI_FINISHED_FLUTES_BY_LAYER[policy.layer_count]
+        ):
+            raise StockReplenishmentError(
+                "三层只允许A/B/E楞，五层只允许AB/BE楞，七层只允许AAA/ABC楞。"
+            )
+        policy.flute_type = flute_type
     else:
         raise StockReplenishmentError("库存预警类型无效。")
 
@@ -350,6 +365,7 @@ def stock_replenishment_order(
             raise StockReplenishmentError(str(error), error.status_code) from error
 
         item.inventory_lot_id = lot.id
+        item.inventory_lot = lot
         item.stocked_quantity = item.quantity
         item.stocked_at = now
 

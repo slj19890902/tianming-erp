@@ -39,10 +39,18 @@ def _make_customer(session):
     return c
 
 
-def _make_material(session, supplier="苏州嘉林亿", layer=3, flute="B", price="1.52", weight="150g/130g/130g"):
+def _make_material(
+    session,
+    supplier="苏州嘉林亿",
+    layer=3,
+    flute="B",
+    price="1.52",
+    weight="150g/130g/130g",
+    code=None,
+):
     from app.models.material import Material
     m = Material(
-        code=f"A6D-{flute}", supplier_name=supplier, quote_price=Decimal(price),
+        code=code or f"A6D-{flute}", supplier_name=supplier, quote_price=Decimal(price),
         is_active=True, layer_count=layer, flute_type=flute,
         basis_weight_description=weight,
     )
@@ -68,6 +76,21 @@ def _make_product(session, customer_id, material=None, layer=3, flute="A"):
     session.add(p)
     session.flush()
     return p
+
+
+def _make_admin(session):
+    from app.models.user import User
+
+    user = User(
+        username="order-seven-admin",
+        password_hash="test-only",
+        role="admin",
+        real_name="订单七层测试",
+        must_change_password=False,
+    )
+    session.add(user)
+    session.flush()
+    return user
 
 
 class TestOrderItemColumns:
@@ -164,6 +187,172 @@ class TestOrderItemColumns:
 
         loaded = db.get(OrderItem, item.id)
         assert loaded.drawing_file == "/static/uploads/drawings/abc123.png"
+
+
+class TestSevenLayerOrderSnapshots:
+    @pytest.mark.parametrize("flute_type", ["AAA", "ABC"])
+    def test_create_order_preserves_valid_seven_layer_flute(self, db, flute_type):
+        from app.api.orders import OrderCreate, OrderItemCreate, create_order
+        from app.models.order import OrderItem
+
+        customer = _make_customer(db)
+        material = _make_material(
+            db,
+            layer=7,
+            flute=None,
+            code="A12345B",
+            weight="200g/130g/130g/130g/130g/130g/200g",
+        )
+        product = _make_product(
+            db,
+            customer.id,
+            material=material,
+            layer=7,
+            flute=flute_type,
+        )
+        user = _make_admin(db)
+        db.commit()
+
+        create_order(
+            OrderCreate(
+                customer_id=customer.id,
+                order_date=dt.date(2026, 7, 16),
+                items=[
+                    OrderItemCreate(
+                        product_id=product.id,
+                        quantity=10,
+                        unit_price=Decimal("2.50"),
+                    )
+                ],
+            ),
+            db=db,
+            user=user,
+        )
+
+        item = db.query(OrderItem).one()
+        assert item.snapshot_material == "A12345B"
+        assert item.layer_count == 7
+        assert item.flute_type == flute_type
+
+    @pytest.mark.parametrize(
+        "flute_type",
+        [None, "", "A", "B", "E", "AB", "BE"],
+    )
+    def test_create_order_rejects_invalid_seven_layer_flute(self, db, flute_type):
+        from fastapi import HTTPException
+
+        from app.api.orders import OrderCreate, OrderItemCreate, create_order
+        from app.models.order import Order
+
+        customer = _make_customer(db)
+        material = _make_material(
+            db,
+            layer=7,
+            flute=None,
+            code="A12345B",
+        )
+        product = _make_product(
+            db,
+            customer.id,
+            material=material,
+            layer=7,
+            flute=None,
+        )
+        user = _make_admin(db)
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            create_order(
+                OrderCreate(
+                    customer_id=customer.id,
+                    order_date=dt.date(2026, 7, 16),
+                    items=[
+                        OrderItemCreate(
+                            product_id=product.id,
+                            quantity=10,
+                            unit_price=Decimal("2.50"),
+                            layer_count=7,
+                            flute_type=flute_type,
+                        )
+                    ],
+                ),
+                db=db,
+                user=user,
+            )
+
+        assert exc_info.value.status_code == 400
+        detail = str(exc_info.value.detail)
+        assert "AAA" in detail and "ABC" in detail
+        assert db.query(Order).count() == 0
+
+    def test_update_order_item_cannot_bypass_validation_when_product_sync_is_off(self, db):
+        from fastapi import HTTPException
+
+        from app.api.orders import OrderItemUpdate, update_order_item
+        from app.models.order import Order, OrderItem
+        from app.models.product import Product
+
+        customer = _make_customer(db)
+        material = _make_material(db, layer=7, flute=None, code="A12345B")
+        product = _make_product(
+            db,
+            customer.id,
+            material=material,
+            layer=7,
+            flute="AAA",
+        )
+        user = _make_admin(db)
+        order = Order(
+            order_number="TM20260716001",
+            customer_id=customer.id,
+            order_date=dt.date(2026, 7, 16),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("25"),
+            created_by=user.id,
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            item_sequence=1,
+            item_order_number="TM20260716001-001",
+            quantity=10,
+            unit_price=Decimal("2.50"),
+            subtotal=Decimal("25"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_code=product.product_code,
+            snapshot_product_name=product.product_name,
+            snapshot_material="A12345B",
+            material_id=material.id,
+            layer_count=7,
+            flute_type="AAA",
+        )
+        db.add(item)
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            update_order_item(
+                item.id,
+                OrderItemUpdate(
+                    quantity=10,
+                    unit_price=Decimal("2.50"),
+                    product_code=product.product_code,
+                    product_name=product.product_name,
+                    material="A12345B",
+                    layer_count=7,
+                    flute_type="AB",
+                    sync_product=False,
+                ),
+                db=db,
+                user=user,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert db.get(OrderItem, item.id).flute_type == "AAA"
+        assert db.get(Product, product.id).flute_type == "AAA"
 
 
 class TestFluteDeltaInCost:

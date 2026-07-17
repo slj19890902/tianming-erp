@@ -384,7 +384,10 @@ def test_common_box_drawing_history_shows_filename_time_latest_and_open_action()
 
 def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     source = _source()
-    save_block = source[source.index("async saveModal()"):source.index('if (this.modal.type === "material")')]
+    save_start = source.index("async saveModal()")
+    save_block = source[
+        save_start:source.index('if (this.modal.type === "material")', save_start)
+    ]
 
     assert "payload.production_process = this.serializeProductionProcesses(" in source
     assert '"pieces_per_box", "flap_mm",' in save_block

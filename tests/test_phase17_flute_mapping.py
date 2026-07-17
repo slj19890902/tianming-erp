@@ -156,6 +156,8 @@ def test_surface_paper_bai():
     ("E",  3, False),
     ("AB", 5, False),
     ("BE", 5, False),
+    ("AAA", 7, False),
+    ("ABC", 7, False),
     # 非法：3层+双楞
     ("AB", 3, True),
     ("BE", 3, True),
@@ -163,8 +165,11 @@ def test_surface_paper_bai():
     ("A",  5, True),
     ("B",  5, True),
     ("E",  5, True),
+    ("A",  7, True),
+    ("AB", 7, True),
     # None 值不校验
     (None, 3, False),
+    (None, 7, False),  # Historical empty flute values remain readable.
     ("A",  None, False),
     (None, None, False),
 ])
@@ -174,6 +179,13 @@ def test_validate_flute_consistency(flute_type, layer_count, expect_error):
         assert err is not None, f"Expected error for {flute_type}/{layer_count} but got None"
     else:
         assert err is None, f"Expected no error for {flute_type}/{layer_count} but got: {err}"
+
+
+def test_parse_seven_layer_text_does_not_assign_default_flute():
+    result = parse_flute_from_text("120/105/80/100/80/105/120")
+    assert result.layer_count == 7
+    assert result.flute_type is None
+    assert result.source == "weight_count"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

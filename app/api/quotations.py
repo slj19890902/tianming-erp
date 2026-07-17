@@ -21,7 +21,7 @@ from app.models.product import Product
 from app.models.quotation import QuotationItem, QuotationOrder
 from app.models.user import User
 from app.services import material_pricing
-from app.services.flute_mapping import validate_flute_consistency
+from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 from app.services.report_crease import crease_width_error
 
@@ -102,6 +102,20 @@ class ConvertPayload(BaseModel):
         if not code:
             raise ValueError("存货编码不能为空")
         return code
+
+
+def _validated_quotation_flute(
+    layer_count: int | None,
+    flute_type: str | None,
+) -> str | None:
+    """Validate a manually supplied business flute without using material defaults."""
+    normalized_flute = normalize_flute_type(flute_type)
+    error = validate_flute_consistency(normalized_flute, layer_count)
+    if error is None and layer_count == 7 and normalized_flute not in {"AAA", "ABC"}:
+        error = "七层瓦楞必须人工选择 AAA 或 ABC，不能为空或使用三层/五层楞型"
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return normalized_flute
 
 
 def _is_a1(box_type: str | None) -> bool:
@@ -258,6 +272,12 @@ def _material_or_none(db: Session, material_id: int | None) -> Material | None:
 
 
 def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
+    material = _material_or_none(db, payload.material_id)
+    flute_type = (
+        _validated_quotation_flute(material.layer_count, payload.flute_type)
+        if material is not None
+        else None
+    )
     if not _is_a1(payload.box_type):
         return {
             "auto_calculated": False,
@@ -266,7 +286,6 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
             "margin_rate": payload.margin_rate,
             "message": "当前箱型暂无自动报价公式，请手工填写单价",
         }
-    material = _material_or_none(db, payload.material_id)
     if material is None:
         return {
             "auto_calculated": False,
@@ -278,7 +297,7 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
     effective = material_pricing.get_effective_material_price(
         db,
         material=material,
-        flute_type=payload.flute_type,
+        flute_type=flute_type,
     )
     square_price = effective.get("effective_price")
     if square_price is None:
@@ -348,6 +367,11 @@ def _replace_items(
     total = Decimal("0")
     for payload in payloads:
         material = _material_or_none(db, payload.material_id)
+        flute_type = (
+            _validated_quotation_flute(material.layer_count, payload.flute_type)
+            if material is not None
+            else None
+        )
         preview = _preview(db, payload)
         suggested = preview["suggested_unit_price"]
         final_price = payload.final_unit_price
@@ -369,7 +393,7 @@ def _replace_items(
             material_id=material.id if material else None,
             material_supplier=material.supplier_name if material else None,
             material_code=material.code if material else None,
-            flute_type=payload.flute_type,
+            flute_type=flute_type,
             quantity=payload.quantity,
             estimated_unit_cost=preview["estimated_unit_cost"],
             margin_rate=payload.margin_rate,
@@ -640,12 +664,18 @@ def convert_to_product(
         raise HTTPException(status_code=400, detail="请先在报价明细中选择材质")
     if not (material.supplier_name or "").strip():
         raise HTTPException(status_code=400, detail="所选材质缺少供应商，请先完善材质资料")
-    if material.layer_count not in {3, 5}:
+    if material.layer_count not in {3, 5, 7}:
         raise HTTPException(status_code=400, detail="所选材质缺少有效层数，请先完善材质资料")
-    flute_type = (payload.flute_type or item.flute_type or "").strip().upper()
-    flute_error = validate_flute_consistency(flute_type, material.layer_count)
-    if not flute_type or flute_error:
-        expected = "A、B 或 E" if material.layer_count == 3 else "AB 或 BE"
+    flute_type = _validated_quotation_flute(
+        material.layer_count,
+        payload.flute_type or item.flute_type,
+    )
+    if not flute_type:
+        expected = {
+            3: "A、B 或 E",
+            5: "AB 或 BE",
+            7: "AAA 或 ABC",
+        }[material.layer_count]
         raise HTTPException(
             status_code=400,
             detail=f"报价明细缺少有效楞型，请先选择{expected}后再转入常用箱",

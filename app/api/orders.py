@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Literal
 
+import jwt
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
@@ -22,6 +23,7 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.core.config import load_settings
 from app.core.time_contract import (
     beijing_naive_to_api,
     beijing_now_naive,
@@ -258,6 +260,13 @@ class OrderItemCreate(BaseModel):
         return value
 
 
+class PdfImportConfirmation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    preview_safety_token: str = Field(min_length=1, max_length=4000)
+    confirmed: bool = False
+
+
 class OrderItemUpdate(BaseModel):
     quantity: int
     unit_price: Decimal
@@ -316,6 +325,8 @@ class OrderCreate(BaseModel):
     items: list[OrderItemCreate] | None = None
     import_integrity_status: str | None = None
     import_integrity_errors: list[str] | None = None
+    import_draft: bool = False
+    pdf_import_confirmation: PdfImportConfirmation | None = None
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -347,6 +358,173 @@ def _validated_order_quantity(value: int | float, index: int) -> int:
             detail="当前 PDF 识别存在非整数数量，请人工确认并修改后再保存。",
         )
     return int(decimal_value)
+
+
+PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES = 5
+PDF_PREVIEW_SAFETY_TOKEN_TYPE = "pdf_order_preview_safety"
+
+
+def _pdf_preview_actor(user: User) -> str:
+    if user.id is not None:
+        return f"id:{user.id}"
+    return f"username:{user.username}"
+
+
+def _pdf_preview_safety_states(draft: dict) -> dict:
+    route = draft.get("customer_route")
+    route_status = route.get("status") if isinstance(route, dict) else None
+    integrity = draft.get("integrity_check")
+    integrity_status = (
+        integrity.get("integrity_status") if isinstance(integrity, dict) else None
+    )
+    matched_customer_id = draft.get("matched_customer_id")
+    return {
+        "recognition_status": str(draft.get("recognition_status") or "failed"),
+        "customer_route_status": str(route_status or "unmatched"),
+        "customer_match_status": str(
+            draft.get("customer_match_status") or "unmatched"
+        ),
+        "integrity_status": str(integrity_status or "missing"),
+        "matched_customer_id": int(matched_customer_id or 0),
+    }
+
+
+def _encode_pdf_preview_safety_token(
+    draft: dict,
+    user: User,
+    *,
+    state_overrides: dict | None = None,
+) -> str:
+    now = datetime.now(timezone.utc)
+    states = {**_pdf_preview_safety_states(draft), **(state_overrides or {})}
+    claims = {
+        "sub": _pdf_preview_actor(user),
+        "type": PDF_PREVIEW_SAFETY_TOKEN_TYPE,
+        "source_name": str(draft.get("source_name") or ""),
+        "source_hash": str(draft.get("file_hash") or ""),
+        **states,
+        "iat": now,
+        "exp": now + timedelta(minutes=PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
+
+
+def _attach_pdf_preview_safety_token(
+    draft: dict,
+    user: User,
+    *,
+    state_overrides: dict | None = None,
+) -> dict:
+    result = dict(draft)
+    result["preview_safety_token"] = _encode_pdf_preview_safety_token(
+        result,
+        user,
+        state_overrides=state_overrides,
+    )
+    return result
+
+
+def _pdf_preview_token_error(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": "PDF_PREVIEW_TOKEN_STALE", "message": message},
+    )
+
+
+def _decode_pdf_preview_safety_token(token: str, user: User) -> dict:
+    try:
+        claims = jwt.decode(
+            token,
+            load_settings().secret_key,
+            algorithms=["HS256"],
+            options={
+                "require": [
+                    "sub",
+                    "type",
+                    "source_name",
+                    "source_hash",
+                    "recognition_status",
+                    "customer_route_status",
+                    "customer_match_status",
+                    "integrity_status",
+                    "matched_customer_id",
+                    "iat",
+                    "exp",
+                ]
+            },
+        )
+    except jwt.ExpiredSignatureError as error:
+        raise _pdf_preview_token_error("PDF 预览确认已过期，请重新预览") from error
+    except jwt.PyJWTError as error:
+        raise _pdf_preview_token_error("PDF 预览确认无效，请重新预览") from error
+    if (
+        claims.get("type") != PDF_PREVIEW_SAFETY_TOKEN_TYPE
+        or claims.get("sub") != _pdf_preview_actor(user)
+    ):
+        raise _pdf_preview_token_error("PDF 预览确认与当前操作员不匹配")
+    try:
+        claims["matched_customer_id"] = int(claims["matched_customer_id"])
+    except (TypeError, ValueError) as error:
+        raise _pdf_preview_token_error("PDF 预览确认内容无效，请重新预览") from error
+    return claims
+
+
+def _validate_pdf_import_safety(
+    payload: OrderCreate,
+    user: User,
+) -> tuple[list[str], dict]:
+    context = payload.pdf_import_confirmation
+    if context is None:
+        if payload.import_draft:
+            raise HTTPException(
+                status_code=400,
+                detail="PDF 草稿缺少服务端保存确认上下文，不能直接保存。请返回预览页重新确认。",
+            )
+        return [], {}
+
+    if not context.confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail="PDF 草稿尚未执行明确确认，后端已拒绝直接保存。",
+        )
+    if payload.customer_id is None:
+        raise HTTPException(status_code=400, detail="PDF 草稿必须明确选择客户")
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="PDF 草稿至少需要一条明细")
+    for index, item in enumerate(payload.items, start=1):
+        if item.is_new_product or item.product_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条 PDF 明细必须明确选择唯一常用箱产品后才能直接保存",
+            )
+
+    claims = _decode_pdf_preview_safety_token(context.preview_safety_token, user)
+    if claims["integrity_status"] != "passed":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PDF_PREVIEW_INTEGRITY_FAILED",
+                "message": "PDF 完整性校验未通过或缺失，不能保存；请重新预览并补齐原单明细。",
+            },
+        )
+    if (
+        claims["customer_match_status"] != "matched"
+        or claims["matched_customer_id"] != payload.customer_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PDF_PREVIEW_CUSTOMER_STALE",
+                "message": "PDF 客户选择未经过最新重匹配确认，请重新选择客户。",
+            },
+        )
+
+    reasons: list[str] = []
+    if claims["recognition_status"] != "recognized":
+        reasons.append(f"recognition_status={claims['recognition_status']}")
+    if claims["customer_route_status"] != "locked":
+        reasons.append(f"customer_route={claims['customer_route_status']}")
+    return reasons, claims
 
 
 def _validated_order_layer_flute(
@@ -838,6 +1016,7 @@ class OrderUpdate(BaseModel):
 class DraftRematchRequest(BaseModel):
     draft: dict
     customer_id: int
+    preview_safety_token: str = Field(min_length=1, max_length=4000)
 
 
 class CostPreviewRequest(BaseModel):
@@ -1523,7 +1702,7 @@ def _parse_order_pdf_preview(
 async def preview_order_pdf(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_create),
+    user: User = Depends(can_create),
 ) -> dict:
     filename = (file.filename or "").strip()
     if not filename.lower().endswith(".pdf"):
@@ -1535,9 +1714,15 @@ async def preview_order_pdf(
     try:
         draft = _parse_order_pdf_preview(content, filename, template_rules)
         draft["file_hash"] = file_sha256(content)
-        return match_import_draft(db, draft)
+        return _attach_pdf_preview_safety_token(
+            match_import_draft(db, draft),
+            user,
+        )
     except PdfParseError as error:
-        return _pdf_failure_draft(filename, error, digest=file_sha256(content))
+        return _attach_pdf_preview_safety_token(
+            _pdf_failure_draft(filename, error, digest=file_sha256(content)),
+            user,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -1548,7 +1733,7 @@ async def preview_order_pdf(
 async def preview_order_pdf_batch(
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_create),
+    user: User = Depends(can_create),
 ) -> dict:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个 PDF 文件")
@@ -1557,6 +1742,7 @@ async def preview_order_pdf_batch(
     template_rules = load_active_pdf_template_rules(db)
     for file in files:
         filename = (file.filename or "uploaded.pdf").strip()
+        digest = ""
         try:
             if not filename.lower().endswith(".pdf"):
                 raise ValueError("只支持 PDF 文件")
@@ -1566,7 +1752,7 @@ async def preview_order_pdf_batch(
             digest = file_sha256(content)
             if digest in seen_hashes:
                 drafts.append(
-                    {
+                    _attach_pdf_preview_safety_token({
                         "source_name": filename,
                         "file_hash": digest,
                         "recognition_status": "duplicate_skipped",
@@ -1574,34 +1760,43 @@ async def preview_order_pdf_batch(
                         "duplicate_reason": "本批次已上传相同文件",
                         "items": [],
                         "warnings": ["本批次已上传相同文件，已跳过。"],
-                    }
+                    }, user)
                 )
                 continue
             seen_hashes.add(digest)
             draft = _parse_order_pdf_preview(content, filename, template_rules)
             draft["file_hash"] = digest
-            drafts.append(match_import_draft(db, draft))
+            drafts.append(
+                _attach_pdf_preview_safety_token(match_import_draft(db, draft), user)
+            )
         except PdfParseError as error:
-            drafts.append(_pdf_failure_draft(filename, error, digest=digest))
+            drafts.append(
+                _attach_pdf_preview_safety_token(
+                    _pdf_failure_draft(filename, error, digest=digest),
+                    user,
+                )
+            )
         except ValueError as error:
             drafts.append(
-                {
+                _attach_pdf_preview_safety_token({
                     "source_name": filename,
+                    "file_hash": digest,
                     "recognition_status": "failed",
                     "duplicate_status": None,
                     "items": [],
                     "warnings": [str(error)],
-                }
+                }, user)
             )
         except Exception:
             drafts.append(
-                {
+                _attach_pdf_preview_safety_token({
                     "source_name": filename,
+                    "file_hash": digest,
                     "recognition_status": "failed",
                     "duplicate_status": None,
                     "items": [],
                     "warnings": ["文件识别失败，请检查文件内容后重试。"],
-                }
+                }, user)
             )
     return {"batch_count": len(files), "drafts": drafts}
 
@@ -1612,10 +1807,60 @@ def rematch_order_draft(
     db: Session = Depends(get_db),
     _user: User = Depends(can_create),
 ) -> dict:
+    trusted_claims = _decode_pdf_preview_safety_token(
+        payload.preview_safety_token,
+        _user,
+    )
+    draft_source_name = str(payload.draft.get("source_name") or "").strip()
+    trusted_source_name = str(trusted_claims["source_name"] or "").strip()
+    draft_source_hash = str(payload.draft.get("file_hash") or "").strip().casefold()
+    trusted_source_hash = str(trusted_claims["source_hash"] or "").strip().casefold()
+    if (
+        draft_source_name or trusted_source_name
+    ) and draft_source_name != trusted_source_name:
+        raise _pdf_preview_token_error("PDF 预览 token 与草稿文件名不一致，请重新预览")
+    if (
+        draft_source_hash or trusted_source_hash
+    ) and draft_source_hash != trusted_source_hash:
+        raise _pdf_preview_token_error("PDF 预览 token 与草稿文件哈希不一致，请重新预览")
     require_customer_access(payload.customer_id, current_user=_user, db=db)
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
-    return match_import_draft(db, payload.draft, customer_id=payload.customer_id)
+    trusted_draft = dict(payload.draft)
+    trusted_draft["source_name"] = trusted_claims["source_name"]
+    trusted_draft["file_hash"] = trusted_claims["source_hash"]
+    trusted_draft["recognition_status"] = trusted_claims["recognition_status"]
+    trusted_draft["parse_status"] = trusted_claims["recognition_status"]
+    route = (
+        dict(trusted_draft.get("customer_route"))
+        if isinstance(trusted_draft.get("customer_route"), dict)
+        else {}
+    )
+    route["status"] = trusted_claims["customer_route_status"]
+    trusted_draft["customer_route"] = route
+    integrity = (
+        dict(trusted_draft.get("integrity_check"))
+        if isinstance(trusted_draft.get("integrity_check"), dict)
+        else {}
+    )
+    integrity["integrity_status"] = trusted_claims["integrity_status"]
+    trusted_draft["integrity_check"] = integrity
+    result = match_import_draft(
+        db,
+        trusted_draft,
+        customer_id=payload.customer_id,
+    )
+    return _attach_pdf_preview_safety_token(
+        result,
+        _user,
+        state_overrides={
+            "recognition_status": trusted_claims["recognition_status"],
+            "customer_route_status": trusted_claims["customer_route_status"],
+            "customer_match_status": "matched",
+            "integrity_status": trusted_claims["integrity_status"],
+            "matched_customer_id": payload.customer_id,
+        },
+    )
 
 
 @router.post("/cost-preview")
@@ -2637,6 +2882,10 @@ def create_order(
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    pdf_safety_override_reasons, pdf_safety_claims = _validate_pdf_import_safety(
+        payload,
+        user,
+    )
     if (
         any(
             item.drawing_save_option in _PRODUCT_DRAWING_SAVE_OPTIONS
@@ -2656,7 +2905,10 @@ def create_order(
             status_code=403,
             detail="无常用箱图纸覆盖权限",
         )
-    if payload.import_integrity_status == "failed":
+    if (
+        payload.import_integrity_status == "failed"
+        and payload.pdf_import_confirmation is None
+    ):
         errors = payload.import_integrity_errors or []
         message = (
             "当前 PDF 识别存在漏行或合计不一致，不能直接保存。"
@@ -2670,6 +2922,10 @@ def create_order(
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
             raise HTTPException(status_code=400, detail="客户不存在")
+        if payload.pdf_import_confirmation is not None and (
+            not customer.is_active or customer.status != "active"
+        ):
+            raise HTTPException(status_code=400, detail="PDF 草稿所选客户已停用")
 
         customer_po = (payload.customer_po or "").strip() or None
 
@@ -3016,6 +3272,39 @@ def create_order(
                 description="创建多明细订单",
             )
         )
+        if pdf_safety_override_reasons:
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    action="PDF_SAFETY_OVERRIDE",
+                    resource="Order",
+                    details=json.dumps(
+                        {
+                            "order_number": order.order_number,
+                            "customer_id": order.customer_id,
+                            "item_count": len(payload.items),
+                            "source_name": pdf_safety_claims.get("source_name"),
+                            "source_hash": pdf_safety_claims.get("source_hash"),
+                            "recognition_status": pdf_safety_claims.get(
+                                "recognition_status"
+                            ),
+                            "customer_route_status": pdf_safety_claims.get(
+                                "customer_route_status"
+                            ),
+                            "integrity_status": pdf_safety_claims.get(
+                                "integrity_status"
+                            ),
+                            "override_reasons": pdf_safety_override_reasons,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    username=user.username,
+                    role=user.role,
+                    entity_type="order",
+                    entity_id=order.id,
+                    description="人工明确确认后保存存在安全闸门状态的 PDF 草稿",
+                )
+            )
         db.flush()  # 获取 item.id 以便处理图纸
         for created_item in created_items:
             create_or_refresh_production_task(db, created_item.id)

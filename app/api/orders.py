@@ -78,6 +78,8 @@ from app.services import material_pricing
 from app.services.order_pdf_import import (
     PARSE_STATUS_LABELS,
     PdfParseError,
+    _company_name_key,
+    _full_company_name_key,
     calculate_draft_cost,
     file_sha256,
     match_import_draft,
@@ -1618,6 +1620,189 @@ def _parse_order_pdf_preview(
     return parse_pdf_bytes(content, filename, template_rules).draft
 
 
+def _customer_id_value(value: object) -> int | None:
+    try:
+        customer_id = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return customer_id if customer_id > 0 else None
+
+
+def _scope_denied_pdf_preview(draft: dict) -> dict:
+    """Return a fixed, customer-data-free preview for an out-of-scope match.
+
+    Build this payload from a whitelist instead of redacting the matched draft.
+    This keeps future customer/product fields fail-closed as the PDF parser grows.
+    """
+
+    return {
+        "source_name": str(draft.get("source_name") or "uploaded.pdf"),
+        "file_hash": str(draft.get("file_hash") or ""),
+        "source_type": "purchase_order_pdf",
+        "recognition_status": "needs_confirmation",
+        "parse_status": "needs_confirmation",
+        "duplicate_status": None,
+        "item_count": 0,
+        "items": [],
+        "warnings": ["当前账号无权访问该 PDF 对应客户，请联系管理员分配客户范围。"],
+        "customer_route": {"status": "needs_confirmation"},
+        "integrity_check": {
+            "integrity_status": "unknown",
+            "integrity_errors": [],
+            "integrity_warnings": ["客户范围未通过，未执行业务数据匹配。"],
+        },
+    }
+
+
+def _match_pdf_customer_in_scope(
+    db: Session,
+    raw_name: str | None,
+    visible_customer_ids: set[int],
+) -> tuple[str, int | None, list[dict]]:
+    """Resolve a parsed customer name without reading outside the allow-list."""
+
+    if not raw_name or not visible_customer_ids:
+        return "unmatched", None, []
+    full_target = _full_company_name_key(raw_name)
+    target = _company_name_key(raw_name)
+    exact_candidates: list[dict] = []
+    normalized_candidates: list[dict] = []
+    partial_candidates: list[dict] = []
+    customers = db.scalars(
+        select(Customer)
+        .where(
+            Customer.id.in_(visible_customer_ids),
+            Customer.is_active.is_(True),
+        )
+        .order_by(Customer.id)
+    ).all()
+    for customer in customers:
+        candidate = {"id": customer.id, "name": customer.name}
+        full_key = _full_company_name_key(customer.name)
+        key = _company_name_key(customer.name)
+        if full_key and full_key == full_target:
+            exact_candidates.append(candidate)
+        elif key and key == target:
+            normalized_candidates.append(candidate)
+        elif key and target and (key in target or target in key):
+            partial_candidates.append(candidate)
+    candidates = exact_candidates or normalized_candidates or partial_candidates
+    if len(candidates) == 1:
+        return "matched", candidates[0]["id"], candidates
+    if len(candidates) > 1:
+        return "multiple_candidates", None, candidates
+    return "unmatched", None, []
+
+
+def _match_pdf_preview_for_user(
+    db: Session,
+    draft: dict,
+    user: User,
+    *,
+    customer_id: int | None = None,
+) -> dict:
+    """Apply the same customer scope gate to preview, batch and rematch.
+
+    Restricted users are resolved against their allow-list before
+    ``match_import_draft`` can query customer products or material candidates.
+    """
+
+    if customer_id is not None:
+        require_customer_access(customer_id, current_user=user, db=db)
+        if db.get(Customer, customer_id) is None:
+            raise HTTPException(status_code=400, detail="客户不存在")
+        return match_import_draft(db, draft, customer_id=customer_id)
+
+    if has_unrestricted_customer_access(user, db):
+        return match_import_draft(db, draft)
+
+    visible_customer_ids = customer_scope_ids(user, db)
+    if not visible_customer_ids:
+        return _scope_denied_pdf_preview(draft)
+
+    route = (
+        draft.get("customer_route")
+        if isinstance(draft.get("customer_route"), dict)
+        else {}
+    )
+    route_status = route.get("status")
+    if route_status == "locked":
+        routed_customer_id = _customer_id_value(route.get("template_customer_id"))
+        if routed_customer_id is not None:
+            if routed_customer_id not in visible_customer_ids:
+                return _scope_denied_pdf_preview(draft)
+            routed_customer = db.scalar(
+                select(Customer).where(
+                    Customer.id == routed_customer_id,
+                    Customer.is_active.is_(True),
+                    Customer.status == "active",
+                )
+            )
+            if routed_customer is None:
+                return _scope_denied_pdf_preview(draft)
+            return match_import_draft(db, draft, customer_id=routed_customer_id)
+        match_status, matched_customer_id, _candidates = _match_pdf_customer_in_scope(
+            db,
+            draft.get("customer_name_raw") or draft.get("customer_name"),
+            visible_customer_ids,
+        )
+        if match_status != "matched" or matched_customer_id is None:
+            return _scope_denied_pdf_preview(draft)
+        return match_import_draft(db, draft, customer_id=matched_customer_id)
+
+    if route_status == "needs_confirmation":
+        route_candidates = route.get("candidates")
+        if isinstance(route_candidates, list):
+            visible_candidates = [
+                candidate
+                for candidate in route_candidates
+                if isinstance(candidate, dict)
+                and _customer_id_value(candidate.get("template_customer_id"))
+                in visible_customer_ids
+            ]
+            if route_candidates and not visible_candidates:
+                return _scope_denied_pdf_preview(draft)
+            draft = {
+                **draft,
+                "customer_route": {**route, "candidates": visible_candidates},
+            }
+        return match_import_draft(db, draft)
+
+    match_status, matched_customer_id, candidates = _match_pdf_customer_in_scope(
+        db,
+        draft.get("customer_name_raw") or draft.get("customer_name"),
+        visible_customer_ids,
+    )
+    if matched_customer_id is not None:
+        if matched_customer_id not in visible_customer_ids:
+            return _scope_denied_pdf_preview(draft)
+        return match_import_draft(db, draft, customer_id=matched_customer_id)
+
+    if match_status == "multiple_candidates":
+        visible_candidates = [
+            candidate
+            for candidate in candidates
+            if _customer_id_value(candidate.get("id")) in visible_customer_ids
+        ]
+        if not visible_candidates:
+            return _scope_denied_pdf_preview(draft)
+        draft = {
+            **draft,
+            "customer_route": {
+                "status": "needs_confirmation",
+                "candidates": [
+                    {
+                        "template_customer_id": candidate["id"],
+                        "customer_name": candidate["name"],
+                    }
+                    for candidate in visible_candidates
+                ],
+            },
+        }
+        return match_import_draft(db, draft)
+    return _scope_denied_pdf_preview(draft)
+
+
 @router.post("/pdf-preview")
 async def preview_order_pdf(
     file: UploadFile = File(...),
@@ -1635,7 +1820,7 @@ async def preview_order_pdf(
         draft = _parse_order_pdf_preview(content, filename, template_rules)
         draft["file_hash"] = file_sha256(content)
         return _attach_pdf_preview_safety_token(
-            match_import_draft(db, draft),
+            _match_pdf_preview_for_user(db, draft, user),
             user,
         )
     except PdfParseError as error:
@@ -1687,7 +1872,9 @@ async def preview_order_pdf_batch(
             draft = _parse_order_pdf_preview(content, filename, template_rules)
             draft["file_hash"] = digest
             drafts.append(
-                _attach_pdf_preview_safety_token(match_import_draft(db, draft), user)
+                _attach_pdf_preview_safety_token(
+                    _match_pdf_preview_for_user(db, draft, user), user
+                )
             )
         except PdfParseError as error:
             drafts.append(
@@ -1743,9 +1930,6 @@ def rematch_order_draft(
         draft_source_hash or trusted_source_hash
     ) and draft_source_hash != trusted_source_hash:
         raise _pdf_preview_token_error("PDF 预览 token 与草稿文件哈希不一致，请重新预览")
-    require_customer_access(payload.customer_id, current_user=_user, db=db)
-    if db.get(Customer, payload.customer_id) is None:
-        raise HTTPException(status_code=400, detail="客户不存在")
     trusted_draft = dict(payload.draft)
     trusted_draft["source_name"] = trusted_claims["source_name"]
     trusted_draft["file_hash"] = trusted_claims["source_hash"]
@@ -1765,9 +1949,10 @@ def rematch_order_draft(
     )
     integrity["integrity_status"] = trusted_claims["integrity_status"]
     trusted_draft["integrity_check"] = integrity
-    result = match_import_draft(
+    result = _match_pdf_preview_for_user(
         db,
         trusted_draft,
+        _user,
         customer_id=payload.customer_id,
     )
     return _attach_pdf_preview_safety_token(

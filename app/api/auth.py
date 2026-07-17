@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from threading import Lock
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from app.api.deps import (
     get_db,
 )
 from app.core.config import load_settings
+from app.core.password_policy import normalize_username, password_policy_issues
 from app.core.security import create_session_token, hash_password, verify_password
 from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
@@ -31,12 +33,13 @@ from app.models.user import USER_ROLES, User
 router = APIRouter()
 
 
-# OperationLog is the shared persistence layer for this lightweight guard.  The
-# deployment runs one application worker, so its query-then-record flow remains
-# ordered without introducing a new table or migration.
+# OperationLog is the shared persistence layer for this lightweight guard.  A
+# short process-local gate serializes only committed audit count/write steps;
+# bcrypt always runs outside the gate.
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_IP_FAILURE_LIMIT = 30
 LOGIN_FAILURE_WINDOW = timedelta(minutes=15)
+_LOGIN_AUDIT_GATE = Lock()
 
 
 PERMISSION_LABELS: dict[str, tuple[str, str]] = {
@@ -77,9 +80,23 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=72)
     remember_me: bool = False
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username_input(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_username(value)
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("密码 UTF-8 编码后不能超过 72 字节")
+        return value
 
 
 class ChangePasswordRequest(BaseModel):
@@ -189,21 +206,16 @@ def _validate_role(role: str) -> str:
 
 
 def _validate_username(username: str) -> str:
-    normalized = username.strip()
-    if not normalized:
-        raise HTTPException(status_code=400, detail="用户名不能为空")
-    if len(normalized) > 50:
-        raise HTTPException(status_code=400, detail="用户名长度不能超过 50")
-    return normalized
+    try:
+        return normalize_username(username)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-def _validate_new_password(password: str) -> None:
-    if len(password) < 10:
-        raise HTTPException(status_code=400, detail="新密码至少需要 10 位")
-    if not any(char.isalpha() for char in password) or not any(
-        char.isdigit() for char in password
-    ):
-        raise HTTPException(status_code=400, detail="新密码必须同时包含字母和数字")
+def _validate_new_password(password: str, *, username: str | None = None) -> None:
+    issues = password_policy_issues(password, username=username)
+    if issues:
+        raise HTTPException(status_code=400, detail=f"密码不符合要求：{'；'.join(issues)}")
 
 
 def _password_log(
@@ -234,6 +246,8 @@ def _password_log(
 def _login_request_metadata(request: Request, username: str) -> dict[str, str | None]:
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
+    if user_agent is not None:
+        user_agent = user_agent[:256]
     return {
         "attempted_username": username,
         "ip_address": ip_address,
@@ -297,24 +311,59 @@ def _recent_ip_failed_login_count(db: Session, *, ip_address: str | None) -> int
     )
 
 
-@router.post("/login")
-def login(
-    payload: LoginRequest,
+def _throttle_log_exists(
+    db: Session,
+    *,
+    username: str,
+    ip_address: str | None,
+    ip_throttled: bool,
+) -> bool:
+    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    filters = [
+        OperationLog.action == "LOGIN_THROTTLED",
+        OperationLog.ip_address == ip_address,
+        OperationLog.created_at >= cutoff,
+    ]
+    if not ip_throttled:
+        filters.append(OperationLog.username == username)
+    return db.scalar(select(OperationLog.id).where(*filters).limit(1)) is not None
+
+
+def _login_throttle_state(
+    db: Session,
+    *,
+    username: str,
+    ip_address: str | None,
+) -> tuple[bool, bool]:
+    username_throttled = (
+        _recent_failed_login_count(
+            db,
+            username=username,
+            ip_address=ip_address,
+        )
+        >= LOGIN_FAILURE_LIMIT
+    )
+    ip_throttled = (
+        ip_address is not None
+        and _recent_ip_failed_login_count(db, ip_address=ip_address)
+        >= LOGIN_IP_FAILURE_LIMIT
+    )
+    return username_throttled, ip_throttled
+
+
+def _raise_login_throttled(
+    db: Session,
+    *,
     request: Request,
-    response: Response,
-    db: Session = Depends(get_db),
-) -> dict:
-    username = payload.username.strip()
-    ip_address = request.client.host if request.client else None
-    username_failures = _recent_failed_login_count(
+    username: str,
+    ip_address: str | None,
+    ip_throttled: bool,
+) -> None:
+    if not _throttle_log_exists(
         db,
         username=username,
         ip_address=ip_address,
-    )
-    ip_failures = _recent_ip_failed_login_count(db, ip_address=ip_address)
-    if (
-        username_failures >= LOGIN_FAILURE_LIMIT
-        or ip_failures >= LOGIN_IP_FAILURE_LIMIT
+        ip_throttled=ip_throttled,
     ):
         db.add(
             _login_attempt_log(
@@ -323,26 +372,100 @@ def login(
                 username=username,
             )
         )
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="\u767b\u5f55\u5c1d\u8bd5\u8fc7\u591a\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5",
-        )
+    db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="\u767b\u5f55\u5c1d\u8bd5\u8fc7\u591a\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5",
+    )
 
-    user = db.scalar(select(User).where(User.username == username))
-    if (
-        user is None
-        or not user.is_active
-        or not verify_password(payload.password, user.password_hash)
-    ):
-        db.add(
-            _login_attempt_log(
-                action="LOGIN_FAILED",
+
+def _reject_committed_throttle(
+    db: Session,
+    *,
+    request: Request,
+    username: str,
+    ip_address: str | None,
+) -> None:
+    # This gate is deliberately held only around committed audit reads/writes.
+    # Password verification is performed after it is released.
+    with _LOGIN_AUDIT_GATE:
+        username_throttled, ip_throttled = _login_throttle_state(
+            db,
+            username=username,
+            ip_address=ip_address,
+        )
+        if username_throttled or ip_throttled:
+            _raise_login_throttled(
+                db,
                 request=request,
                 username=username,
+                ip_address=ip_address,
+                ip_throttled=ip_throttled,
             )
-        )
-        db.commit()
+        db.rollback()
+
+
+@router.post("/login")
+def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict:
+    username = normalize_username(payload.username)
+    ip_address = request.client.host if request.client else None
+    _reject_committed_throttle(
+        db,
+        request=request,
+        username=username,
+        ip_address=ip_address,
+    )
+    user = db.scalar(select(User).where(User.username == username))
+    user_snapshot = (
+        {
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "is_active": user.is_active,
+            "password_hash": user.password_hash,
+            "auth_version": user.auth_version,
+        }
+        if user is not None
+        else None
+    )
+    # Release SQLite's read transaction before bcrypt.  Different login keys
+    # may verify concurrently; only the short audit INSERT holds a write lock.
+    db.rollback()
+    password_valid = (
+        user_snapshot is not None
+        and user_snapshot["is_active"]
+        and verify_password(payload.password, user_snapshot["password_hash"])
+    )
+    if not password_valid:
+        # Recheck and record under one short process-local gate.  Concurrent
+        # failures therefore cannot all pass a stale count snapshot.
+        with _LOGIN_AUDIT_GATE:
+            username_throttled, ip_throttled = _login_throttle_state(
+                db,
+                username=username,
+                ip_address=ip_address,
+            )
+            if username_throttled or ip_throttled:
+                _raise_login_throttled(
+                    db,
+                    request=request,
+                    username=username,
+                    ip_address=ip_address,
+                    ip_throttled=ip_throttled,
+                )
+            db.add(
+                _login_attempt_log(
+                    action="LOGIN_FAILED",
+                    request=request,
+                    username=username,
+                )
+            )
+            db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
@@ -351,8 +474,8 @@ def login(
     current = load_settings()
     remember_seconds = 30 * 24 * 60 * 60
     token = create_session_token(
-        user.id,
-        auth_version=user.auth_version,
+        user_snapshot["id"],
+        auth_version=user_snapshot["auth_version"],
         expires_minutes=(
             remember_seconds // 60
             if payload.remember_me
@@ -370,25 +493,37 @@ def login(
     if payload.remember_me:
         cookie_options["max_age"] = remember_seconds
     response.set_cookie(**cookie_options)
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="LOGIN",
-            resource="User",
-            details=json.dumps(
-                {"username": user.username, "role": user.role},
-                ensure_ascii=False,
-            ),
-            ip_address=request.client.host if request.client else None,
-            username=user.username,
-            role=user.role,
-            entity_type="user",
-            entity_id=user.id,
-            description="用户登录",
-            user_agent=request.headers.get("user-agent"),
+    # SQLite accepts one writer at a time.  Serialize only this short audit
+    # commit; all password checks above remain fully concurrent.
+    with _LOGIN_AUDIT_GATE:
+        db.add(
+            OperationLog(
+                user_id=user_snapshot["id"],
+                action="LOGIN",
+                resource="User",
+                details=json.dumps(
+                    {
+                        "username": user_snapshot["username"],
+                        "role": user_snapshot["role"],
+                    },
+                    ensure_ascii=False,
+                ),
+                ip_address=request.client.host if request.client else None,
+                username=user_snapshot["username"],
+                role=user_snapshot["role"],
+                entity_type="user",
+                entity_id=user_snapshot["id"],
+                description="用户登录",
+                user_agent=request.headers.get("user-agent"),
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    user = db.get(User, user_snapshot["id"])
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误",
+        )
     return _auth_payload(user, db)
 
 
@@ -466,7 +601,7 @@ def change_password(
 ) -> dict:
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="当前密码错误")
-    _validate_new_password(payload.new_password)
+    _validate_new_password(payload.new_password, username=current_user.username)
     if verify_password(payload.new_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
 
@@ -504,7 +639,7 @@ def create_user(
     username = _validate_username(payload.username)
     if db.scalar(select(User.id).where(User.username == username)) is not None:
         raise HTTPException(status_code=409, detail="用户名已存在")
-    _validate_new_password(payload.password)
+    _validate_new_password(payload.password, username=username)
     role = _validate_role(payload.role)
     user = User(
         username=username,
@@ -579,7 +714,7 @@ def update_user(
     if "must_change_password" in changes:
         user.must_change_password = changes["must_change_password"]
     if "password" in changes and changes["password"] is not None:
-        _validate_new_password(changes["password"])
+        _validate_new_password(changes["password"], username=user.username)
         user.password_hash = hash_password(changes["password"])
         if "must_change_password" not in changes:
             user.must_change_password = True
@@ -808,10 +943,11 @@ def reset_password(
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
-    target = db.scalar(select(User).where(User.username == username.strip()))
+    normalized_username = _validate_username(username)
+    target = db.scalar(select(User).where(User.username == normalized_username))
     if target is None:
         raise HTTPException(status_code=404, detail="账号不存在")
-    _validate_new_password(payload.new_password)
+    _validate_new_password(payload.new_password, username=target.username)
 
     target.password_hash = hash_password(payload.new_password)
     target.must_change_password = True

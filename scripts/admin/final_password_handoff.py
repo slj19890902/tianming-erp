@@ -4,6 +4,7 @@ import argparse
 import getpass
 import hashlib
 import json
+import os
 import sqlite3
 import urllib.error
 import urllib.parse
@@ -13,6 +14,7 @@ from datetime import datetime
 from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import sys
 
@@ -21,21 +23,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.backup_retention import auto_cleanup_regular_backups
+from app.core.config import load_settings
+from app.core.password_policy import normalize_username, password_policy_issues
 from app.core.security import hash_password
 
 
 VALID_USERS = ("admin", "finance", "sales", "workshop")
-WEAK_PASSWORDS = {
-    "admin",
-    "123456",
-    "12345678",
-    "888888",
-    "password",
-    "password123",
-    "qwerty",
-}
-
-
 @dataclass
 class LoginCheck:
     login_status: int
@@ -48,8 +41,9 @@ class LoginCheck:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive final password handoff")
     parser.add_argument("--sqlite-path", required=True)
-    parser.add_argument("--api-base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--api-base-url")
     parser.add_argument("--output-json", required=True)
+    parser.add_argument("--actor", required=True)
     return parser.parse_args()
 
 
@@ -81,6 +75,17 @@ def backup_sqlite(source: Path, backup: Path) -> None:
     auto_cleanup_regular_backups(backup_dir=backup.parent, keep=5)
 
 
+def validate_backup_before_password_write(
+    backup: Path,
+) -> tuple[str, dict[str, Any]]:
+    if not backup.is_file() or backup.stat().st_size <= 0:
+        raise RuntimeError("密码交接备份不存在或为空，禁止写入密码")
+    integrity = db_integrity(backup)
+    if integrity != {"integrity_check": "ok", "foreign_key_check_count": 0}:
+        raise RuntimeError(f"密码交接备份完整性校验失败，禁止写入密码：{integrity}")
+    return sha256_of(backup), integrity
+
+
 def prompt_password(username: str) -> str:
     while True:
         first = getpass.getpass(f"{username} 新密码: ")
@@ -98,23 +103,7 @@ def prompt_password(username: str) -> str:
 
 
 def validate_handoff_password(password: str, username: str) -> list[str]:
-    issues: list[str] = []
-    lowered = password.lower()
-    if len(password) < 12:
-        issues.append("至少 12 位")
-    if lowered in WEAK_PASSWORDS:
-        issues.append("不能使用弱密码")
-    if username.lower() in lowered:
-        issues.append("不能包含用户名")
-    if not any(ch.islower() for ch in password):
-        issues.append("至少包含 1 个小写字母")
-    if not any(ch.isupper() for ch in password):
-        issues.append("至少包含 1 个大写字母")
-    if not any(ch.isdigit() for ch in password):
-        issues.append("至少包含 1 个数字")
-    if not any(not ch.isalnum() for ch in password):
-        issues.append("至少包含 1 个符号")
-    return issues
+    return password_policy_issues(password, username=username)
 
 
 def fetch_users(db_path: Path) -> list[dict[str, Any]]:
@@ -131,11 +120,44 @@ def fetch_users(db_path: Path) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def update_passwords(db_path: Path, passwords: dict[str, str]) -> None:
+def validate_handoff_actor(
+    connection: sqlite3.Connection,
+    actor_username: str,
+) -> tuple[int, str, str]:
+    try:
+        normalized_actor = normalize_username(actor_username)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("--actor 必须是可识别的启用管理员账号") from error
+    row = connection.execute(
+        """
+        SELECT id, username, role, is_active
+        FROM users
+        WHERE username = ?
+        """,
+        (normalized_actor,),
+    ).fetchone()
+    if row is None or row[2] != "admin" or not bool(row[3]):
+        raise RuntimeError("--actor 必须是可识别的启用管理员账号")
+    return int(row[0]), str(row[1]), str(row[2])
+
+
+def update_passwords(
+    db_path: Path,
+    passwords: dict[str, str],
+    *,
+    actor_username: str,
+) -> None:
+    password_hashes = {
+        username: hash_password(password) for username, password in passwords.items()
+    }
     with sqlite3.connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        for username, password in passwords.items():
-            conn.execute(
+        actor_id, actor_name, actor_role = validate_handoff_actor(
+            conn,
+            actor_username,
+        )
+        for username, password_hash in password_hashes.items():
+            cursor = conn.execute(
                 """
                 UPDATE users
                 SET password_hash = ?,
@@ -144,8 +166,31 @@ def update_passwords(db_path: Path, passwords: dict[str, str]) -> None:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE username = ?
                 """,
-                (hash_password(password), username),
+                (password_hash, username),
             )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"密码交接目标账号不存在：{username}")
+        conn.execute(
+            """
+            INSERT INTO operation_logs (
+                user_id, action, resource, details, username,
+                role, entity_type, description
+            ) VALUES (
+                ?, 'FINAL_PASSWORD_HANDOFF', 'User', ?,
+                ?, ?, 'user', '最终密码交接'
+            )
+            """,
+            (
+                actor_id,
+                json.dumps(
+                    {"target_usernames": sorted(passwords)},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                actor_name,
+                actor_role,
+            ),
+        )
         conn.commit()
 
 
@@ -254,13 +299,70 @@ def ensure_user_set(db_path: Path) -> None:
         raise SystemExit(f"missing users: {', '.join(missing)}")
 
 
+def preflight_handoff(
+    db_path: Path,
+    api_base_url: str,
+    *,
+    production: bool,
+) -> tuple[int, dict[str, Any] | None]:
+    parsed = urlsplit(api_base_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise RuntimeError("API URL 必须是无路径、无凭据的 HTTP/HTTPS 根地址")
+    if production and parsed.scheme != "https":
+        raise RuntimeError("生产密码交接只允许显式 HTTPS 反向代理 API URL")
+    if not db_path.is_file():
+        raise RuntimeError(f"数据库不存在：{db_path}")
+    integrity = db_integrity(db_path)
+    if integrity != {"integrity_check": "ok", "foreign_key_check_count": 0}:
+        raise RuntimeError(f"数据库预检失败：{integrity}")
+    ensure_user_set(db_path)
+    with sqlite3.connect(db_path, timeout=15) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(users)")
+        }
+        if not {"password_hash", "auth_version"}.issubset(columns):
+            raise RuntimeError("users 表缺少密码或会话撤销字段")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("SELECT COUNT(*) FROM users").fetchone()
+        connection.rollback()
+    health_status, health_body = request_json(
+        open_api(api_base_url),
+        f"{api_base_url.rstrip('/')}/api/health",
+    )
+    if health_status != 200 or not health_body or health_body.get("ok") is not True:
+        raise RuntimeError(
+            f"API 健康预检失败：status={health_status}, body={health_body}"
+        )
+    return health_status, health_body
+
+
 def main() -> int:
     args = parse_args()
     db_path = Path(args.sqlite_path).resolve()
     output_json = Path(args.output_json).resolve()
+    current = load_settings()
+    api_base_url = args.api_base_url or os.getenv("ERP_BROWSER_URL", "").strip()
+    if not api_base_url:
+        if current.is_production:
+            raise RuntimeError(
+                "生产密码交接必须通过 --api-base-url 或 ERP_BROWSER_URL 显式提供 HTTPS URL"
+            )
+        api_base_url = f"http://127.0.0.1:{current.port}"
+    api_base_url = api_base_url.rstrip("/")
+    health_status, health_body = preflight_handoff(
+        db_path,
+        api_base_url,
+        production=current.is_production,
+    )
     output_json.parent.mkdir(parents=True, exist_ok=True)
-
-    ensure_user_set(db_path)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = db_path.parent / "backups" / f"{db_path.stem}_before_final_password_handoff_{timestamp}{db_path.suffix}"
@@ -281,11 +383,12 @@ def main() -> int:
     }
 
     backup_sqlite(db_path, backup_path)
-    backup_sha = sha256_of(backup_path)
-    backup_integrity = db_integrity(backup_path)
+    backup_sha, backup_integrity = validate_backup_before_password_write(
+        backup_path
+    )
 
     passwords = {username: prompt_password(username) for username in VALID_USERS}
-    update_passwords(db_path, passwords)
+    update_passwords(db_path, passwords, actor_username=args.actor)
 
     source_sha_after = sha256_of(db_path)
     after_users_full = fetch_users(db_path)
@@ -300,28 +403,27 @@ def main() -> int:
     }
     source_integrity_after = db_integrity(db_path)
 
-    health_status, health_body = request_json(open_api(args.api_base_url), f"{args.api_base_url}/api/health")
     login_checks = {
-        username: vars(verify_login(args.api_base_url, username, password))
+        username: vars(verify_login(api_base_url, username, password))
         for username, password in passwords.items()
     }
     role_checks = {
-        username: role_matrix(args.api_base_url, username, password)
+        username: role_matrix(api_base_url, username, password)
         for username, password in passwords.items()
     }
-    old_password_results = verify_old_passwords(args.api_base_url)
-    no_login_status, _ = request_json(open_api(args.api_base_url), f"{args.api_base_url}/api/auth/me")
+    old_password_results = verify_old_passwords(api_base_url)
+    no_login_status, _ = request_json(open_api(api_base_url), f"{api_base_url}/api/auth/me")
     forged_status, _ = request_json(
-        open_api(args.api_base_url, CookieJar()),
-        f"{args.api_base_url}/api/auth/me",
+        open_api(api_base_url, CookieJar()),
+        f"{api_base_url}/api/auth/me",
     )
     incoming_no_login_status, _ = request_json(
-        open_api(args.api_base_url),
-        f"{args.api_base_url}/api/incoming/pending",
+        open_api(api_base_url),
+        f"{api_base_url}/api/incoming/pending",
     )
     incoming_html_status, _ = request_json(
-        open_api(args.api_base_url),
-        f"{args.api_base_url}/incoming.html",
+        open_api(api_base_url),
+        f"{api_base_url}/incoming.html",
     )
 
     result = {

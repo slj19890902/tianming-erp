@@ -116,6 +116,11 @@ def test_production_security_removes_docs_and_disables_lan_wildcard_cors(
         "ERP_SECRET_KEY",
         "phase13-production-secret-that-is-longer-than-32-characters",
     )
+    monkeypatch.setenv("ERP_ALLOWED_ORIGINS", "https://erp.example.com")
+    monkeypatch.setenv("ERP_HEALTH_URL", "https://erp.example.com/api/health")
+    monkeypatch.setenv("ERP_BROWSER_URL", "https://erp.example.com/")
+    monkeypatch.setenv("ERP_TRUSTED_HOSTS", "erp.example.com")
+    monkeypatch.setenv("ERP_TRUSTED_PROXY_IPS", "127.0.0.1")
     settings = load_settings()
     app = FastAPI()
 
@@ -126,7 +131,7 @@ def test_production_security_removes_docs_and_disables_lan_wildcard_cors(
     assert "/redoc" not in paths
     assert "/openapi.json" not in paths
     assert settings.is_production is True
-    assert settings.allowed_origins == ()
+    assert settings.allowed_origins == ("https://erp.example.com",)
     assert settings.allowed_origin_regex is None
     assert settings.session_cookie_secure is True
 
@@ -148,8 +153,8 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port(
     assert '"--host", $BindHost' in launcher
     assert '"--port", $ErpPort.ToString()' in launcher
     assert "from app.core.config import load_settings" in launcher
-    assert "生产环境必须配置 ERP_HEALTH_URL" in launcher
-    assert "生产环境必须配置 ERP_BROWSER_URL" in launcher
+    assert "Production requires ERP_HEALTH_URL" in launcher
+    assert "Production requires ERP_BROWSER_URL" in launcher
     assert '"--workers", "1"' in launcher
     assert "erp_server.log" in launcher
     monkeypatch.setenv("ERP_ENVIRONMENT", "production")
@@ -157,4 +162,105 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port(
         "ERP_SECRET_KEY",
         "n031-test-secret-that-is-longer-than-32-characters",
     )
+    monkeypatch.setenv("ERP_ALLOWED_ORIGINS", "https://erp.example.com")
+    monkeypatch.setenv("ERP_HEALTH_URL", "https://erp.example.com/api/health")
+    monkeypatch.setenv("ERP_BROWSER_URL", "https://erp.example.com/")
+    monkeypatch.setenv("ERP_TRUSTED_HOSTS", "erp.example.com")
+    monkeypatch.setenv("ERP_TRUSTED_PROXY_IPS", "127.0.0.1")
     assert load_settings().is_production is True
+
+
+def test_generated_production_config_loads_with_loopback_and_https(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.core.config import load_settings
+    from scripts.deploy_production import (
+        build_production_env_values,
+        validate_production_env_values,
+        write_env_file,
+    )
+
+    monkeypatch.setenv(
+        "ERP_SECRET_KEY",
+        "generated-production-secret-that-is-longer-than-32-characters",
+    )
+    values = build_production_env_values(
+        database_path=tmp_path / "production.sqlite3",
+        backup_dir=tmp_path / "backups",
+        external_url="https://erp.example.com",
+        trusted_proxy_ips="127.0.0.1",
+    )
+    validate_production_env_values(values)
+    env_path = tmp_path / ".env"
+    write_env_file(env_path, values)
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        key, value = line.split("=", 1)
+        monkeypatch.setenv(key, value)
+
+    current = load_settings()
+    assert current.bind_host == "127.0.0.1"
+    assert current.workers == 1
+    assert current.allowed_origins == ("https://erp.example.com",)
+    assert values["ERP_WORKERS"] == "1"
+    assert values["ERP_HEALTH_URL"] == "https://erp.example.com/api/health"
+    assert values["ERP_BROWSER_URL"] == "https://erp.example.com/"
+
+
+def test_production_config_generation_fails_closed_without_https_or_proxy(tmp_path: Path) -> None:
+    from scripts.deploy_production import build_production_env_values
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        build_production_env_values(
+            database_path=tmp_path / "production.sqlite3",
+            backup_dir=tmp_path / "backups",
+            external_url="http://erp.example.com",
+            trusted_proxy_ips="127.0.0.1",
+        )
+    with pytest.raises(ValueError, match="trusted-proxy-ips"):
+        build_production_env_values(
+            database_path=tmp_path / "production.sqlite3",
+            backup_dir=tmp_path / "backups",
+            external_url="https://erp.example.com",
+            trusted_proxy_ips="",
+        )
+    with pytest.raises(ValueError, match="loopback"):
+        build_production_env_values(
+            database_path=tmp_path / "production.sqlite3",
+            backup_dir=tmp_path / "backups",
+            external_url="https://erp.example.com",
+            trusted_proxy_ips="10.0.0.10",
+        )
+
+
+def test_generated_production_config_requires_explicit_preprovisioned_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts.deploy_production import (
+        build_production_env_values,
+        validate_production_env_values,
+    )
+
+    monkeypatch.delenv("ERP_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ERP_SECRET_KEY_FILE", raising=False)
+    values = build_production_env_values(
+        database_path=tmp_path / "production.sqlite3",
+        backup_dir=tmp_path / "backups",
+        external_url="https://erp.example.com",
+        trusted_proxy_ips="127.0.0.1",
+    )
+    with pytest.raises(RuntimeError, match="显式提供"):
+        validate_production_env_values(values)
+
+    secret_file = tmp_path / "production-session.key"
+    secret_file.write_text("S" * 48, encoding="utf-8")
+    values = build_production_env_values(
+        database_path=tmp_path / "production.sqlite3",
+        backup_dir=tmp_path / "backups",
+        external_url="https://erp.example.com",
+        trusted_proxy_ips="127.0.0.1",
+        secret_key_file=secret_file,
+    )
+    validate_production_env_values(values)
+    assert values["ERP_SECRET_KEY_FILE"] == str(secret_file.resolve())

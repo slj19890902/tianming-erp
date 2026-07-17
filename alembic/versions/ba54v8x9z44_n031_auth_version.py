@@ -39,13 +39,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     # On a populated database this would discard the revocation state and let
     # pre-N031 application code resume accepting those signed sessions.  That
-    # rollback is unsafe, so fail closed.  An empty users table has no valid
-    # sessions and remains reversibly downgradeable for disposable databases.
-    user_count = op.get_bind().execute(sa.text("SELECT COUNT(*) FROM users")).scalar_one()
+    # rollback is unsafe, so fail closed even when users is currently empty:
+    # old signed sessions may still exist outside the database.
     confirmation = os.environ.get(DATA_LOSS_CONFIRMATION_ENV)
-    if user_count and confirmation != DATA_LOSS_CONFIRMATION_VALUE:
+    if confirmation != DATA_LOSS_CONFIRMATION_VALUE:
         raise RuntimeError(
-            "Refusing to drop users.auth_version from a populated database: "
+            "Refusing to drop users.auth_version: "
             "it would discard session-revocation state. Only after the "
             "application has been stopped and its session-signing secret has "
             "been rotated, set "

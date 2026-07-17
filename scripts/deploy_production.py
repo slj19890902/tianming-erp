@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import argparse
 import os
-import socket
 import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SCRIPT_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_PROJECT_ROOT))
 
-from app.core.config import PROJECT_ROOT, load_settings, normalize_path
+from app.core.config import DEFAULT_BACKUP_DIR, PROJECT_ROOT, load_settings, normalize_path
 from app.core.database import backup_to_nas
 
 
@@ -141,16 +142,104 @@ def discover_preview_database(project_root: Path = PROJECT_ROOT) -> Path:
     return normalize_path(project_root / "data" / "carton_erp.sqlite3")
 
 
-def _lan_origin() -> str | None:
+def build_production_env_values(
+    *,
+    database_path: Path,
+    backup_dir: Path,
+    external_url: str,
+    trusted_proxy_ips: str,
+    secret_key_file: Path | None = None,
+    port: int = 8000,
+) -> dict[str, str]:
+    parsed = urlsplit(external_url.strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("--external-url 必须是无路径、无凭据的显式 HTTPS URL")
+    proxy_ips = ",".join(
+        item.strip() for item in trusted_proxy_ips.split(",") if item.strip()
+    )
+    if not proxy_ips:
+        raise ValueError("--trusted-proxy-ips 必须显式配置反向代理 IP")
+    for proxy_ip in proxy_ips.split(","):
+        try:
+            address = ip_address(proxy_ip)
+        except ValueError as error:
+            raise ValueError("--trusted-proxy-ips 只接受 loopback IP") from error
+        if not address.is_loopback:
+            raise ValueError(
+                "--trusted-proxy-ips 在生产 loopback 后端只允许 127.0.0.1 或 ::1"
+            )
+    origin = f"https://{parsed.netloc}"
+    values = {
+        "ERP_ENVIRONMENT": "production",
+        "ERP_DATABASE_PATH": str(normalize_path(database_path)),
+        "ERP_BACKUP_DIR": str(normalize_path(backup_dir)),
+        "ERP_ALLOWED_ORIGINS": origin,
+        "ERP_TRUSTED_HOSTS": parsed.hostname,
+        "ERP_TRUSTED_PROXY_IPS": proxy_ips,
+        "ERP_BIND_HOST": "127.0.0.1",
+        "ERP_PORT": str(port),
+        "ERP_WORKERS": "1",
+        "ERP_HEALTH_URL": f"{origin}/api/health",
+        "ERP_BROWSER_URL": f"{origin}/",
+    }
+    if secret_key_file is not None:
+        values["ERP_SECRET_KEY_FILE"] = str(normalize_path(secret_key_file))
+    return values
+
+
+def _validate_explicit_production_secret(values: dict[str, str]) -> None:
+    configured_secret = os.getenv("ERP_SECRET_KEY", "").strip()
+    if configured_secret:
+        if len(configured_secret) < 32:
+            raise RuntimeError("生产环境 ERP_SECRET_KEY 至少需要 32 个字符")
+        return
+
+    configured_file = values.get("ERP_SECRET_KEY_FILE") or os.getenv(
+        "ERP_SECRET_KEY_FILE", ""
+    ).strip()
+    if not configured_file:
+        raise RuntimeError(
+            "部署生产配置前必须显式提供 ERP_SECRET_KEY 或 ERP_SECRET_KEY_FILE"
+        )
+    secret_path = normalize_path(configured_file)
+    if not secret_path.is_file():
+        raise RuntimeError(f"显式 ERP_SECRET_KEY_FILE 不存在：{secret_path}")
+    if len(secret_path.read_text(encoding="utf-8").strip()) < 32:
+        raise RuntimeError("ERP_SECRET_KEY_FILE 中的生产会话密钥至少需要 32 个字符")
+    values["ERP_SECRET_KEY_FILE"] = str(secret_path)
+
+
+def validate_production_env_values(values: dict[str, str]) -> None:
+    _validate_explicit_production_secret(values)
+    managed_keys = set(values)
+    previous = {key: os.environ.get(key) for key in managed_keys}
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
-            connection.connect(("10.255.255.255", 1))
-            address = connection.getsockname()[0]
-    except OSError:
-        return None
-    if address.startswith(("10.", "192.168.", "172.")):
-        return f"http://{address}:8000"
-    return None
+        os.environ.update(values)
+        current = load_settings()
+        if not current.is_production or current.bind_host != "127.0.0.1":
+            raise RuntimeError("生成的生产配置未通过 loopback 安全校验")
+        if current.workers != 1:
+            raise RuntimeError("生成的生产配置未通过单 worker 安全校验")
+        if current.allowed_origins != (values["ERP_ALLOWED_ORIGINS"],):
+            raise RuntimeError("生成的生产 HTTPS origin 未通过配置校验")
+        if not values["ERP_HEALTH_URL"].startswith("https://"):
+            raise RuntimeError("生产健康检查 URL 必须使用 HTTPS")
+        if not values["ERP_BROWSER_URL"].startswith("https://"):
+            raise RuntimeError("生产浏览器 URL 必须使用 HTTPS")
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -165,34 +254,38 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=PROJECT_ROOT / ".env",
     )
+    parser.add_argument("--external-url", required=True)
+    parser.add_argument("--trusted-proxy-ips", required=True)
+    parser.add_argument("--secret-key-file", type=Path)
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    current = load_settings()
     source = args.source or discover_preview_database()
-    backup_dir = args.backup_dir or current.backup_dir
+    configured_backup = os.getenv("ERP_BACKUP_DIR", "").strip()
+    backup_dir = args.backup_dir or (
+        Path(configured_backup) if configured_backup else DEFAULT_BACKUP_DIR
+    )
+    production_values = build_production_env_values(
+        database_path=args.target,
+        backup_dir=backup_dir,
+        external_url=args.external_url,
+        trusted_proxy_ips=args.trusted_proxy_ips,
+        secret_key_file=args.secret_key_file,
+    )
+    # Validate every generated value before any production database promotion.
+    validate_production_env_values(production_values)
     result = promote_database(
         source=source,
         target=args.target,
         backup_dir=backup_dir,
     )
 
-    origins = ["http://127.0.0.1:8000", "http://localhost:8000"]
-    lan_origin = _lan_origin()
-    if lan_origin:
-        origins.append(lan_origin)
+    production_values["ERP_DATABASE_PATH"] = str(result.target)
     write_env_file(
         normalize_path(args.env_file),
-        {
-            "ERP_ENVIRONMENT": "production",
-            "ERP_DATABASE_PATH": str(result.target),
-            "ERP_BACKUP_DIR": str(normalize_path(backup_dir)),
-            "ERP_ALLOWED_ORIGINS": ",".join(origins),
-            "ERP_BIND_HOST": "0.0.0.0",
-            "ERP_PORT": "8000",
-        },
+        production_values,
     )
 
     print(f"source={result.source}")

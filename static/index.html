@@ -1822,6 +1822,21 @@
                 </div>
               </div>
               <div class="section-title">数据备份</div>
+              <div class="section-title" style="margin-top:16px">送货单打印纸张</div>
+              <div class="panel" style="margin-bottom:10px;padding:12px 16px">
+                <div style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:end">
+                  <div class="field" style="margin:0;min-width:170px">
+                    <label>打印纸宽（mm）</label>
+                    <input class="input" type="number" min="100" max="400" step="0.01" v-model.number="deliveryPrintSettings.paper_width_mm" :disabled="user.role !== 'admin'" />
+                  </div>
+                  <div class="field" style="margin:0;min-width:170px">
+                    <label>打印纸高（mm）</label>
+                    <input class="input" type="number" min="80" max="400" step="0.01" v-model.number="deliveryPrintSettings.paper_height_mm" :disabled="user.role !== 'admin'" />
+                  </div>
+                  <button v-if="user.role === 'admin'" class="btn primary" @click="saveDeliveryPrintSettings">保存纸张设置</button>
+                </div>
+                <div class="muted" style="font-size:12px;margin-top:8px">默认 241 × 139.5mm。仅在更换针式打印机或连续纸规格时调整；此处保存的设置供送货单打印页读取。</div>
+              </div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
                   <span><strong>备份位置：</strong>{{ backupStats.location_type === 'nas' ? 'NAS 网络存储' : '本地磁盘' }}</span>
@@ -4023,6 +4038,7 @@
               {value:"workshop",label:"车间/仓库"}, {value:"delivery_picker",label:"送货拿货员"}, {value:"admin",label:"管理员"},
             ],
             companyConfig: {}, companyForm: {}, showCompanyModal: false,
+            deliveryPrintSettings: { paper_width_mm: 241, paper_height_mm: 139.5 },
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
@@ -7260,17 +7276,19 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async loadSystem() {
-            const [backups, users, version, changelog, company] = await Promise.all([
+            const [backups, users, version, changelog, company, deliveryPrintSettings] = await Promise.all([
               axios.get("/api/system/backups"),
               axios.get("/api/auth/users"),
               axios.get("/api/system/version"),
               axios.get("/api/system/version/changelog"),
               axios.get("/api/system/company"),
+              axios.get("/api/system/delivery-print-settings"),
             ]);
             this.backups = backups.data.items;
             this.systemUsers = users.data.items;
             this.versionInfo = { ...version.data, changelog: changelog.data.changelog };
             this.companyConfig = company.data;
+            this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...deliveryPrintSettings.data };
             await this.loadMaterialMapping(1);
             await this.loadPdfTemplates();
           },
@@ -7286,6 +7304,15 @@
               this.$nextTick(() => this.showToast("公司信息已保存"));
             } catch (e) {
               this.showToast("保存失败：" + (e.response?.data?.detail || e.message), true);
+            }
+          },
+          async saveDeliveryPrintSettings() {
+            try {
+              const { data } = await axios.put("/api/system/delivery-print-settings", this.deliveryPrintSettings);
+              this.deliveryPrintSettings = data;
+              this.showToast("送货单打印纸张设置已保存");
+            } catch (e) {
+              this.showToast("保存纸张设置失败：" + this.errorMessage(e), true);
             }
           },
           forgotPassword() {

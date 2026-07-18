@@ -281,7 +281,7 @@ def _next_delivery_number(db: Session, delivery_date: date) -> str:
     ).scalar_one()
     if sequence > 999:
         raise HTTPException(status_code=409, detail="当日送货单流水号已超过999")
-    return f"DH-{delivery_date:%Y%m%d}-{sequence:03d}"
+    return f"TM-{delivery_date:%Y%m%d}-{sequence:03d}"
 
 
 def _pending_query(
@@ -1946,10 +1946,8 @@ def get_delivery_print_data(
             Order.customer_po,
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
-            OrderItem.snapshot_spec.label("specification"),
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.remarks,
-            OrderItem.snapshot_production_notes.label("production_notes"),
         )
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .join(Order, Order.id == OrderItem.order_id)
@@ -1987,11 +1985,9 @@ def get_delivery_print_data(
                 "customer_po": row.customer_po,
                 "product_code": _print_product_code(row.product_code),
                 "product_name": row.product_name,
-                "specification": row.specification,
                 "unit": "PCS",
                 "quantity": row.quantity,
                 "remarks": row.remarks,
-                "production_notes": row.production_notes,
             }
             for row in rows
         ],

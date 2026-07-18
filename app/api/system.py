@@ -30,6 +30,10 @@ from app.core.database import (
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.user import User
+from app.services.delivery_print_settings import (
+    get_delivery_print_settings,
+    save_delivery_print_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,11 @@ class CompanyConfigUpdate(BaseModel):
         if not normalized:
             raise ValueError("公司名称不能为空")
         return normalized
+
+
+class DeliveryPrintSettingsUpdate(BaseModel):
+    paper_width_mm: float
+    paper_height_mm: float
 
 
 def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
@@ -1372,3 +1381,55 @@ def update_company(
     )
     db.commit()
     return _company_dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Delivery-note print paper calibration (N037)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/delivery-print-settings")
+def get_delivery_print_paper_settings() -> dict:
+    """Public, read-only paper size contract used by the print-only page.
+
+    This has no customer, order, or financial information, so it is deliberately
+    readable before login as well as by a logged-in print window.
+    """
+    return get_delivery_print_settings()
+
+
+@router.put("/delivery-print-settings", dependencies=[Depends(admin_only)])
+def update_delivery_print_paper_settings(
+    body: DeliveryPrintSettingsUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Persist printer/paper calibration.  Only administrators may change it."""
+    try:
+        settings = save_delivery_print_settings(body.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        logger.exception("保存送货单打印纸张设置失败")
+        raise HTTPException(status_code=503, detail="保存送货单打印纸张设置失败") from error
+
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="UPDATE_DELIVERY_PRINT_SETTINGS",
+            resource="System",
+            details=json.dumps(settings, ensure_ascii=False),
+            ip_address=request.client.host if request.client else None,
+            username=user.username,
+            role=user.role,
+            entity_type="delivery_print_settings",
+            description=(
+                "管理员更新送货单打印纸张："
+                f"{settings['paper_width_mm']:g}×{settings['paper_height_mm']:g}mm"
+            ),
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+    return settings

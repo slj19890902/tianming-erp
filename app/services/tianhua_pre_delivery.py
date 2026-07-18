@@ -263,7 +263,7 @@ def _next_delivery_number(db: Session, delivery_date: date) -> str:
     ).scalar_one()
     if sequence > 999:
         raise ValueError("当日送货单流水号已超过 999")
-    return f"DH-{delivery_date:%Y%m%d}-{sequence:03d}"
+    return f"TM-{delivery_date:%Y%m%d}-{sequence:03d}"
 
 
 def _delivery_total(db: Session, delivery_id: int) -> int:

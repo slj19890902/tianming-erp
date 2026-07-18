@@ -474,13 +474,13 @@ class TestA4ProductionNotesDisplay:
             detail = client.get(f"/api/orders/{ids['order2_id']}").json()
         assert detail["items"][0]["snapshot_production_notes"] == "改为印刷日文"
 
-    def test_delivery_print_includes_production_notes(self, v192_app):
+    def test_delivery_print_excludes_internal_production_notes(self, v192_app):
         app, _, ids = v192_app
         with TestClient(app) as client:
             _login(client)
             res = client.get(f"/api/deliveries/{ids['delivery_id']}/print")
         assert res.status_code == 200, res.text
-        assert res.json()["items"][0]["production_notes"] == "在白色处打勾 縦置き厳禁"
+        assert "production_notes" not in res.json()["items"][0]
 
     def test_requisition_print_includes_production_notes(self, v192_app):
         app, _, ids = v192_app

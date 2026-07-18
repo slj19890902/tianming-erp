@@ -259,7 +259,7 @@ def test_create_combined_delivery_then_partial_dispatch_once(
         repeated = client.put(f"/api/deliveries/{delivery_id}/dispatch")
 
     assert created.status_code == 201, created.text
-    assert created.json()["delivery_number"] == "DH-20260613-001"
+    assert created.json()["delivery_number"] == "TM-20260613-001"
     assert created.json()["total_quantity"] == 70
     assert dispatched.status_code == 200
     assert dispatched.json()["status"] == "dispatched"
@@ -675,6 +675,62 @@ def test_print_response_contains_no_financial_fields(delivery_api_app) -> None:
     assert response.json()["items"][0]["unit"] == "PCS"
 
 
+def test_new_delivery_uses_tm_number_without_changing_historical_dh(
+    delivery_api_app,
+) -> None:
+    from app.models.delivery import Delivery
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        historical = Delivery(
+            delivery_number="DH-20260612-001",
+            customer_id=1,
+            delivery_date=date(2026, 6, 12),
+            status="dispatched",
+            total_quantity=70,
+        )
+        session.add(historical)
+        session.flush()
+        historical_id = historical.id
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+
+    assert created.status_code == 201, created.text
+    assert created.json()["delivery_number"] == "TM-20260613-001"
+    with session_factory() as session:
+        assert session.get(Delivery, historical_id).delivery_number == "DH-20260612-001"
+
+
+def test_print_data_uses_product_name_and_customer_remark_only(
+    delivery_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = delivery_api_app
+    long_name = "超长产品名称用于验证送货单打印时自动换行并在必要时缩小一个字号而不截断"
+    with session_factory() as session:
+        order_item = session.get(OrderItem, 1)
+        order_item.snapshot_product_name = long_name
+        order_item.snapshot_production_notes = "生产备注不得出现在送货单打印中"
+        session.commit()
+
+    payload = _create_payload()
+    payload["items"][0]["remarks"] = "客户备注需要完整显示在底部备注说明"
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=payload)
+        response = client.get(f"/api/deliveries/{created.json()['id']}/print")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["product_name"] == long_name
+    assert item["remarks"] == "客户备注需要完整显示在底部备注说明"
+    assert "production_notes" not in item
+
+
 def test_mixed_customer_delivery_is_rejected_without_draft(
     delivery_api_app,
 ) -> None:
@@ -704,7 +760,7 @@ def test_delivery_list_returns_customer_and_line_details(
 
     assert listed.status_code == 200, listed.text
     row = listed.json()["items"][0]
-    assert row["delivery_number"].startswith("DH-")
+    assert row["delivery_number"].startswith("TM-")
     assert row["customer_name"]
     assert row["items"][0]["order_item_id"] == 1
     assert row["return_receipt_status"] is None
@@ -885,14 +941,32 @@ def test_print_html_has_required_text_and_no_money_bindings() -> None:
         "苏州天明包装有限公司",
         "送货单",
         "客户单号",
+        "<th>序号</th>",
         "款号",
-        "单位(PCS)",
+        "产品名称",
+        "<th>单位</th>",
+        "备注说明",
         "白联:存档",
         "红联:客户",
         "黄联:回单",
         "@media print",
+        "size: 241mm 139.5mm",
+        ".product-name.long-name",
+        "overflow-wrap: anywhere",
+        'data-field="pageNumber"',
+        "本页数量",
+        "pageFits",
+        "if (!pageFits([entry]))",
+        "当前纸张高度无法完整打印",
+        "break-after: page",
+        "`${pageNumber}/${totalPages}页`",
+        "/api/system/delivery-print-settings",
+        "--paper-width",
+        "--paper-height",
     ):
         assert required in source
+    assert "单位(PCS)" not in source
+    assert "production_notes" not in source
     lowered = source.lower()
     for forbidden in ("unit_price", "subtotal", "cost_unit_price", "成本", "单价"):
         assert forbidden not in lowered

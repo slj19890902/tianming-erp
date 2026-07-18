@@ -7,6 +7,10 @@
   <title>送货单打印</title>
   <style>
     * { box-sizing: border-box; }
+    :root {
+      --paper-width: 241mm;
+      --paper-height: 139.5mm;
+    }
     body {
       margin: 0;
       background: #eef1f4;
@@ -32,48 +36,57 @@
       text-decoration: none;
     }
     .sheet {
-      width: 210mm;
-      min-height: 140mm;
+      position: relative;
+      width: var(--paper-width);
+      height: var(--paper-height);
       margin: 0 auto 24px;
-      padding: 10mm 12mm;
+      padding: 5mm 6mm;
       background: #fff;
       box-shadow: 0 2px 14px rgba(0,0,0,.12);
+      overflow: hidden;
+    }
+    .page-number {
+      position: absolute;
+      top: 5mm;
+      right: 6mm;
+      font-size: 10px;
+      font-weight: 700;
     }
     .company {
       margin: 0;
       text-align: center;
       font-family: "SimSun", serif;
-      font-size: 26px;
-      letter-spacing: 3px;
+      font-size: 20px;
+      letter-spacing: 2px;
     }
     .document-title {
-      margin: 4px 0 7px;
+      margin: 2px 0 4px;
       text-align: center;
       font-family: "SimSun", serif;
-      font-size: 22px;
-      letter-spacing: 10px;
+      font-size: 17px;
+      letter-spacing: 7px;
     }
     .factory-address {
-      padding-bottom: 7px;
+      padding-bottom: 4px;
       border-bottom: 2px solid #111;
       text-align: center;
-      font-size: 12px;
+      font-size: 10px;
     }
     .meta {
       display: grid;
       grid-template-columns: 1.35fr 1fr;
-      gap: 3px 28px;
-      padding: 8px 0;
-      font-size: 13px;
-      line-height: 1.65;
+      gap: 2px 18px;
+      padding: 4px 0;
+      font-size: 11px;
+      line-height: 1.35;
     }
     .meta-row {
       display: grid;
-      grid-template-columns: 72px 1fr;
+      grid-template-columns: 62px 1fr;
       min-width: 0;
     }
     .meta-value {
-      min-height: 22px;
+      min-height: 17px;
       border-bottom: 1px solid #555;
       overflow-wrap: anywhere;
     }
@@ -81,49 +94,63 @@
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      font-size: 13px;
+      font-size: 11px;
     }
     th, td {
-      height: 31px;
       border: 1px solid #111;
-      padding: 4px 6px;
+      padding: 2px 3px;
       text-align: center;
       vertical-align: middle;
       overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.25;
     }
     th { font-weight: 700; }
-    .description { text-align: left; }
+    .product-code { font-size: 10px; }
+    .sequence { width: 5%; }
+    .product-name { text-align: left; overflow-wrap: anywhere; }
+    .product-name.long-name { font-size: 10px; line-height: 1.18; }
+    .item-remark { font-size: 10px; }
     .total {
-      padding: 9px 2px 6px;
+      padding: 4px 2px 3px;
       text-align: right;
-      font-size: 15px;
+      font-size: 12px;
       font-weight: 700;
     }
     .copies {
-      padding: 5px 0;
+      padding: 3px 0;
       border-top: 1px solid #111;
       border-bottom: 1px solid #111;
       text-align: center;
-      font-size: 13px;
-      word-spacing: 14px;
+      font-size: 10px;
+      word-spacing: 8px;
     }
+    .remark-notes {
+      margin-top: 4px;
+      padding: 3px 0;
+      border-top: 1px solid #111;
+      font-size: 10px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .remark-note + .remark-note { margin-top: 2px; }
     .signatures {
       display: grid;
       grid-template-columns: 1fr 1.5fr 1fr;
-      gap: 22px;
-      padding-top: 16px;
-      font-size: 13px;
+      gap: 14px;
+      padding-top: 7px;
+      font-size: 10px;
     }
     .signature-line {
       display: inline-block;
       width: calc(100% - 70px);
-      min-width: 80px;
+      min-width: 50px;
       border-bottom: 1px solid #111;
     }
     .opened-at {
-      margin-top: 17px;
+      margin-top: 6px;
       text-align: right;
-      font-size: 12px;
+      font-size: 9px;
     }
     .error {
       margin: 30px auto;
@@ -135,19 +162,23 @@
       text-align: center;
     }
     @page {
-      size: A4 landscape;
-      margin: 8mm;
+      size: 241mm 139.5mm;
+      margin: 0;
     }
     @media print {
       body { background: #fff; }
+      html, body { width: var(--paper-width); min-height: var(--paper-height); }
       .no-print { display: none !important; }
       .sheet {
-        width: auto;
-        min-height: 0;
+        width: var(--paper-width);
+        height: var(--paper-height);
         margin: 0;
-        padding: 0;
+        padding: 5mm 6mm;
         box-shadow: none;
+        break-after: page;
+        page-break-after: always;
       }
+      .sheet:last-child { break-after: auto; page-break-after: auto; }
     }
   </style>
 </head>
@@ -159,49 +190,61 @@
 
   <div id="errorBox" class="error" hidden></div>
 
-  <main id="sheet" class="sheet" hidden>
-    <h1 id="senderCompanyName" class="company">苏州天明包装有限公司</h1>
+  <template id="sheetTemplate">
+  <main class="sheet">
+    <div class="page-number" data-field="pageNumber"></div>
+    <h1 data-field="senderCompanyName" class="company">苏州天明包装有限公司</h1>
     <h2 class="document-title">送货单</h2>
-    <div id="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
+    <div data-field="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
 
     <section class="meta">
-      <div class="meta-row"><span>客户名称：</span><span id="customerName" class="meta-value"></span></div>
-      <div class="meta-row"><span>送货单号：</span><span id="deliveryNumber" class="meta-value"></span></div>
-      <div class="meta-row"><span>联系电话：</span><span id="customerPhone" class="meta-value"></span></div>
-      <div class="meta-row"><span>送货日期：</span><span id="deliveryDate" class="meta-value"></span></div>
-      <div class="meta-row"><span>客户地址：</span><span id="customerAddress" class="meta-value"></span></div>
-      <div class="meta-row"><span>车牌号码：</span><span id="vehicleNumber" class="meta-value"></span></div>
+      <div class="meta-row"><span>客户名称：</span><span data-field="customerName" class="meta-value"></span></div>
+      <div class="meta-row"><span>送货单号：</span><span data-field="deliveryNumber" class="meta-value"></span></div>
+      <div class="meta-row"><span>联系电话：</span><span data-field="customerPhone" class="meta-value"></span></div>
+      <div class="meta-row"><span>送货日期：</span><span data-field="deliveryDate" class="meta-value"></span></div>
+      <div class="meta-row"><span>客户地址：</span><span data-field="customerAddress" class="meta-value"></span></div>
+      <div class="meta-row"><span>车牌号码：</span><span data-field="vehicleNumber" class="meta-value"></span></div>
     </section>
 
     <table>
       <colgroup>
+        <col style="width:5%">
+        <col style="width:16%">
+        <col style="width:15%">
+        <col style="width:30%">
+        <col style="width:7%">
+        <col style="width:9%">
         <col style="width:18%">
-        <col style="width:43%">
-        <col style="width:11%">
-        <col style="width:11%">
-        <col style="width:17%">
       </colgroup>
       <thead>
         <tr>
+          <th>序号</th>
           <th>客户单号</th>
           <th>款号</th>
-          <th>单位(PCS)</th>
+          <th>产品名称</th>
+          <th>单位</th>
           <th>数量</th>
           <th>备注</th>
         </tr>
       </thead>
-      <tbody id="itemRows"></tbody>
+      <tbody data-field="itemRows"></tbody>
     </table>
 
-    <div class="total">送货总量：<span id="totalQuantity"></span></div>
+    <div class="total">本页数量：<span data-field="pageQuantity"></span>　送货总量：<span data-field="totalQuantity"></span></div>
+    <section data-field="remarkNotes" class="remark-notes" hidden>
+      <strong>备注说明：</strong>
+      <div data-field="remarkNoteItems"></div>
+    </section>
     <div class="copies">白联:存档　红联:客户　黄联:回单</div>
     <section class="signatures">
       <div>送货人：<span class="signature-line"></span></div>
       <div>收货单位(签章)：<span class="signature-line"></span></div>
       <div>经手人：<span class="signature-line"></span></div>
     </section>
-    <div class="opened-at">开单时间：<span id="createdAt"></span></div>
+    <div class="opened-at">开单时间：<span data-field="createdAt"></span></div>
   </main>
+  </template>
+  <div id="sheets" class="sheets" hidden></div>
 
   <script>
     const escapeHtml = (value) => String(value ?? "")
@@ -211,10 +254,135 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
 
+    const getField = (sheet, name) => sheet.querySelector(`[data-field="${name}"]`);
+
+    function createSheet() {
+      return document.getElementById("sheetTemplate").content.firstElementChild.cloneNode(true);
+    }
+
+    function applyPaperSize(widthValue, heightValue) {
+      const width = Number(widthValue);
+      const height = Number(heightValue);
+      const safeWidth = Number.isFinite(width) && width >= 100 && width <= 400 ? width : 241;
+      const safeHeight = Number.isFinite(height) && height >= 80 && height <= 400 ? height : 139.5;
+      document.documentElement.style.setProperty("--paper-width", `${safeWidth}mm`);
+      document.documentElement.style.setProperty("--paper-height", `${safeHeight}mm`);
+      let pageStyle = document.getElementById("dynamicPageSize");
+      if (!pageStyle) {
+        pageStyle = document.createElement("style");
+        pageStyle.id = "dynamicPageSize";
+        document.head.appendChild(pageStyle);
+      }
+      pageStyle.textContent = `@page { size: ${safeWidth}mm ${safeHeight}mm; margin: 0; }`;
+    }
+
+    async function loadPaperSettings() {
+      try {
+        const response = await fetch("/api/system/delivery-print-settings", {
+          credentials: "same-origin",
+        });
+        if (!response.ok) throw new Error("读取纸张设置失败");
+        const settings = await response.json();
+        applyPaperSize(settings.paper_width_mm, settings.paper_height_mm);
+      } catch (_error) {
+        applyPaperSize(241, 139.5);
+      }
+    }
+
+    function populateSheet(sheet, data, entries, pageNumber, totalPages) {
+      const sender = data.sender || {};
+      const senderParts = [];
+      if (sender.address) senderParts.push(`地址：${sender.address}`);
+      if (sender.phone) senderParts.push(`电话：${sender.phone}`);
+      if (sender.fax) senderParts.push(`传真：${sender.fax}`);
+      if (sender.company_name) getField(sheet, "senderCompanyName").textContent = sender.company_name;
+      if (senderParts.length) getField(sheet, "senderContact").textContent = senderParts.join("　");
+      getField(sheet, "pageNumber").textContent = `${pageNumber}/${totalPages}页`;
+      getField(sheet, "customerName").textContent = data.customer?.name || "";
+      getField(sheet, "customerPhone").textContent = data.customer?.phone || "";
+      getField(sheet, "customerAddress").textContent = data.customer?.address || "";
+      getField(sheet, "deliveryNumber").textContent = data.delivery_number || "";
+      getField(sheet, "deliveryDate").textContent = data.delivery_date || "";
+      getField(sheet, "vehicleNumber").textContent = data.vehicle_number || "";
+      getField(sheet, "totalQuantity").textContent = data.total_quantity ?? 0;
+      getField(sheet, "createdAt").textContent = data.created_at
+        ? TmTime.formatBeijingDateTime(data.created_at)
+        : "";
+      getField(sheet, "pageQuantity").textContent = entries.reduce(
+        (total, entry) => total + (Number(entry.item.quantity) || 0),
+        0,
+      );
+      getField(sheet, "itemRows").innerHTML = entries.map((entry) => {
+        const item = entry.item;
+        const productName = String(item.product_name || "").trim();
+        const customerRemark = String(item.remarks || "").trim();
+        const tableRemark = customerRemark.length > 12 ? "详见备注说明" : customerRemark;
+        const longNameClass = productName.length > 28 ? " long-name" : "";
+        return `<tr>
+          <td class="sequence">${entry.index + 1}</td>
+          <td>${escapeHtml(item.customer_po)}</td>
+          <td class="product-code">${escapeHtml(item.product_code)}</td>
+          <td class="product-name${longNameClass}">${escapeHtml(productName)}</td>
+          <td>${escapeHtml(item.unit)}</td>
+          <td>${escapeHtml(item.quantity)}</td>
+          <td class="item-remark">${escapeHtml(tableRemark)}</td>
+        </tr>`;
+      }).join("");
+      const remarkNotes = entries
+        .map((entry) => ({ index: entry.index + 1, text: String(entry.item.remarks || "").trim() }))
+        .filter((entry) => entry.text);
+      if (remarkNotes.length) {
+        getField(sheet, "remarkNoteItems").innerHTML = remarkNotes
+          .map((entry) => `<div class="remark-note">${entry.index}. ${escapeHtml(entry.text)}</div>`)
+          .join("");
+        getField(sheet, "remarkNotes").hidden = false;
+      }
+    }
+
+    function renderDelivery(data) {
+      const container = document.getElementById("sheets");
+      const entries = (data.items || []).map((item, index) => ({ item, index }));
+      const pages = [];
+      let currentPage = [];
+      container.hidden = false;
+      container.style.visibility = "hidden";
+      container.innerHTML = "";
+      const pageFits = (candidateEntries) => {
+        const probe = createSheet();
+        populateSheet(probe, data, candidateEntries, 1, 1);
+        container.appendChild(probe);
+        const fits = probe.scrollHeight <= probe.clientHeight + 1;
+        probe.remove();
+        return fits;
+      };
+      entries.forEach((entry) => {
+        if (!pageFits([entry])) {
+          throw new Error(
+            `第${entry.index + 1}行产品名称或备注过长，当前纸张高度无法完整打印。请缩短内容或在系统备份中增加纸张高度后重试。`,
+          );
+        }
+        const candidate = [...currentPage, entry];
+        if (currentPage.length && !pageFits(candidate)) {
+          pages.push(currentPage);
+          currentPage = [entry];
+        } else {
+          currentPage = candidate;
+        }
+      });
+      if (currentPage.length || !pages.length) pages.push(currentPage);
+      container.innerHTML = "";
+      pages.forEach((pageEntries, index) => {
+        const sheet = createSheet();
+        populateSheet(sheet, data, pageEntries, index + 1, pages.length);
+        container.appendChild(sheet);
+      });
+      container.style.visibility = "visible";
+    }
+
     function showError(message) {
       document.getElementById("errorBox").textContent = message;
       document.getElementById("errorBox").hidden = false;
-      document.getElementById("sheet").hidden = true;
+      document.getElementById("sheets").hidden = true;
     }
 
     async function loadDelivery() {
@@ -234,49 +402,14 @@
         if (!response.ok) {
           throw new Error(data.detail || "读取送货单失败。");
         }
-        const sender = data.sender || {};
-        if (sender.company_name) {
-          document.getElementById("senderCompanyName").textContent = sender.company_name;
-        }
-        const senderParts = [];
-        if (sender.address) senderParts.push(`地址：${sender.address}`);
-        if (sender.phone) senderParts.push(`电话：${sender.phone}`);
-        if (sender.fax) senderParts.push(`传真：${sender.fax}`);
-        if (senderParts.length) {
-          document.getElementById("senderContact").textContent = senderParts.join("　");
-        }
-        document.getElementById("customerName").textContent = data.customer.name || "";
-        document.getElementById("customerPhone").textContent = data.customer.phone || "";
-        document.getElementById("customerAddress").textContent = data.customer.address || "";
-        document.getElementById("deliveryNumber").textContent = data.delivery_number || "";
-        document.getElementById("deliveryDate").textContent = data.delivery_date || "";
-        document.getElementById("vehicleNumber").textContent = data.vehicle_number || "";
-        document.getElementById("totalQuantity").textContent = data.total_quantity ?? 0;
-        document.getElementById("createdAt").textContent = data.created_at
-          ? TmTime.formatBeijingDateTime(data.created_at)
-          : "";
-        document.getElementById("itemRows").innerHTML = data.items.map((item) => {
-          const description = item.product_code || "";
-          const remarkParts = [];
-          if (item.production_notes) remarkParts.push(item.production_notes);
-          if (item.remarks) remarkParts.push(item.remarks);
-          const remarkText = remarkParts.join("；");
-          return `<tr>
-            <td>${escapeHtml(item.customer_po)}</td>
-            <td class="description">${escapeHtml(description)}</td>
-            <td>${escapeHtml(item.unit)}</td>
-            <td>${escapeHtml(item.quantity)}</td>
-            <td>${escapeHtml(remarkText)}</td>
-          </tr>`;
-        }).join("");
-        document.getElementById("sheet").hidden = false;
+        renderDelivery(data);
       } catch (error) {
         showError(error.message);
       }
     }
 
     document.getElementById("printButton").addEventListener("click", () => window.print());
-    loadDelivery();
+    loadPaperSettings().then(loadDelivery);
   </script>
 </body>
 </html>

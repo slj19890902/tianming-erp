@@ -441,8 +441,8 @@ def test_delivery_print_page_uses_sender_from_api():
     source = (project_root / "static" / "delivery-print.html").read_text(
         encoding="utf-8"
     )
-    assert 'id="senderCompanyName"' in source
-    assert 'id="senderContact"' in source
+    assert 'data-field="senderCompanyName"' in source
+    assert 'data-field="senderContact"' in source
     assert "const sender = data.sender || {}" in source
     assert "sender.company_name" in source
     assert "sender.address" in source

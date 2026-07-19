@@ -66,6 +66,11 @@ from app.models.stock_replenishment import (  # noqa: E402,F401
     StockReplenishmentOrder,
     StockReplenishmentOrderItem,
 )
+from app.models.stocktake import (  # noqa: E402,F401
+    StocktakeItem,
+    StocktakeOrder,
+    StocktakeReview,
+)
 from app.models.finance import (  # noqa: E402,F401
     Invoice,
     ReturnReceipt,

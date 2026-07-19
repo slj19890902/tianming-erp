@@ -43,6 +43,9 @@ PERMISSION_CATALOG = frozenset(
         "warehouse.view",
         "warehouse.execute",
         "warehouse.reserve",
+        "warehouse.stocktake.view",
+        "warehouse.stocktake.submit",
+        "warehouse.stocktake.review",
         "deliveries.view",
         "deliveries.execute",
         "finance.view",
@@ -71,13 +74,19 @@ SALES_DEFAULT_PERMISSIONS = frozenset(
 )
 ALL_PERMISSIONS = PERMISSION_CATALOG
 ADMIN_ONLY_PERMISSIONS = frozenset(
-    {"system.backup", "users.manage", "pdf_training.manage"}
+    {
+        "system.backup",
+        "users.manage",
+        "pdf_training.manage",
+        "warehouse.stocktake.review",
+    }
 )
 BOSS_DEFAULT_PERMISSIONS = frozenset(
     permission
     for permission in ALL_PERMISSIONS
     if not permission.startswith(("system.", "pdf_training."))
     and permission != "users.manage"
+    and permission not in ADMIN_ONLY_PERMISSIONS
 )
 ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": ALL_PERMISSIONS,
@@ -105,6 +114,8 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "incoming.execute",
             "warehouse.view",
             "warehouse.execute",
+            "warehouse.stocktake.view",
+            "warehouse.stocktake.submit",
             "deliveries.view",
         }
     ),

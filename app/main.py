@@ -37,6 +37,7 @@ from app.api.pdf_training import router as pdf_training_router
 from app.api.production import router as production_router
 from app.api.system import router as system_router
 from app.api.warehouse import router as warehouse_router
+from app.api.stocktake import router as stocktake_router
 from app.api.tianhua_pre_delivery import (
     mobile_router as tianhua_mobile_router,
     router as tianhua_pre_delivery_router,
@@ -273,6 +274,18 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/stocktake.html" for route in application.routes):
+        mobile_stocktake_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_stocktake.html"
+        )
+        application.add_api_route(
+            "/mobile/stocktake.html",
+            lambda: FileResponse(mobile_stocktake_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(route.path == "/mold-label.html" for route in application.routes):
         mold_label_path = (
             Path(__file__).resolve().parents[1]
@@ -444,6 +457,15 @@ def create_app() -> FastAPI:
             warehouse_router,
             prefix="/api/warehouse",
             tags=["warehouse"],
+        )
+    if not any(
+        route.path == "/api/warehouse/stocktake/locations"
+        for route in application.routes
+    ):
+        application.include_router(
+            stocktake_router,
+            prefix="/api/warehouse",
+            tags=["warehouse-stocktake"],
         )
 
     # create_app() reconfigures the legacy singleton.  TestClient builds and

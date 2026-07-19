@@ -70,3 +70,13 @@ BoxDB20_REPRO
 - 执行完整性检查。
 - 保留回滚文件和迁移报告。
 
+## N034 Phase A：复合产品 BOM
+
+- worktree：`D:\tm-worktrees\erp-composite-bom-n034`；branch：`feature/composite-bom-n034`。
+- 迁移链：`bd57v8x9z47`（N034 Phase A）接在 `bc56v8x9z46` 后。
+- 新增三张表：`product_bom_components`、`sales_order_item_bom_components`、`requisition_item_bom_sources`；`products` 新增 `is_composite`、`is_internal_component` 两个标记。
+- `sales_order_item_bom_components` 保存历史快照，快照字段不可变；其 `product_bom_component_id` 在模板删除时允许 `SET NULL`，不得借此修改快照内容。
+- downgrade 必须 fail-closed：三张 N034 表任一有事实行，或任意 Product 的 `is_composite` / `is_internal_component` 为真，即拒绝降级；只有三表均为空且两个标记均无真值时才可降级。
+- 隔离副本 `D:\tm-uat\composite_bom_n034_20260718_130112\carton_erp_uat.sqlite3` 已完成 `head -> base -> head`，最终 `integrity_check=ok`、`foreign_key_check=0`；测试 `144 passed`；UAT 端口 `18068`。
+- 正式库未写入；本阶段未 commit、未 push。
+

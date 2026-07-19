@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 from fastapi import (
     APIRouter,
     Depends,
@@ -57,6 +58,12 @@ from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
     serialize_versioned_entity,
+)
+from app.services.composite_bom import (
+    CompositeBOMError,
+    get_product_bom,
+    raise_http as raise_composite_bom_http,
+    replace_product_bom,
 )
 
 
@@ -323,7 +330,46 @@ class ProductResponse(ProductPayload):
     deleted_by: int | None = None
     purged_at: datetime | None = None
     version: int
+    is_composite: bool = False
+    is_internal_component: bool = False
     drawings: list[ProductDrawingResponse] = Field(default_factory=list)
+
+
+class ProductBOMComponentPayload(BaseModel):
+    component_product_id: int = Field(gt=0)
+    quantity_per_set: Decimal = Field(gt=0)
+    is_die_cut: bool = False
+    mold_tool_id: int | None = Field(default=None, gt=0)
+    mold_max_yield_per_sheet: int | None = Field(default=None, gt=0)
+    spare_sheet_quantity: int = Field(default=0, ge=0)
+    display_mode: Literal[
+        "internal_only", "show_on_delivery", "show_on_all_docs"
+    ] = "internal_only"
+    is_required: bool = True
+    remark: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_non_die_cut_mold_fields(self):
+        if not self.is_die_cut and (
+            self.mold_tool_id is not None
+            or self.mold_max_yield_per_sheet is not None
+        ):
+            raise ValueError("非模切组件不能设置模具或模具最大产出")
+        return self
+
+
+class ProductBOMUpdatePayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    change_reason: str = Field(min_length=1, max_length=500)
+    components: list[ProductBOMComponentPayload] = Field(max_length=99)
+
+    @field_validator("change_reason")
+    @classmethod
+    def validate_change_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("修改原因不能为空")
+        return reason
 
 
 class ProductMutationPayload(BaseModel):
@@ -444,6 +490,10 @@ def _response(product: Product, user: User) -> dict:
             beijing_naive_to_api(product.purged_at) if product.purged_at else None
         ),
         "version": product.version,
+        "is_composite": bool(getattr(product, "is_composite", False)),
+        "is_internal_component": bool(
+            getattr(product, "is_internal_component", False)
+        ),
         "drawings": [
             {
                 **ProductDrawingResponse.model_validate(drawing).model_dump(),
@@ -786,6 +836,54 @@ def get_product(
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     return _response(product, user)
+
+
+@router.get("/{product_id}/bom")
+def read_product_bom(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    try:
+        return get_product_bom(db, product_id)
+    except CompositeBOMError as error:
+        raise raise_composite_bom_http(error) from error
+
+
+@router.put("/{product_id}/bom")
+def update_product_bom(
+    product_id: int,
+    payload: ProductBOMUpdatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    try:
+        result = replace_product_bom(
+            db,
+            parent_product_id=product_id,
+            components=[component.model_dump() for component in payload.components],
+            expected_version=payload.expected_version,
+            user=user,
+            change_reason=payload.change_reason,
+        )
+        db.commit()
+        return result
+    except CompositeBOMError as error:
+        db.rollback()
+        raise raise_composite_bom_http(error) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="BOM 已被其他操作修改，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 async def _create_drawing_version(

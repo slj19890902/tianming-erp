@@ -577,3 +577,23 @@
 - [x] 后端已恢复并读取正式库 `15593/15658`
 - [ ] 最终只读验收
 - [ ] 最终备份归档
+
+## N034 Phase A 复合产品 BOM 交接（2026-07-18）
+
+- [x] worktree：`D:\tm-worktrees\erp-composite-bom-n034`
+- [x] branch：`feature/composite-bom-n034`
+- [x] 迁移链：`bc56v8x9z46 -> bd57v8x9z47`
+- [x] 新表：`product_bom_components`
+- [x] 新表：`sales_order_item_bom_components`
+- [x] 新表：`requisition_item_bom_sources`
+- [x] `products` 新增 `is_composite`、`is_internal_component`
+- [x] 历史订单 BOM 快照不可变；模板删除时来源引用允许 `SET NULL`，不修改其他快照字段
+- [x] downgrade fail-closed：三张 N034 表任一有事实行，或任一 Product 标记为真时拒绝；仅三表全空且两个标记均为假时允许
+- [x] 隔离副本：`D:\tm-uat\composite_bom_n034_20260718_130112\carton_erp_uat.sqlite3`
+- [x] 副本已完成 `head -> base -> head`
+- [x] 最终 `integrity_check=ok`
+- [x] 最终 `foreign_key_check=0`
+- [x] 自动测试：`144 passed`
+- [x] UAT 端口：`18068`
+- [x] 正式库未写入
+- [x] 未 commit / push

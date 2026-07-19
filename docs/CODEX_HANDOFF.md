@@ -1452,3 +1452,12 @@ legacy_ruida_* 原始层
 - 禁止把客户端原有的上述头部拼接进转发值；否则 loopback 代理会把攻击者伪造内容当成可信来源。代理上线前必须验证不可信 TCP peer 的伪造头无效、loopback 代理覆盖后的头才生效。
 - 启动脚本只用 http://127.0.0.1:<port>/api/health 判断本机进程是否就绪；本机就绪后才单独检查外部 HTTPS。外部证书或代理异常只告警，不得把外部重定向当作本机就绪，也不得终止已经本机就绪的 ERP 进程。
 - 登录限流使用进程内按“规范化用户名 + 来源 IP”划分的细粒度锁；同一键的计数、门禁、验密和短审计写入有序，不同键可并行验密，且不再持有 SQLite 全库写锁跨越 bcrypt。该契约依赖单 worker：`ERP_WORKERS` 只能为 `1`，部署生成器与 Windows 启动器均强制该值；任何绕过项目启动器的部署同样必须只启动一个应用 worker。
+
+## 57. N034 Phase A 复合产品 BOM 交接（2026-07-18）
+
+- 独立 worktree：`D:\tm-worktrees\erp-composite-bom-n034`；分支：`feature/composite-bom-n034`。本轮仅追加项目文档交接，未 commit、未 push。
+- 迁移 `bd57v8x9z47` 线性接在 `bc56v8x9z46` 后；新增 `product_bom_components`、`sales_order_item_bom_components`、`requisition_item_bom_sources` 三张表，并在 `products` 增加 `is_composite`、`is_internal_component` 两个标记。
+- 订单 BOM 历史快照是不可变事实：快照字段更新被拒绝；模板来源 `product_bom_component_id` 仅允许因模板删除而 `SET NULL`，不得反向改写其他快照字段。
+- downgrade 采用 fail-closed：三张 N034 表任一存在事实行，或 `products` 中任一 `is_composite` / `is_internal_component` 为真，均拒绝降级；仅在三表全空且两个 Product 标记均无真值时允许降级。
+- 隔离副本 `D:\tm-uat\composite_bom_n034_20260718_130112\carton_erp_uat.sqlite3` 已完成 `head -> base -> head` 往返演练，最终 `integrity_check=ok`、`foreign_key_check=0`；自动测试 `144 passed`。UAT 端口：`18068`。
+- 本轮未写正式库；正式库未迁移、未写入。业务代码和已有工作区改动未在本轮处理。

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from app.models.customer import Customer
     from app.models.material import Material
     from app.models.mold_tool import MoldTool
+    from app.models.product_bom import ProductBomComponent
     from app.models.product_drawing import ProductDrawing
 
 
@@ -144,6 +145,16 @@ class Product(Base):
     splice_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_composite: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    is_internal_component: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     manual_modified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     manual_modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -181,6 +192,13 @@ class Product(Base):
     customer: Mapped["Customer"] = relationship(back_populates="products")
     material: Mapped["Material | None"] = relationship(back_populates="products")
     mold_tool: Mapped["MoldTool | None"] = relationship(back_populates="products")
+    bom_components: Mapped[list["ProductBomComponent"]] = relationship(
+        "ProductBomComponent",
+        foreign_keys="ProductBomComponent.parent_product_id",
+        back_populates="parent_product",
+        passive_deletes=True,
+        order_by="ProductBomComponent.display_order",
+    )
     drawings: Mapped[list["ProductDrawing"]] = relationship(
         back_populates="product",
         order_by=(

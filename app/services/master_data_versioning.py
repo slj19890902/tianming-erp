@@ -114,6 +114,10 @@ _PRODUCT_FIELDS = (
     "pieces_per_box",
     "flap_mm",
     "is_active",
+) + tuple(
+    field
+    for field in ("is_composite",)
+    if hasattr(Product, field)
 )
 _MATERIAL_FIELDS = (
     "code",

@@ -2087,9 +2087,11 @@
                   </div>
                 </div>
 
-                <!-- PDF 客户模板生命周期 -->
-                <div class="section-title" style="margin-top:20px">客户 PDF 模板生命周期</div>
-                <div class="panel" style="padding:14px 18px">
+                <!-- PDF 客户模板生命周期：保留旧能力，但默认折叠给普通操作员 -->
+                <details class="pdf-admin-advanced" style="margin-top:20px">
+                  <summary class="section-title" style="cursor:pointer;list-style-position:inside">管理员高级设置（一般操作无需使用）</summary>
+                  <div class="section-title" style="margin-top:12px">客户 PDF 模板生命周期</div>
+                  <div class="panel" style="padding:14px 18px">
                   <div class="toolbar" style="margin-bottom:10px;align-items:flex-start">
                     <div class="toolbar-group" style="flex-wrap:wrap">
                       <button class="btn primary" :disabled="pdfTemplateLoading || !canAdmin" @click="openPdfTemplateEditor()">新建 draft 模板</button>
@@ -2159,7 +2161,8 @@
                       </tbody>
                     </table>
                   </div>
-                </div>
+                  </div>
+                </details>
               </div>
             </template>
           </main>
@@ -2456,6 +2459,9 @@
                   <div class="field"><label>识别客户原文</label><div>{{ draft.customer_name_raw || draft.customer_name || "-" }}</div></div>
                   <div class="field"><label>系统匹配客户</label><div :class="{'danger-text':!draft.matched_customer_id}">{{ importCustomerMatchText(draft) }}</div></div>
                   <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" @change="rematchImportDraft(draftIndex)"></search-select></div>
+                  <div v-if="!draft.matched_customer_id" class="field wide">
+                    <div class="notice danger" style="margin:0;white-space:normal">尚未选择确认客户。请先选择客户；提交改进和保存正式订单都需要确认客户。</div>
+                  </div>
                   <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <div v-if="draft.source_text_quality === 'garbled_text_layer'" class="field wide">
                     <div class="notice danger" style="margin:0">思迈尔 PDF 已使用文本层与 OCR 合并；客户订单号已保留。未匹配或多候选明细必须人工确认后才能保存。</div>
@@ -2489,6 +2495,56 @@
                   </div>
                   <div v-if="draft._warningsExpanded" class="status orange" style="display:block;margin-top:4px">
                     <div v-for="(warning, index) in draft.warnings" :key="index" style="font-size:12px">{{ warning }}</div>
+                  </div>
+                </div>
+                <div v-if="canSubmitPdfCorrection" style="margin-bottom:10px">
+                  <div class="toolbar-group" style="justify-content:flex-start;align-items:center">
+                    <button class="btn" type="button" :disabled="draft._correction_submitting" @click="openPdfCorrectionForm(draft)">识别有误？提交改进</button>
+                    <span v-if="!draft.matched_customer_id" class="muted">先选择确认客户后才能提交</span>
+                  </div>
+                  <div v-if="draft._correction_error" class="notice danger" style="margin-top:8px;white-space:normal">{{ draft._correction_error }}</div>
+                  <div v-if="draft._correction_success" class="notice success" style="margin-top:8px;white-space:normal">
+                    改进已提交，样本 ID：<strong>{{ draft._correction_success.sample_id }}</strong>。待管理员复核；不会自动创建订单，管理员验证后才用于后续识别。
+                  </div>
+                </div>
+                <div v-if="draft._correction_open" class="panel" style="margin-bottom:12px;padding:12px 14px;border:2px solid #bfdbfe;background:#f8fbff">
+                  <div class="toolbar" style="margin-bottom:8px;align-items:flex-start">
+                    <div>
+                      <strong>修正识别结果</strong>
+                      <div class="muted" style="font-size:12px;margin-top:3px">只提交识别改进，不会加入批量保存，也不会创建正式订单。</div>
+                    </div>
+                    <button class="btn small" type="button" @click="cancelPdfCorrection(draft)">取消</button>
+                  </div>
+                  <div v-if="!draft.matched_customer_id" class="notice danger" style="margin-bottom:10px;white-space:normal">请先在上方选择确认客户，再提交这份改进。</div>
+                  <div class="form-grid" style="margin-bottom:10px">
+                    <div class="field"><label>客户名称</label><input class="input" v-model.trim="draft._correction_form.customer_name" /></div>
+                    <div class="field"><label>客户单号</label><input class="input" v-model.trim="draft._correction_form.order_no" /></div>
+                    <div class="field"><label>下单日期</label><input class="input" v-model.trim="draft._correction_form.order_date" placeholder="如 2026-07-03" /></div>
+                    <div class="field"><label>交货日期</label><input class="input" v-model.trim="draft._correction_form.delivery_date" placeholder="如 2026-07-10" /></div>
+                    <div class="field wide"><label>改进说明</label><input class="input" v-model.trim="draft._correction_form.notes" placeholder="请用中文说明本次修正内容" /></div>
+                  </div>
+                  <div style="overflow-x:auto">
+                    <table class="data-table" style="font-size:12px;min-width:1040px">
+                      <thead><tr><th>行号</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>数量</th><th>单位</th><th>单价</th><th>金额</th><th>操作</th></tr></thead>
+                      <tbody>
+                        <tr v-for="(item,index) in draft._correction_form.items" :key="`pdf-correction-${index}`">
+                          <td><input class="input" type="number" min="1" v-model.number="item.line_no" style="width:66px" /></td>
+                          <td><input class="input" v-model.trim="item.product_code" placeholder="存货编码" style="width:120px" /></td>
+                          <td><input class="input" v-model.trim="item.product_name" placeholder="产品名称" style="width:180px" /></td>
+                          <td><input class="input" v-model.trim="item.spec" placeholder="规格" style="width:180px" /></td>
+                          <td><input class="input" type="number" min="0" step="0.0001" v-model="item.quantity" placeholder="数量" style="width:100px" /></td>
+                          <td><input class="input" v-model.trim="item.unit" placeholder="单位" style="width:80px" /></td>
+                          <td><input class="input" type="number" step="0.0001" v-model="item.unit_price" placeholder="单价" style="width:100px" /></td>
+                          <td><input class="input" type="number" step="0.0001" v-model="item.amount" placeholder="金额" style="width:100px" /></td>
+                          <td><button class="btn small danger" type="button" @click="removePdfCorrectionItem(draft,index)">删除</button></td>
+                        </tr>
+                        <tr v-if="!draft._correction_form.items.length"><td colspan="9" class="muted" style="text-align:center">当前没有明细行，请新增或取消。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="toolbar-group" style="margin-top:10px">
+                    <button class="btn small" type="button" @click="addPdfCorrectionItem(draft)">新增明细行</button>
+                    <button class="btn primary small" type="button" :disabled="draft._correction_submitting || !draft.matched_customer_id" @click="submitPdfCorrection(draft)">{{ draft._correction_submitting ? "提交中…" : "提交改进" }}</button>
                   </div>
                 </div>
                 <!-- PDF草稿明细：简洁2行布局，常用箱名称/规格/材质为主 -->
@@ -4296,6 +4352,7 @@
           },
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
+          canSubmitPdfCorrection() { return this.hasPermission("pdf_training.manage"); },
           canManagePermissions() { return this.user?.role === "admin"; },
           canViewCosts() { return this.hasPermission("cost.view"); },
           canCreateCustomers() { return this.hasPermission("customers.create"); },
@@ -8807,6 +8864,104 @@
             this.orderImportDrafts = [];
             this.modal = { type:"orderPdfImport", title:"识别采购订单 PDF" };
           },
+          pdfCorrectionItemFromDraft(item, index) {
+            const quantity = item?.quantity ?? "";
+            const unitPrice = item?.unit_price ?? "";
+            const amount = item?.amount !== undefined && item?.amount !== null && item?.amount !== ""
+              ? item.amount
+              : (Number.isFinite(Number(quantity)) && Number.isFinite(Number(unitPrice)) && quantity !== "" && unitPrice !== ""
+                ? Number(quantity) * Number(unitPrice)
+                : "");
+            return {
+              line_no: Number.parseInt(item?.line_no, 10) || index + 1,
+              product_code: String(item?.normalized_product_code || item?.product_code || item?.raw_product_code || "").trim(),
+              product_name: String(item?.product_name || item?.raw_product_name || "").trim(),
+              spec: String(item?.specification || item?.raw_spec_model || item?.size_spec || "").trim(),
+              quantity,
+              unit: String(item?.unit || "").trim(),
+              unit_price: unitPrice,
+              amount,
+            };
+          },
+          pdfCorrectionFormFromDraft(draft) {
+            const matched = this.customerOptions.find(row => Number(row.id) === Number(draft?.matched_customer_id));
+            return {
+              customer_name: String(matched?.name || draft?.matched_customer_name || draft?.customer_name || draft?.customer_name_raw || "").trim(),
+              order_no: String(draft?.customer_po || "").trim(),
+              order_date: String(draft?.order_date || "").trim(),
+              delivery_date: String(draft?.delivery_date || "").trim(),
+              notes: "人工核对订单 PDF 识别结果",
+              items: (draft?.items || []).map((item, index) => this.pdfCorrectionItemFromDraft(item, index)),
+            };
+          },
+          openPdfCorrectionForm(draft) {
+            if (!this.canSubmitPdfCorrection) return;
+            draft._correction_form = draft._correction_form || this.pdfCorrectionFormFromDraft(draft);
+            draft._correction_open = true;
+            draft._correction_error = draft.matched_customer_id ? "" : "尚未选择确认客户；请选择客户后才能提交改进。";
+          },
+          addPdfCorrectionItem(draft) {
+            draft._correction_form = draft._correction_form || this.pdfCorrectionFormFromDraft(draft);
+            draft._correction_form.items.push(this.pdfCorrectionItemFromDraft({}, draft._correction_form.items.length));
+          },
+          removePdfCorrectionItem(draft, index) {
+            draft._correction_form?.items?.splice(index, 1);
+          },
+          cancelPdfCorrection(draft) {
+            draft._correction_open = false;
+            draft._correction_error = "";
+          },
+          async submitPdfCorrection(draft) {
+            if (!this.canSubmitPdfCorrection || draft?._correction_submitting) return;
+            draft._correction_error = "";
+            if (!draft?.matched_customer_id) {
+              draft._correction_error = "尚未选择确认客户；请选择客户后才能提交改进。";
+              return;
+            }
+            const file = (this.orderImportBatch.files || []).find(row => row.name === draft.source_name);
+            if (!file) {
+              draft._correction_error = "找不到当前 draft 对应的原 PDF 文件，请重新选择文件后再识别。";
+              return;
+            }
+            const formState = draft._correction_form || this.pdfCorrectionFormFromDraft(draft);
+            const groundTruth = {
+              customer_name: String(formState.customer_name || "").trim(),
+              order_no: String(formState.order_no || "").trim(),
+              order_date: String(formState.order_date || "").trim(),
+              delivery_date: String(formState.delivery_date || "").trim(),
+              items: (formState.items || []).map((item, index) => ({
+                line_no: Number.parseInt(item.line_no, 10) || index + 1,
+                product_code: String(item.product_code || "").trim(),
+                product_name: String(item.product_name || "").trim(),
+                spec: String(item.spec || "").trim(),
+                quantity: item.quantity === "" || item.quantity === null || item.quantity === undefined ? null : Number(item.quantity),
+                unit: String(item.unit || "").trim(),
+                unit_price: item.unit_price === "" || item.unit_price === null || item.unit_price === undefined ? null : Number(item.unit_price),
+                amount: item.amount === "" || item.amount === null || item.amount === undefined ? null : Number(item.amount),
+              })),
+            };
+            const form = new FormData();
+            form.append("file", file, file.name);
+            form.append("customer_id", String(draft.matched_customer_id));
+            form.append("ground_truth_json", JSON.stringify(groundTruth));
+            form.append("notes", String(formState.notes || "人工核对订单 PDF 识别结果").trim() || "人工核对订单 PDF 识别结果");
+            draft._correction_submitting = true;
+            try {
+              const { data } = await axios.post("/api/pdf-training/samples/submit-correction", form, {
+                headers: { "Content-Type": "multipart/form-data" },
+              });
+              draft._correction_success = {
+                sample_id: data?.sample_id ?? data?.id ?? data?.sample?.id ?? "待返回",
+              };
+              draft._correction_open = false;
+              this.showToast("改进已提交，待管理员复核");
+            } catch (error) {
+              draft._correction_error = this.errorMessage(error);
+              this.showToast(this.errorMessage(error), true);
+            } finally {
+              draft._correction_submitting = false;
+            }
+          },
           onOrderPdfFileChange(event) {
             this.orderImportBatch.files = Array.from(event?.target?.files || []);
             this.orderImportDrafts = [];
@@ -8822,7 +8977,16 @@
               const form = new FormData();
               this.orderImportBatch.files.forEach(file => form.append("files", file));
               const { data } = await axios.post("/api/orders/pdf-preview-batch", form);
-              this.orderImportDrafts = (data.drafts || []).map(draft => ({...draft, confirmed:false, items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))}));
+              this.orderImportDrafts = (data.drafts || []).map(draft => ({
+                ...draft,
+                confirmed:false,
+                _correction_open:false,
+                _correction_submitting:false,
+                _correction_error:"",
+                _correction_success:null,
+                _correction_form:null,
+                items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))
+              }));
               await Promise.all(this.orderImportDrafts.map(draft => Promise.all((draft.items || []).filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id)))));
               this.orderImportBatch.status = "recognized";
             } catch (error) {
@@ -8957,7 +9121,16 @@
               preview_safety_token:draft.preview_safety_token,
             });
             data.items.forEach((item,itemIndex) => Object.assign(item, preserved[itemIndex] || {}));
-            this.orderImportDrafts[index] = {...data, confirmed:false, items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))};
+            this.orderImportDrafts[index] = {
+              ...data,
+              confirmed:false,
+              _correction_open:false,
+              _correction_submitting:false,
+              _correction_error:"",
+              _correction_success:null,
+              _correction_form:null,
+              items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))
+            };
             await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
           async selectImportProduct(draft, item) {

@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import PermissionChecker, get_db
 from app.core.time_contract import utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
+from app.models.customer import Customer
 from app.models.pdf_training import (
     PdfOrderCorrectionLog,
     PdfOrderCustomerTemplate,
@@ -159,6 +160,40 @@ def _parse_pdf_sample_content(
         "parse_method": parse_method,
         "text_quality": text_quality,
     }
+
+
+# ---------------------------------------------------------------------------
+# Sample source persistence
+# ---------------------------------------------------------------------------
+
+def _ensure_sample_pdf(
+    sample: PdfOrderTrainingSample,
+    content: bytes,
+    source_name: str,
+) -> bool:
+    """Persist the immutable source PDF once, repairing a missing/stale local copy."""
+    expected_sha = sample.file_sha256
+    if sample.file_path:
+        current_path = Path(sample.file_path)
+        try:
+            if current_path.is_file() and file_sha256(current_path.read_bytes()) == expected_sha:
+                return False
+        except OSError:
+            pass
+
+    _SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(source_name).stem)[:40] or "sample"
+    destination = _SAMPLE_DIR / f"{expected_sha[:16]}_{safe_stem}.pdf"
+    try:
+        already_saved = destination.is_file() and file_sha256(destination.read_bytes()) == expected_sha
+    except OSError:
+        already_saved = False
+    if not already_saved:
+        destination.write_bytes(content)
+    new_path = str(destination)
+    path_changed = sample.file_path != new_path
+    sample.file_path = new_path
+    return path_changed or not already_saved
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +316,71 @@ class TemplateActivationPayload(BaseModel):
 
 class TemplateRetirePayload(BaseModel):
     reason: str
+
+
+def _apply_ground_truth(
+    db: Session,
+    sample: PdfOrderTrainingSample,
+    sample_id: int,
+    payload: GroundTruthPayload,
+    user: User,
+) -> bool:
+    """Apply the shared annotation workflow and return whether it changed the sample."""
+    try:
+        json.loads(payload.ground_truth_json)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"ground_truth_json 格式错误: {exc}",
+        ) from exc
+
+    ground_truth_changed = sample.ground_truth_json != payload.ground_truth_json
+    notes_changed = payload.notes is not None and sample.notes != payload.notes
+    if not ground_truth_changed and not notes_changed:
+        return False
+
+    sample.ground_truth_json = payload.ground_truth_json
+    sample.parse_status = "labeled"
+    sample.labeled_at = _now()
+    sample.labeled_by = user.username
+    if payload.notes is not None:
+        sample.notes = payload.notes
+
+    if ground_truth_changed:
+        sample.gold_review_status = "pending"
+        sample.gold_reviewed_at = None
+        sample.gold_reviewed_by = None
+        sample.gold_review_note = None
+
+    score_result = score_sample(sample.parser_result_json, sample.ground_truth_json)
+    sample.score = score_result.overall_score
+    auto_note = "ground_truth_form_auto_diff"
+    db.query(PdfOrderCorrectionLog).filter(
+        PdfOrderCorrectionLog.sample_id == sample_id,
+        PdfOrderCorrectionLog.note == auto_note,
+    ).delete(synchronize_session=False)
+    for difference in correction_candidates(
+        sample.parser_result_json,
+        sample.ground_truth_json,
+    ):
+        db.add(
+            PdfOrderCorrectionLog(
+                sample_id=sample_id,
+                field_path=str(difference["field_path"]),
+                parser_value=difference["parser_value"],
+                corrected_value=difference["corrected_value"],
+                corrected_by=user.username,
+                note=auto_note,
+            )
+        )
+
+    _log(
+        db,
+        user,
+        "pdf_training.sample.label",
+        f"标注样本 {sample_id}，评分={score_result.overall_score:.3f}",
+    )
+    return True
 
 
 def _validate_template_rule_payload(payload: TemplateCreate) -> None:
@@ -564,6 +664,77 @@ async def upload_sample(
 # 样本详情 / 标注 / 评分 / 删除
 # ---------------------------------------------------------------------------
 
+@router.post(
+    "/samples/submit-correction",
+    response_model=SampleDetail,
+)
+async def submit_correction_sample(
+    file: UploadFile = File(...),
+    ground_truth_json: str = Form(...),
+    customer_id: int | None = Form(None),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_pdf_training_manage),
+):
+    """保存人工纠正样本；不会创建正式订单或启用客户模板。"""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只支持 PDF 文件")
+
+    if customer_id is not None and db.get(Customer, customer_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="所选客户不存在，请刷新后重新选择。",
+        )
+
+    content = await file.read()
+    sha = file_sha256(content)
+    sample = db.query(PdfOrderTrainingSample).filter(
+        PdfOrderTrainingSample.file_sha256 == sha
+    ).first()
+    created = sample is None
+    customer_changed = False
+    if sample is not None:
+        if (
+            sample.customer_id is not None
+            and customer_id is not None
+            and sample.customer_id != customer_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="该 PDF 已绑定其他客户，不能覆盖。",
+            )
+        if sample.customer_id is None and customer_id is not None:
+            sample.customer_id = customer_id
+            customer_changed = True
+    else:
+        parse_payload = _parse_pdf_sample_content(db, content, file.filename)
+        sample = PdfOrderTrainingSample(
+            customer_id=customer_id,
+            file_name=file.filename,
+            file_sha256=sha,
+            parser_result_json=parse_payload["parser_result_json"],
+            extracted_text=parse_payload["extracted_text"],
+            ocr_text_raw=parse_payload["ocr_text_raw"],
+            parse_method=parse_payload["parse_method"],
+            parse_status="pending",
+        )
+        db.add(sample)
+        db.flush()
+
+    file_changed = _ensure_sample_pdf(sample, content, file.filename)
+    labeled = _apply_ground_truth(
+        db,
+        sample,
+        sample.id,
+        GroundTruthPayload(ground_truth_json=ground_truth_json, notes=notes),
+        user,
+    )
+    if created or customer_changed or file_changed or labeled:
+        db.commit()
+        db.refresh(sample)
+    return sample
+
+
 @router.get("/samples/detail/{sample_id}", response_model=SampleDetail)
 def get_sample_legacy_detail(
     sample_id: str,
@@ -591,70 +762,12 @@ def set_ground_truth(
     db: Session = Depends(get_db),
     user: User = Depends(require_pdf_training_manage),
 ):
-    """写入人工标注 ground_truth_json，同时自动触发评分计算。"""
+    """写入人工标注，并通过统一纠错流程重新评分。"""
     sample, safe_sample_id = _get_sample_or_404(db, sample_id)
-
-    # 校验 JSON 格式
-    try:
-        json.loads(payload.ground_truth_json)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"ground_truth_json 格式错误: {exc}",
-        ) from exc
-
-    ground_truth_changed = sample.ground_truth_json != payload.ground_truth_json
-    notes_changed = payload.notes is not None and sample.notes != payload.notes
-    if not ground_truth_changed and not notes_changed:
-        return sample
-
-    sample.ground_truth_json = payload.ground_truth_json
-    sample.parse_status = "labeled"
-    sample.labeled_at = _now()
-    sample.labeled_by = user.username
-    if payload.notes is not None:
-        sample.notes = payload.notes
-
-    # A changed label invalidates every previous gold decision.  This is a
-    # state reset, never an implicit re-approval.
-    if ground_truth_changed:
-        sample.gold_review_status = "pending"
-        sample.gold_reviewed_at = None
-        sample.gold_reviewed_by = None
-        sample.gold_review_note = None
-
-    # 自动评分
-    sr = score_sample(sample.parser_result_json, sample.ground_truth_json)
-    sample.score = sr.overall_score
-    auto_note = "ground_truth_form_auto_diff"
-    db.query(PdfOrderCorrectionLog).filter(
-        PdfOrderCorrectionLog.sample_id == safe_sample_id,
-        PdfOrderCorrectionLog.note == auto_note,
-    ).delete(synchronize_session=False)
-    differences = correction_candidates(
-        sample.parser_result_json,
-        sample.ground_truth_json,
-    )
-    for difference in differences:
-        db.add(
-            PdfOrderCorrectionLog(
-                sample_id=safe_sample_id,
-                field_path=str(difference["field_path"]),
-                parser_value=difference["parser_value"],
-                corrected_value=difference["corrected_value"],
-                corrected_by=user.username,
-                note=auto_note,
-            )
-        )
-
-    _log(
-        db,
-        user,
-        "pdf_training.sample.label",
-        f"标注样本 {safe_sample_id}，评分={sr.overall_score:.3f}",
-    )
-    db.commit()
-    db.refresh(sample)
+    changed = _apply_ground_truth(db, sample, safe_sample_id, payload, user)
+    if changed:
+        db.commit()
+        db.refresh(sample)
     return sample
 
 
@@ -752,40 +865,25 @@ def reparse_sample(
             status_code=status.HTTP_409_CONFLICT,
             detail="样本原始 PDF 文件不存在，无法重新解析。",
         )
-
-    pdf_path = Path(sample.file_path)
-    if not pdf_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="样本原始 PDF 文件不存在，无法重新解析。",
-        )
-
     try:
-        content = pdf_path.read_bytes()
-    except OSError as exc:
+        content = read_and_verify_sample_pdf(sample)
+    except (ValueError, OSError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"读取样本原始 PDF 失败：{exc}",
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"样本原始 PDF 校验失败，拒绝重新解析：{exc}",
         ) from exc
 
-    parse_payload = _parse_pdf_sample_content(db, content, sample.file_name or pdf_path.name)
+    parse_payload = _parse_pdf_sample_content(db, content, sample.file_name or "sample.pdf")
     sample.extracted_text = parse_payload["extracted_text"]
     sample.ocr_text_raw = parse_payload["ocr_text_raw"]
     sample.parser_result_json = parse_payload["parser_result_json"]
     sample.parse_method = parse_payload["parse_method"]
-
-    if sample.ground_truth_json:
-        sr = score_sample(sample.parser_result_json, sample.ground_truth_json)
-        sample.score = sr.overall_score
-    else:
-        sample.score = None
-
-    _log(
-        db,
-        user,
-        "pdf_training.sample.reparse",
-        f"重新解析样本 {safe_sample_id}: {sample.file_name}",
+    sample.score = (
+        score_sample(sample.parser_result_json, sample.ground_truth_json).overall_score
+        if sample.ground_truth_json
+        else None
     )
+    _log(db, user, "pdf_training.sample.reparse", f"重新解析样本 {safe_sample_id}: {sample.file_name}")
     db.commit()
     db.refresh(sample)
     return sample

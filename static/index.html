@@ -986,6 +986,7 @@
                   <button v-if="canFinance" class="btn" @click="go('finance')">月结对账</button>
                   <button v-if="hasPermission('incoming.view')" class="btn" @click="go('incoming')">仓库来料入库</button>
                   <a v-if="hasPermission('warehouse.view')" class="btn" href="/warehouse.html">仓库库存管理</a>
+                  <a v-if="hasPermission('warehouse.stocktake.view')" class="btn" href="/mobile/stocktake.html">手机库存盘点</a>
                   <button v-if="hasPermission('incoming.execute')" class="btn" @click="openMobileEntry">手机扫码入口</button>
                 </div></div>
                 <div class="panel"><div class="section-title">最近业务摘要</div><div class="section-body">
@@ -7276,7 +7277,7 @@
               ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
               ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
               ["dashboard", "首页仪表盘查看", "dashboard.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
-              ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"],
+              ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
               ["deliveries", "送货查看", "deliveries.view"], ["deliveries", "送货操作", "deliveries.execute"], ["finance", "财务查看", "finance.view"], ["finance", "财务操作", "finance.execute"],
             ];
             return rows.map(([module, name, code]) => ({ module, name, code }));
@@ -7286,10 +7287,10 @@
             const role = roleOverride || this.permissionProfile?.role || this.permissionUsers.find(row => row.id === this.selectedPermissionUserId)?.role;
             if (role === "admin") return true;
             const defaults = {
-              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage"].includes(code)),
+              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","warehouse.stocktake.review"].includes(code)),
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"],
               finance: ["customers.view","quotations.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
-              workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","deliveries.view"],
+              workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
               delivery_picker: ["orders.view"],
             };
             return (defaults[role] || []).includes(item.code);

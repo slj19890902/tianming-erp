@@ -723,3 +723,28 @@ cd D:\纸箱厂erp软件搭建
 降级后应在隔离环境执行登录和会话失效验收。若重新升级，`auth_version`
 会以 `1` 回填，因此此前更高的撤销版本不可恢复；必须按一次新的会话安全
 切换处理，并要求用户重新登录。
+
+## N034 Phase A 复合产品 BOM（2026-07-18）
+
+### 迁移范围
+
+- worktree：`D:\tm-worktrees\erp-composite-bom-n034`；branch：`feature/composite-bom-n034`。
+- Alembic：`bc56v8x9z46 -> bd57v8x9z47`。
+- 新表：`product_bom_components`（产品 BOM 模板）、`sales_order_item_bom_components`（订单项历史快照）、`requisition_item_bom_sources`（报料来源）。
+- `products` 新增 `is_composite` 与 `is_internal_component` 两个布尔标记。
+
+### 历史与删除约束
+
+- 订单项 BOM 快照字段一经生成即不可更新；模板删除只允许将快照的 `product_bom_component_id` 置为 `NULL`（`SET NULL`），不能改变已保存的历史快照字段。
+- 报料来源引用订单项快照；不得通过删除模板或修改模板回写历史订单或报料事实。
+
+### downgrade 门禁
+
+降级前必须满足全部条件：`product_bom_components`、`sales_order_item_bom_components`、`requisition_item_bom_sources` 三表均为空，且 `products` 中不存在 `is_composite = true` 或 `is_internal_component = true` 的产品。任一条件不满足即 fail-closed 拒绝降级，并要求恢复 `bd57v8x9z47` 升级前的完整备份。
+
+### Phase A 验证记录
+
+- 隔离副本：`D:\tm-uat\composite_bom_n034_20260718_130112\carton_erp_uat.sqlite3`。
+- 已完成 `head -> base -> head` 往返演练；最终 `integrity_check=ok`、`foreign_key_check=0`。
+- 自动测试：`144 passed`；UAT：`18068`。
+- 正式库未写入；本轮未 commit、未 push。

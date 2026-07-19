@@ -1,0 +1,482 @@
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models import Base
+
+if TYPE_CHECKING:
+    from app.models.mold_tool import MoldTool
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.requisition import RequisitionItem
+
+
+class ProductBomComponent(Base):
+    __tablename__ = "product_bom_components"
+    __table_args__ = (
+        CheckConstraint(
+            "parent_product_id <> component_product_id",
+            name="ck_product_bom_components_distinct_products",
+        ),
+        CheckConstraint(
+            "quantity_per_set > 0",
+            name="ck_product_bom_components_quantity_per_set",
+        ),
+        CheckConstraint(
+            "display_order >= 0",
+            name="ck_product_bom_components_display_order",
+        ),
+        CheckConstraint(
+            "length(trim(internal_component_code)) > 0",
+            name="ck_product_bom_components_internal_component_code",
+        ),
+        CheckConstraint(
+            "mold_max_yield_per_sheet IS NULL OR mold_max_yield_per_sheet > 0",
+            name="ck_product_bom_components_mold_yield",
+        ),
+        CheckConstraint(
+            "spare_sheet_quantity >= 0",
+            name="ck_product_bom_components_spare_sheets",
+        ),
+        CheckConstraint(
+            "display_mode IN ('internal_only', 'show_on_delivery', 'show_on_all_docs')",
+            name="ck_product_bom_components_display_mode",
+        ),
+        CheckConstraint(
+            "is_die_cut IS TRUE OR (mold_tool_id IS NULL "
+            "AND mold_max_yield_per_sheet IS NULL)",
+            name="ck_product_bom_components_non_die_cut_mold_fields",
+        ),
+        CheckConstraint(
+            "is_die_cut IS FALSE OR mold_tool_id IS NOT NULL",
+            name="ck_product_bom_components_die_cut_mold_required",
+        ),
+        UniqueConstraint(
+            "parent_product_id",
+            "component_product_id",
+            name="uq_product_bom_components_parent_component",
+        ),
+        UniqueConstraint(
+            "parent_product_id",
+            "display_order",
+            name="uq_product_bom_components_parent_display_order",
+        ),
+        Index(
+            "ix_product_bom_components_parent_display_order",
+            "parent_product_id",
+            "display_order",
+        ),
+        Index(
+            "ix_product_bom_components_component_product_id",
+            "component_product_id",
+        ),
+        Index("ix_product_bom_components_mold_tool_id", "mold_tool_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    parent_product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    component_product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    quantity_per_set: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    internal_component_code: Mapped[str] = mapped_column(String(150), nullable=False)
+    is_die_cut: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    die_cut_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mold_tool_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mold_tools.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    mold_max_yield_per_sheet: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    spare_sheet_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    display_mode: Mapped[str] = mapped_column(
+        String(30),
+        default="internal_only",
+        nullable=False,
+    )
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        onupdate=func.current_timestamp(),
+        nullable=True,
+    )
+
+    parent_product: Mapped["Product"] = relationship(
+        foreign_keys=[parent_product_id],
+        back_populates="bom_components",
+    )
+    component_product: Mapped["Product"] = relationship(
+        foreign_keys=[component_product_id],
+    )
+    mold_tool: Mapped["MoldTool | None"] = relationship()
+
+
+class SalesOrderItemBomComponent(Base):
+    """Immutable component requisition inputs captured with one parent order item."""
+
+    __tablename__ = "sales_order_item_bom_components"
+    __table_args__ = (
+        CheckConstraint(
+            "quantity_per_set > 0",
+            name="ck_sales_order_item_bom_components_quantity_per_set",
+        ),
+        CheckConstraint(
+            "order_set_quantity > 0",
+            name="ck_sales_order_item_bom_components_order_set_quantity",
+        ),
+        CheckConstraint(
+            "required_piece_quantity > 0",
+            name="ck_sales_order_item_bom_components_required_piece_quantity",
+        ),
+        CheckConstraint(
+            "required_piece_quantity = order_set_quantity * quantity_per_set",
+            name="ck_sales_order_item_bom_components_required_piece_formula",
+        ),
+        CheckConstraint(
+            "display_order >= 0",
+            name="ck_sales_order_item_bom_components_display_order",
+        ),
+        CheckConstraint(
+            "length(trim(internal_component_code)) > 0",
+            name="ck_sales_order_item_bom_components_internal_component_code",
+        ),
+        CheckConstraint(
+            "mold_max_yield_per_sheet IS NULL OR mold_max_yield_per_sheet > 0",
+            name="ck_sales_order_item_bom_components_mold_yield",
+        ),
+        CheckConstraint(
+            "spare_sheet_quantity >= 0",
+            name="ck_sales_order_item_bom_components_spare_sheets",
+        ),
+        CheckConstraint(
+            "display_mode IN ('internal_only', 'show_on_delivery', 'show_on_all_docs')",
+            name="ck_sales_order_item_bom_components_display_mode",
+        ),
+        CheckConstraint(
+            "is_die_cut IS TRUE OR (snapshot_mold_tool_id IS NULL "
+            "AND mold_max_yield_per_sheet IS NULL)",
+            name="ck_sales_order_item_bom_components_non_die_cut_mold_fields",
+        ),
+        CheckConstraint(
+            "is_die_cut IS FALSE OR snapshot_mold_tool_id IS NOT NULL",
+            name="ck_sales_order_item_bom_components_die_cut_mold_required",
+        ),
+        UniqueConstraint(
+            "sales_order_item_id",
+            "display_order",
+            name="uq_sales_order_item_bom_components_item_display_order",
+        ),
+        UniqueConstraint(
+            "sales_order_item_id",
+            "product_bom_component_id",
+            name="uq_sales_order_item_bom_components_item_source",
+        ),
+        Index(
+            "ix_sales_order_item_bom_components_item_display_order",
+            "sales_order_item_id",
+            "display_order",
+        ),
+        Index(
+            "ix_sales_order_item_bom_components_component_product_id",
+            "component_product_id",
+        ),
+        Index(
+            "ix_sales_order_item_bom_components_source_component_id",
+            "product_bom_component_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sales_order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    product_bom_component_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_bom_components.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    component_product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    order_set_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_per_set: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    required_piece_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4),
+        nullable=False,
+    )
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    internal_component_code: Mapped[str] = mapped_column(String(150), nullable=False)
+    is_die_cut: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    snapshot_die_cut_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_mold_tool_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_mold_tool_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    snapshot_mold_tool_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    mold_max_yield_per_sheet: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    spare_sheet_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    display_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_component_product_code: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+    )
+    snapshot_component_product_name: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+    snapshot_component_spec: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    snapshot_component_material: Mapped[str | None] = mapped_column(
+        String(250),
+        nullable=True,
+    )
+    snapshot_component_material_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_supplier_name: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
+    snapshot_component_layer_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_flute_type: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    snapshot_component_box_category: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+    snapshot_component_box_style: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+    snapshot_component_production_process: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    snapshot_component_report_length_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_report_width_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_crease_type: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    snapshot_component_crease_left_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_crease_middle_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_crease_right_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_report_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    snapshot_component_base_report_length_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_base_report_width_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_base_crease_type: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    snapshot_component_base_crease_left_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_base_crease_middle_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_base_crease_right_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_base_report_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    snapshot_component_splice_mode: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    snapshot_component_pieces_per_box: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_component_flap_mm: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+
+    sales_order_item: Mapped["OrderItem"] = relationship()
+    product_bom_component: Mapped["ProductBomComponent | None"] = relationship()
+    component_product: Mapped["Product"] = relationship()
+
+
+class RequisitionItemBomSource(Base):
+    __tablename__ = "requisition_item_bom_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "order_set_quantity > 0",
+            name="ck_requisition_item_bom_sources_order_set_quantity",
+        ),
+        CheckConstraint(
+            "quantity_per_set > 0",
+            name="ck_requisition_item_bom_sources_quantity_per_set",
+        ),
+        CheckConstraint(
+            "required_piece_quantity > 0",
+            name="ck_requisition_item_bom_sources_required_piece_quantity",
+        ),
+        CheckConstraint(
+            "required_piece_quantity = order_set_quantity * quantity_per_set",
+            name="ck_requisition_item_bom_sources_required_piece_formula",
+        ),
+        CheckConstraint(
+            "mold_max_yield_per_sheet IS NULL OR mold_max_yield_per_sheet > 0",
+            name="ck_requisition_item_bom_sources_mold_yield",
+        ),
+        CheckConstraint(
+            "actual_yield_per_sheet IS NULL OR actual_yield_per_sheet > 0",
+            name="ck_requisition_item_bom_sources_actual_yield",
+        ),
+        CheckConstraint(
+            "actual_yield_per_sheet IS NULL OR mold_max_yield_per_sheet IS NOT NULL",
+            name="ck_requisition_item_bom_sources_actual_yield_has_maximum",
+        ),
+        CheckConstraint(
+            "actual_yield_per_sheet IS NULL OR "
+            "actual_yield_per_sheet <= mold_max_yield_per_sheet",
+            name="ck_requisition_item_bom_sources_actual_yield_within_maximum",
+        ),
+        CheckConstraint(
+            "spare_sheet_quantity >= 0",
+            name="ck_requisition_item_bom_sources_spare_sheets",
+        ),
+        CheckConstraint(
+            "calculated_purchase_quantity >= 0",
+            name="ck_requisition_item_bom_sources_calculated_purchase_quantity",
+        ),
+        CheckConstraint(
+            "calculated_purchase_quantity >= spare_sheet_quantity",
+            name="ck_requisition_item_bom_sources_purchase_covers_spares",
+        ),
+        CheckConstraint(
+            "direction_note IS NULL OR length(trim(direction_note)) > 0",
+            name="ck_requisition_item_bom_sources_direction_note",
+        ),
+        UniqueConstraint(
+            "requisition_item_id",
+            "sales_order_item_bom_component_id",
+            name="uq_requisition_item_bom_sources_item_snapshot",
+        ),
+        Index(
+            "ix_requisition_item_bom_sources_requisition_item_id",
+            "requisition_item_id",
+        ),
+        Index(
+            "ix_requisition_item_bom_sources_snapshot_id",
+            "sales_order_item_bom_component_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    requisition_item_id: Mapped[int] = mapped_column(
+        ForeignKey("material_requisition_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sales_order_item_bom_component_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    order_set_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_per_set: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    required_piece_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4),
+        nullable=False,
+    )
+    mold_max_yield_per_sheet: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    actual_yield_per_sheet: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 4),
+        nullable=True,
+    )
+    spare_sheet_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    calculated_purchase_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4),
+        nullable=False,
+    )
+    direction_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+
+    requisition_item: Mapped["RequisitionItem"] = relationship()
+    sales_order_item_bom_component: Mapped["SalesOrderItemBomComponent"] = (
+        relationship()
+    )

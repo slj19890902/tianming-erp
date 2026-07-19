@@ -20,6 +20,11 @@ from app.models.master_data_object_version import (  # noqa: E402,F401
 )
 from app.models.mold_tool import MoldLocationMovement, MoldTool  # noqa: E402,F401
 from app.models.product import Product  # noqa: E402,F401
+from app.models.product_bom import (  # noqa: E402,F401
+    ProductBomComponent,
+    RequisitionItemBomSource,
+    SalesOrderItemBomComponent,
+)
 from app.models.product_drawing import ProductDrawing  # noqa: E402,F401
 from app.models.historical_requisition import (  # noqa: E402,F401
     HistoricalRequisitionMap,

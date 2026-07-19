@@ -596,6 +596,50 @@
       .product-edit-grid .field label { margin-bottom: 5px; white-space: nowrap; }
       .product-edit-grid .input,
       .product-edit-grid .select { min-height: 34px; }
+      .bom-editor-panel {
+        margin-top: 12px; padding: 12px; border: 1px solid #cfe4f7; border-radius: 10px;
+        background: #f7fbff; min-width: 0;
+      }
+      .bom-editor-heading {
+        display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+        flex-wrap: wrap; margin-bottom: 8px;
+      }
+      .bom-editor-heading h4 { margin: 0; font-size: 14px; color: #075985; }
+      .bom-editor-note { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+      .bom-component-list { display: grid; gap: 8px; min-width: 0; }
+      .bom-component-card {
+        display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 9px;
+        background: #fff; min-width: 0; box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+      }
+      .bom-component-card-head {
+        display: flex; justify-content: space-between; align-items: center; gap: 8px;
+        flex-wrap: wrap; min-width: 0;
+      }
+      .bom-component-card-head strong { color: #334155; }
+      .bom-component-code { color: #075985; font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+      .bom-component-product { min-width: 0; }
+      .bom-component-product .search-select { min-width: 0; width: 100%; }
+      .bom-component-fields {
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; min-width: 0;
+      }
+      .bom-component-fields .wide { grid-column: 1 / -1; }
+      .bom-component-fields .field { min-width: 0; }
+      .bom-component-fields .input, .bom-component-fields .select { min-height: 32px; }
+      .bom-component-fields textarea { min-height: 42px; }
+      .bom-preview-box {
+        margin-top: 6px; padding: 7px 9px; border-left: 3px solid #7dd3fc; border-radius: 6px;
+        background: #f0f9ff; color: #334155; font-size: 11px; line-height: 1.55; white-space: normal;
+      }
+      .bom-preview-title { color: #075985; font-weight: 700; }
+      .bom-preview-list { display: grid; gap: 2px; margin-top: 2px; }
+      .bom-preview-item { overflow-wrap: anywhere; }
+      @media (max-width: 900px) {
+        .bom-component-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 560px) {
+        .bom-component-fields { grid-template-columns: minmax(0, 1fr); }
+        .bom-component-fields .wide { grid-column: auto; }
+      }
       .process-options {
         display: flex;
         flex-wrap: wrap;
@@ -1511,7 +1555,7 @@
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
                   <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>明细系统单号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td class="sys-num" style="font-size:11px">{{ item.item_order_number || "-" }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}</td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>明细系统单号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td class="sys-num" style="font-size:11px">{{ item.item_order_number || "-" }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -2427,6 +2471,49 @@
                 <div class="field compact-remark-field"><label>备注</label><textarea class="textarea" v-model="productForm.remark" rows="1" placeholder="内部备注，可选"></textarea></div>
               </div>
               </fieldset>
+              <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
+                <div class="bom-editor-heading">
+                  <div>
+                    <h4>组合产品 / 内部 BOM（Phase A）</h4>
+                    <p class="bom-editor-note">客户订单仍只保留一个父产品，单位为“套”。下方组件仅供内部生产/领料，不生成子销售订单明细，也不改变送货、对账或生产数量。</p>
+                  </div>
+                  <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
+                </div>
+                <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
+                <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
+                <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>
+                <template v-if="bomEditor.enabled && !bomEditor.error">
+                  <div class="toolbar-group" style="margin-bottom:8px">
+                    <button type="button" class="btn small" @click="addBomComponent">添加内部组件</button>
+                    <span class="muted">组件必须来自当前客户已有的常用箱。</span>
+                  </div>
+                  <div v-if="!bomEditor.components.length" class="muted">尚未添加内部组件。</div>
+                  <div v-else class="bom-component-list">
+                    <div v-for="(component,index) in bomEditor.components" :key="component._key || component.id || index" class="bom-component-card">
+                      <div class="bom-component-card-head">
+                        <strong>内部组件 {{ index + 1 }}</strong>
+                        <span class="bom-component-code">内部编码：{{ bomComponentInternalCode(component) }}</span>
+                        <button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button>
+                      </div>
+                      <div class="bom-component-product field">
+                        <label>选择同客户常用箱</label>
+                        <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
+                        <div class="muted" v-if="component.product_name">{{ component.product_name }}｜产品编码：{{ component.product_code || "-" }}</div>
+                      </div>
+                      <div class="bom-component-fields">
+                        <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
+                        <label class="remember-line"><input type="checkbox" v-model="component.is_die_cut" @change="onBomDieCutToggle(component)" /> 模切组件</label>
+                        <div class="field"><label>生产模具</label><search-select v-model="component.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="选择已登记模具" :allow-empty="true" :disabled="!component.is_die_cut"></search-select></div>
+                        <div class="field"><label>模具最大产出</label><input class="input" type="number" min="0.0001" step="1" v-model.number="component.mold_max_yield_per_sheet" placeholder="可选" :disabled="!component.is_die_cut" /></div>
+                        <div class="field"><label>备用纸张</label><input class="input" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" /></div>
+                        <div class="field"><label>单据显示方式</label><select class="select" v-model="component.display_mode"><option value="internal_only">仅内部</option><option value="show_on_delivery">显示在送货单</option><option value="show_on_all_docs">显示在全部内部单据</option></select></div>
+                        <label class="remember-line"><input type="checkbox" v-model="component.is_required" /> 必需组件</label>
+                        <div class="field wide"><label>组件备注</label><textarea class="textarea" rows="1" v-model.trim="component.remark" placeholder="内部生产/领料备注"></textarea></div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </fieldset>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
@@ -3017,7 +3104,7 @@
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}</td>
                 <td>{{ item.snapshot_product_code }}</td>
-                <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.snapshot_product_name }}</td>
+                <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div></td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
                 <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
@@ -3932,6 +4019,18 @@
         _base_report_dims_manual: false, _base_crease_dims_manual: false,
         _recommendation_message: "",
       });
+      let bomComponentKeyCounter = 0;
+      const blankBomComponent = () => ({
+        _key: ++bomComponentKeyCounter, id: null, component_product_id: null,
+        product_code: "", product_name: "", internal_code: "",
+        quantity_per_set: 1, is_die_cut: false, mold_tool_id: null,
+        mold_max_yield_per_sheet: null, spare_sheet_quantity: 0,
+        display_mode: "internal_only", is_required: true, remark: "",
+      });
+      const blankBomEditor = () => ({
+        enabled: false, expected_version: null, components: [], componentOptions: [],
+        loading: false, saving: false, error: "", notice: "",
+      });
       const blankMaterial = () => ({
         id:null, version:null, code:"", paper_composition:"", layer_count:5,
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
@@ -4075,7 +4174,8 @@
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [], incomingLocations: [],
             productionTab: "pending", productionPending: [], productionHistory: [], productionLocations: [], productionSelected: {}, productionBusy: false,
             productionCompletionAttempt: null, productionTransferAttempts: {},
-            productFormSnapshot: null,
+            productFormSnapshot: null, productBomSnapshot: null,
+            bomEditor: blankBomEditor(),
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
@@ -7637,6 +7737,196 @@
             );
             await Promise.all([this.loadQuotationHistory(),this.loadProducts()]);
           },
+          bomComponentInternalCode(component) {
+            return component?.internal_code || component?.component_internal_code || "-";
+          },
+          bomComponentOption(product) {
+            const code = product?.product_code || "-";
+            const productCode = product?.product_code || "-";
+            return {
+              ...product,
+              _label: `${code} · ${product?.product_name || "未命名产品"} · ${this.spec(product) || "无规格"}`,
+              internal_code: product?.internal_code || "",
+              product_code: productCode,
+            };
+          },
+          normalizeBomComponent(raw) {
+            const source = JSON.parse(JSON.stringify(raw || {}));
+            const summary = source.component || {};
+            const component = { ...blankBomComponent(), ...source };
+            component.component_product_id = source.component_product_id ?? source.product_id ?? source.component_id ?? null;
+            component.product_code = source.product_code || summary.product_code || "";
+            component.product_name = source.product_name || summary.product_name || "";
+            component.internal_code = source.internal_code || source.internal_component_code || "";
+            component.quantity_per_set = Number(source.quantity_per_set ?? source.qty_per_set ?? source.quantity ?? 1);
+            if (!Number.isFinite(component.quantity_per_set) || component.quantity_per_set <= 0) component.quantity_per_set = 1;
+            component.is_die_cut = source.is_die_cut === true;
+            component.mold_tool_id = source.mold_tool_id ?? source.snapshot_mold_tool_id ?? null;
+            component.mold_max_yield_per_sheet = source.mold_max_yield_per_sheet ?? source.max_yield ?? null;
+            component.spare_sheet_quantity = Number(source.spare_sheet_quantity ?? source.spare_sheets ?? source.spare ?? 0);
+            if (!Number.isFinite(component.spare_sheet_quantity) || component.spare_sheet_quantity < 0) component.spare_sheet_quantity = 0;
+            component.display_mode = ["internal_only", "show_on_delivery", "show_on_all_docs"].includes(source.display_mode)
+              ? source.display_mode
+              : "internal_only";
+            component.is_required = component.is_required !== false;
+            return component;
+          },
+          resetBomEditor() {
+            this.bomEditor = blankBomEditor();
+            this.productBomSnapshot = null;
+          },
+          applyBomResponse(data) {
+            const response = data || {};
+            const rawComponents = response.bom_components || response.components || response.items || [];
+            const components = Array.isArray(rawComponents) ? rawComponents.map(component => this.normalizeBomComponent(component)) : [];
+            this.bomEditor.enabled = response.is_composite ?? response.enabled ?? Boolean(components.length);
+            this.bomEditor.expected_version = response.expected_version ?? response.version ?? null;
+            this.bomEditor.components = components;
+            this.bomEditor.error = "";
+            this.bomEditor.notice = "";
+            this.mergeBomComponentOptions(components);
+            this.productBomSnapshot = JSON.stringify(this._productBomSaveFields());
+          },
+          mergeBomComponentOptions(rows=[]) {
+            const options = [...(this.bomEditor.componentOptions || [])];
+            (rows || []).forEach(row => {
+              if (!row?.component_product_id || options.some(option => String(option.id) === String(row.component_product_id))) return;
+              options.push(this.bomComponentOption({
+                id: row.component_product_id, product_code: row.product_code, product_name: row.product_name,
+                internal_code: row.internal_code || row.component_internal_code || "", specification: row.specification,
+              }));
+            });
+            this.bomEditor.componentOptions = options.filter(option => String(option.id) !== String(this.productForm.id));
+          },
+          async loadProductBom(productId) {
+            this.bomEditor.loading = true;
+            this.bomEditor.error = "";
+            this.bomEditor.notice = "";
+            try {
+              const { data } = await axios.get(`/api/master/products/${productId}/bom`);
+              this.applyBomResponse(data);
+            } catch (error) {
+              if (error?.response?.status === 404) this.bomEditor.notice = "当前产品暂无 BOM 记录，可直接启用并添加内部组件。";
+              else this.bomEditor.error = this.errorMessage(error);
+              this.productBomSnapshot = JSON.stringify(this._productBomSaveFields());
+            } finally {
+              this.bomEditor.loading = false;
+            }
+          },
+          async searchBomProducts(keyword="") {
+            if (!this.productForm.customer_id) {
+              this.bomEditor.componentOptions = [];
+              return;
+            }
+            try {
+              const { data } = await axios.get("/api/master/products", { params: {
+                customer_id: this.productForm.customer_id, keyword, page_size: 50, include_inactive: false,
+              } });
+              const rows = (data.items || []).filter(row => String(row.id) !== String(this.productForm.id));
+              this.bomEditor.componentOptions = rows.map(row => this.bomComponentOption(row));
+              this.mergeBomComponentOptions(this.bomEditor.components);
+            } catch (error) {
+              this.bomEditor.error = this.errorMessage(error);
+            }
+          },
+          addBomComponent() {
+            if (!this.productForm.id) {
+              this.showToast("请先保存父产品，再添加内部组件", true);
+              return;
+            }
+            this.bomEditor.components.push(blankBomComponent());
+            this.searchBomProducts("");
+          },
+          removeBomComponent(index) {
+            this.bomEditor.components.splice(index, 1);
+          },
+          async selectBomComponent(component, productId) {
+            const selected = (this.bomEditor.componentOptions || []).find(row => String(row.id) === String(productId));
+            if (!selected) {
+            component.component_product_id = null;
+            component.product_code = "";
+            component.product_name = "";
+            component.internal_code = "";
+              return;
+            }
+            component.component_product_id = selected.id;
+            component.product_code = selected.product_code || "";
+            component.product_name = selected.product_name || "";
+            component.internal_code = selected.internal_code || "";
+            this.mergeBomComponentOptions([component]);
+          },
+          onBomDieCutToggle(component) {
+            if (component.is_die_cut) return;
+            component.mold_tool_id = null;
+            component.mold_max_yield_per_sheet = null;
+          },
+          _productBomSaveFields() {
+            const editor = this.bomEditor || blankBomEditor();
+            return {
+              enabled: Boolean(editor.enabled), expected_version: editor.expected_version,
+              components: (editor.components || []).map(component => ({
+                component_product_id: component.component_product_id || null,
+                quantity_per_set: component.quantity_per_set,
+                is_die_cut: component.is_die_cut === true,
+                mold_tool_id: component.mold_tool_id || null,
+                mold_max_yield_per_sheet: component.mold_max_yield_per_sheet === "" ? null : component.mold_max_yield_per_sheet,
+                spare_sheet_quantity: component.spare_sheet_quantity,
+                display_mode: component.display_mode || "internal_only",
+                is_required: component.is_required !== false,
+                remark: component.remark || "",
+              })),
+            };
+          },
+          _productBomDirty() {
+            if (this.modal?.type !== "product" || !this.productForm?.id || this.productBomSnapshot === null) return false;
+            return JSON.stringify(this._productBomSaveFields()) !== this.productBomSnapshot;
+          },
+          validateProductBom() {
+            if (!this.bomEditor.enabled) return "";
+            if (!this.bomEditor.components.length) return "启用组合产品后至少添加一个内部组件";
+            const ids = new Set();
+            for (const component of this.bomEditor.components) {
+              if (!component.component_product_id) return "每个内部组件都必须选择同客户常用箱";
+              if (String(component.component_product_id) === String(this.productForm.id)) return "组合产品不能把自己作为内部组件";
+              if (ids.has(String(component.component_product_id))) return "同一个内部组件不能重复添加";
+              ids.add(String(component.component_product_id));
+              if (!Number.isFinite(Number(component.quantity_per_set)) || Number(component.quantity_per_set) <= 0) return "每套数量必须大于0";
+              if (component.is_die_cut && !component.mold_tool_id) return "模切组件必须选择生产模具";
+              if (!component.is_die_cut && (component.mold_tool_id || component.mold_max_yield_per_sheet)) return "非模切组件不能填写模具或最大产出";
+              if (component.mold_max_yield_per_sheet !== null && component.mold_max_yield_per_sheet !== "" && (!Number.isFinite(Number(component.mold_max_yield_per_sheet)) || Number(component.mold_max_yield_per_sheet) <= 0)) return "模具最大产出必须大于0或留空";
+              if (!Number.isFinite(Number(component.spare_sheet_quantity)) || Number(component.spare_sheet_quantity) < 0) return "备用纸张不能小于0";
+            }
+            return "";
+          },
+          bomPayload() {
+            const fields = this._productBomSaveFields();
+            return {
+              expected_version: fields.expected_version ?? 1,
+              change_reason: "维护父产品内部 BOM",
+              components: fields.components,
+            };
+          },
+          async saveProductBom(productId) {
+            if (!this._productBomDirty()) return;
+            const bomError = this.validateProductBom();
+            if (bomError) throw new Error(bomError);
+            const { data } = await axios.put(`/api/master/products/${productId}/bom`, this.bomPayload());
+            if (data && (data.bom_components || data.components)) this.applyBomResponse(data);
+            else {
+              if (data && data.expected_version !== undefined) this.bomEditor.expected_version = data.expected_version;
+              this.productBomSnapshot = JSON.stringify(this._productBomSaveFields());
+            }
+          },
+          hasBomComponents(item) {
+            return Array.isArray(item?.bom_components) && item.bom_components.length > 0;
+          },
+          bomPreviewComponentLabel(component) {
+            const code = component?.internal_code || component?.component_internal_code || component?.product_code || component?.component_product_id || "-";
+            const name = component?.product_name || component?.name || "内部组件";
+            const qty = component?.quantity_per_set ?? component?.qty_per_set ?? component?.quantity ?? 1;
+            const required = component?.is_required === false ? "可选" : "必需";
+            return `${code}｜${name} × ${qty}/套｜${required}`;
+          },
           async openProduct(row=null) {
             if (!this.isWorkshop && !this.moldTools.length) await this.loadMoldTools();
             let detail = row;
@@ -7648,10 +7938,12 @@
               }
             );
             this.drawingFile = null;
+            this.resetBomEditor();
             // 拍快照用于检测未保存更改
             this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
             this.beginMasterEdit("product",this.productForm);
             this.modal = { type:"product", title: row ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
+            if (this.productForm.id) await this.loadProductBom(this.productForm.id);
             this.$nextTick(() => this.autoApplyProductRecommendations());
           },
           normalizeProductDimensions(form) {
@@ -10491,6 +10783,8 @@
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };
             this.productFormSnapshot = null;
+            this.productBomSnapshot = null;
+            this.bomEditor = blankBomEditor();
             this.masterEditBaseline = { customer:null, product:null, material:null };
             this.masterVersionConflict = null;
             this.masterChangeConfirm = blankMasterChangeConfirm();
@@ -10507,9 +10801,11 @@
                 this.openMasterChangeConfirmation(masterEntity,changes);
                 return false;
               }
-              this.closeModal();
-              this.showToast("未检测到可保存的变化");
-              return true;
+              if (!(masterEntity === "product" && this._productBomDirty())) {
+                this.closeModal();
+                this.showToast("未检测到可保存的变化");
+                return true;
+              }
             }
             this.loading = true;
             let successMessage = "保存成功";
@@ -10526,6 +10822,8 @@
                 await this.loadCustomers();
               }
               if (this.modal.type === "product") {
+                const productDirty = this._productFormDirty();
+                const bomDirty = this._productBomDirty();
                 const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
                 if (productCreaseError) throw new Error(productCreaseError);
                 if (this.productMoldError) throw new Error(this.productMoldError);
@@ -10566,12 +10864,16 @@
                 payload.print_content = payload.print_content || "无印刷";
                 this.attachMasterUpdateMetadata("product",payload,masterOptions);
                 let saved;
-                if (this.productForm.id) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
+                if (this.productForm.id) {
+                  saved = { id: this.productForm.id };
+                  if (productDirty) saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
+                }
                 else saved=(await axios.post("/api/master/products", payload)).data;
                 if (this.drawingFile) {
                   const form=new FormData(); form.append("file",this.drawingFile);
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
+                if (saved?.id && bomDirty) await this.saveProductBom(saved.id);
                 await this.loadProducts();
                 // 产品已成功保存，关闭弹窗时不应再提示“有未保存的修改”。
                 this.productFormSnapshot = null;

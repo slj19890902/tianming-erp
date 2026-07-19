@@ -101,6 +101,14 @@ from app.services.production_workflow import (
     refresh_order_production_status,
     refresh_production_task,
 )
+from app.services.composite_bom import (
+    CompositeBOMError,
+    create_order_item_bom_snapshots,
+    get_order_item_bom_components_by_item_ids,
+    get_order_item_bom_preview,
+    is_composite_product,
+    raise_http as raise_composite_bom_http,
+)
 from app.services.report_crease import crease_width_error, product_crease_width_error
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -631,6 +639,13 @@ def _preflight_reservation_plans(
         if plan is None:
             continue
         product = resolved_products[index]
+        if is_composite_product(product):
+            if plan.finished or plan.semi:
+                raise WarehouseInventoryError(
+                    f"第{index}条组合品明细不能建立父项库存抵扣计划",
+                    409,
+                )
+            continue
         for entry in [*plan.finished, *plan.semi]:
             if not entry.confirmed:
                 raise WarehouseInventoryError(
@@ -804,6 +819,8 @@ def _apply_order_reservation_plans(
     for index, (item_payload, item) in enumerate(
         zip(payload_items, created_items, strict=True), start=1
     ):
+        if is_composite_product(resolved_products[index]):
+            continue
         plan = item_payload.reservation_plan
         if plan is None:
             continue
@@ -847,6 +864,8 @@ def _apply_order_reservation_plans(
         zip(payload_items, created_items, strict=True), start=1
     ):
         product = resolved_products[index]
+        if is_composite_product(product):
+            continue
         plan = item_payload.reservation_plan or OrderItemReservationPlan()
         production_required_boxes = max(
             item.quantity - active_finished_reserved_qty(db, item.id), 0
@@ -912,6 +931,8 @@ def _apply_order_reservation_plans(
     for index, (item_payload, item) in enumerate(
         zip(payload_items, created_items, strict=True), start=1
     ):
+        if is_composite_product(resolved_products[index]):
+            continue
         plan = item_payload.reservation_plan
         if plan is None:
             continue
@@ -1166,10 +1187,12 @@ def _order_response(
     customer_name: str | None = None,
     display_registry=None,
     completion_dates: dict[int, date] | None = None,
+    bom_components_by_item_id: dict[int, list[dict]] | None = None,
 ) -> dict:
+    item_ids = [item.id for item in order.items]
     reservation_map = (
         active_finished_reservations_by_item_ids(
-            db, [item.id for item in order.items]
+            db, item_ids
         )
         if db is not None
         else {}
@@ -1177,9 +1200,15 @@ def _order_response(
     completion_date_map = completion_dates
     if completion_date_map is None and db is not None:
         completion_date_map = _completion_dates_by_item(
-            db, [item.id for item in order.items]
+            db, item_ids
         )
     completion_date_map = completion_date_map or {}
+    if bom_components_by_item_id is None:
+        bom_components_by_item_id = (
+            get_order_item_bom_components_by_item_ids(db, item_ids)
+            if db is not None
+            else {}
+        )
     data = {
         "id": order.id,
         **serialize_order_number_fields(order, display_registry),
@@ -1227,6 +1256,7 @@ def _order_response(
                 "item_sequence": item.item_sequence,
                 "quantity": item.quantity,
                 "ordered_quantity": item.quantity,
+                "bom_components": bom_components_by_item_id.get(item.id, []),
                 "delivered_quantity": item.delivered_quantity,
                 "remaining_quantity": max(
                     int(item.quantity or 0) - int(item.delivered_quantity or 0),
@@ -1552,6 +1582,10 @@ def list_orders(
         db,
         [item.id for order in orders for item in order.items],
     )
+    bom_components_by_item_id = get_order_item_bom_components_by_item_ids(
+        db,
+        [item.id for order in orders for item in order.items],
+    )
     unfinished_query = select(func.count(Order.id)).where(
             ~history_condition,
             Order.status.in_(
@@ -1587,6 +1621,7 @@ def list_orders(
                 customer_name=customer_names.get(order.customer_id),
                 display_registry=display_registry,
                 completion_dates=completion_dates,
+                bom_components_by_item_id=bom_components_by_item_id,
             )
             for order in orders
         ],
@@ -3440,7 +3475,15 @@ def create_order(
                 )
             )
         db.flush()  # 获取 item.id 以便处理图纸
-        for created_item in created_items:
+        for index, created_item in enumerate(created_items, start=1):
+            product = resolved_products[index]
+            if is_composite_product(product):
+                create_order_item_bom_snapshots(
+                    db,
+                    order_item=created_item,
+                    parent_product=product,
+                )
+                continue
             create_or_refresh_production_task(db, created_item.id)
         # v0.19.2-B: 图纸保存到常用箱
         for i, item in enumerate(created_items):
@@ -3465,8 +3508,9 @@ def create_order(
             states=reservation_plan_states,
             operator_id=user.id,
         )
-        for created_item in created_items:
-            refresh_production_task(db, created_item.id)
+        for index, created_item in enumerate(created_items, start=1):
+            if not is_composite_product(resolved_products[index]):
+                refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
         db.commit()
         db.refresh(order)
@@ -3484,6 +3528,9 @@ def create_order(
     except HTTPException:
         db.rollback()
         raise
+    except CompositeBOMError as error:
+        db.rollback()
+        raise raise_composite_bom_http(error) from error
     except WarehouseInventoryError as error:
         db.rollback()
         raise HTTPException(
@@ -3496,6 +3543,25 @@ def create_order(
     except Exception:
         db.rollback()
         raise
+
+
+@router.get("/items/{item_id}/bom")
+def read_order_item_bom(
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    try:
+        return get_order_item_bom_preview(db, item_id)
+    except CompositeBOMError as error:
+        raise raise_composite_bom_http(error) from error
 
 
 @router.put("/items/{item_id}")

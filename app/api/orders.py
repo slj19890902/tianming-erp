@@ -45,6 +45,10 @@ from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import (
+    SalesOrderItemBomComponent,
+    SalesOrderItemBomDemandAdjustment,
+)
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
@@ -108,6 +112,11 @@ from app.services.composite_bom import (
     get_order_item_bom_preview,
     is_composite_product,
     raise_http as raise_composite_bom_http,
+)
+from app.services.composite_bom_workflow import (
+    CompositeBomWorkflowError,
+    append_order_quantity_adjustments,
+    is_composite_order_item,
 )
 from app.services.report_crease import crease_width_error, product_crease_width_error
 from app.services.warehouse_inventory import (
@@ -316,6 +325,11 @@ class OrderItemUpdate(BaseModel):
     production_process: str | None = None
     print_content: str | None = None
     product_remark: str | None = None
+    quantity_adjustment_reason: str | None = Field(default=None, max_length=500)
+    quantity_adjustment_idempotency_key: str | None = Field(
+        default=None,
+        max_length=120,
+    )
 
 
 class OrderCreate(BaseModel):
@@ -3483,6 +3497,7 @@ def create_order(
                     order_item=created_item,
                     parent_product=product,
                 )
+                create_or_refresh_production_task(db, created_item.id)
                 continue
             create_or_refresh_production_task(db, created_item.id)
         # v0.19.2-B: 图纸保存到常用箱
@@ -3531,6 +3546,12 @@ def create_order(
     except CompositeBOMError as error:
         db.rollback()
         raise raise_composite_bom_http(error) from error
+    except CompositeBomWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except WarehouseInventoryError as error:
         db.rollback()
         raise HTTPException(
@@ -3892,6 +3913,41 @@ def update_order_item(
         "material": item.snapshot_material,
         "specification": item.snapshot_spec,
     }
+    quantity_delta = int(payload.quantity) - int(item.quantity or 0)
+    if quantity_delta and is_composite_order_item(db, item.id):
+        adjustment_count = int(
+            db.scalar(
+                select(func.count(SalesOrderItemBomDemandAdjustment.id))
+                .join(
+                    SalesOrderItemBomComponent,
+                    SalesOrderItemBomComponent.id
+                    == SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id,
+                )
+                .where(SalesOrderItemBomComponent.sales_order_item_id == item.id)
+            )
+            or 0
+        )
+        adjustment_key = (
+            (payload.quantity_adjustment_idempotency_key or "").strip()
+            or (
+                f"order-item-{item.id}-quantity-adjustment-{adjustment_count + 1}-"
+                f"{item.quantity}-to-{payload.quantity}"
+            )
+        )
+        try:
+            append_order_quantity_adjustments(
+                db,
+                order_item_id=item.id,
+                delta_sets=quantity_delta,
+                reason=(
+                    (payload.quantity_adjustment_reason or "").strip()
+                    or "订单明细数量修改"
+                ),
+                actor_id=user.id,
+                idempotency_key=adjustment_key,
+            )
+        except CompositeBomWorkflowError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     item.quantity = payload.quantity
     item.unit_price = unit_price
     item.subtotal = (Decimal(payload.quantity) * unit_price).quantize(
@@ -4006,8 +4062,14 @@ def update_order_item(
             confirmation_token=payload.product_confirmation_token,
         )
     db.flush()
-    if refresh_production_task(db, item.id) is not None:
-        refresh_order_production_status(db, item.order_id)
+    try:
+        if is_composite_order_item(db, item.id):
+            refresh_production_task(db, item.id, create_if_missing=True)
+        elif refresh_production_task(db, item.id) is not None:
+            refresh_order_production_status(db, item.order_id)
+    except ProductionWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     _refresh_total(db, order)
     db.add(
         OperationLog(

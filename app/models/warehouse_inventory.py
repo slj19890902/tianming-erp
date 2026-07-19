@@ -570,11 +570,19 @@ class OrderItemSemiRequirement(Base):
             "flute_type",
             "component_type",
         ),
+        Index(
+            "ix_order_item_semi_requirements_bom_component",
+            "sales_order_item_bom_component_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     order_item_id: Mapped[int] = mapped_column(
         ForeignKey("sales_order_items.id", ondelete="CASCADE"), nullable=False
+    )
+    sales_order_item_bom_component_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="SET NULL"),
+        nullable=True,
     )
     customer_id: Mapped[int] = mapped_column(
         ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
@@ -776,6 +784,10 @@ class InventoryReservation(Base):
         ),
         Index("ix_inventory_reservations_match_rule", "match_rule_id"),
         Index("ix_inventory_reservations_group", "reservation_group_key"),
+        Index(
+            "ix_inventory_reservations_bom_component",
+            "sales_order_item_bom_component_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -789,6 +801,10 @@ class InventoryReservation(Base):
     )
     order_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("sales_order_items.id", ondelete="SET NULL"), nullable=True
+    )
+    sales_order_item_bom_component_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="SET NULL"),
+        nullable=True,
     )
     requisition_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("material_requisition_items.id", ondelete="SET NULL"), nullable=True

@@ -55,7 +55,7 @@ def test_n034_payload_accepts_and_validates_canonical_relation_fields() -> None:
     } <= set(products.ProductBOMComponentPayload.model_fields)
     payload = products.ProductBOMComponentPayload(
         component_product_id=2,
-        quantity_per_set=Decimal("1.5"),
+        quantity_per_set=Decimal("2"),
         is_die_cut=True,
         mold_tool_id=41,
         mold_max_yield_per_sheet=6,
@@ -66,6 +66,12 @@ def test_n034_payload_accepts_and_validates_canonical_relation_fields() -> None:
     assert payload.model_dump()["mold_tool_id"] == 41
     assert payload.display_mode == "show_on_delivery"
     assert payload.is_required is False
+
+    with pytest.raises(ValueError, match="正整数"):
+        products.ProductBOMComponentPayload(
+            component_product_id=2,
+            quantity_per_set=Decimal("1.5"),
+        )
 
     with pytest.raises(ValueError):
         products.ProductBOMComponentPayload(
@@ -310,8 +316,8 @@ def test_n034_unlinked_snapshot_facts_serialize_independently_and_bulk_once() ->
             product_bom_component_id=None,
             component_product_id=3,
             order_set_quantity=4,
-            quantity_per_set=Decimal("1.5"),
-            required_piece_quantity=Decimal("6"),
+            quantity_per_set=Decimal("2"),
+            required_piece_quantity=Decimal("8"),
             display_order=1,
             internal_component_code="PARENT2-S01",
             is_die_cut=True,

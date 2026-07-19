@@ -348,6 +348,16 @@ class ProductBOMComponentPayload(BaseModel):
     is_required: bool = True
     remark: str | None = Field(default=None, max_length=1000)
 
+    @field_validator("quantity_per_set")
+    @classmethod
+    def validate_quantity_per_set_is_positive_integer(
+        cls,
+        value: Decimal,
+    ) -> Decimal:
+        if value != value.to_integral_value():
+            raise ValueError("每套组件数量必须是正整数")
+        return value
+
     @model_validator(mode="after")
     def validate_non_die_cut_mold_fields(self):
         if not self.is_die_cut and (

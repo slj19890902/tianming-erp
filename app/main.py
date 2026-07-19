@@ -21,6 +21,7 @@ from app.api.auth import router as auth_router
 from app.api.customers import router as customers_router
 from app.api.deliveries import (
     order_actions_router,
+    pick_router,
     router as deliveries_router,
 )
 from app.api.dashboard import router as dashboard_router
@@ -273,6 +274,18 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/delivery-pick.html" for route in application.routes):
+        generic_mobile_pick_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_delivery_pick.html"
+        )
+        application.add_api_route(
+            "/mobile/delivery-pick.html",
+            lambda: FileResponse(generic_mobile_pick_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(route.path == "/mold-label.html" for route in application.routes):
         mold_label_path = (
             Path(__file__).resolve().parents[1]
@@ -390,6 +403,12 @@ def create_app() -> FastAPI:
             tianhua_pre_delivery_router,
             prefix="/api/deliveries",
             tags=["tianhua-pre-delivery"],
+        )
+    if not any(route.path == "/api/delivery-picks" for route in application.routes):
+        application.include_router(
+            pick_router,
+            prefix="/api/delivery-picks",
+            tags=["delivery-picks"],
         )
     if not any(route.path == "/api/mobile/tianhua-pick" for route in application.routes):
         application.include_router(

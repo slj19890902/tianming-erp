@@ -32,6 +32,11 @@ from app.models.customer import Customer
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import (
+    RequisitionItemBomSource,
+    SalesOrderItemBomComponent,
+    SalesOrderItemBomDemandAdjustment,
+)
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
@@ -45,6 +50,7 @@ from app.models.stock_replenishment import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
+    InventoryReservation,
     InventoryLot,
     OrderItemSemiRequirement,
     WarehouseLocation,
@@ -95,6 +101,12 @@ from app.services.semi_finished_inventory import (
     reserve_semi_finished_inventory,
     save_order_item_semi_requirement,
     semi_finished_candidates_for_product,
+)
+from app.services.composite_bom_execution import (
+    CompositeBOMExecutionError,
+    calculate_effective_order_sets,
+    calculate_requisition,
+    require_positive_integer,
 )
 
 
@@ -175,6 +187,8 @@ def _company_sender(db: Session) -> dict:
 class RequisitionLinePayload(BaseModel):
     order_item_id: int
     component_type: str | None = None
+    bom_snapshot_id: int | None = Field(default=None, gt=0)
+    actual_yield_per_sheet: int | None = Field(default=None, gt=0, strict=True)
     inventory_deducted_qty: int = Field(default=0, ge=0)
     requisition_qty: int | None = Field(default=None, ge=0)
     cardboard_len: Decimal = Field(gt=0)
@@ -199,6 +213,12 @@ class RequisitionLinePayload(BaseModel):
         if normalized not in {"cover", "base"}:
             raise ValueError("天地盖组件仅允许 cover 或 base")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_bom_component_selection(self):
+        if self.bom_snapshot_id is not None and self.component_type is not None:
+            raise ValueError("复合产品组件不能同时传 bom_snapshot_id 与 component_type")
+        return self
 
 
 class PendingMaterialUpdate(BaseModel):
@@ -231,7 +251,13 @@ class RequisitionBatchCreate(BaseModel):
             raise ValueError("至少选择一条待报料明细")
         seen_single: set[int] = set()
         seen_components: set[tuple[int, str]] = set()
+        seen_bom_snapshots: set[int] = set()
         for item in value:
+            if item.bom_snapshot_id is not None:
+                if item.bom_snapshot_id in seen_bom_snapshots:
+                    raise ValueError("同一复合产品组件不能重复报料")
+                seen_bom_snapshots.add(item.bom_snapshot_id)
+                continue
             if item.component_type:
                 key = (item.order_item_id, item.component_type)
                 if key in seen_components:
@@ -241,8 +267,16 @@ class RequisitionBatchCreate(BaseModel):
             if item.order_item_id in seen_single:
                 raise ValueError("同一订单明细不能重复报料")
             seen_single.add(item.order_item_id)
-        if seen_single & {order_item_id for order_item_id, _ in seen_components}:
+        component_order_item_ids = {
+            order_item_id for order_item_id, _ in seen_components
+        }
+        bom_order_item_ids = {
+            item.order_item_id for item in value if item.bom_snapshot_id is not None
+        }
+        if seen_single & (component_order_item_ids | bom_order_item_ids):
             raise ValueError("同一订单明细不能同时按整单和组件报料")
+        if component_order_item_ids & bom_order_item_ids:
+            raise ValueError("同一订单明细不能同时按天地盖和复合产品组件报料")
         return value
 
 
@@ -654,6 +688,206 @@ def _purchase_qty(required_piece_qty: int, inventory_deducted_qty: int, cutting_
     remaining = max(int(required_piece_qty or 0) - max(int(inventory_deducted_qty or 0), 0), 0)
     factor = _cutting_factor(cutting_mode)
     return (remaining + factor - 1) // factor
+
+
+def _bom_snapshots_for_order_item(
+    db: Session,
+    order_item_id: int,
+) -> list[SalesOrderItemBomComponent]:
+    return db.scalars(
+        select(SalesOrderItemBomComponent)
+        .where(SalesOrderItemBomComponent.sales_order_item_id == order_item_id)
+        .order_by(
+            SalesOrderItemBomComponent.display_order,
+            SalesOrderItemBomComponent.id,
+        )
+    ).all()
+
+
+def _bom_effective_sets(
+    db: Session,
+    snapshot: SalesOrderItemBomComponent,
+) -> int:
+    adjustments = db.scalars(
+        select(SalesOrderItemBomDemandAdjustment)
+        .where(
+            SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+            == snapshot.id
+        )
+        .order_by(SalesOrderItemBomDemandAdjustment.id)
+    ).all()
+    try:
+        return calculate_effective_order_sets(
+            snapshot.order_set_quantity,
+            [
+                {
+                    "delta_order_set_quantity": adjustment.delta_order_set_quantity,
+                }
+                for adjustment in adjustments
+            ],
+        )
+    except CompositeBOMExecutionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+def _bom_semi_reserved_piece_qty(
+    db: Session,
+    snapshot_id: int,
+) -> int:
+    """Read snapshot-linked semi-finished coverage without changing legacy services.
+
+    N039 uses the new snapshot foreign key where it exists.  The requirement
+    join keeps an already-reserved line visible while the dedicated execution
+    service is being integrated in a later N039 slice.
+    """
+    rows = db.scalars(
+        select(InventoryReservation)
+        .outerjoin(
+            OrderItemSemiRequirement,
+            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id,
+        )
+        .where(
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+            or_(
+                InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id
+                == snapshot_id,
+            ),
+        )
+    ).all()
+    return sum(
+        max(
+            int(row.credited_requirement_quantity or 0)
+            - int(row.released_requirement_quantity or 0),
+            0,
+        )
+        for row in rows
+    )
+
+
+def _bom_snapshot_requirements(
+    db: Session,
+    snapshot: SalesOrderItemBomComponent,
+    *,
+    cutting_mode: str | None = None,
+    actual_yield_per_sheet: int | None = None,
+) -> dict:
+    """Return one immutable component's live purchase requirement."""
+    effective_sets = _bom_effective_sets(db, snapshot)
+    try:
+        if actual_yield_per_sheet is not None:
+            actual_yield_per_sheet = require_positive_integer(
+                actual_yield_per_sheet,
+                label="实际模切出数",
+            )
+            if not snapshot.is_die_cut:
+                raise CompositeBOMExecutionError("非模切组件不能填写实际模切出数")
+            if snapshot.mold_max_yield_per_sheet is None:
+                raise CompositeBOMExecutionError("模切组件缺少最大模切出数")
+            if actual_yield_per_sheet > int(snapshot.mold_max_yield_per_sheet):
+                raise CompositeBOMExecutionError("实际模切出数不能超过模具最大出数")
+        quantity_per_set = require_positive_integer(
+            snapshot.quantity_per_set,
+            label="组件每套用量",
+        )
+        requirement = calculate_requisition(
+            {
+                "component": {
+                    "component_product_id": snapshot.component_product_id,
+                    "snapshot_component_product_code": snapshot.snapshot_component_product_code,
+                    "snapshot_component_product_name": snapshot.snapshot_component_product_name,
+                    "snapshot_component_spec": snapshot.snapshot_component_spec,
+                    "snapshot_component_material": snapshot.snapshot_component_material,
+                    "is_die_cut": snapshot.is_die_cut,
+                    "snapshot_mold_tool_id": snapshot.snapshot_mold_tool_id,
+                    "mold_max_yield_per_sheet": snapshot.mold_max_yield_per_sheet,
+                    "spare_sheet_quantity": snapshot.spare_sheet_quantity,
+                },
+                "demand_quantity": effective_sets * quantity_per_set,
+            },
+            actual_yield_per_sheet=actual_yield_per_sheet,
+        )
+    except CompositeBOMExecutionError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    semi_reserved = _bom_semi_reserved_piece_qty(db, snapshot.id)
+    remaining = max(int(requirement["demand_quantity"]) - semi_reserved, 0)
+    yield_per_sheet = int(requirement["yield_per_sheet"])
+    net_sheets = (remaining + yield_per_sheet - 1) // yield_per_sheet
+    requisition_qty = net_sheets + int(snapshot.spare_sheet_quantity or 0)
+    resolved_cutting_mode = cutting_mode or DEFAULT_CUTTING_MODE
+    if resolved_cutting_mode not in CUTTING_MODE_FACTORS:
+        resolved_cutting_mode = DEFAULT_CUTTING_MODE
+    return {
+        "snapshot_id": snapshot.id,
+        "effective_set_quantity": effective_sets,
+        "quantity_per_set": quantity_per_set,
+        "required_piece_quantity": int(requirement["demand_quantity"]),
+        "semi_finished_reserved_piece_qty": semi_reserved,
+        "remaining_required_piece_qty": remaining,
+        "actual_yield_per_sheet": actual_yield_per_sheet,
+        "yield_per_sheet": yield_per_sheet,
+        "requisition_qty": requisition_qty,
+        "spare_sheet_quantity": int(snapshot.spare_sheet_quantity or 0),
+        "cutting_mode": resolved_cutting_mode,
+        "cutting_factor": _cutting_factor(resolved_cutting_mode),
+        "is_required": bool(snapshot.is_required),
+        "display_order": snapshot.display_order,
+        "product_code": snapshot.snapshot_component_product_code,
+        "product_name": snapshot.snapshot_component_product_name,
+        "specification": snapshot.snapshot_component_spec,
+        "material": snapshot.snapshot_component_material,
+        "layer_count": snapshot.snapshot_component_layer_count,
+        "flute_type": snapshot.snapshot_component_flute_type,
+        "supplier_name": snapshot.snapshot_component_supplier_name,
+        "report_length_mm": snapshot.snapshot_component_report_length_mm,
+        "report_width_mm": snapshot.snapshot_component_report_width_mm,
+        "crease_type": snapshot.snapshot_component_crease_type,
+        "crease_left_mm": snapshot.snapshot_component_crease_left_mm,
+        "crease_middle_mm": snapshot.snapshot_component_crease_middle_mm,
+        "crease_right_mm": snapshot.snapshot_component_crease_right_mm,
+        "remark": snapshot.remark or snapshot.snapshot_component_report_notes,
+    }
+
+
+def _bom_snapshot_has_active_requisition(
+    db: Session,
+    snapshot_id: int,
+) -> bool:
+    return (
+        db.scalar(
+            select(RequisitionItemBomSource.id)
+            .join(
+                RequisitionItem,
+                RequisitionItem.id == RequisitionItemBomSource.requisition_item_id,
+            )
+            .where(
+                RequisitionItemBomSource.sales_order_item_bom_component_id
+                == snapshot_id,
+                RequisitionItem.status.in_(["有效", "merged_pending"]),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _bom_pending_component_requirements(
+    db: Session,
+    item: OrderItem,
+) -> list[dict]:
+    rows: list[dict] = []
+    for snapshot in _bom_snapshots_for_order_item(db, item.id):
+        requirements = _bom_snapshot_requirements(db, snapshot)
+        requirements["already_requisitioned"] = _bom_snapshot_has_active_requisition(
+            db, snapshot.id
+        )
+        requirements["can_requisition"] = (
+            requirements["remaining_required_piece_qty"] > 0
+            and not requirements["already_requisitioned"]
+        )
+        rows.append(requirements)
+    return rows
 
 
 def _current_requisition_requirements(
@@ -2613,6 +2847,83 @@ def pending_requisitions(
         if is_history_order_number(order.order_number):
             continue
         material = db.get(Material, item.material_id) if item.material_id else None
+        bom_components = _bom_pending_component_requirements(db, item)
+        if bom_components:
+            pending_components = [
+                row for row in bom_components if row["can_requisition"]
+            ]
+            if not pending_components:
+                continue
+            suggested_len, suggested_width = _purchase_dimensions(
+                item.snapshot_report_length_mm,
+                item.snapshot_report_width_mm,
+                DEFAULT_CUTTING_MODE,
+            )
+            if suggested_len is None or suggested_width is None:
+                suggested_len, suggested_width = _suggested_dimensions(product)
+            items.append(
+                {
+                    "item_id": item.id,
+                    "is_merge_group": False,
+                    "is_composite_bom": True,
+                    "order_number": display_order_number(order, registry),
+                    "display_order_number": display_order_number(order, registry),
+                    "customer_id": customer.id,
+                    "customer_name": customer.name,
+                    "product_id": product.id,
+                    "product_version": product.version,
+                    "product_code": item.snapshot_product_code or product.product_code,
+                    "product_name": item.snapshot_product_name,
+                    "specification": item.snapshot_spec,
+                    "material": item.snapshot_material,
+                    "material_display": _format_supplier_material(
+                        material.code if material else item.snapshot_material,
+                        item.layer_count or (material.layer_count if material else None),
+                        item.flute_type,
+                        fallback_text=item.snapshot_material,
+                    ),
+                    "quantity": item.quantity,
+                    "delivery_date": order.delivery_date,
+                    "inventory_deducted_qty": 0,
+                    "legacy_inventory_deducted_qty": item.inventory_deducted_qty,
+                    "finished_inventory_reserved_qty": 0,
+                    "production_required_qty": sum(
+                        int(row["effective_set_quantity"])
+                        for row in pending_components
+                    ),
+                    "fully_covered_by_finished_inventory": False,
+                    "requisition_qty": sum(
+                        int(row["requisition_qty"]) for row in pending_components
+                    ),
+                    "requisition_status": item.requisition_status,
+                    "special_process": item.special_process,
+                    "cutting_mode": item.special_process or DEFAULT_CUTTING_MODE,
+                    "cutting_factor": _cutting_factor(item.special_process),
+                    "pieces_per_box": 1,
+                    "required_piece_qty": sum(
+                        int(row["required_piece_quantity"])
+                        for row in pending_components
+                    ),
+                    "semi_finished_reserved_piece_qty": sum(
+                        int(row["semi_finished_reserved_piece_qty"])
+                        for row in pending_components
+                    ),
+                    "remaining_required_piece_qty": sum(
+                        int(row["remaining_required_piece_qty"])
+                        for row in pending_components
+                    ),
+                    "component_requirements": bom_components,
+                    "suggested_cardboard_len": item.cardboard_len or suggested_len,
+                    "suggested_cardboard_width": item.cardboard_width or suggested_width,
+                    "layer_count": item.layer_count,
+                    "flute_type": item.flute_type,
+                    "material_id": item.material_id,
+                    "snapshot_supplier_name": item.snapshot_supplier_name,
+                    "box_style": product.box_style,
+                    "dimension_warnings": [],
+                }
+            )
+            continue
         requirements = _current_requisition_summary(
             db,
             item,
@@ -2957,6 +3268,154 @@ def create_batch(
                 raise HTTPException(status_code=404, detail="订单明细不存在")
             item, product = row
             _require_order_item_customer_access(db, item, user)
+            bom_snapshots = _bom_snapshots_for_order_item(db, item.id)
+            if bom_snapshots:
+                if item.material_status == "received":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="已入库明细不能继续创建组件报料",
+                    )
+                if any(line.bom_snapshot_id is None for line in lines):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="复合产品必须按组件快照报料，不能按父订单整行报料",
+                    )
+                for line in lines:
+                    snapshot = db.get(
+                        SalesOrderItemBomComponent,
+                        line.bom_snapshot_id,
+                    )
+                    if (
+                        snapshot is None
+                        or snapshot.sales_order_item_id != item.id
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="所选复合产品组件不属于当前订单明细",
+                        )
+                    if _bom_snapshot_has_active_requisition(db, snapshot.id):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="该复合产品组件已经报料，不能重复创建",
+                        )
+                    if line.actual_yield_per_sheet is not None and not snapshot.is_die_cut:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="非模切组件不能填写实际模切出数",
+                        )
+                    requirements = _bom_snapshot_requirements(
+                        db,
+                        snapshot,
+                        cutting_mode=line.special_process,
+                        actual_yield_per_sheet=line.actual_yield_per_sheet,
+                    )
+                    if int(requirements["remaining_required_piece_qty"]) <= 0:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="该复合产品组件已由半成品库存全额抵扣，无需报料",
+                        )
+                    cardboard_len = Decimal(
+                        snapshot.snapshot_component_report_length_mm
+                        or line.cardboard_len
+                    )
+                    cardboard_width = Decimal(
+                        snapshot.snapshot_component_report_width_mm
+                        or line.cardboard_width
+                    )
+                    component_remark = " / ".join(
+                        value
+                        for value in [
+                            (line.remark or "").strip(),
+                            (requirements.get("remark") or "").strip(),
+                        ]
+                        if value
+                    ) or None
+                    batch_item = RequisitionItem(
+                        requisition_id=batch.id,
+                        order_item_id=item.id,
+                        inventory_deducted_qty=0,
+                        requisition_qty=int(requirements["requisition_qty"]),
+                        cardboard_len=cardboard_len,
+                        cardboard_width=cardboard_width,
+                        pieces_per_box=int(requirements["quantity_per_set"]),
+                        required_piece_qty=int(
+                            requirements["required_piece_quantity"]
+                        ),
+                        special_process=str(requirements["cutting_mode"]),
+                        material_snapshot=snapshot.snapshot_component_material,
+                        product_code_snapshot=snapshot.snapshot_component_product_code,
+                        product_name_snapshot=snapshot.snapshot_component_product_name,
+                        specification_snapshot=snapshot.snapshot_component_spec,
+                        remark=component_remark,
+                        status="有效",
+                    )
+                    db.add(batch_item)
+                    db.flush()
+                    db.add(
+                        RequisitionItemBomSource(
+                            requisition_item_id=batch_item.id,
+                            sales_order_item_bom_component_id=snapshot.id,
+                            order_set_quantity=int(
+                                requirements["effective_set_quantity"]
+                            ),
+                            quantity_per_set=Decimal(
+                                requirements["quantity_per_set"]
+                            ),
+                            required_piece_quantity=Decimal(
+                                requirements["required_piece_quantity"]
+                            ),
+                            mold_max_yield_per_sheet=snapshot.mold_max_yield_per_sheet,
+                            actual_yield_per_sheet=(
+                                Decimal(line.actual_yield_per_sheet)
+                                if line.actual_yield_per_sheet is not None
+                                else None
+                            ),
+                            spare_sheet_quantity=int(
+                                requirements["spare_sheet_quantity"]
+                            ),
+                            calculated_purchase_quantity=Decimal(
+                                requirements["requisition_qty"]
+                            ),
+                            direction_note=(
+                                f"剩余需求片数：{requirements['remaining_required_piece_qty']}"
+                            ),
+                            calculation_rule_version="n039-v1",
+                        )
+                    )
+                db.flush()
+                item.inventory_deducted_qty = 0
+                item.requisition_qty = int(
+                    db.scalar(
+                        select(func.coalesce(func.sum(RequisitionItem.requisition_qty), 0))
+                        .join(
+                            RequisitionItemBomSource,
+                            RequisitionItemBomSource.requisition_item_id
+                            == RequisitionItem.id,
+                        )
+                        .where(
+                            RequisitionItem.order_item_id == item.id,
+                            RequisitionItem.status == "有效",
+                        )
+                    )
+                    or 0
+                )
+                item.requisition_status = (
+                    "已报料"
+                    if all(
+                        _bom_snapshot_has_active_requisition(db, snapshot.id)
+                        for snapshot in bom_snapshots
+                    )
+                    else "未报料"
+                )
+                item.requisition_date = requisition_date
+                item.requisition_remark = (lines[0].remark or "").strip() or None
+                response_items.append(_item_response(item, db))
+                continue
+            if any(line.bom_snapshot_id is not None for line in lines):
+                raise HTTPException(
+                    status_code=400,
+                    detail="当前订单明细不是复合产品，不能传 bom_snapshot_id",
+                )
             if item.material_status == "received":
                 raise HTTPException(status_code=409, detail="已入库明细不能报料")
             if item.requisition_status != "未报料":

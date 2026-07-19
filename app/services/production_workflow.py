@@ -15,6 +15,10 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import (
+    BomComponentDirectDeliveryAllocation,
+    SalesOrderItemBomComponent,
+)
 from app.models.production import (
     ProductionCompletion,
     ProductionCompletionBatch,
@@ -30,12 +34,20 @@ from app.models.warehouse_inventory import (
     OrderItemSemiRequirement,
     WarehouseLocation,
 )
+from app.services.composite_bom_workflow import (
+    CompositeBomWorkflowError,
+    component_available_quantity,
+    effective_component_demands,
+    is_composite_order_item,
+    kit_availability,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     manual_finished_in,
     reserve_completed_finished_inventory,
 )
+from app.services.warehouse_inventory import _balances, _movement
 
 
 Disposition = Literal["direct", "stock"]
@@ -227,6 +239,110 @@ def _semi_inventory_covers(db: Session, order_item_id: int) -> bool:
     return inventory_fully_covers_order_item(db, order_item_id)
 
 
+def _component_task_rows(
+    db: Session,
+    order_item_id: int,
+) -> list[tuple[ProductionTask, SalesOrderItemBomComponent]]:
+    """Return component tasks in immutable BOM display order."""
+    return list(
+        db.execute(
+            select(ProductionTask, SalesOrderItemBomComponent)
+            .join(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == ProductionTask.sales_order_item_bom_component_id,
+            )
+            .where(ProductionTask.order_item_id == order_item_id)
+            .order_by(
+                SalesOrderItemBomComponent.display_order,
+                SalesOrderItemBomComponent.id,
+            )
+        ).all()
+    )
+
+
+def _refresh_composite_production_tasks(
+    db: Session,
+    item: OrderItem,
+    *,
+    create_if_missing: bool,
+) -> list[ProductionTask]:
+    """Refresh every BOM snapshot independently, in component piece units.
+
+    The parent sales-order item remains measured in sets.  Its BOM snapshots
+    are the execution anchors, so one component's material coverage or
+    completion never changes a sibling component's planned piece quantity.
+    """
+    try:
+        demands = effective_component_demands(db, item.id)
+    except CompositeBomWorkflowError as error:
+        raise ProductionWorkflowError(str(error), 409) from error
+    tasks: list[ProductionTask] = []
+    now = utc_now_naive()
+    for demand in demands:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
+            )
+        )
+        if task is None:
+            if not create_if_missing:
+                continue
+            task = ProductionTask(
+                order_item_id=item.id,
+                sales_order_item_bom_component_id=demand.snapshot_id,
+                status=WAITING_MATERIAL,
+                planned_quantity=0,
+                finished_coverage_snapshot=0,
+                readiness_basis=None,
+                ready_at=None,
+                version=1,
+            )
+            db.add(task)
+            db.flush()
+
+        # A completion is immutable.  Its task stays completed even if the
+        # parent material flag later changes during a separate correction.
+        if task.status == COMPLETED:
+            tasks.append(task)
+            continue
+
+        coverage = component_available_quantity(db, demand.snapshot_id)
+        if coverage >= demand.required_piece_quantity:
+            next_status = NOT_REQUIRED
+            planned_quantity = 0
+            readiness_basis = "component_finished_inventory"
+        elif item.material_status == "received":
+            next_status = PENDING
+            planned_quantity = max(demand.required_piece_quantity - coverage, 0)
+            readiness_basis = "component_material_received"
+        else:
+            next_status = WAITING_MATERIAL
+            planned_quantity = 0
+            readiness_basis = None
+
+        changed = (
+            task.status != next_status
+            or int(task.planned_quantity or 0) != planned_quantity
+            or int(task.finished_coverage_snapshot or 0) != coverage
+            or task.readiness_basis != readiness_basis
+        )
+        if changed:
+            was_ready = task.status in READY_TASK_STATUSES
+            is_ready = next_status in READY_TASK_STATUSES
+            task.status = next_status
+            task.planned_quantity = planned_quantity
+            task.finished_coverage_snapshot = coverage
+            task.readiness_basis = readiness_basis
+            task.ready_at = (
+                task.ready_at if was_ready and is_ready else (now if is_ready else None)
+            )
+            task.version = int(task.version or 0) + 1
+        tasks.append(task)
+    db.flush()
+    return tasks
+
+
 def refresh_production_task(
     db: Session,
     order_item_id: int,
@@ -236,8 +352,19 @@ def refresh_production_task(
     item = db.get(OrderItem, order_item_id)
     if item is None:
         raise ProductionWorkflowError("订单明细不存在", 404)
+    if is_composite_order_item(db, item.id):
+        tasks = _refresh_composite_production_tasks(
+            db,
+            item,
+            create_if_missing=create_if_missing,
+        )
+        refresh_order_production_status(db, item.order_id)
+        return tasks[0] if tasks else None
     task = db.scalar(
-        select(ProductionTask).where(ProductionTask.order_item_id == item.id)
+        select(ProductionTask).where(
+            ProductionTask.order_item_id == item.id,
+            ProductionTask.sales_order_item_bom_component_id.is_(None),
+        )
     )
     if task is None:
         if not create_if_missing:
@@ -325,21 +452,57 @@ def refresh_order_production_status(db: Session, order_id: int) -> Order | None:
     order = db.get(Order, order_id)
     if order is None or order.status not in MUTABLE_ORDER_STATUSES:
         return order
-    item_count = int(
-        db.scalar(select(func.count(OrderItem.id)).where(OrderItem.order_id == order.id))
-        or 0
+    items = list(
+        db.scalars(
+            select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.id)
+        ).all()
     )
-    tasks = db.scalars(
-        select(ProductionTask)
-        .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
-        .where(OrderItem.order_id == order.id)
-        .order_by(ProductionTask.id)
-    ).all()
-    if not tasks or len(tasks) != item_count:
+    if not items:
         return order
-    if all(task.status in READY_TASK_STATUSES for task in tasks):
+
+    item_states: list[str] = []
+    for item in items:
+        if is_composite_order_item(db, item.id):
+            component_rows = _component_task_rows(db, item.id)
+            demands = effective_component_demands(db, item.id)
+            required_snapshot_ids = {
+                demand.snapshot_id for demand in demands if demand.is_required
+            }
+            required_rows = [
+                (task, snapshot)
+                for task, snapshot in component_rows
+                if snapshot.is_required
+            ]
+            if not required_snapshot_ids:
+                item_states.append(NOT_REQUIRED)
+            elif {snapshot.id for _task, snapshot in required_rows} != required_snapshot_ids:
+                # A required snapshot without a task is still waiting; this is
+                # expected before the caller creates component tasks.
+                item_states.append(WAITING_MATERIAL)
+            elif all(task.status in READY_TASK_STATUSES for task, _ in required_rows):
+                item_states.append(COMPLETED)
+            elif any(task.status == COMPLETED for task, _ in required_rows):
+                # At least one required component is done, but the parent
+                # remains un-deliverable until every required component can
+                # form a set.
+                item_states.append("component_in_progress")
+            else:
+                item_states.append(PENDING)
+            continue
+
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == item.id,
+                ProductionTask.sales_order_item_bom_component_id.is_(None),
+            )
+        )
+        if task is None:
+            return order
+        item_states.append(task.status)
+
+    if all(state in READY_TASK_STATUSES for state in item_states):
         next_status = "pending_delivery"
-    elif any(task.status == COMPLETED for task in tasks):
+    elif any(state in {COMPLETED, "component_in_progress"} for state in item_states):
         next_status = "production"
     else:
         next_status = "pending_production"
@@ -353,6 +516,11 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
     item = db.get(OrderItem, order_item) if isinstance(order_item, int) else order_item
     if item is None:
         raise ProductionWorkflowError("订单明细不存在", 404)
+    if is_composite_order_item(db, item.id):
+        try:
+            return int(kit_availability(db, item.id)["available_sets"])
+        except CompositeBomWorkflowError as error:
+            raise ProductionWorkflowError(str(error), 409) from error
     finished_coverage = max(active_finished_reserved_qty(db, item.id), 0)
     direct_quantity = int(
         db.scalar(
@@ -466,11 +634,25 @@ def _consume_completion_semi_reservations(
 ) -> None:
     from app.services.semi_finished_inventory import consume_semi_finished_reservation
 
+    requirement_query = select(OrderItemSemiRequirement).where(
+        OrderItemSemiRequirement.order_item_id == item.id
+    )
+    if task.sales_order_item_bom_component_id is not None:
+        # N039 components never consume a parent-level semi-finished
+        # reservation.  Requisition integration will attach the component FK;
+        # until then, no semi reservation is eligible for this task.
+        requirement_query = requirement_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id
+            == task.sales_order_item_bom_component_id
+        )
     requirements = db.scalars(
-        select(OrderItemSemiRequirement)
-        .where(OrderItemSemiRequirement.order_item_id == item.id)
-        .order_by(OrderItemSemiRequirement.component_type, OrderItemSemiRequirement.id)
+        requirement_query.order_by(
+            OrderItemSemiRequirement.component_type,
+            OrderItemSemiRequirement.id,
+        )
     ).all()
+    if task.sales_order_item_bom_component_id is not None and not requirements:
+        return
     require_full = task.readiness_basis == "semi_finished_inventory"
     product = db.get(Product, item.product_id)
     box_style = str(product.box_style or "") if product is not None else ""
@@ -564,10 +746,104 @@ def _consume_completion_semi_reservations(
             )
 
 
+def _reserve_component_completion_lot(
+    db: Session,
+    *,
+    completion: ProductionCompletion,
+    order: Order,
+    item: OrderItem,
+    snapshot_id: int,
+    lot: InventoryLot,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> InventoryReservation:
+    """Reserve a just-created component lot for its immutable BOM snapshot.
+
+    The legacy helper checks the parent product, which is intentionally wrong
+    for a component.  This narrow variant preserves the same inventory
+    movement and reservation invariants while binding both the parent order
+    item and the component snapshot.
+    """
+    existing = db.scalar(
+        select(InventoryReservation).where(
+            InventoryReservation.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        if (
+            existing.order_item_id != item.id
+            or existing.inventory_lot_id != lot.id
+            or existing.sales_order_item_bom_component_id != snapshot_id
+        ):
+            raise ProductionWorkflowError("组件完工库存预占幂等标识冲突", 409)
+        return existing
+    quantity = int(completion.quantity or 0)
+    if quantity <= 0 or int(lot.quantity_available or 0) != quantity:
+        raise ProductionWorkflowError("组件完工库存数量与完工事实不一致", 409)
+    before = _balances(lot)
+    expected_version = int(lot.version or 0)
+    now = utc_now_naive()
+    updated = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == lot.id,
+            InventoryLot.version == expected_version,
+            InventoryLot.quantity_available == quantity,
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+        )
+        .values(
+            quantity_available=InventoryLot.quantity_available - quantity,
+            quantity_reserved=InventoryLot.quantity_reserved + quantity,
+            version=InventoryLot.version + 1,
+            last_movement_at=now,
+        )
+    )
+    if updated.rowcount != 1:
+        raise ProductionWorkflowError("组件完工库存数量或版本已变化，请刷新后重试", 409)
+    reservation = InventoryReservation(
+        reservation_number=_stable_key("CPRS", completion.id, snapshot_id, max_length=50),
+        inventory_lot_id=lot.id,
+        reservation_type="finished_order",
+        order_id=order.id,
+        order_item_id=item.id,
+        sales_order_item_bom_component_id=snapshot_id,
+        reserved_stock_quantity=quantity,
+        credited_requirement_quantity=quantity,
+        yield_factor=1,
+        status="active",
+        warning_codes="[]",
+        reserved_by=operator_id,
+        reserved_at=now,
+        idempotency_key=idempotency_key,
+    )
+    db.add(reservation)
+    db.flush()
+    db.expire(lot)
+    refreshed_lot = db.get(InventoryLot, lot.id)
+    assert refreshed_lot is not None
+    _movement(
+        db,
+        lot=refreshed_lot,
+        movement_type="reserve",
+        quantity=quantity,
+        before=before,
+        operator_id=operator_id,
+        reason="复合 BOM 组件生产完工自动预占",
+        idempotency_key=idempotency_key,
+        reservation_id=reservation.id,
+        related_order_id=order.id,
+        related_order_item_id=item.id,
+    )
+    db.flush()
+    return reservation
+
+
 def _stock_completion_lot(
     db: Session,
     *,
     completion: ProductionCompletion,
+    task: ProductionTask,
     order: Order,
     item: OrderItem,
     command: CompletionCommand | StockTransferCommand,
@@ -579,10 +855,16 @@ def _stock_completion_lot(
         command.location_id,
         pallet_id=command.pallet_id,
     )
+    snapshot = (
+        db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
+        if task.sales_order_item_bom_component_id is not None
+        else None
+    )
+    product_id = snapshot.component_product_id if snapshot is not None else item.product_id
     lot = manual_finished_in(
         db,
         customer_id=order.customer_id,
-        product_id=item.product_id,
+        product_id=product_id,
         location_id=location.id,
         quantity=int(completion.quantity),
         stock_date=beijing_today(),
@@ -597,15 +879,27 @@ def _stock_completion_lot(
         require_empty_pallet=True,
         movement_reason="生产完工入库",
     )
-    reserve_completed_finished_inventory(
-        db,
-        order_item_id=item.id,
-        inventory_lot_id=lot.id,
-        quantity=int(completion.quantity),
-        expected_version=int(lot.version),
-        operator_id=operator_id,
-        idempotency_key=_stable_key(idempotency_prefix, "finished-reserve"),
-    )
+    if snapshot is None:
+        reserve_completed_finished_inventory(
+            db,
+            order_item_id=item.id,
+            inventory_lot_id=lot.id,
+            quantity=int(completion.quantity),
+            expected_version=int(lot.version),
+            operator_id=operator_id,
+            idempotency_key=_stable_key(idempotency_prefix, "finished-reserve"),
+        )
+    else:
+        _reserve_component_completion_lot(
+            db,
+            completion=completion,
+            order=order,
+            item=item,
+            snapshot_id=snapshot.id,
+            lot=lot,
+            operator_id=operator_id,
+            idempotency_key=_stable_key(idempotency_prefix, "component-finished-reserve"),
+        )
     return lot
 
 
@@ -709,6 +1003,7 @@ def complete_production_batch(
 
     for command in commands:
         task, item, order = by_task[command.task_id]
+        is_component_task = task.sales_order_item_bom_component_id is not None
         if order.status not in PRODUCIBLE_ORDER_STATUSES:
             raise ProductionWorkflowError(
                 "订单当前状态不允许继续生产完工，请刷新后重试", 409
@@ -723,7 +1018,14 @@ def complete_production_batch(
             raise ProductionWorkflowError("生产任务冻结计划数量无效", 409)
         if int(item.delivered_quantity or 0) > 0:
             raise ProductionWorkflowError("订单明细已送货，不能再确认生产完工", 409)
-        if has_production_completion_facts(db, [item.id]):
+        existing_completion = db.scalar(
+            select(ProductionCompletion.id)
+            .where(ProductionCompletion.task_id == task.id)
+            .limit(1)
+        )
+        if existing_completion is not None:
+            raise ProductionWorkflowError("该生产组件已存在完工事实，不能重复完工", 409)
+        if not is_component_task and has_production_completion_facts(db, [item.id]):
             raise ProductionWorkflowError("该订单明细已经存在生产完工事实", 409)
         if command.disposition == "stock":
             _temporary_location(
@@ -781,6 +1083,7 @@ def complete_production_batch(
             lot = _stock_completion_lot(
                 db,
                 completion=completion,
+                task=task,
                 order=order,
                 item=item,
                 command=command,
@@ -848,6 +1151,33 @@ def transfer_direct_completion_to_stock(
     )
     if existing_transfer is not None:
         raise ProductionWorkflowError("该完工记录已转入库存，不能重复操作", 409)
+    task = db.get(ProductionTask, completion.task_id)
+    if task is None:
+        raise ProductionWorkflowError("完工记录关联生产任务不存在", 409)
+    if task.sales_order_item_bom_component_id is not None:
+        consumed_direct_quantity = int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            BomComponentDirectDeliveryAllocation.consumed_quantity
+                            - BomComponentDirectDeliveryAllocation.reversed_quantity
+                        ),
+                        0,
+                    )
+                ).where(
+                    BomComponentDirectDeliveryAllocation.production_completion_id
+                    == completion.id,
+                    BomComponentDirectDeliveryAllocation.status.in_(("active", "partial")),
+                )
+            )
+            or 0
+        )
+        if consumed_direct_quantity > 0:
+            raise ProductionWorkflowError(
+                "该组件完工数量已用于组套送货，不能再转入库存",
+                409,
+            )
     item = db.get(OrderItem, completion.order_item_id)
     if item is None:
         raise ProductionWorkflowError("完工记录关联订单明细不存在", 409)
@@ -885,6 +1215,7 @@ def transfer_direct_completion_to_stock(
     lot = _stock_completion_lot(
         db,
         completion=completion,
+        task=task,
         order=order,
         item=item,
         command=command,
@@ -935,6 +1266,73 @@ def _item_product_snapshot(item: OrderItem, product: Product) -> dict:
     }
 
 
+def _task_product_snapshot(
+    db: Session,
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+    parent_product: Product,
+) -> dict:
+    """Expose the actual component being produced without changing parent sets."""
+    snapshot_id = task.sales_order_item_bom_component_id
+    if snapshot_id is None:
+        return {
+            **_item_product_snapshot(item, parent_product),
+            "is_component_task": False,
+            "bom_component_snapshot_id": None,
+            "production_quantity_unit": "sets",
+        }
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    component = (
+        db.get(Product, snapshot.component_product_id) if snapshot is not None else None
+    )
+    return {
+        "product_id": snapshot.component_product_id if snapshot is not None else None,
+        "product_code": (
+            snapshot.snapshot_component_product_code
+            if snapshot is not None
+            else parent_product.product_code
+        ),
+        "product_name": (
+            snapshot.snapshot_component_product_name
+            if snapshot is not None
+            else parent_product.product_name
+        ),
+        "specification": (
+            snapshot.snapshot_component_spec if snapshot is not None else item.snapshot_spec
+        ),
+        "material": (
+            snapshot.snapshot_component_material
+            if snapshot is not None
+            else item.snapshot_material
+        ),
+        "flute": (
+            snapshot.snapshot_component_flute_type
+            if snapshot is not None
+            else item.flute_type
+        ),
+        "special_process": (
+            snapshot.snapshot_component_production_process
+            if snapshot is not None
+            else item.special_process
+        ),
+        "production_notes": (
+            snapshot.snapshot_component_report_notes
+            if snapshot is not None
+            else item.snapshot_production_notes
+        ),
+        "mold_name": snapshot.snapshot_mold_tool_name if snapshot is not None else None,
+        "mold_location": snapshot.snapshot_mold_tool_code if snapshot is not None else None,
+        "is_component_task": True,
+        "bom_component_snapshot_id": snapshot_id,
+        "component_quantity_per_set": (
+            int(snapshot.quantity_per_set) if snapshot is not None else None
+        ),
+        "production_quantity_unit": "pieces",
+        "component_product_found": component is not None,
+    }
+
+
 def list_production_tasks(
     db: Session,
     *,
@@ -957,7 +1355,12 @@ def list_production_tasks(
             "item_order_number": item.item_order_number,
             "customer_id": order.customer_id,
             "customer_name": customer.name,
-            **_item_product_snapshot(item, product),
+            **_task_product_snapshot(
+                db,
+                task=task,
+                item=item,
+                parent_product=product,
+            ),
             "order_quantity": int(item.quantity),
             "delivered_quantity": int(item.delivered_quantity or 0),
             "material_status": item.material_status,
@@ -1049,7 +1452,12 @@ def list_production_completions(
                 "item_order_number": item.item_order_number,
                 "customer_id": order.customer_id,
                 "customer_name": customer.name,
-                **_item_product_snapshot(item, product),
+                **_task_product_snapshot(
+                    db,
+                    task=task,
+                    item=item,
+                    parent_product=product,
+                ),
                 "quantity": int(completion.quantity),
                 "initial_disposition": completion.initial_disposition,
                 "warehouse_location_id": effective_location_id,

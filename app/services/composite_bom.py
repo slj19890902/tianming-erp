@@ -86,6 +86,8 @@ def _as_decimal(value: Any, *, label: str = "组件用量") -> Decimal:
         raise CompositeBOMError(f"{label}无效") from error
     if not result.is_finite() or result <= 0:
         raise CompositeBOMError(f"{label}必须大于0")
+    if result != result.to_integral_value():
+        raise CompositeBOMError(f"{label}必须是正整数")
     return result
 
 
@@ -651,6 +653,9 @@ def _snapshot_kwargs(
         (("sales_order_item_id", "order_item_id"), order_item.id),
         (("parent_product_id",), parent.id),
         (("component_product_id",), component.id),
+        (("parent_product_version",), parent.version),
+        (("component_product_version", "snapshot_product_version", "product_version"), component.version),
+        (("snapshot_schema_version",), 2),
         (("quantity_per_set", "component_quantity", "qty_per_set"), relation["quantity_per_set"]),
         (("required_piece_quantity", "required_quantity", "total_component_quantity", "snapshot_quantity"), required_quantity),
         (("display_order", "sort_order", "sequence", "sequence_no", "component_sequence"), relation["display_order"]),
@@ -695,7 +700,6 @@ def _snapshot_kwargs(
         (("snapshot_component_splice_mode",), component.splice_mode),
         (("snapshot_component_pieces_per_box",), component.pieces_per_box),
         (("snapshot_component_flap_mm",), component.flap_mm),
-        (("snapshot_product_version", "component_product_version", "product_version"), component.version),
     ]
     kwargs: dict[str, Any] = {}
     for aliases, value in semantic_values:
@@ -703,10 +707,15 @@ def _snapshot_kwargs(
         if field is not None:
             kwargs[field] = value
     required_aliases = (
-        semantic_values[0][0],
-        semantic_values[2][0],
-        semantic_values[3][0],
-        semantic_values[4][0],
+        ("sales_order_item_id", "order_item_id"),
+        ("component_product_id",),
+        ("quantity_per_set", "component_quantity", "qty_per_set"),
+        (
+            "required_piece_quantity",
+            "required_quantity",
+            "total_component_quantity",
+            "snapshot_quantity",
+        ),
     )
     for aliases in required_aliases:
         if not any(alias in kwargs for alias in aliases):
@@ -984,10 +993,26 @@ def get_order_item_bom_preview(db: Session, order_item_id: int) -> dict[str, Any
         _snapshot_response(row, fallback_position=index)
         for index, row in enumerate(rows, start=1)
     ]
+    if components:
+        from app.services.composite_bom_workflow import effective_component_demands
+
+        effective_by_snapshot = {
+            demand.snapshot_id: demand
+            for demand in effective_component_demands(db, order_item_id)
+        }
+        for component in components:
+            demand = effective_by_snapshot.get(component["id"])
+            if demand is None:
+                continue
+            component["effective_order_set_quantity"] = demand.effective_sets
+            component["effective_required_piece_quantity"] = (
+                demand.required_piece_quantity
+            )
     return {
         "order_item_id": item.id,
         "parent_product_id": item.product_id,
         "ordered_sets": item.quantity,
+        "effective_order_sets": item.quantity,
         "is_composite": bool(components),
         "components": components,
     }

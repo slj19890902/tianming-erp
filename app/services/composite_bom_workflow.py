@@ -1,0 +1,645 @@
+"""N039 composite BOM execution domain service.
+
+This module is deliberately independent from API handlers.  It only operates
+on component snapshots, their append-only adjustments and the new snapshot
+foreign keys.  A caller can therefore keep the existing single-product and A3
+flows unchanged by simply not calling these functions when an order item has
+no BOM snapshots.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from math import floor
+from typing import Iterable
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.models.delivery import DeliveryItem
+from app.models.order import OrderItem
+from app.models.product_bom import (
+    BomComponentDirectDeliveryAllocation,
+    SalesOrderItemBomComponent,
+    SalesOrderItemBomDemandAdjustment,
+)
+from app.models.production import (
+    ProductionCompletion,
+    ProductionStockTransfer,
+    ProductionTask,
+)
+from app.models.warehouse_inventory import (
+    DeliveryInventoryAllocation,
+    InventoryLot,
+    InventoryReservation,
+)
+from app.services.warehouse_inventory import _balances, _movement, utc_now_naive
+
+
+DIRECT_DISPOSITION = "direct"  # existing database/API value; means direct kit.
+STOCK_DISPOSITION = "stock"
+ACTIVE_RESERVATION_STATUSES = ("active", "partial")
+
+
+class CompositeBomWorkflowError(ValueError):
+    """Business-safe failure for the caller to render as a 4xx response."""
+
+
+@dataclass(frozen=True)
+class ComponentDemand:
+    snapshot_id: int
+    order_item_id: int
+    component_product_id: int
+    component_code: str
+    component_name: str
+    specification: str | None
+    quantity_per_set: int
+    is_required: bool
+    effective_sets: int
+    required_piece_quantity: int
+
+
+@dataclass(frozen=True)
+class ComponentAvailability:
+    snapshot_id: int
+    component_code: str
+    component_name: str
+    quantity_per_set: int
+    is_required: bool
+    stock_quantity: int
+    direct_quantity: int
+    available_quantity: int
+    required_piece_quantity: int
+
+
+@dataclass(frozen=True)
+class ConsumptionPart:
+    source: str
+    snapshot_id: int
+    source_id: int
+    quantity: int
+
+
+@dataclass(frozen=True)
+class ComponentConsumption:
+    snapshot_id: int
+    component_code: str
+    component_name: str
+    required_quantity: int
+    parts: tuple[ConsumptionPart, ...]
+
+
+def _as_positive_integer(value: object, *, field: str) -> int:
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise CompositeBomWorkflowError(f"{field}必须为正整数") from exc
+    if decimal_value <= 0 or decimal_value != decimal_value.to_integral_value():
+        raise CompositeBomWorkflowError(f"{field}必须为正整数")
+    return int(decimal_value)
+
+
+def _as_integer(value: object, *, field: str) -> int:
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise CompositeBomWorkflowError(f"{field}必须为整数") from exc
+    if decimal_value != decimal_value.to_integral_value():
+        raise CompositeBomWorkflowError(f"{field}必须为整数")
+    return int(decimal_value)
+
+
+def _snapshot_rows(db: Session, order_item_id: int) -> list[SalesOrderItemBomComponent]:
+    return list(
+        db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(SalesOrderItemBomComponent.sales_order_item_id == order_item_id)
+            .order_by(SalesOrderItemBomComponent.display_order, SalesOrderItemBomComponent.id)
+        ).all()
+    )
+
+
+def _remaining_reservation_quantity(reservation: InventoryReservation) -> int:
+    return max(
+        int(reservation.reserved_stock_quantity or 0)
+        - int(reservation.consumed_stock_quantity or 0)
+        - int(reservation.released_stock_quantity or 0),
+        0,
+    )
+
+
+def _reservation_status(reservation: InventoryReservation) -> str:
+    consumed = int(reservation.consumed_stock_quantity or 0)
+    released = int(reservation.released_stock_quantity or 0)
+    reserved = int(reservation.reserved_stock_quantity or 0)
+    if consumed + released >= reserved:
+        return "consumed" if consumed else "released"
+    return "partial" if consumed or released else "active"
+
+
+def _adjustment_total(db: Session, snapshot_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.coalesce(func.sum(SalesOrderItemBomDemandAdjustment.delta_order_set_quantity), 0)).where(
+                SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+                == snapshot_id
+            )
+        )
+        or 0
+    )
+
+
+def is_composite_order_item(db: Session, order_item_id: int) -> bool:
+    """Return whether N039 applies, without changing ordinary/A3 paths."""
+    return bool(_snapshot_rows(db, order_item_id))
+
+
+def effective_component_demands(
+    db: Session,
+    order_item_id: int,
+) -> list[ComponentDemand]:
+    """Read immutable snapshots plus append-only set adjustments."""
+    rows = _snapshot_rows(db, order_item_id)
+    result: list[ComponentDemand] = []
+    for snapshot in rows:
+        per_set = _as_positive_integer(snapshot.quantity_per_set, field="每套组件数量")
+        effective_sets = int(snapshot.order_set_quantity) + _adjustment_total(db, snapshot.id)
+        if effective_sets < 0:
+            raise CompositeBomWorkflowError("组件调整后的有效套数不能小于0")
+        result.append(
+            ComponentDemand(
+                snapshot_id=snapshot.id,
+                order_item_id=snapshot.sales_order_item_id,
+                component_product_id=snapshot.component_product_id,
+                component_code=snapshot.snapshot_component_product_code,
+                component_name=snapshot.snapshot_component_product_name,
+                specification=snapshot.snapshot_component_spec,
+                quantity_per_set=per_set,
+                is_required=bool(snapshot.is_required),
+                effective_sets=effective_sets,
+                required_piece_quantity=effective_sets * per_set,
+            )
+        )
+    return result
+
+
+def append_order_quantity_adjustments(
+    db: Session,
+    *,
+    order_item_id: int,
+    delta_sets: int,
+    reason: str,
+    actor_id: int | None,
+    idempotency_key: str,
+    event_type: str = "order_quantity_adjusted",
+    minimum_effective_sets: int = 0,
+) -> list[SalesOrderItemBomDemandAdjustment]:
+    """Append one immutable adjustment per snapshot, never edit a snapshot."""
+    delta = _as_integer(delta_sets, field="订单套数调整")
+    if delta == 0:
+        raise CompositeBomWorkflowError("订单套数调整不能为0")
+    if not reason or not reason.strip():
+        raise CompositeBomWorkflowError("订单数量调整必须填写原因")
+    if not idempotency_key or not idempotency_key.strip():
+        raise CompositeBomWorkflowError("订单数量调整缺少幂等标识")
+
+    demands = effective_component_demands(db, order_item_id)
+    if not demands:
+        return []
+    created: list[SalesOrderItemBomDemandAdjustment] = []
+    for demand in demands:
+        next_sets = demand.effective_sets + delta
+        if next_sets < minimum_effective_sets:
+            raise CompositeBomWorkflowError("调整后套数不能小于已处理套数")
+        row_key = f"{idempotency_key}:bom:{demand.snapshot_id}"
+        existing = db.scalar(
+            select(SalesOrderItemBomDemandAdjustment).where(
+                SalesOrderItemBomDemandAdjustment.idempotency_key == row_key
+            )
+        )
+        if existing is not None:
+            if (
+                int(existing.delta_order_set_quantity) != delta
+                or int(existing.delta_required_piece_quantity)
+                != delta * demand.quantity_per_set
+            ):
+                raise CompositeBomWorkflowError("订单数量调整幂等标识已被其他变更使用")
+            created.append(existing)
+            continue
+        row = SalesOrderItemBomDemandAdjustment(
+            sales_order_item_bom_component_id=demand.snapshot_id,
+            event_type=event_type,
+            delta_order_set_quantity=delta,
+            delta_required_piece_quantity=delta * demand.quantity_per_set,
+            reason=reason.strip(),
+            actor_id=actor_id,
+            idempotency_key=row_key,
+        )
+        db.add(row)
+        created.append(row)
+    db.flush()
+    return created
+
+
+def ensure_component_production_tasks(
+    db: Session,
+    order_item_id: int,
+) -> list[ProductionTask]:
+    """Create/refresh only snapshot-bound tasks; leave the regular task alone."""
+    item = db.get(OrderItem, order_item_id)
+    if item is None:
+        raise CompositeBomWorkflowError("订单明细不存在")
+    demands = effective_component_demands(db, order_item_id)
+    tasks: list[ProductionTask] = []
+    for demand in demands:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
+            )
+        )
+        if task is None:
+            task = ProductionTask(
+                order_item_id=order_item_id,
+                sales_order_item_bom_component_id=demand.snapshot_id,
+                status="waiting_material",
+                planned_quantity=0,
+                finished_coverage_snapshot=0,
+                readiness_basis=None,
+                version=1,
+            )
+            db.add(task)
+            db.flush()
+
+        if task.status == "completed":
+            tasks.append(task)
+            continue
+        ready = item.material_status == "received"
+        task.planned_quantity = demand.required_piece_quantity if ready else 0
+        task.finished_coverage_snapshot = component_available_quantity(db, demand.snapshot_id)
+        task.status = "pending" if ready and demand.required_piece_quantity else "waiting_material"
+        task.readiness_basis = "component_material_received" if ready else None
+        task.version = max(int(task.version or 0), 1) + 1
+        tasks.append(task)
+    db.flush()
+    return tasks
+
+
+def _stock_reservations(
+    db: Session,
+    snapshot_id: int,
+) -> list[InventoryReservation]:
+    return list(
+        db.scalars(
+            select(InventoryReservation)
+            .where(
+                InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+                InventoryReservation.reservation_type == "finished_order",
+                InventoryReservation.status.in_(ACTIVE_RESERVATION_STATUSES),
+            )
+            .order_by(InventoryReservation.id)
+        ).all()
+    )
+
+
+def _direct_completion_rows(db: Session, snapshot_id: int):
+    allocated = func.coalesce(
+        func.sum(
+            BomComponentDirectDeliveryAllocation.consumed_quantity
+            - BomComponentDirectDeliveryAllocation.reversed_quantity
+        ),
+        0,
+    )
+    return db.execute(
+        select(ProductionCompletion, allocated.label("allocated_quantity"))
+        .join(ProductionTask, ProductionTask.id == ProductionCompletion.task_id)
+        .outerjoin(
+            ProductionStockTransfer,
+            ProductionStockTransfer.completion_id == ProductionCompletion.id,
+        )
+        .outerjoin(
+            BomComponentDirectDeliveryAllocation,
+            (BomComponentDirectDeliveryAllocation.production_completion_id == ProductionCompletion.id)
+            & (BomComponentDirectDeliveryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES)),
+        )
+        .where(
+            ProductionTask.sales_order_item_bom_component_id == snapshot_id,
+            ProductionCompletion.initial_disposition == DIRECT_DISPOSITION,
+            ProductionStockTransfer.id.is_(None),
+        )
+        .group_by(ProductionCompletion.id)
+        .order_by(ProductionCompletion.completed_at, ProductionCompletion.id)
+    ).all()
+
+
+def component_availability(
+    db: Session,
+    snapshot_id: int,
+) -> ComponentAvailability:
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None:
+        raise CompositeBomWorkflowError("组件快照不存在")
+    demand = next(
+        demand
+        for demand in effective_component_demands(db, snapshot.sales_order_item_id)
+        if demand.snapshot_id == snapshot_id
+    )
+    stock_quantity = sum(_remaining_reservation_quantity(row) for row in _stock_reservations(db, snapshot_id))
+    direct_quantity = sum(
+        max(int(completion.quantity or 0) - int(allocated or 0), 0)
+        for completion, allocated in _direct_completion_rows(db, snapshot_id)
+    )
+    return ComponentAvailability(
+        snapshot_id=snapshot_id,
+        component_code=demand.component_code,
+        component_name=demand.component_name,
+        quantity_per_set=demand.quantity_per_set,
+        is_required=demand.is_required,
+        stock_quantity=stock_quantity,
+        direct_quantity=direct_quantity,
+        available_quantity=stock_quantity + direct_quantity,
+        required_piece_quantity=demand.required_piece_quantity,
+    )
+
+
+def component_available_quantity(db: Session, snapshot_id: int) -> int:
+    return component_availability(db, snapshot_id).available_quantity
+
+
+def kit_availability(db: Session, order_item_id: int) -> dict:
+    """Return delivery capacity in sets; optional components are informational."""
+    demands = effective_component_demands(db, order_item_id)
+    if not demands:
+        return {"applicable": False, "available_sets": 0, "missing_components": [], "components": []}
+    item = db.get(OrderItem, order_item_id)
+    required_rows: list[ComponentAvailability] = []
+    component_rows = [component_availability(db, demand.snapshot_id) for demand in demands]
+    for row in component_rows:
+        if row.is_required:
+            required_rows.append(row)
+    if not required_rows:
+        available_sets = max((d.effective_sets for d in demands), default=0)
+    else:
+        available_sets = min(row.available_quantity // row.quantity_per_set for row in required_rows)
+    effective_sets = max((d.effective_sets for d in demands), default=0)
+    delivered = int(item.delivered_quantity or 0) if item is not None else 0
+    remaining_order_sets = max(effective_sets - delivered, 0)
+    available_sets = min(available_sets, remaining_order_sets)
+    missing = [
+        {
+            "snapshot_id": row.snapshot_id,
+            "component_code": row.component_code,
+            "component_name": row.component_name,
+            "required_quantity": row.quantity_per_set,
+            "available_quantity": row.available_quantity,
+            "shortage_quantity": max(row.quantity_per_set - row.available_quantity, 0),
+        }
+        for row in required_rows
+        if row.available_quantity < row.quantity_per_set
+    ]
+    return {
+        "applicable": True,
+        "effective_sets": effective_sets,
+        "delivered_sets": delivered,
+        "available_sets": available_sets,
+        "components": [asdict(row) for row in component_rows],
+        "missing_components": missing,
+    }
+
+
+def build_delivery_component_consumption_plan(
+    db: Session,
+    *,
+    delivery_item_id: int,
+    delivery_sets: int,
+) -> list[ComponentConsumption]:
+    """Preflight every required component.  No writes occur in this function."""
+    sets = _as_positive_integer(delivery_sets, field="送货套数")
+    delivery_item = db.get(DeliveryItem, delivery_item_id)
+    if delivery_item is None:
+        raise CompositeBomWorkflowError("送货明细不存在")
+    demands = effective_component_demands(db, delivery_item.order_item_id)
+    if not demands:
+        return []
+
+    plan: list[ComponentConsumption] = []
+    shortages: list[str] = []
+    for demand in demands:
+        needed = sets * demand.quantity_per_set
+        parts: list[ConsumptionPart] = []
+        remaining = needed
+        for reservation in _stock_reservations(db, demand.snapshot_id):
+            quantity = min(_remaining_reservation_quantity(reservation), remaining)
+            if quantity:
+                parts.append(ConsumptionPart("stock", demand.snapshot_id, reservation.id, quantity))
+                remaining -= quantity
+            if not remaining:
+                break
+        if remaining:
+            for completion, allocated in _direct_completion_rows(db, demand.snapshot_id):
+                quantity = min(max(int(completion.quantity or 0) - int(allocated or 0), 0), remaining)
+                if quantity:
+                    parts.append(ConsumptionPart("direct", demand.snapshot_id, completion.id, quantity))
+                    remaining -= quantity
+                if not remaining:
+                    break
+        if remaining and demand.is_required:
+            shortages.append(f"{demand.component_name}缺{remaining}件")
+        if not demand.is_required and remaining == needed:
+            continue
+        plan.append(
+            ComponentConsumption(
+                snapshot_id=demand.snapshot_id,
+                component_code=demand.component_code,
+                component_name=demand.component_name,
+                required_quantity=needed,
+                parts=tuple(parts),
+            )
+        )
+    if shortages:
+        raise CompositeBomWorkflowError("复合产品无法齐套发货：" + "；".join(shortages))
+    return plan
+
+
+def execute_delivery_component_consumption(
+    db: Session,
+    *,
+    delivery_item_id: int,
+    delivery_sets: int,
+    operator_id: int | None,
+    operation_key: str,
+) -> list[ComponentConsumption]:
+    """Atomically allocate component stock/direct completions for one delivery item."""
+    if not operation_key or not operation_key.strip():
+        raise CompositeBomWorkflowError("组件送货扣减缺少操作标识")
+    delivery_item = db.get(DeliveryItem, delivery_item_id)
+    if delivery_item is None:
+        raise CompositeBomWorkflowError("送货明细不存在")
+    demands = effective_component_demands(db, delivery_item.order_item_id)
+    if not demands:
+        return []
+    existing_direct = db.scalar(
+        select(BomComponentDirectDeliveryAllocation.id).where(
+            BomComponentDirectDeliveryAllocation.delivery_item_id == delivery_item_id,
+            BomComponentDirectDeliveryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+        ).limit(1)
+    )
+    existing_stock = db.scalar(
+        select(DeliveryInventoryAllocation.id)
+        .join(
+            InventoryReservation,
+            InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+        )
+        .where(
+            DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
+            DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+            InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+        )
+        .limit(1)
+    )
+    if existing_direct is not None or existing_stock is not None:
+        return []  # delivery dispatch is already allocated; caller stays idempotent.
+
+    with db.begin_nested():
+        plan = build_delivery_component_consumption_plan(
+            db, delivery_item_id=delivery_item_id, delivery_sets=delivery_sets
+        )
+        for component in plan:
+            for part in component.parts:
+                if part.source == "direct":
+                    db.add(
+                        BomComponentDirectDeliveryAllocation(
+                            delivery_item_id=delivery_item_id,
+                            production_completion_id=part.source_id,
+                            sales_order_item_bom_component_id=part.snapshot_id,
+                            consumed_quantity=part.quantity,
+                            reversed_quantity=0,
+                            status="active",
+                            created_by=operator_id,
+                        )
+                    )
+                    continue
+
+                reservation = db.get(InventoryReservation, part.source_id)
+                if reservation is None or reservation.sales_order_item_bom_component_id != part.snapshot_id:
+                    raise CompositeBomWorkflowError("组件成品预占记录已变化，请刷新后重试")
+                lot = db.get(InventoryLot, reservation.inventory_lot_id)
+                if lot is None or _remaining_reservation_quantity(reservation) < part.quantity:
+                    raise CompositeBomWorkflowError("组件成品预占数量不足，请刷新后重试")
+                if int(lot.quantity_reserved or 0) < part.quantity:
+                    raise CompositeBomWorkflowError("组件库存预占余额异常，请刷新后重试")
+                before = _balances(lot)
+                lot.quantity_reserved -= part.quantity
+                lot.quantity_consumed += part.quantity
+                lot.version = int(lot.version or 0) + 1
+                reservation.consumed_stock_quantity += part.quantity
+                reservation.consumed_requirement_quantity += part.quantity
+                reservation.consumed_by = operator_id
+                reservation.consumed_at = utc_now_naive()
+                reservation.status = _reservation_status(reservation)
+                db.flush()
+                movement = _movement(
+                    db,
+                    lot=lot,
+                    movement_type="consume",
+                    quantity=part.quantity,
+                    before=before,
+                    operator_id=operator_id,
+                    reason="N039复合组件随整套送货消耗",
+                    idempotency_key=f"{operation_key}:stock:{reservation.id}",
+                    reservation_id=reservation.id,
+                    related_order_item_id=delivery_item.order_item_id,
+                    related_delivery_id=delivery_item.delivery_id,
+                )
+                db.flush()
+                db.add(
+                    DeliveryInventoryAllocation(
+                        delivery_item_id=delivery_item_id,
+                        reservation_id=reservation.id,
+                        consume_movement_id=movement.id,
+                        consumed_stock_quantity=part.quantity,
+                        credited_requirement_quantity=part.quantity,
+                        reversed_stock_quantity=0,
+                        reversed_requirement_quantity=0,
+                        status="active",
+                        created_by=operator_id,
+                    )
+                )
+        db.flush()
+    return plan
+
+
+def reverse_delivery_component_allocations(
+    db: Session,
+    *,
+    delivery_item_id: int,
+    operator_id: int | None,
+    operation_key: str,
+) -> None:
+    """Reverse only N039 snapshot-bound allocations for a cancelled delivery item."""
+    if not operation_key or not operation_key.strip():
+        raise CompositeBomWorkflowError("组件送货撤销缺少操作标识")
+    with db.begin_nested():
+        direct_rows = db.scalars(
+            select(BomComponentDirectDeliveryAllocation).where(
+                BomComponentDirectDeliveryAllocation.delivery_item_id == delivery_item_id,
+                BomComponentDirectDeliveryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+            )
+        ).all()
+        now = utc_now_naive()
+        for row in direct_rows:
+            row.reversed_quantity = row.consumed_quantity
+            row.status = "reversed"
+            row.reversed_by = operator_id
+            row.reversed_at = now
+
+        allocations = db.scalars(
+            select(DeliveryInventoryAllocation)
+            .join(InventoryReservation, InventoryReservation.id == DeliveryInventoryAllocation.reservation_id)
+            .where(
+                DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
+                DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            )
+        ).all()
+        for allocation in allocations:
+            quantity = int(allocation.consumed_stock_quantity) - int(allocation.reversed_stock_quantity or 0)
+            if quantity <= 0:
+                continue
+            reservation = db.get(InventoryReservation, allocation.reservation_id)
+            lot = db.get(InventoryLot, reservation.inventory_lot_id) if reservation else None
+            if reservation is None or lot is None or int(lot.quantity_consumed or 0) < quantity:
+                raise CompositeBomWorkflowError("组件库存分配无法撤销，请先核对库存记录")
+            before = _balances(lot)
+            lot.quantity_reserved += quantity
+            lot.quantity_consumed -= quantity
+            lot.version = int(lot.version or 0) + 1
+            reservation.consumed_stock_quantity -= quantity
+            reservation.consumed_requirement_quantity -= quantity
+            reservation.status = _reservation_status(reservation)
+            allocation.reversed_stock_quantity += quantity
+            allocation.reversed_requirement_quantity += quantity
+            allocation.status = "reversed"
+            allocation.reversed_by = operator_id
+            allocation.reversed_at = now
+            db.flush()
+            _movement(
+                db,
+                lot=lot,
+                movement_type="reverse_consume",
+                quantity=quantity,
+                before=before,
+                operator_id=operator_id,
+                reason="N039复合组件送货撤销",
+                idempotency_key=f"{operation_key}:stock:{allocation.id}",
+                reservation_id=reservation.id,
+                related_order_item_id=reservation.order_item_id,
+                reversal_of_movement_id=allocation.consume_movement_id,
+            )
+        db.flush()
+
+
+def serialize_kit_availability(db: Session, order_item_id: int) -> dict:
+    """Small API-friendly wrapper kept here so APIs do not repeat N039 math."""
+    return kit_availability(db, order_item_id)

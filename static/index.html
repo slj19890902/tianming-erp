@@ -787,6 +787,12 @@
       .requisition-demand-cell .semi-deducted { color: #047857; font-weight: 700; }
       .requisition-demand-cell .remaining-demand { color: #b45309; font-weight: 700; }
       .requisition-demand-cell .purchase-demand { color: #1d4ed8; font-weight: 800; }
+      .bom-requisition-components { margin-top: 6px; display: grid; gap: 5px; min-width: 310px; }
+      .bom-requisition-component { padding: 6px 8px; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; white-space: normal; }
+      .bom-requisition-component.disabled { opacity: .62; background: #f8fafc; }
+      .bom-requisition-component-summary { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 4px; font-size: 11px; }
+      .bom-requisition-component-summary strong { color: #1d4ed8; }
+      .bom-kit-warning { margin-top: 4px; white-space: normal; }
       .merge-size-editor { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
       .merge-size-input { width: 76px !important; min-width: 76px !important; padding-left: 8px; padding-right: 8px; }
       .merge-cutter-select { width: 104px !important; min-width: 104px !important; margin-top: 4px; padding-left: 8px; padding-right: 8px; }
@@ -1609,6 +1615,21 @@
                   :class="['btn','small','supplier-count-button',{active:requisitionSupplierFilter===row.supplier_name}]"
                   @click="requisitionSupplierFilter=row.supplier_name">{{ row.supplier_name }}（{{ row.count }}）</button>
               </div>
+              <div v-if="requisitionTab==='pending' && filteredRequisitionPending.some(row => row.is_composite_bom)" class="bom-requisition-components" style="margin:8px 0">
+                <div v-for="row in filteredRequisitionPending.filter(item => item.is_composite_bom)" :key="`bom-components-${row.item_id}`" class="bom-requisition-component">
+                  <div class="toolbar-group" style="justify-content:space-between">
+                    <strong>{{ displayOrderNumber(row) }}｜{{ row.product_code }}｜{{ row.product_name }}</strong>
+                    <button class="btn small" type="button" @click="requisitionComponentExpanded[row.item_id] = !requisitionComponentExpanded[row.item_id]">{{ requisitionComponentExpanded[row.item_id] ? '收起组件' : `展开组件（${compositeRequisitionComponents(row).length}）` }}</button>
+                  </div>
+                  <div v-if="requisitionComponentExpanded[row.item_id]" class="bom-requisition-components">
+                    <label v-for="component in compositeRequisitionComponents(row)" :key="component.snapshot_id" :class="['bom-requisition-component',{disabled:!component.can_requisition}]">
+                      <div><input type="checkbox" :checked="isBomSnapshotSelected(component)" :disabled="!component.can_requisition" @change="toggleBomSnapshot(row,component,$event.target.checked)" /> <strong>{{ component.product_code || '-' }}｜{{ component.product_name || '组件' }}</strong> <span v-if="component.already_requisitioned" class="status green">已报料</span></div>
+                      <div class="muted">{{ component.specification || '-' }}｜{{ component.material || '-' }} / {{ component.flute_type || '-' }}</div>
+                      <div class="bom-requisition-component-summary"><span>每套 <strong>{{ component.quantity_per_set }}</strong> 片</span><span>需求 <strong>{{ component.required_piece_quantity }}</strong> 片</span><span>半成品抵扣 <strong>{{ component.semi_finished_reserved_piece_qty || 0 }}</strong> 片</span><span>剩余采购 <strong>{{ component.remaining_required_piece_qty || 0 }}</strong> 片 / {{ component.requisition_qty || 0 }} 张</span></div>
+                    </label>
+                  </div>
+                </div>
+              </div>
               <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>小片需求 / 库存 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :class="{ 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br>{{ displayOrderNumber(row) }}<div v-if="row.is_merge_group" class="muted">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id">{{ m.order_number }}｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" min="1" v-model.number="row.report_width_mm" /></div><select class="select merge-cutter-select" v-model="row.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></template></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div>需求：{{ row.required_piece_qty || 0 }} 片</div><div class="semi-deducted">半成品抵扣：{{ row.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="remaining-demand">剩余：{{ row.remaining_required_piece_qty || 0 }} 片</div><div class="purchase-demand">采购：{{ row.requisition_qty || 0 }} 张</div></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><button v-else class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></td></tr></tbody></table></data-panel>
               <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table"><thead><tr><th>报料单号</th><th>来源</th><th>供应商</th><th>客户 / 订单</th><th>存货编码 / 产品</th><th>明细数</th><th>报料数</th><th>入库状态</th><th>日期</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.source_type + '-' + row.id" :class="{'row-voided': row.status==='voided'}"><td><strong>{{ row.document_number }}</strong></td><td><span :class="['status', row.source_type==='supplier_order' ? 'blue' : row.source_type==='stock_replenishment' ? 'orange' : 'green']">{{ reportedSourceLabel(row) }}</span></td><td>{{ row.supplier_name || '-' }}</td><td class="reported-source-cell" :title="fullJoin(row.order_numbers) + '\\n' + fullJoin(row.customer_names)"><div><span v-for="orderNo in compactList(row.order_numbers)" :key="orderNo" class="reported-chip">{{ orderNo }}</span><span v-if="compactMore(row.order_numbers)" class="reported-more">+{{ compactMore(row.order_numbers) }}</span></div><div class="muted"><span v-for="customerName in compactList(row.customer_names)" :key="customerName" class="reported-chip">{{ shortCustomerName(customerName) }}</span><span v-if="compactMore(row.customer_names)" class="reported-more">+{{ compactMore(row.customer_names) }}</span></div></td><td class="reported-code-cell" :title="fullJoin(row.product_codes)"><strong><span v-for="code in compactList(row.product_codes)" :key="code" class="reported-chip">{{ code }}</span><span v-if="compactMore(row.product_codes)" class="reported-more">+{{ compactMore(row.product_codes) }}</span></strong></td><td>{{ row.item_count }}</td><td><strong>{{ row.requisition_qty || 0 }}</strong></td><td>{{ row.incoming_status || '-' }}</td><td style="font-size:12px">{{ formatBeijingDate(row.created_at) }}</td><td><div class="toolbar-group"><button class="btn small" @click="openReportedDocument(row)">打印</button><button v-if="row.source_type==='stock_replenishment' && row.status==='confirmed' && canRequisition" class="btn small success" @click="stockReportedReplenishment(row)">确认入库</button><button v-else-if="row.source_type!=='stock_replenishment' && (isWorkshop || canAdmin)" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button></div></td></tr></tbody></table></data-panel>
             </template>
@@ -1683,10 +1704,10 @@
                   <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
                     <td v-if="canProductionExecute"><input type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /></td>
                     <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td>
-                    <td style="white-space:normal"><div>订单 {{ row.order_quantity || 0 }}</div><div>抵扣 {{ row.finished_coverage_snapshot || 0 }}</div><strong>应生产 {{ row.planned_quantity || 0 }}</strong></td>
+                    <td style="white-space:normal"><span v-if="row.is_component_task" class="status blue">复合组件</span><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td>
+                    <td style="white-space:normal"><template v-if="row.is_component_task"><div>父订单 {{ row.order_quantity || 0 }} 套</div><div>每套 {{ row.component_quantity_per_set || 1 }} 片</div><strong>组件需求 {{ row.planned_quantity || 0 }} 片</strong></template><template v-else><div>订单 {{ row.order_quantity || 0 }}</div><div>抵扣 {{ row.finished_coverage_snapshot || 0 }}</div><strong>应生产 {{ row.planned_quantity || 0 }}</strong></template></td>
                     <td style="white-space:normal">{{ row.special_process || row.production_notes || '-' }}<br><span class="muted">模具：{{ row.mold_location || '-' }}</span></td><td style="white-space:normal">{{ row.delivery_date || '-' }}</td>
-                    <td v-if="canProductionExecute" style="white-space:normal"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">直接待送货</option><option value="stock" :disabled="!canWarehouseExecute">入临时成品库</option></select><select v-if="row.completion_mode==='stock'" class="select" v-model.number="row.location_id" :disabled="productionBusy" style="margin-top:4px;width:100%"><option :value="null">请选择三楼临放位</option><option v-for="location in productionAvailableLocations" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }} {{ location.location_name }}{{ location.pallet_code ? `｜${location.pallet_code}` : '' }}</option></select></td>
+                    <td v-if="canProductionExecute" style="white-space:normal"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">直接待送货</option><option value="stock" :disabled="!canWarehouseExecute">入临时成品库</option></select><div v-if="row.is_component_task" class="muted" style="margin-top:4px">组件任务：直接待送货表示组件直接齐套；入库表示组件库存。</div><select v-if="row.completion_mode==='stock'" class="select" v-model.number="row.location_id" :disabled="productionBusy" style="margin-top:4px;width:100%"><option :value="null">请选择三楼临放位</option><option v-for="location in productionAvailableLocations" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }} {{ location.location_name }}{{ location.pallet_code ? `｜${location.pallet_code}` : '' }}</option></select></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -1695,7 +1716,7 @@
                   <thead><tr><th style="width:130px">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">去向 / 库位</th><th>操作</th></tr></thead>
                   <tbody><tr v-for="row in productionHistory" :key="row.id">
                     <td>{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td><td><strong>{{ row.quantity || 0 }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
+                    <td style="white-space:normal"><span v-if="row.is_component_task" class="status blue">复合组件</span><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
                     <td style="white-space:normal"><span :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_code"><strong>{{ row.warehouse_location_code }}</strong></template><template v-else><span class="muted">已进入待送货</span></template></td>
                     <td><div class="toolbar-group"><template v-if="row.can_transfer_to_stock && canWarehouseExecute"><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy" style="min-width:190px"><option :value="null">选择三楼临放位</option><option v-for="location in productionAvailableLocations" :key="location.id" :value="location.id">{{ location.location_code }} {{ location.location_name }}</option></select><button class="btn small success" :disabled="productionBusy" @click="transferProductionCompletionToStock(row)">转入临时成品库</button></template><button class="btn small" :disabled="productionBusy" @click="go(productionCompletionIsStock(row)?'warehouse':'deliveries')">{{ productionCompletionIsStock(row)?'查看库存':'去送货' }}</button></div></td>
                   </tr></tbody>
@@ -4219,10 +4240,10 @@
             pdfTrainingTemplates: [], pdfTemplateStatusFilter: "active_draft", pdfTemplateDryRun: null,
             pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
             pdfTemplateLoading: false,
-            requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {}, selectedPendingKeys: [],
+            requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
             requisitionSupplierFilter: "", requisitionSupplierCounts: [],
             requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:true },
-            mergeSuggestions: [], mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {},
+            mergeSuggestions: [], mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [],
@@ -4764,7 +4785,12 @@
           },
           allRequisitionSelected() {
             const rows = this.filteredRequisitionPending.filter(row => this.isPendingRowSelectable(row));
-            return rows.length > 0 && rows.every(row => this.selectedPendingKeys.includes(this.pendingRowKey(row)));
+            return rows.length > 0 && rows.every(row => {
+              if (!this.selectedPendingKeys.includes(this.pendingRowKey(row))) return false;
+              if (!row.is_composite_bom) return true;
+              const selectable = this.compositeRequisitionComponents(row).filter(component => component.can_requisition);
+              return selectable.length > 0 && selectable.every(component => this.isBomSnapshotSelected(component));
+            });
           },
           allIncomingSelected() {
             const rows = this.incomingPending.filter(row => this.canReceiveIncoming(row));
@@ -5898,7 +5924,36 @@
             }
           },
           inventorySourcesText(sources) {
-            return (sources || []).map(source => `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${source.location_code || source.location_name || "库位未标注"} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? 0}`).join("；");
+            return (sources || []).map(source => {
+              if (source.source_type === "component_stock" || source.component_code || source.component_name) {
+                const component = [source.component_code, source.component_name].filter(Boolean).join(" / ") || "复合组件";
+                const location = source.location_code || source.location_name || "库位未标注";
+                const quantity = source.quantity_to_pick_component ?? source.quantity_to_pick_piece ?? source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? source.quantity ?? 0;
+                return `组件 ${component} ${location} 取货${quantity}片`;
+              }
+              return `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${source.location_code || source.location_name || "库位未标注"} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? 0}`;
+            }).join("；");
+          },
+          deliveryKitInfo(item) {
+            const kit = item?.kit_availability;
+            if (kit?.applicable) return kit;
+            if (!item?.is_composite_bom) return null;
+            return {
+              applicable:true,
+              available_sets:Number(item.available_sets ?? item.remaining_quantity ?? 0),
+              missing_components:item.missing_components || [],
+            };
+          },
+          deliveryKitSummary(item) {
+            const kit = this.deliveryKitInfo(item);
+            if (!kit) return "";
+            const missing = (kit.missing_components || []).map(component => {
+              if (typeof component === "string") return component;
+              const label = component.component_name || component.component_code || "组件";
+              const shortage = component.shortage_quantity ?? component.missing_quantity ?? component.required_quantity;
+              return shortage === undefined || shortage === null ? label : `${label}缺${shortage}片`;
+            }).filter(Boolean);
+            return `按套可发 ${Number(kit.available_sets || 0)} 套${missing.length ? `；缺件：${missing.join("、")}` : ""}`;
           },
           inventoryCandidatePayload(line, component) {
             const product = line._inventory_product || line;
@@ -6720,6 +6775,8 @@
             this.requisitionItems = items.data.items;
             const validPendingKeys = new Set(this.requisitionPending.filter(row => this.isPendingRowSelectable(row)).map(row => this.pendingRowKey(row)));
             this.selectedPendingKeys = (this.selectedPendingKeys || []).filter(key => validPendingKeys.has(key));
+            const validBomSnapshotIds = new Set(this.requisitionPending.flatMap(row => (row.component_requirements || []).filter(component => component.can_requisition).map(component => Number(component.snapshot_id))));
+            this.selectedBomSnapshotIds = (this.selectedBomSnapshotIds || []).filter(snapshotId => validBomSnapshotIds.has(Number(snapshotId)));
             this.requisitionSelected = {};
             try {
               const ms = await axios.get("/api/requisition/merge-suggestions");
@@ -7098,6 +7155,7 @@
             return row?.initial_disposition === "stock" || !!row?.stock_transfer_id;
           },
           productionDestinationLabel(row) {
+            if (row?.is_component_task) return this.productionCompletionIsStock(row) ? "组件入库存" : "组件直接齐套";
             return this.productionCompletionIsStock(row) ? "临时成品库" : "直接待送货";
           },
           productionCompletionRequestItems(rows) {
@@ -8424,9 +8482,39 @@
             const itemId = row?.order_item_id || row?.item_id || row?.id;
             return `order_item:${itemId}`;
           },
+          compositeRequisitionComponents(row) {
+            return row?.is_composite_bom && Array.isArray(row.component_requirements) ? row.component_requirements : [];
+          },
+          selectedCompositeComponents(row) {
+            const selected = new Set((this.selectedBomSnapshotIds || []).map(Number));
+            return this.compositeRequisitionComponents(row).filter(component => component.can_requisition && selected.has(Number(component.snapshot_id)));
+          },
+          isBomSnapshotSelected(component) {
+            return (this.selectedBomSnapshotIds || []).map(Number).includes(Number(component?.snapshot_id));
+          },
+          toggleBomSnapshot(row, component, checked) {
+            const snapshotId = Number(component?.snapshot_id || 0);
+            if (!snapshotId || !component?.can_requisition) return;
+            const selected = new Set((this.selectedBomSnapshotIds || []).map(Number));
+            if (checked) selected.add(snapshotId); else selected.delete(snapshotId);
+            this.selectedBomSnapshotIds = [...selected];
+            const key = this.pendingRowKey(row);
+            const rowKeys = new Set(this.selectedPendingKeys || []);
+            if (this.selectedCompositeComponents(row).length) rowKeys.add(key); else rowKeys.delete(key);
+            this.selectedPendingKeys = [...rowKeys];
+          },
+          toggleCompositeRowComponents(row, checked) {
+            const selected = new Set((this.selectedBomSnapshotIds || []).map(Number));
+            this.compositeRequisitionComponents(row).forEach(component => {
+              if (!component.can_requisition) return;
+              if (checked) selected.add(Number(component.snapshot_id)); else selected.delete(Number(component.snapshot_id));
+            });
+            this.selectedBomSnapshotIds = [...selected];
+          },
           isPendingRowSelectable(row) {
             if (!row || row.fully_covered_by_finished_inventory) return false;
             if (row.is_merge_group) return !!(row.merge_group_id || row.id);
+            if (row.is_composite_bom) return this.compositeRequisitionComponents(row).some(component => component.can_requisition);
             return !!(row.order_item_id || row.item_id || row.id);
           },
           togglePendingRow(row, checked) {
@@ -8435,6 +8523,10 @@
             if (checked && this.isPendingRowSelectable(row)) next.add(key);
             else next.delete(key);
             this.selectedPendingKeys = [...next];
+            if (row?.is_composite_bom) {
+              this.requisitionComponentExpanded[row.item_id] = checked || !!this.requisitionComponentExpanded[row.item_id];
+              this.toggleCompositeRowComponents(row, checked);
+            }
           },
           selectedPendingRows(rows = null) {
             const sourceRows = Array.isArray(rows) ? rows : this.filteredRequisitionPending;
@@ -8442,9 +8534,12 @@
             return sourceRows.filter(row => selectedKeySet.has(this.pendingRowKey(row)) && this.isPendingRowSelectable(row));
           },
           toggleAllRequisition(checked) {
-            this.selectedPendingKeys = checked
-              ? this.filteredRequisitionPending.filter(row => this.isPendingRowSelectable(row)).map(row => this.pendingRowKey(row))
-              : [];
+            const selectableRows = this.filteredRequisitionPending.filter(row => this.isPendingRowSelectable(row));
+            this.selectedPendingKeys = checked ? selectableRows.map(row => this.pendingRowKey(row)) : [];
+            const visibleSnapshotIds = selectableRows.flatMap(row => this.compositeRequisitionComponents(row).filter(component => component.can_requisition).map(component => Number(component.snapshot_id)));
+            const selected = new Set((this.selectedBomSnapshotIds || []).map(Number));
+            visibleSnapshotIds.forEach(snapshotId => checked ? selected.add(snapshotId) : selected.delete(snapshotId));
+            this.selectedBomSnapshotIds = [...selected];
           },
           // ===== 报料合并建议 =====
           openMergeSuggestions() {
@@ -10311,6 +10406,12 @@
             if (!this.canRequisition) return;
             const selectedRows = Array.isArray(rows) ? rows.filter(row => this.isPendingRowSelectable(row)) : this.selectedPendingRows();
             if (!selectedRows.length) { this.showToast("请先勾选待报料明细", true); return; }
+            const compositeRows = selectedRows.filter(row => row.is_composite_bom);
+            if (compositeRows.length) {
+              if (compositeRows.length !== selectedRows.length) { this.showToast("复合产品组件请与普通商品分开报料", true); return; }
+              await this.openCompositeRequisition(compositeRows);
+              return;
+            }
             const selections = selectedRows.map(row => this.pendingSupplierSelectionPayload(row)).filter(item => item.type === "merge_group" ? !!item.merge_group_id : !!item.order_item_id);
             if (!selections.length) { this.showToast("已勾选行缺少明细ID，请刷新后重试", true); return; }
             try {
@@ -10323,6 +10424,37 @@
             } catch (e) {
               this.showToast('生成报料草稿失败：' + (e.response?.data?.detail || e.message), true);
             }
+          },
+          async openCompositeRequisition(rows) {
+            const lines = rows.flatMap(row => this.buildRequisitionFormLines(row));
+            if (!lines.length) { this.showToast("请展开复合产品并勾选至少一个待报料组件", true); return; }
+            const suppliers = [...new Set(lines.map(line => line.snapshot_supplier_name).filter(Boolean))];
+            if (suppliers.length > 1) { this.showToast("所选组件包含多个供应商，请按供应商分开报料", true); return; }
+            if (!suppliers[0]) { this.showToast("所选组件缺少报料供应商，请先维护组件快照", true); return; }
+            if (!confirm(`确认按组件提交 ${lines.length} 条报料明细吗？`)) return;
+            try {
+              const payload = { supplier_name:suppliers[0], items:lines.map(line => this.requisitionBatchLinePayload(line)) };
+              const {data} = await axios.post("/api/requisition/batches", payload);
+              this.selectedPendingKeys = [];
+              this.selectedBomSnapshotIds = [];
+              await this.loadRequisition();
+              window.open(`/requisition-print.html?id=${data.id}`, "_blank");
+              this.showToast(`已按组件提交 ${lines.length} 条报料明细`);
+            } catch (error) { this.showToast(`组件报料失败：${this.errorMessage(error)}`, true); }
+          },
+          requisitionBatchLinePayload(line) {
+            return {
+              order_item_id:Number(line.order_item_id),
+              component_type:line.component_type || null,
+              bom_snapshot_id:line.bom_snapshot_id ? Number(line.bom_snapshot_id) : null,
+              actual_yield_per_sheet:line.actual_yield_per_sheet ? Number(line.actual_yield_per_sheet) : null,
+              inventory_deducted_qty:Number(line.inventory_deducted_qty || 0),
+              requisition_qty:Number(line.requisition_qty || 0),
+              cardboard_len:Number(line.cardboard_len),
+              cardboard_width:Number(line.cardboard_width),
+              special_process:line.special_process || "一开一",
+              remark:line.remark || null,
+            };
           },
           async openRequisition() {
             if (!this.canRequisition) return;
@@ -10375,6 +10507,38 @@
               splice_mode_label:(row.snapshot_splice_mode || "single") === "double" ? "双拼" : "单拼",
               remark:""
             };
+            if (row.is_composite_bom) {
+              return this.selectedCompositeComponents(row).map(component => ({
+                ...common,
+                is_composite_component:true,
+                bom_snapshot_id:Number(component.snapshot_id),
+                component_type:null,
+                product_code:component.product_code || "-",
+                product_name:component.product_name || "复合组件",
+                specification:component.specification || "",
+                quantity:Number(component.effective_set_quantity || row.quantity || 0),
+                production_required_qty:Number(component.effective_set_quantity || 0),
+                pieces_per_box:Number(component.quantity_per_set || 1),
+                required_piece_qty:Number(component.required_piece_quantity || 0),
+                semi_finished_reserved_piece_qty:Number(component.semi_finished_reserved_piece_qty || 0),
+                remaining_required_piece_qty:Number(component.remaining_required_piece_qty || 0),
+                requisition_qty:Number(component.requisition_qty || 0),
+                cardboard_len:Number(component.report_length_mm || row.suggested_cardboard_len || 0),
+                cardboard_width:Number(component.report_width_mm || row.suggested_cardboard_width || 0),
+                snapshot_report_length_mm:Number(component.report_length_mm || 0) || null,
+                snapshot_report_width_mm:Number(component.report_width_mm || 0) || null,
+                snapshot_supplier_name:component.supplier_name || row.snapshot_supplier_name || "",
+                material_display:[component.material, component.flute_type].filter(Boolean).join(" / "),
+                layer_count:component.layer_count || null,
+                flute_type:component.flute_type || null,
+                special_process:this.normalizeCuttingMode(component.cutting_mode),
+                cutting_mode:this.normalizeCuttingMode(component.cutting_mode),
+                is_die_cut:!!component.is_die_cut,
+                mold_max_yield_per_sheet:component.mold_max_yield_per_sheet || null,
+                actual_yield_per_sheet:component.actual_yield_per_sheet || null,
+                remark:component.remark || "",
+              }));
+            }
             const isTelescoping = row.snapshot_base_report_length_mm && row.snapshot_base_report_width_mm;
             if (!isTelescoping) {
               return [{
@@ -10485,6 +10649,9 @@
               candidate_error: false,
               search_loading: false,
               inventory_sources: [],
+              is_composite_bom: false,
+              kit_availability: null,
+              missing_components: [],
               ...overrides,
             };
           },
@@ -10565,7 +10732,10 @@
                   limit: 200,
                 },
               });
-              this.deliveryBatchPicker.items = data.items || [];
+              this.deliveryBatchPicker.items = (data.items || []).map(item => {
+                const kitSummary = this.deliveryKitSummary(item);
+                return kitSummary ? {...item, material_display:[item.material_display || item.material, kitSummary].filter(Boolean).join("｜")} : item;
+              });
               this.deliveryBatchPicker.message = this.deliveryBatchPicker.items.length
                 ? `已加载 ${this.deliveryBatchPicker.items.length} 条待送货明细`
                 : "当前客户没有可送货明细";
@@ -10672,7 +10842,8 @@
             return `${option.product_code || "-"}｜${option.product_name || "-"}｜${option.specification || "-"}｜${option.material_display || "-"}｜合计未送 ${option.total_remaining_quantity}｜明细 ${option.detail_count} 条`;
           },
           deliveryDetailOptionLabel(candidate) {
-            return `${this.displayOrderNumber(candidate)} / ${candidate.customer_po || "-"} / 未送 ${candidate.remaining_quantity || 0} / 交期 ${candidate.delivery_date || "-"}`;
+            const quantityLabel = this.deliveryKitSummary(candidate) || `未送 ${candidate.remaining_quantity || 0}`;
+            return `${this.displayOrderNumber(candidate)} / ${candidate.customer_po || "-"} / ${quantityLabel} / 交期 ${candidate.delivery_date || "-"}`;
           },
           selectDeliveryProductCandidate(line, productKey) {
             const targetKey = String(productKey || "");
@@ -10773,13 +10944,16 @@
               specification: candidate.specification || "",
               material_display: candidate.material_display || candidate.material || "",
               inventory_sources: candidate.inventory_sources || [],
+              is_composite_bom: !!candidate.is_composite_bom,
+              kit_availability: candidate.kit_availability || null,
+              missing_components: candidate.missing_components || candidate.kit_availability?.missing_components || [],
               remaining_quantity: candidate.remaining_quantity,
               delivered_quantity: candidate.remaining_quantity,
               remarks: line.remarks || "",
               product_options: [],
               selected_product_key: "",
               candidate_options: [],
-              candidate_message: "已带出待送货明细",
+              candidate_message: this.deliveryKitSummary(candidate) || "已带出待送货明细",
               candidate_error: false,
             }));
           },
@@ -11240,10 +11414,12 @@
                 if (requisitionError) throw new Error(requisitionError);
                 const payload = {
                   supplier_name:this.requisitionForm.supplier_name,
-                  items:this.requisitionForm.items.map(({customer_name,order_number,product_code,product_name,quantity,...line}) => line)
+                  items:this.requisitionForm.items.map(line => this.requisitionBatchLinePayload(line))
                 };
                 const {data} = await axios.post("/api/requisition/batches", payload);
                 this.requisitionSelected = {};
+                this.selectedPendingKeys = [];
+                this.selectedBomSnapshotIds = [];
                 await this.loadRequisition();
                 window.open(`/requisition-print.html?id=${data.id}`, "_blank");
               }

@@ -55,6 +55,7 @@ from app.services.production_workflow import (
     refresh_order_production_status,
     refresh_production_task,
 )
+from app.services.composite_bom_workflow import is_composite_order_item
 
 
 router = APIRouter()
@@ -72,7 +73,14 @@ def _refresh_production_after_material_change(
 ) -> bool:
     """Refresh N029 state and report whether this is a production-managed item."""
     try:
-        task = refresh_production_task(db, order_item.id)
+        # Composite BOM parent items do not own a single ordinary task.  Once
+        # their material receipt changes, refresh/create every snapshot task
+        # independently; ordinary and A3 items retain the existing behavior.
+        task = refresh_production_task(
+            db,
+            order_item.id,
+            create_if_missing=is_composite_order_item(db, order_item.id),
+        )
     except ProductionWorkflowError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     if task is None:

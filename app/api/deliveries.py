@@ -30,6 +30,7 @@ from app.models.delivery import (
 )
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import BomComponentDirectDeliveryAllocation
 from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
 from app.models.user import User
@@ -45,6 +46,15 @@ from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
     production_ready_quantity,
+)
+from app.services.composite_bom_workflow import (
+    CompositeBomWorkflowError,
+    component_availability,
+    effective_component_demands,
+    execute_delivery_component_consumption,
+    is_composite_order_item,
+    kit_availability,
+    reverse_delivery_component_allocations,
 )
 from app.services.semi_finished_inventory import (
     active_semi_requirement_credited_quantity,
@@ -114,6 +124,8 @@ def _received_telescoping_capacity(db: Session, order_item_id: int) -> int | Non
 
 
 def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
+    if is_composite_order_item(db, order_item.id):
+        return int(kit_availability(db, order_item.id)["available_sets"])
     task = db.scalar(
         select(ProductionTask).where(
             ProductionTask.order_item_id == order_item.id,
@@ -647,6 +659,184 @@ def _require_order_item_customer_access(
         require_customer_access(customer_id, user, db)
 
 
+def _composite_inventory_sources_for_order_item(
+    db: Session,
+    *,
+    order_item: OrderItem,
+    planned_delivery_quantity: int,
+    delivery_item_id: int | None,
+    dispatched: bool,
+) -> list[dict]:
+    """Expose N039 component pick sources without treating pieces as parent sets."""
+    demands = effective_component_demands(db, order_item.id)
+    demand_by_snapshot = {row.snapshot_id: row for row in demands}
+    if not demand_by_snapshot:
+        return []
+
+    def source_payload(
+        *,
+        demand,
+        source_type: str,
+        quantity: int,
+        reservation: InventoryReservation | None = None,
+    ) -> dict:
+        lot = db.get(InventoryLot, reservation.inventory_lot_id) if reservation else None
+        location = (
+            db.get(WarehouseLocation, lot.warehouse_location_id)
+            if lot is not None
+            else None
+        )
+        return {
+            "source_type": source_type,
+            "reservation_id": reservation.id if reservation else None,
+            "lot_id": lot.id if lot else None,
+            "lot_number": lot.lot_number if lot else None,
+            "location_id": location.id if location else None,
+            "location_code": location.location_code if location else None,
+            "location_name": location.location_name if location else None,
+            "component_type": "bom_component",
+            "component_snapshot_id": demand.snapshot_id,
+            "component_code": demand.component_code,
+            "component_name": demand.component_name,
+            "quantity_per_set": demand.quantity_per_set,
+            "quantity_to_pick_stock": quantity if reservation else 0,
+            "quantity_to_pick_requirement": quantity,
+        }
+
+    items: list[dict] = []
+    if dispatched and delivery_item_id is not None:
+        stock_allocations = db.scalars(
+            select(DeliveryInventoryAllocation)
+            .join(
+                InventoryReservation,
+                InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+            )
+            .where(
+                DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
+                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            )
+            .order_by(DeliveryInventoryAllocation.id)
+        ).all()
+        for allocation in stock_allocations:
+            reservation = db.get(InventoryReservation, allocation.reservation_id)
+            if reservation is None:
+                continue
+            demand = demand_by_snapshot.get(
+                reservation.sales_order_item_bom_component_id
+            )
+            quantity = max(
+                int(allocation.consumed_stock_quantity or 0)
+                - int(allocation.reversed_stock_quantity or 0),
+                0,
+            )
+            if demand is not None and quantity > 0:
+                items.append(
+                    source_payload(
+                        demand=demand,
+                        source_type="component_stock",
+                        quantity=quantity,
+                        reservation=reservation,
+                    )
+                )
+        direct_allocations = db.scalars(
+            select(BomComponentDirectDeliveryAllocation)
+            .where(
+                BomComponentDirectDeliveryAllocation.delivery_item_id
+                == delivery_item_id
+            )
+            .order_by(BomComponentDirectDeliveryAllocation.id)
+        ).all()
+        for allocation in direct_allocations:
+            demand = demand_by_snapshot.get(
+                allocation.sales_order_item_bom_component_id
+            )
+            quantity = max(
+                int(allocation.consumed_quantity or 0)
+                - int(allocation.reversed_quantity or 0),
+                0,
+            )
+            if demand is not None and quantity > 0:
+                items.append(
+                    source_payload(
+                        demand=demand,
+                        source_type="component_direct",
+                        quantity=quantity,
+                    )
+                )
+        return items
+
+    delivery_sets = max(int(planned_delivery_quantity or 0), 0)
+    for demand in demands:
+        required_pieces = delivery_sets * demand.quantity_per_set
+        if required_pieces <= 0:
+            continue
+        remaining = required_pieces
+        reservations = db.scalars(
+            select(InventoryReservation)
+            .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+            .where(
+                InventoryReservation.order_item_id == order_item.id,
+                InventoryReservation.sales_order_item_bom_component_id
+                == demand.snapshot_id,
+                InventoryReservation.status != "cancelled",
+                InventoryReservation.reserved_stock_quantity
+                > InventoryReservation.consumed_stock_quantity
+                + InventoryReservation.released_stock_quantity,
+            )
+            .order_by(InventoryLot.stock_date, InventoryLot.id, InventoryReservation.id)
+        ).all()
+        for reservation in reservations:
+            available = max(
+                int(reservation.reserved_stock_quantity or 0)
+                - int(reservation.consumed_stock_quantity or 0)
+                - int(reservation.released_stock_quantity or 0),
+                0,
+            )
+            picked = min(available, remaining)
+            if picked > 0:
+                items.append(
+                    source_payload(
+                        demand=demand,
+                        source_type="component_stock",
+                        quantity=picked,
+                        reservation=reservation,
+                    )
+                )
+                remaining -= picked
+            if remaining <= 0:
+                break
+        direct_quantity = min(
+            max(component_availability(db, demand.snapshot_id).direct_quantity, 0),
+            remaining,
+        )
+        if direct_quantity > 0:
+            items.append(
+                source_payload(
+                    demand=demand,
+                    source_type="component_direct",
+                    quantity=direct_quantity,
+                )
+            )
+    return items
+
+
+def _delivery_kit_metadata(db: Session, order_item: OrderItem | None) -> dict:
+    if order_item is None or not is_composite_order_item(db, order_item.id):
+        return {
+            "is_composite_bom": False,
+            "kit_availability": None,
+            "available_sets": None,
+            "missing_components": [],
+        }
+    availability = kit_availability(db, order_item.id)
+    return {
+        "is_composite_bom": True,
+        "kit_availability": availability,
+        "available_sets": int(availability.get("available_sets") or 0),
+        "missing_components": availability.get("missing_components") or [],
+    }
+
+
 def _inventory_sources_for_order_item(
     db: Session,
     *,
@@ -655,6 +845,14 @@ def _inventory_sources_for_order_item(
     delivery_item_id: int | None = None,
     dispatched: bool = False,
 ) -> list[dict]:
+    if is_composite_order_item(db, order_item.id):
+        return _composite_inventory_sources_for_order_item(
+            db,
+            order_item=order_item,
+            planned_delivery_quantity=planned_delivery_quantity,
+            delivery_item_id=delivery_item_id,
+            dispatched=dispatched,
+        )
     reservations = db.scalars(
         select(InventoryReservation)
         .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
@@ -903,6 +1101,10 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
                 )
                 if "order_id" in row._mapping
                 else row._mapping["order_number"],
+                **_delivery_kit_metadata(
+                    db,
+                    db.get(OrderItem, row._mapping["order_item_id"]),
+                ),
                 "inventory_sources": _inventory_sources_for_order_item(
                     db,
                     order_item=db.get(OrderItem, row._mapping["order_item_id"]),
@@ -1529,6 +1731,7 @@ def pending_delivery_items(
                 "remaining_quantity": remaining_quantity,
                 "order_number": display,
                 "display_order_number": display,
+                **_delivery_kit_metadata(db, order_item),
                 "inventory_sources": _inventory_sources_for_order_item(
                     db,
                     order_item=order_item,
@@ -1621,6 +1824,7 @@ def search_pending_delivery_items(
                     if material and flute_type
                     else material
                 ),
+                **_delivery_kit_metadata(db, order_item),
                 "inventory_sources": _inventory_sources_for_order_item(
                     db,
                     order_item=order_item,
@@ -1881,17 +2085,27 @@ def dispatch_delivery(
                 )
             order_id = order_item.order_id
             delivered_before = int(order_item.delivered_quantity or 0)
-            consume_delivery_item_inventory(
-                db,
-                delivery_item_id=line.id,
-                delivered_quantity_after_dispatch=(
-                    delivered_before + line.delivered_quantity
-                ),
-                operator_id=user.id,
-                operation_key=(
-                    f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
-                ),
+            operation_key = (
+                f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
+            if is_composite_order_item(db, order_item.id):
+                execute_delivery_component_consumption(
+                    db,
+                    delivery_item_id=line.id,
+                    delivery_sets=line.delivered_quantity,
+                    operator_id=user.id,
+                    operation_key=operation_key,
+                )
+            else:
+                consume_delivery_item_inventory(
+                    db,
+                    delivery_item_id=line.id,
+                    delivered_quantity_after_dispatch=(
+                        delivered_before + line.delivered_quantity
+                    ),
+                    operator_id=user.id,
+                    operation_key=operation_key,
+                )
             result = db.execute(
                 update(OrderItem)
                 .where(
@@ -1940,6 +2154,9 @@ def dispatch_delivery(
             status_code=error.status_code,
             detail=str(error),
         ) from error
+    except CompositeBomWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except Exception:
         db.rollback()
         raise
@@ -2177,15 +2394,24 @@ def cancel_delivery(
                     detail=f"订单明细{line.order_item_id}已送数量异常，无法回滚",
                 )
             delivered_after = delivered_before - line.delivered_quantity
-            reverse_delivery_item_inventory(
-                db,
-                delivery_item_id=line.id,
-                delivered_quantity_after_cancel=delivered_after,
-                operator_id=user.id,
-                operation_key=(
-                    f"c{delivery_id}-{cancelled_at:%Y%m%d%H%M%S%f}-i{line.id}"
-                ),
+            operation_key = (
+                f"c{delivery_id}-{cancelled_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
+            if is_composite_order_item(db, order_item.id):
+                reverse_delivery_component_allocations(
+                    db,
+                    delivery_item_id=line.id,
+                    operator_id=user.id,
+                    operation_key=operation_key,
+                )
+            else:
+                reverse_delivery_item_inventory(
+                    db,
+                    delivery_item_id=line.id,
+                    delivered_quantity_after_cancel=delivered_after,
+                    operator_id=user.id,
+                    operation_key=operation_key,
+                )
             result = db.execute(
                 update(OrderItem)
                 .where(
@@ -2233,6 +2459,9 @@ def cancel_delivery(
             status_code=error.status_code,
             detail=str(error),
         ) from error
+    except CompositeBomWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except Exception:
         db.rollback()
         raise

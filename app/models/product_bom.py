@@ -36,7 +36,7 @@ class ProductBomComponent(Base):
             name="ck_product_bom_components_distinct_products",
         ),
         CheckConstraint(
-            "quantity_per_set > 0",
+            "quantity_per_set > 0 AND quantity_per_set = round(quantity_per_set, 0)",
             name="ck_product_bom_components_quantity_per_set",
         ),
         CheckConstraint(
@@ -151,7 +151,7 @@ class SalesOrderItemBomComponent(Base):
     __tablename__ = "sales_order_item_bom_components"
     __table_args__ = (
         CheckConstraint(
-            "quantity_per_set > 0",
+            "quantity_per_set > 0 AND quantity_per_set = round(quantity_per_set, 0)",
             name="ck_sales_order_item_bom_components_quantity_per_set",
         ),
         CheckConstraint(
@@ -231,6 +231,16 @@ class SalesOrderItemBomComponent(Base):
     )
     component_product_id: Mapped[int] = mapped_column(
         ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    parent_product_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    component_product_version: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    snapshot_schema_version: Mapped[int] = mapped_column(
+        Integer,
+        default=2,
         nullable=False,
     )
     order_set_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -382,7 +392,7 @@ class RequisitionItemBomSource(Base):
             name="ck_requisition_item_bom_sources_order_set_quantity",
         ),
         CheckConstraint(
-            "quantity_per_set > 0",
+            "quantity_per_set > 0 AND quantity_per_set = round(quantity_per_set, 0)",
             name="ck_requisition_item_bom_sources_quantity_per_set",
         ),
         CheckConstraint(
@@ -470,6 +480,11 @@ class RequisitionItemBomSource(Base):
         nullable=False,
     )
     direction_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    calculation_rule_version: Mapped[str] = mapped_column(
+        String(80),
+        default="n039-v1",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),
@@ -477,6 +492,147 @@ class RequisitionItemBomSource(Base):
     )
 
     requisition_item: Mapped["RequisitionItem"] = relationship()
+    sales_order_item_bom_component: Mapped["SalesOrderItemBomComponent"] = (
+        relationship()
+    )
+
+
+class SalesOrderItemBomDemandAdjustment(Base):
+    """Append-only quantity adjustment for one immutable BOM component snapshot."""
+
+    __tablename__ = "sales_order_item_bom_demand_adjustments"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(event_type)) > 0",
+            name="ck_sales_order_item_bom_demand_adjustments_event_type",
+        ),
+        CheckConstraint(
+            "delta_order_set_quantity <> 0 OR delta_required_piece_quantity <> 0",
+            name="ck_sales_order_item_bom_demand_adjustments_not_noop",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) > 0",
+            name="ck_sales_order_item_bom_demand_adjustments_reason",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_sales_order_item_bom_demand_adjustments_idempotency",
+        ),
+        Index(
+            "ix_sales_order_item_bom_demand_adjustments_snapshot_created",
+            "sales_order_item_bom_component_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sales_order_item_bom_component_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    delta_order_set_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    delta_required_piece_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4),
+        nullable=False,
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+
+    sales_order_item_bom_component: Mapped["SalesOrderItemBomComponent"] = (
+        relationship()
+    )
+
+
+class BomComponentDirectDeliveryAllocation(Base):
+    """Tracks direct-kit completion consumption and cancellation reversal per delivery."""
+
+    __tablename__ = "bom_component_direct_delivery_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            "consumed_quantity > 0",
+            name="ck_bom_component_direct_delivery_allocations_consumed_quantity",
+        ),
+        CheckConstraint(
+            "reversed_quantity >= 0 AND reversed_quantity <= consumed_quantity",
+            name="ck_bom_component_direct_delivery_allocations_reversed_quantity",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'partial', 'reversed')",
+            name="ck_bom_component_direct_delivery_allocations_status",
+        ),
+        CheckConstraint(
+            "((status = 'active' AND reversed_quantity = 0) OR "
+            "(status = 'partial' AND reversed_quantity > 0 "
+            "AND reversed_quantity < consumed_quantity) OR "
+            "(status = 'reversed' AND reversed_quantity = consumed_quantity))",
+            name="ck_bom_component_direct_delivery_allocations_status_quantity",
+        ),
+        UniqueConstraint(
+            "delivery_item_id",
+            "production_completion_id",
+            name="uq_bom_component_direct_delivery_allocations_delivery_completion",
+        ),
+        Index(
+            "ix_bom_component_direct_delivery_allocations_snapshot_status",
+            "sales_order_item_bom_component_id",
+            "status",
+        ),
+        Index(
+            "ix_bom_component_direct_delivery_allocations_completion_status",
+            "production_completion_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    delivery_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_delivery_items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    production_completion_id: Mapped[int] = mapped_column(
+        ForeignKey("production_completions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sales_order_item_bom_component_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    consumed_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reversed_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="active",
+        nullable=False,
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reversed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     sales_order_item_bom_component: Mapped["SalesOrderItemBomComponent"] = (
         relationship()
     )

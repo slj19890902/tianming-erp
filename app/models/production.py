@@ -6,11 +6,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,7 +22,20 @@ from app.models import Base
 class ProductionTask(Base):
     __tablename__ = "production_tasks"
     __table_args__ = (
-        UniqueConstraint("order_item_id", name="uq_production_tasks_order_item"),
+        Index(
+            "uq_production_tasks_regular_order_item",
+            "order_item_id",
+            unique=True,
+            sqlite_where=text("sales_order_item_bom_component_id IS NULL"),
+            postgresql_where=text("sales_order_item_bom_component_id IS NULL"),
+        ),
+        Index(
+            "uq_production_tasks_bom_component",
+            "sales_order_item_bom_component_id",
+            unique=True,
+            sqlite_where=text("sales_order_item_bom_component_id IS NOT NULL"),
+            postgresql_where=text("sales_order_item_bom_component_id IS NOT NULL"),
+        ),
         CheckConstraint(
             "status IN ('waiting_material','pending','completed','not_required')",
             name="ck_production_tasks_status",
@@ -44,6 +59,10 @@ class ProductionTask(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     order_item_id: Mapped[int] = mapped_column(
         ForeignKey("sales_order_items.id", ondelete="CASCADE"), nullable=False
+    )
+    sales_order_item_bom_component_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="SET NULL"),
+        nullable=True,
     )
     status: Mapped[str] = mapped_column(
         String(30), default="waiting_material", server_default="waiting_material", nullable=False
@@ -98,9 +117,7 @@ class ProductionCompletionBatch(Base):
 class ProductionCompletion(Base):
     __tablename__ = "production_completions"
     __table_args__ = (
-        UniqueConstraint(
-            "order_item_id", name="uq_production_completions_order_item"
-        ),
+        Index("uq_production_completions_task", "task_id", unique=True),
         UniqueConstraint(
             "inventory_lot_id", name="uq_production_completions_inventory_lot"
         ),

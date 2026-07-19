@@ -22,7 +22,12 @@ from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naiv
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
-from app.models.delivery import Delivery, DeliveryItem
+from app.models.delivery import (
+    Delivery,
+    DeliveryItem,
+    DeliveryPickTask,
+    DeliveryPickTaskItem,
+)
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionTask
@@ -55,8 +60,11 @@ from app.services.warehouse_inventory import (
 
 router = APIRouter()
 order_actions_router = APIRouter()
+pick_router = APIRouter()
 can_read = PermissionChecker("deliveries.view")
 can_operate = PermissionChecker("deliveries.execute")
+can_pick = PermissionChecker("deliveries.pick")
+PICK_TASK_STATUSES = {"pushed", "driver_confirmed", "exception", "applied", "dispatched"}
 
 
 def _utc_now() -> datetime:
@@ -252,6 +260,95 @@ class DeliveryUpdate(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("同一订单明细不能重复选择")
         return value
+
+
+class DeliveryPickItemUpdate(BaseModel):
+    pick_status: str
+    picked_quantity: int | None = None
+
+    @field_validator("pick_status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"picked", "partial", "no_stock"}:
+            raise ValueError("拿货状态必须是 picked、partial 或 no_stock")
+        return normalized
+
+
+def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
+    return {
+        "id": item.id,
+        "delivery_item_id": item.delivery_item_id,
+        "order_item_id": item.order_item_id,
+        "original_quantity": item.original_quantity,
+        "planned_quantity": item.original_quantity,
+        "picked_quantity": item.picked_quantity,
+        "status": item.status,
+        "pick_status": item.status,
+        "product_code": item.product_code_snapshot,
+        "product_name": item.product_name_snapshot,
+        "specification": item.specification_snapshot,
+        "updated_at": utc_naive_to_api(item.updated_at) if item.updated_at else None,
+    }
+
+
+def _pick_task_response(task: DeliveryPickTask) -> dict:
+    exception_items = [
+        {
+            **_pick_item_response(item),
+            "customer_name": task.customer.name if task.customer else None,
+        }
+        for item in task.items
+        if item.status in {"partial", "no_stock"}
+        or int(item.picked_quantity) > int(item.original_quantity)
+    ]
+    return {
+        "id": task.id,
+        "delivery_id": task.delivery_id,
+        "customer_id": task.customer_id,
+        "customer_name": task.customer.name if task.customer else None,
+        "delivery_number": task.delivery.delivery_number if task.delivery else None,
+        "status": task.status,
+        "has_exception": bool(exception_items) or task.status == "exception",
+        "exceptions": exception_items,
+        "snapshot_version": task.snapshot_version,
+        "created_at": utc_naive_to_api(task.created_at) if task.created_at else None,
+        "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
+        "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
+        "dispatched_at": utc_naive_to_api(task.dispatched_at) if task.dispatched_at else None,
+        "items": [_pick_item_response(item) for item in task.items],
+    }
+
+
+def _delivery_pick_task(db: Session, delivery_id: int) -> DeliveryPickTask | None:
+    return db.scalar(
+        select(DeliveryPickTask)
+        .where(DeliveryPickTask.delivery_id == delivery_id)
+        .order_by(DeliveryPickTask.id.desc())
+    )
+
+
+def _discard_delivery_pick_task(
+    db: Session,
+    *,
+    delivery_id: int,
+    user: User,
+    reason: str,
+) -> None:
+    task = _delivery_pick_task(db, delivery_id)
+    if task is None:
+        return
+    _write_audit(
+        db,
+        user=user,
+        action="PICK_TASK_INVALIDATED",
+        resource="DeliveryPickTask",
+        entity_id=task.id,
+        details={"delivery_id": delivery_id, "reason": reason},
+        description="送货草稿变更，已作废旧拿货快照",
+    )
+    db.delete(task)
+    db.flush()
 
 
 class ForceCloseRequest(BaseModel):
@@ -762,6 +859,11 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
     orders = {
         order.id: order for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
     } if order_ids else {}
+    pick_task = _delivery_pick_task(db, delivery_id)
+    pick_by_delivery_item = {
+        item.delivery_item_id: _pick_item_response(item)
+        for item in (pick_task.items if pick_task else [])
+    }
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -785,6 +887,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
+        "pick_task": _pick_task_response(pick_task) if pick_task else None,
         "items": [
             {
                 **dict(row._mapping),
@@ -807,6 +910,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
                     delivery_item_id=row._mapping["id"],
                     dispatched=delivery.status == "dispatched",
                 ),
+                "pick_result": pick_by_delivery_item.get(row._mapping["id"]),
             }
             for row in items
         ],
@@ -836,6 +940,301 @@ def _write_audit(
             description=description,
         )
     )
+
+
+def _build_pick_task(
+    db: Session,
+    *,
+    delivery: Delivery,
+    user: User,
+) -> DeliveryPickTask:
+    if delivery.status != "pending":
+        raise HTTPException(status_code=409, detail="已发货送货单不能创建拿货任务")
+    previous = _delivery_pick_task(db, delivery.id)
+    if previous is not None:
+        # The normal button is idempotent.  Editing the delivery explicitly
+        # invalidates the task; a repeated click must never erase driver input.
+        return previous
+    lines = db.scalars(
+        select(DeliveryItem)
+        .where(DeliveryItem.delivery_id == delivery.id)
+        .order_by(DeliveryItem.id)
+    ).all()
+    if not lines:
+        raise HTTPException(status_code=409, detail="送货单没有可拿货明细")
+    task = DeliveryPickTask(
+        delivery_id=delivery.id,
+        customer_id=delivery.customer_id,
+        status="pushed",
+        snapshot_version=1,
+        created_by=user.id,
+    )
+    db.add(task)
+    db.flush()
+    for line in lines:
+        order_item = db.get(OrderItem, line.order_item_id)
+        product = db.get(Product, order_item.product_id) if order_item else None
+        db.add(
+            DeliveryPickTaskItem(
+                task_id=task.id,
+                delivery_item_id=line.id,
+                order_item_id=line.order_item_id,
+                original_quantity=int(line.delivered_quantity),
+                picked_quantity=0,
+                status="pending",
+                product_code_snapshot=product.product_code if product else None,
+                product_name_snapshot=(
+                    order_item.snapshot_product_name if order_item else None
+                ),
+                specification_snapshot=(order_item.snapshot_spec if order_item else None),
+            )
+        )
+    db.flush()
+    _write_audit(
+        db,
+        user=user,
+        action="CREATE_PICK_TASK",
+        resource="DeliveryPickTask",
+        entity_id=task.id,
+        details={
+            "delivery_id": delivery.id,
+            "delivery_number": delivery.delivery_number,
+            "snapshot_version": task.snapshot_version,
+            "item_count": len(lines),
+        },
+        description="创建送货拿货任务快照",
+    )
+    return task
+
+
+def _pick_task_for_user(
+    db: Session,
+    task_id: int,
+    user: User,
+) -> DeliveryPickTask:
+    task = db.get(DeliveryPickTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="拿货任务不存在")
+    require_customer_access(task.customer_id, user, db)
+    return task
+
+
+@router.post("/{delivery_id}/pick-task", status_code=status.HTTP_201_CREATED)
+def create_or_rebuild_delivery_pick_task(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    delivery = _delivery_for_user(db, delivery_id, user)
+    try:
+        task = _build_pick_task(db, delivery=delivery, user=user)
+        db.commit()
+        return _pick_task_response(task)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@pick_router.get("")
+def list_delivery_pick_tasks(
+    status_filter: str | None = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_pick),
+) -> dict:
+    query = select(DeliveryPickTask).order_by(DeliveryPickTask.id.desc())
+    visible = _visible_customer_ids(user, db)
+    if visible is not None:
+        query = query.where(DeliveryPickTask.customer_id.in_(visible))
+    if status_filter:
+        normalized_status = status_filter.strip().lower()
+        if normalized_status not in PICK_TASK_STATUSES:
+            raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
+        query = query.where(DeliveryPickTask.status == normalized_status)
+    tasks = db.scalars(query).all()
+    return {"items": [_pick_task_response(task) for task in tasks]}
+
+
+@pick_router.get("/{task_id}")
+def get_delivery_pick_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_pick),
+) -> dict:
+    return _pick_task_response(_pick_task_for_user(db, task_id, user))
+
+
+@pick_router.put("/{task_id}/items/{item_id}")
+def update_delivery_pick_task_item(
+    task_id: int,
+    item_id: int,
+    payload: DeliveryPickItemUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_pick),
+) -> dict:
+    task = _pick_task_for_user(db, task_id, user)
+    if task.status not in {"pushed", "driver_confirmed", "exception"}:
+        raise HTTPException(status_code=409, detail="当前拿货任务不能再更新")
+    item = db.scalar(
+        select(DeliveryPickTaskItem).where(
+            DeliveryPickTaskItem.id == item_id,
+            DeliveryPickTaskItem.task_id == task.id,
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="拿货任务明细不存在")
+    original = int(item.original_quantity)
+    requested = payload.picked_quantity
+    if payload.pick_status == "picked":
+        quantity = original if requested is None else int(requested)
+        if quantity < original:
+            raise HTTPException(status_code=400, detail="完整拿货数量不能小于原送货数量")
+    elif payload.pick_status == "partial":
+        if requested is None or not 0 < int(requested) < original:
+            raise HTTPException(status_code=400, detail="部分拿货数量必须大于0且小于原送货数量")
+        quantity = int(requested)
+    else:
+        if requested not in {None, 0}:
+            raise HTTPException(status_code=400, detail="无货状态的拿货数量必须为0")
+        quantity = 0
+    item.status = payload.pick_status
+    item.picked_quantity = quantity
+    if task.status in {"driver_confirmed", "exception"}:
+        task.status = "pushed"
+        task.submitted_at = None
+        task.submitted_by = None
+    _write_audit(
+        db,
+        user=user,
+        action="UPDATE_PICK_ITEM",
+        resource="DeliveryPickTaskItem",
+        entity_id=item.id,
+        details={"task_id": task.id, "status": item.status, "picked_quantity": quantity},
+        description="更新送货拿货结果",
+    )
+    db.commit()
+    return {"task": _pick_task_response(task), "item": _pick_item_response(item)}
+
+
+@pick_router.post("/{task_id}/submit")
+def submit_delivery_pick_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_pick),
+) -> dict:
+    task = _pick_task_for_user(db, task_id, user)
+    if task.status not in {"pushed", "driver_confirmed", "exception"}:
+        raise HTTPException(status_code=409, detail="当前拿货任务不能提交")
+    if any(item.status == "pending" for item in task.items):
+        raise HTTPException(status_code=400, detail="仍有未处理的拿货明细")
+    has_exception = any(
+        item.status in {"partial", "no_stock"}
+        or int(item.picked_quantity) > int(item.original_quantity)
+        for item in task.items
+    )
+    task.status = "exception" if has_exception else "driver_confirmed"
+    task.submitted_by = user.id
+    task.submitted_at = _utc_now()
+    _write_audit(
+        db,
+        user=user,
+        action="SUBMIT_PICK_TASK",
+        resource="DeliveryPickTask",
+        entity_id=task.id,
+        details={"delivery_id": task.delivery_id, "status": task.status},
+        description="司机提交送货拿货结果",
+    )
+    db.commit()
+    return _pick_task_response(task)
+
+
+@pick_router.post("/{task_id}/apply")
+def apply_delivery_pick_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    task = _pick_task_for_user(db, task_id, user)
+    if task.status not in {"driver_confirmed", "exception"}:
+        raise HTTPException(status_code=409, detail="请先由司机提交拿货结果")
+    delivery = _delivery_for_user(db, task.delivery_id, user)
+    if delivery.status != "pending":
+        raise HTTPException(status_code=409, detail="已发货送货单不能应用拿货结果")
+    try:
+        # Acquire the same delivery-row write claim used by dispatch without
+        # changing business state.  This serializes apply vs dispatch: if
+        # dispatch wins first, rowcount is zero; if apply wins, dispatch waits
+        # and then reads the adjusted draft quantities.
+        claimed = db.execute(
+            update(Delivery)
+            .where(Delivery.id == delivery.id, Delivery.status == "pending")
+            .values(total_quantity=Delivery.total_quantity)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="送货单状态已变化，请刷新后重试")
+        applied_changes: list[dict] = []
+        for item in list(task.items):
+            delivery_item = db.get(DeliveryItem, item.delivery_item_id)
+            if (
+                delivery_item is None
+                or delivery_item.delivery_id != delivery.id
+                or delivery_item.order_item_id != item.order_item_id
+                or int(delivery_item.delivered_quantity) != int(item.original_quantity)
+            ):
+                raise HTTPException(status_code=409, detail="送货草稿已变更，请重新创建拿货任务")
+            applied_changes.append(
+                {
+                    "task_item_id": item.id,
+                    "delivery_item_id": item.delivery_item_id,
+                    "order_item_id": item.order_item_id,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "original_quantity": int(item.original_quantity),
+                    "picked_quantity": int(item.picked_quantity),
+                    "pick_status": item.status,
+                }
+            )
+            if int(item.picked_quantity) <= 0:
+                db.delete(delivery_item)
+            else:
+                delivery_item.delivered_quantity = int(item.picked_quantity)
+        db.flush()
+        delivery.total_quantity = int(
+            db.scalar(
+                select(func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0)).where(
+                    DeliveryItem.delivery_id == delivery.id
+                )
+            )
+            or 0
+        )
+        task.status = "applied"
+        task.applied_by = user.id
+        task.applied_at = _utc_now()
+        _write_audit(
+            db,
+            user=user,
+            action="APPLY_PICK_TASK",
+            resource="DeliveryPickTask",
+            entity_id=task.id,
+            details={
+                "delivery_id": delivery.id,
+                "total_quantity": delivery.total_quantity,
+                "item_count": len(task.items),
+                "items": applied_changes,
+            },
+            description="应用送货拿货结果到本次送货明细",
+        )
+        db.commit()
+        return _delivery_response(db, delivery.id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _refresh_order_status(db: Session, order_id: int) -> None:
@@ -1347,6 +1746,12 @@ def dispatch_delivery(
     _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
     try:
+        pick_task = _delivery_pick_task(db, delivery_id)
+        if pick_task and pick_task.status == "exception":
+            raise HTTPException(
+                status_code=409,
+                detail="拿货任务存在异常，请先在电脑端应用拿货结果后再发货",
+            )
         order_ids = list(
             db.scalars(
                 select(OrderItem.order_id)
@@ -1390,6 +1795,11 @@ def dispatch_delivery(
             .where(DeliveryItem.delivery_id == delivery_id)
             .order_by(DeliveryItem.id)
         ).all()
+        if not lines:
+            raise HTTPException(
+                status_code=409,
+                detail="本次送货单已无可发货明细，请删除送货草稿或重新编辑",
+            )
         current_order_ids = set(
             db.scalars(
                 select(OrderItem.order_id)
@@ -1504,6 +1914,9 @@ def dispatch_delivery(
                 affected_order_ids.add(order_id)
         for order_id in affected_order_ids:
             _refresh_order_status(db, order_id)
+        if pick_task is not None:
+            pick_task.status = "dispatched"
+            pick_task.dispatched_at = dispatched_at
         _write_audit(
             db,
             user=user,
@@ -1562,6 +1975,12 @@ def update_delivery(
                 detail="送货单已确认发货，不能编辑，请先取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        _discard_delivery_pick_task(
+            db,
+            delivery_id=delivery_id,
+            user=user,
+            reason="delivery_draft_updated",
+        )
         built, total_quantity, warnings = _collect_delivery_lines(
             db,
             customer_id=delivery.customer_id,
@@ -1642,6 +2061,12 @@ def delete_delivery(
                 detail="已确认发货的送货单不能删除，请改用取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        _discard_delivery_pick_task(
+            db,
+            delivery_id=delivery_id,
+            user=user,
+            reason="送货草稿被删除",
+        )
         _write_audit(
             db,
             user=user,
@@ -1778,6 +2203,12 @@ def cancel_delivery(
                 affected_order_ids.add(order_id)
         for order_id in affected_order_ids:
             _refresh_order_status(db, order_id)
+        _discard_delivery_pick_task(
+            db,
+            delivery_id=delivery_id,
+            user=user,
+            reason="delivery_dispatch_cancelled",
+        )
         _write_audit(
             db,
             user=user,

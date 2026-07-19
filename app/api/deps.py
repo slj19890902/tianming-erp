@@ -48,6 +48,7 @@ PERMISSION_CATALOG = frozenset(
         "warehouse.stocktake.review",
         "deliveries.view",
         "deliveries.execute",
+        "deliveries.pick",
         "finance.view",
         "finance.execute",
         "cost.view",
@@ -119,7 +120,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "deliveries.view",
         }
     ),
-    "delivery_picker": frozenset({"orders.view"}),
+    "delivery_picker": frozenset({"orders.view", "deliveries.pick"}),
 }
 
 

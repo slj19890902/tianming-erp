@@ -168,6 +168,9 @@ class OrderItem(Base):
     )
     snapshot_spec: Mapped[str | None] = mapped_column(String(150), nullable=True)
     snapshot_material: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    snapshot_original_material_code: Mapped[str | None] = mapped_column(
+        String(250), nullable=True
+    )
     snapshot_customer_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     snapshot_production_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     inventory_deducted_qty: Mapped[int] = mapped_column(

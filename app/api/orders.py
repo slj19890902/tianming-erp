@@ -1295,6 +1295,7 @@ def _order_response(
                 "snapshot_product_name": item.snapshot_product_name,
                 "snapshot_spec": item.snapshot_spec,
                 "snapshot_material": item.snapshot_material,
+                "snapshot_original_material_code": item.snapshot_original_material_code,
                 "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
                 "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
                 "display_material": _display_material(item.snapshot_material),
@@ -3343,6 +3344,14 @@ def create_order(
             ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
+            initial_material_code = (
+                (item_payload.material or "").strip()
+                or (
+                    selected_material.code
+                    if selected_material is not None
+                    else product.legacy_material_text
+                )
+            )
             item = OrderItem(
                 order_id=order.id,
                 product_id=product.id,
@@ -3364,14 +3373,8 @@ def create_order(
                 snapshot_spec=(
                     (item_payload.specification or "").strip() or _snapshot_spec(product)
                 ),
-                snapshot_material=(
-                    (item_payload.material or "").strip()
-                    or (
-                        selected_material.code
-                        if selected_material is not None
-                        else product.legacy_material_text
-                    )
-                ),
+                snapshot_material=initial_material_code,
+                snapshot_original_material_code=initial_material_code,
                 snapshot_customer_model=(
                     (item_payload.customer_model or "").strip() or None
                 ),  # v0.19.1: TH型号 / 客户型号
@@ -4101,6 +4104,7 @@ def update_order_item(
         "snapshot_product_code": item.snapshot_product_code,
         "snapshot_product_name": item.snapshot_product_name,
         "snapshot_material": item.snapshot_material,
+        "snapshot_original_material_code": item.snapshot_original_material_code,
         "snapshot_spec": item.snapshot_spec,
         "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
         "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A

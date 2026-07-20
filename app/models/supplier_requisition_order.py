@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Date,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -57,6 +58,17 @@ class SupplierRequisitionOrder(Base):
 
 class SupplierRequisitionOrderItem(Base):
     __tablename__ = "supplier_requisition_order_items"
+    __table_args__ = (
+        Index(
+            "ix_supplier_requisition_order_items_product_created",
+            "product_id",
+            "supplier_order_id",
+        ),
+        Index(
+            "ix_supplier_requisition_order_items_material_id",
+            "material_id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     supplier_order_id: Mapped[int] = mapped_column(
@@ -65,6 +77,20 @@ class SupplierRequisitionOrderItem(Base):
     order_item_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sales_order_items.id", ondelete="SET NULL"), nullable=True
     )
+    product_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    material_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("materials.id", ondelete="SET NULL"), nullable=True
+    )
+    material_code_snapshot: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    supplier_name_snapshot: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    layer_count_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    flute_type_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
     order_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     product_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     product_name: Mapped[str | None] = mapped_column(String(200), nullable=True)

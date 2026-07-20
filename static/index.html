@@ -580,9 +580,59 @@
       .product-crease-type-field { grid-column: span 1; }
       .product-crease-field { grid-column: span 3; min-width: 0; }
       .product-crease-warning { grid-column: 1 / -1; }
-      .product-material-row {
-        grid-template-columns: minmax(130px, .7fr) minmax(90px, .45fr) minmax(110px, .55fr) minmax(360px, 2fr);
+      .product-material-workbench {
+        display: grid;
+        grid-template-columns: minmax(420px, 1.15fr) minmax(240px, .55fr) minmax(360px, .95fr);
+        gap: 12px;
+        margin: 0 0 10px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #ededf0;
+        align-items: stretch;
       }
+      .product-material-controls {
+        display: grid;
+        grid-template-columns: minmax(140px, 1fr) minmax(90px, .55fr) minmax(110px, .65fr);
+        gap: 10px 12px;
+        align-content: start;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #d7e8fb;
+        border-radius: 10px;
+        background: #fff;
+      }
+      .product-material-picker { grid-column: 1 / -1; }
+      .product-material-context-panel {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #d7e8fb;
+        border-radius: 10px;
+        background: #f8fbff;
+      }
+      .product-material-context-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .product-material-context-head strong { color: #075985; font-size: 13px; }
+      .product-material-context-list { display: grid; gap: 6px; max-height: 210px; overflow-y: auto; }
+      .product-material-candidate-row,
+      .product-material-history-row {
+        display: grid;
+        gap: 4px 8px;
+        align-items: center;
+        padding: 7px 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        font-size: 12px;
+      }
+      .product-material-candidate-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .product-material-history-row { grid-template-columns: 88px minmax(0, 1fr) minmax(100px, .75fr); }
+      .product-material-context-main { min-width: 0; font-weight: 700; color: #334155; overflow-wrap: anywhere; }
+      .product-material-context-meta { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+      .product-material-history-qty { color: #075985; font-weight: 700; white-space: nowrap; }
       .product-print-row {
         grid-template-columns: minmax(310px, 1.25fr) minmax(180px, .7fr) minmax(250px, 1fr) minmax(330px, 1.35fr);
       }
@@ -722,9 +772,12 @@
         white-space: nowrap;
         color: var(--text);
       }
+      @media (max-width: 1250px) {
+        .product-material-workbench { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); }
+        .product-material-controls { grid-column: 1 / -1; }
+      }
       @media (max-width: 1100px) {
         .product-core-row,
-        .product-material-row,
         .product-print-row,
         .product-final-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .product-size-report-row { grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -739,10 +792,14 @@
       @media (max-width: 680px) {
         .product-core-row,
         .product-size-report-row,
-        .product-material-row,
         .product-print-row,
         .product-final-row { grid-template-columns: 1fr; }
         .product-size-report-row > .field { grid-column: 1 / -1; }
+        .product-material-workbench,
+        .product-material-controls { grid-template-columns: 1fr; }
+        .product-material-controls { grid-column: auto; }
+        .product-material-picker { grid-column: auto; }
+        .product-material-history-row { grid-template-columns: 1fr; }
       }
 
       /* Toast */
@@ -846,6 +903,15 @@
       .tianhua-row-not_matched { background: #f1f5f9 !important; color: #64748b; }
       .tianhua-row-ocr_failed { background: #fee2e2 !important; color: #991b1b; }
       .requisition-selected { background: #f0f5ff; }
+      .material-candidate-section { grid-column: 1 / -1; border: 1px solid #bfdbfe; border-radius: 10px; background: #f8fbff; padding: 10px; }
+      .material-candidate-heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 8px; }
+      .material-candidate-list { display: grid; gap: 8px; }
+      .material-candidate-card { width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; padding: 9px 10px; text-align: left; cursor: pointer; }
+      .material-candidate-card:hover { border-color: var(--primary); background: #eff6ff; }
+      .material-candidate-card.selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+      .material-candidate-card strong { color: #1d4ed8; }
+      .material-candidate-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--muted); }
+      .material-candidate-reason { margin-top: 5px; font-size: 12px; color: #475569; white-space: normal; }
 
       /* Remember line */
       .remember-line { display:flex; align-items:center; gap:7px; margin:8px 0 16px; color:var(--text-secondary); }
@@ -1218,6 +1284,34 @@
                   <td>{{ row.quote_date || "-" }}</td>
                   <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" @click="deleteMaterial(row)">删除</button></td>
                 </tr></tbody></table>
+              </data-panel>
+              <data-panel v-else-if="productTab === 'materialCandidates'" :empty="false">
+                <div class="toolbar">
+                  <div class="toolbar-group">
+                    <select class="select" style="min-width:220px" v-model.number="materialCandidateFilter.customer_id" @change="loadMaterialCandidates">
+                      <option :value="null">全部客户</option>
+                      <option v-for="customer in customerOptions" :key="customer.id" :value="customer.id">{{ customer.name }}</option>
+                    </select>
+                    <input class="input" style="min-width:220px" v-model.trim="materialCandidateFilter.q" placeholder="原始材质代码 / 材质代码" @keyup.enter="loadMaterialCandidates" />
+                    <label><input type="checkbox" v-model="materialCandidateFilter.include_inactive" @change="loadMaterialCandidates" /> 显示已停用</label>
+                    <button class="btn" :disabled="materialCandidateLoading" @click="loadMaterialCandidates">查询</button>
+                  </div>
+                  <button class="btn success" @click="openMaterialCandidate()">新增候选</button>
+                </div>
+                <div v-if="materialCandidateLoading" class="empty">正在加载客户材质候选…</div>
+                <div v-else-if="!materialCandidateItems.length" class="empty">暂无符合条件的客户材质候选</div>
+                <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>原始材质代码</th><th>实际材质</th><th>优先级</th><th>状态</th><th>来源</th><th>备注</th><th>操作</th></tr></thead><tbody>
+                  <tr v-for="row in materialCandidateItems" :key="requisitionCandidateId(row)">
+                    <td>{{ row.customer_name || customerName(row.customer_id) }}</td>
+                    <td><strong>{{ row.original_material_code || '-' }}</strong></td>
+                    <td>{{ materialCandidateMaterialLabel(row) }}</td>
+                    <td>{{ row.manual_priority || 0 }}</td>
+                    <td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
+                    <td>{{ row.source || 'manual' }}</td>
+                    <td style="max-width:240px;white-space:normal">{{ row.notes || '-' }}</td>
+                    <td><button class="btn small" @click="openMaterialCandidate(row)">编辑</button></td>
+                  </tr>
+                </tbody></table></div>
               </data-panel>
 
               <!-- 比价弹窗 -->
@@ -2419,7 +2513,8 @@
                 <div v-if="productCreaseMismatch" class="field wide product-crease-warning status orange" style="display:block">{{ productCreaseMismatch }}</div>
               </div>
 
-              <div class="product-form-row product-material-row">
+              <div class="product-material-workbench">
+                <div class="product-material-controls">
                 <div class="field"><label>材质供应商</label>
                   <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
                     <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ opt }}</option>
@@ -2437,13 +2532,70 @@
                   </select>
                   <div v-if="productFluteLayerError" style="color:#dc2626;font-size:12px;margin-top:4px">{{ productFluteLayerError }}</div>
                 </div>
-                <div class="field"><label>材质（代码｜供应商｜克重｜报价）</label>
+                <div class="field product-material-picker"><label>材质（代码｜供应商｜克重｜报价）</label>
                   <search-select v-model="productForm.material_id"
                     :options="materialSelectOptions(productForm._material_supplier, productForm.layer_count, productForm.flute_type)"
                     label-key="_label" value-key="id" :allow-empty="true"
                     placeholder="输入代码/供应商/克重/报价搜索"></search-select>
                   <div v-if="!isWorkshop && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
+                </div>
+
+                <section class="product-material-context-panel">
+                  <div class="product-material-context-head">
+                    <div>
+                      <strong>这款常用箱的候选材质</strong>
+                      <div class="muted" style="font-size:11px;margin-top:2px">点击“采用”只回填当前表单，仍需保存常用箱。</div>
+                    </div>
+                    <span v-if="productMaterialContext.loading" class="muted">加载中…</span>
+                  </div>
+                  <div v-if="!productForm.id" class="muted">保存常用箱后，系统会按客户、当前材质、层数和楞型显示候选。</div>
+                  <div v-else-if="productMaterialContext.error" class="notice error">{{ productMaterialContext.error }}</div>
+                  <div v-else-if="!productMaterialContext.candidates.length" class="muted">暂无适合这款常用箱的候选材质。</div>
+                  <div v-else class="product-material-context-list">
+                    <div v-for="candidate in productMaterialContext.candidates" :key="candidate.candidate_id || candidate.id" class="product-material-candidate-row">
+                      <div>
+                        <div class="product-material-context-main">
+                          {{ candidate.material_code || candidate.actual_material_code || "-" }} / {{ candidate.supplier_name || "未设置供应商" }}
+                          <span v-if="candidate.recommended" class="status green" style="margin-left:4px">推荐</span>
+                        </div>
+                        <div class="product-material-context-meta">
+                          {{ candidate.layer_count || "-" }}层 / {{ candidate.flute_type || productForm.flute_type || "-" }}楞
+                          · 正式报料 {{ Number(candidate.history_count || candidate.effective_use_count || 0) }} 次
+                          <template v-if="candidate.last_used_at"> · 最近 {{ formatBeijingDate(candidate.last_used_at) }}</template>
+                        </div>
+                        <div v-if="candidate.recommendation_reason" class="product-material-context-meta">{{ candidate.recommendation_reason }}</div>
+                      </div>
+                      <button type="button" class="btn small" @click="applyProductMaterialCandidate(candidate)">采用</button>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="product-material-context-panel">
+                  <div class="product-material-context-head">
+                    <div>
+                      <strong>这款常用箱历史报料材质</strong>
+                      <div class="muted" style="font-size:11px;margin-top:2px">只显示该常用箱关联的正式/历史报料事实，不混入同客户其他产品。</div>
+                    </div>
+                    <button v-if="productForm.id" type="button" class="btn small" @click="loadProductMaterialContext(productForm.id)">刷新</button>
+                  </div>
+                  <div v-if="!productForm.id" class="muted">新增常用箱尚无历史报料记录。</div>
+                  <div v-else-if="productMaterialContext.error" class="notice error">{{ productMaterialContext.error }}</div>
+                  <div v-else-if="!productMaterialContext.requisition_history.length" class="muted">暂无历史报料记录。</div>
+                  <div v-else class="product-material-context-list">
+                    <div v-for="history in productMaterialContext.requisition_history" :key="`${history.source_type || 'history'}-${history.document_id || history.id}-${history.order_item_id || ''}`" class="product-material-history-row">
+                      <div class="product-material-context-meta">{{ history.document_date ? formatBeijingDate(history.document_date) : (history.created_at ? formatBeijingDate(history.created_at) : "-") }}</div>
+                      <div>
+                        <div class="product-material-context-main">{{ history.material_code || history.material_snapshot || "历史材质待确认" }} / {{ history.flute_type || "-" }}楞</div>
+                        <div class="product-material-context-meta">{{ history.supplier_name || "未设置供应商" }} · {{ history.document_no || history.source_reference || "无单号" }}</div>
+                      </div>
+                      <div>
+                        <div class="product-material-history-qty">{{ Number(history.requisition_qty || history.quantity || 0) }} 张</div>
+                        <div class="product-material-context-meta">{{ history.document_status || history.status || history.source_label || "历史记录" }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </div>
 
               <div class="product-form-row product-print-row">
@@ -2549,6 +2701,15 @@
               <div class="field"><label>计价单位</label><input class="input" v-model.trim="materialForm.price_unit" /></div>
               <div class="field"><label>供应商</label><input class="input" v-model.trim="materialForm.supplier_name" /></div>
               <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialForm.remarks" /></div>
+            </div>
+            <div v-else-if="modal.type === 'materialCandidate'" class="form-grid">
+              <div class="field"><label>客户 *</label><select class="select" v-model.number="materialCandidateForm.customer_id" :disabled="!!materialCandidateForm.id"><option :value="null">请选择客户</option><option v-for="customer in customerOptions" :key="customer.id" :value="customer.id">{{ customer.name }}</option></select></div>
+              <div class="field"><label>客户原始材质代码 *</label><input class="input" v-model.trim="materialCandidateForm.original_material_code" placeholder="例如 K=A-BC" /></div>
+              <div class="field wide"><label>实际材质 *</label><search-select v-model="materialCandidateForm.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="搜索材质代码、供应商或克重" :allow-empty="true"></search-select></div>
+              <div class="field"><label>手工优先级</label><input class="input" type="number" min="0" step="1" v-model.number="materialCandidateForm.manual_priority" /></div>
+              <div class="field"><label>状态</label><select class="select" v-model="materialCandidateForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div>
+              <div class="field"><label>来源</label><input class="input" v-model="materialCandidateForm.source" readonly /></div>
+              <div class="field wide"><label>备注</label><textarea class="textarea" v-model.trim="materialCandidateForm.notes" rows="3" placeholder="可选：维护说明或适用范围"></textarea></div>
             </div>
             <div v-else-if="modal.type === 'orderPdfImport'">
               <div class="form-grid" style="margin-bottom:12px">
@@ -3275,10 +3436,38 @@
             <div v-else-if="modal.type === 'requisitionMaterial'">
               <div class="form-grid">
                 <div class="field"><label>当前明细</label><div>{{ shortCustomerName(requisitionMaterialForm.customer_name) }}｜{{ requisitionMaterialForm.product_code }} {{ requisitionMaterialForm.product_name }}</div></div>
-                <div class="field"><label>供应商</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
-                <div class="field"><label>材质代码</label><search-select v-model="requisitionMaterialForm.material_id" :options="materialSelectOptions(requisitionMaterialForm.supplier_name,requisitionMaterialForm.layer_count,requisitionMaterialForm.flute_type)" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @change="onRequisitionMaterialSelected"></search-select></div>
+                <div class="field"><label>客户原始材质代码</label><div>{{ requisitionMaterialForm.customer_material_code || '未提供' }}</div><div v-if="requisitionMaterialForm.original_material_confidence === 'legacy_fallback'" class="status orange" style="display:inline-block;margin-top:4px">历史原始值未冻结</div></div>
+                <div class="field wide material-candidate-section">
+                  <div class="material-candidate-heading"><strong>推荐材质候选</strong><span class="muted">点击候选回填下方手工表单</span></div>
+                  <div v-if="requisitionMaterialForm.candidate_loading" class="muted">正在加载候选…</div>
+                  <div v-else-if="requisitionMaterialForm.candidate_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm.candidate_error }}（仍可手工选择）</div>
+                  <div v-else-if="!requisitionMaterialForm.candidate_options.length" class="muted">暂无可用候选，请手工选择材质。</div>
+                  <div v-else class="material-candidate-list">
+                    <button v-for="candidate in requisitionMaterialForm.candidate_options" :key="requisitionCandidateId(candidate) || candidate.material_id" type="button" :class="['material-candidate-card',{selected: requisitionMaterialForm.candidate_id === requisitionCandidateId(candidate)}]" @click="applyRequisitionMaterialCandidate(candidate)">
+                      <strong>{{ candidate.supplier_name || candidate.supplier || '供应商待确认' }}</strong>｜{{ candidate.actual_material_code || candidate.material_code || '-' }}｜{{ candidate.layer_count || '-' }}层 {{ candidate.flute_type || '-' }}楞
+                      <div class="material-candidate-meta"><span v-if="canViewCosts">参考价：{{ candidate.reference_price == null ? '-' : money(candidate.reference_price) }}</span><span>历史 {{ candidate.history_count || 0 }} 次</span><span>最近使用：{{ candidate.last_used_at ? formatDateTime(candidate.last_used_at) : '-' }}</span></div>
+                      <div class="material-candidate-reason">推荐理由：{{ candidate.recommendation_reason || candidate.reason || '历史报料匹配' }}</div>
+                    </button>
+                  </div>
+                </div>
+                <div class="field wide material-candidate-section">
+                  <div class="material-candidate-heading"><strong>本明细选择历史</strong><span class="muted">只追加，不覆盖历史事实</span></div>
+                  <div v-if="requisitionMaterialForm.history_loading" class="muted">正在加载历史…</div>
+                  <div v-else-if="requisitionMaterialForm.history_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm.history_error }}</div>
+                  <div v-else-if="!requisitionMaterialForm.selection_history.length" class="muted">暂无历史选择记录</div>
+                  <div v-else class="material-candidate-list">
+                    <div v-for="history in requisitionMaterialForm.selection_history.slice().reverse()" :key="history.id" class="material-candidate-card" style="cursor:default">
+                      <strong>{{ history.supplier_name || '供应商未记录' }}</strong>｜{{ history.selected_material_code || '-' }}｜{{ history.layer_count || '-' }}层 {{ history.flute_type || '-' }}楞
+                      <div class="material-candidate-meta"><span>{{ formatDateTime(history.selected_at) }}</span><span>操作：{{ history.selected_by_name || history.selected_by || '-' }}</span><span>{{ history.sync_product ? '已同步常用箱' : '未同步常用箱' }}</span></div>
+                      <div v-if="history.selection_reason" class="material-candidate-reason">选择说明：{{ history.selection_reason }}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
+                <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="materialSelectOptions(requisitionMaterialForm.supplier_name,requisitionMaterialForm.layer_count,requisitionMaterialForm.flute_type)" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @change="onRequisitionMaterialSelected"></search-select></div>
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
-                <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
+                <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
+                <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
                 <label class="remember-line"><input type="checkbox" v-model="requisitionMaterialForm.sync_product" /> 同步回订单关联的常用箱，避免下次报料恢复旧材质</label>
                 <div v-if="requisitionMaterialForm.sync_product" class="field wide"><label>同步原因 *</label><input class="input" v-model.trim="requisitionMaterialForm.product_change_reason" placeholder="例如：报料确认后同步最新材质和楞型" /></div>
                 <div v-if="requisitionMaterialForm._product_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm._product_error }}</div>
@@ -4114,6 +4303,10 @@
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
         supplier_name:"", quote_date:null, remarks:"", is_active:true
       });
+      const blankMaterialCandidate = () => ({
+        id:null, customer_id:null, original_material_code:"", material_id:null,
+        manual_priority:0, is_active:true, source:"manual", notes:""
+      });
       const blankPaperCode = () => ({
         id:null, supplier_name:"", code_char:"", paper_name:"",
         gram_weight:null, paper_grade:"", paper_role:"", remark:"", is_active:true
@@ -4242,7 +4435,7 @@
             pdfTemplateLoading: false,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
             requisitionSupplierFilter: "", requisitionSupplierCounts: [],
-            requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:true },
+            requisitionMaterialForm: { item_id:null, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:false, customer_material_code:"", original_material_confidence:"", candidate_options:[], candidate_loading:false, candidate_error:"", candidate_id:null, source_type:"manual", source_reference:null, selection_reason:"", selection_history:[], history_loading:false, history_error:"" },
             mergeSuggestions: [], mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
@@ -4253,6 +4446,7 @@
             productionTab: "pending", productionPending: [], productionHistory: [], productionLocations: [], productionSelected: {}, productionBusy: false,
             productionCompletionAttempt: null, productionTransferAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
+            productMaterialContext: { product_id:null, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" },
             bomEditor: blankBomEditor(),
             orderProductOptions: {}, requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, drawingFile:null,
@@ -4262,6 +4456,9 @@
             statementsTotal: 0, invoicesTotal: 0, pageSize: 25,
             pages: { customers: 1, products: 1, orders: 1, deliveries: 1, statements: 1, invoices: 1 },
             productTab: "products", modal: null,
+            materialCandidateItems: [], materialCandidateLoading: false,
+            materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
+            materialCandidateForm: blankMaterialCandidate(),
             masterEditBaseline: { customer:null, product:null, material:null },
             masterChangeConfirm: blankMasterChangeConfirm(),
             masterPendingSaveOptions: null,
@@ -4610,6 +4807,7 @@
             if (this.modal.type === "customer") return this.customerForm.id ? this.canEditCustomers : this.canCreateCustomers;
             if (this.modal.type === "product") return this.productForm.id ? this.canEditProducts : this.canCreateProducts;
             if (this.modal.type === "material") return this.canAdmin;
+            if (this.modal.type === "materialCandidate") return this.canAdmin;
             if (this.modal.type === "order") return this.canCreateOrders;
             if (["orderEdit","orderItem"].includes(this.modal.type)) return this.canEditOrders;
             if (this.modal.type === "quotationConvert") return this.canEditQuotations && this.canCreateProducts;
@@ -6365,6 +6563,48 @@
               this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));
             }
           },
+          async openMaterialCandidateMaintenance() {
+            if (!this.canAdmin) return;
+            this.productTab = "materialCandidates";
+            if (!this.customerOptions.length) await this.loadCustomerOptions();
+            if (!this.allMaterials.length) await this.loadMaterials();
+            await this.loadMaterialCandidates();
+          },
+          async loadMaterialCandidates() {
+            this.materialCandidateLoading = true;
+            try {
+              const params = { include_inactive: !!this.materialCandidateFilter.include_inactive };
+              if (this.materialCandidateFilter.customer_id) params.customer_id = this.materialCandidateFilter.customer_id;
+              if (this.materialCandidateFilter.q) params.q = this.materialCandidateFilter.q;
+              const { data } = await axios.get("/api/requisition/material-candidates", { params });
+              this.materialCandidateItems = Array.isArray(data) ? data : (data.items || data.candidates || []);
+            } catch (error) {
+              this.materialCandidateItems = [];
+              this.showToast(this.errorMessage(error), true);
+            } finally {
+              this.materialCandidateLoading = false;
+            }
+          },
+          materialCandidateMaterialLabel(row) {
+            const material = (this.allMaterials.length ? this.allMaterials : this.materials)
+              .find(item => String(item.id) === String(row.material_id));
+            if (!material) return row.material_code || "-";
+            return [material.supplier_name, this.materialBaseCode(material), this.materialWeightStructure(material)]
+              .filter(Boolean).join("｜");
+          },
+          openMaterialCandidate(row=null) {
+            const candidateId = row ? this.requisitionCandidateId(row) : null;
+            this.materialCandidateForm = row ? {
+              ...blankMaterialCandidate(),
+              ...JSON.parse(JSON.stringify(row)),
+              id: candidateId,
+              manual_priority: Number(row.manual_priority || 0),
+              is_active: row.is_active !== false,
+              source: row.source || "manual",
+              notes: row.notes || "",
+            } : blankMaterialCandidate();
+            this.modal = { type:"materialCandidate", title: candidateId ? "编辑客户材质候选" : "新增客户材质候选" };
+          },
           supplierRank(name) {
             const order = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
             if (!name) return order.length + 1;
@@ -8109,14 +8349,65 @@
                 drawings: [],
               }
             );
+            this.productMaterialContext = { product_id:this.productForm.id || null, candidates:[], requisition_history:[], manual_selection_history:[], loading:false, error:"" };
             this.drawingFile = null;
             this.resetBomEditor();
             // 拍快照用于检测未保存更改
             this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
             this.beginMasterEdit("product",this.productForm);
             this.modal = { type:"product", title: row ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
-            if (this.productForm.id) await this.loadProductBom(this.productForm.id);
+            if (this.productForm.id) {
+              const loaders = [this.loadProductBom(this.productForm.id)];
+              if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(this.productForm.id));
+              else this.productMaterialContext.error = "当前账号无报料历史查看权限";
+              await Promise.all(loaders);
+            }
             this.$nextTick(() => this.autoApplyProductRecommendations());
+          },
+          async loadProductMaterialContext(productId) {
+            if (!productId) return;
+            const requestedId = Number(productId);
+            this.productMaterialContext = {
+              ...this.productMaterialContext,
+              product_id: requestedId,
+              loading: true,
+              error: "",
+            };
+            try {
+              const { data } = await axios.get(`/api/requisition/products/${requestedId}/material-context`);
+              if (Number(this.productForm.id || 0) !== requestedId) return;
+              this.productMaterialContext = {
+                product_id: requestedId,
+                candidates: data.candidates || data.candidate_summary || [],
+                requisition_history: data.requisition_history || data.history || [],
+                manual_selection_history: data.manual_selection_history || [],
+                loading: false,
+                error: "",
+              };
+            } catch (error) {
+              if (Number(this.productForm.id || 0) !== requestedId) return;
+              this.productMaterialContext = {
+                product_id: requestedId,
+                candidates: [],
+                requisition_history: [],
+                manual_selection_history: [],
+                loading: false,
+                error: this.errorMessage(error) || "常用箱材质候选与历史加载失败",
+              };
+            }
+          },
+          applyProductMaterialCandidate(candidate) {
+            const materialId = candidate?.material_id || candidate?.actual_material_id;
+            if (!materialId) {
+              this.showToast("该候选缺少可用材质主数据", true);
+              return;
+            }
+            const currentFlute = this.productForm.flute_type;
+            this.productForm.material_id = Number(materialId);
+            this.productForm._material_supplier = candidate.supplier_name || this.productForm._material_supplier;
+            if (!this.productForm.layer_count && candidate.layer_count) this.productForm.layer_count = Number(candidate.layer_count);
+            this.productForm.flute_type = currentFlute;
+            this.showToast("候选材质已回填，请核对后保存常用箱");
           },
           normalizeProductDimensions(form) {
             [
@@ -8562,6 +8853,8 @@
               customer_name: row.customer_name || "",
               product_code: row.product_code || "",
               product_name: row.product_name || "",
+              customer_material_code: row.customer_material_code || row.customer_original_material_code || row.original_material_code || "",
+              original_material_confidence: "",
               supplier_name: row.snapshot_supplier_name || "",
               material_id: row.material_id || null,
               layer_count: row.layer_count || null,
@@ -8574,11 +8867,88 @@
               _product_warnings: [],
               _product_confirmed: false,
               _product_error: "",
+              candidate_options: [],
+              candidate_loading: false,
+              candidate_error: "",
+              candidate_id: null,
+              source_type: "manual",
+              source_reference: null,
+              selection_reason: "",
+              selection_history: [],
+              history_loading: false,
+              history_error: "",
             };
             this.modal = { type:"requisitionMaterial", title:"更换供应商 / 材质" };
+            this.loadRequisitionMaterialCandidates(row.item_id);
+            this.loadRequisitionMaterialHistory(row.item_id);
+          },
+          async loadRequisitionMaterialCandidates(itemId) {
+            const form = this.requisitionMaterialForm;
+            form.candidate_loading = true;
+            form.candidate_error = "";
+            try {
+              const { data } = await axios.get(`/api/requisition/pending/${itemId}/material-candidates`);
+              if (form.item_id !== itemId) return;
+              if (Array.isArray(data)) {
+                form.candidate_options = data;
+              } else {
+                form.customer_material_code = data?.original_material_code || "";
+                form.original_material_confidence = data?.original_material_confidence || "";
+                form.candidate_options = data?.candidates || [];
+              }
+            } catch (error) {
+              form.candidate_options = [];
+              form.candidate_error = this.errorMessage(error) || "材质候选加载失败";
+            } finally {
+              form.candidate_loading = false;
+            }
+          },
+          async loadRequisitionMaterialHistory(itemId) {
+            const form = this.requisitionMaterialForm;
+            form.history_loading = true;
+            form.history_error = "";
+            try {
+              const { data } = await axios.get(`/api/requisition/pending/${itemId}/material-history`);
+              if (form.item_id !== itemId) return;
+              form.selection_history = Array.isArray(data) ? data : (data.items || data.history || []);
+            } catch (error) {
+              form.selection_history = [];
+              form.history_error = this.errorMessage(error) || "材质选择历史加载失败";
+            } finally {
+              form.history_loading = false;
+            }
+          },
+          clearRequisitionMaterialCandidate() {
+            const form = this.requisitionMaterialForm;
+            form.candidate_id = null;
+            form.source_type = "manual";
+            form.source_reference = null;
+            form.selection_reason = "";
+          },
+          requisitionCandidateId(candidate) {
+            return candidate?.candidate_id || candidate?.id || null;
+          },
+          applyRequisitionMaterialCandidate(candidate) {
+            const form = this.requisitionMaterialForm;
+            const materialId = candidate.material_id || candidate.actual_material_id || candidate.material?.id;
+            if (!materialId) {
+              this.showToast("该候选未提供可回填的材质主数据", true);
+              return;
+            }
+            form.material_id = materialId;
+            form.supplier_name = candidate.supplier_name || candidate.supplier || form.supplier_name;
+            form.layer_count = Number(candidate.layer_count) || form.layer_count;
+            const allowed = this.orderItemFluteOptions(form.layer_count);
+            const fluteType = String(candidate.flute_type || "").toUpperCase();
+            form.flute_type = allowed.includes(fluteType) ? fluteType : (this.getDefaultFluteByLayer(form.layer_count) || null);
+            form.candidate_id = this.requisitionCandidateId(candidate);
+            form.source_type = candidate.source_type || "material_candidate";
+            form.source_reference = String(candidate.source_reference || candidate.reference_id || form.candidate_id || "") || null;
+            form.selection_reason = candidate.recommendation_reason || candidate.reason || "";
           },
           onRequisitionMaterialSelected() {
             const form = this.requisitionMaterialForm;
+            this.clearRequisitionMaterialCandidate();
             const material = this._findMaterial(form.material_id);
             if (!material) return;
             form.supplier_name = material.supplier_name || form.supplier_name;
@@ -8589,6 +8959,7 @@
           },
           onRequisitionLayerChange() {
             const form = this.requisitionMaterialForm;
+            this.clearRequisitionMaterialCandidate();
             const allowed = this.orderItemFluteOptions(form.layer_count);
             const current = String(form.flute_type || "").toUpperCase();
             if (!allowed.includes(current)) form.flute_type = this.getDefaultFluteByLayer(form.layer_count) || null;
@@ -11291,6 +11662,29 @@
                 else await axios.post("/api/master/materials",payload);
                 await this.loadMaterials();
               }
+              if (this.modal.type === "materialCandidate") {
+                const form = this.materialCandidateForm;
+                if (!form.customer_id) throw new Error("请选择客户");
+                if (!String(form.original_material_code || "").trim()) throw new Error("请填写客户原始材质代码");
+                if (!form.material_id) throw new Error("请选择实际材质");
+                const manualPriority = Number(form.manual_priority);
+                if (!Number.isInteger(manualPriority) || manualPriority < 0) throw new Error("手工优先级必须是大于等于0的整数");
+                const payload = {
+                  original_material_code: String(form.original_material_code).trim(),
+                  material_id: Number(form.material_id),
+                  manual_priority: manualPriority,
+                  is_active: !!form.is_active,
+                  source: String(form.source || "manual").trim() || "manual",
+                  notes: String(form.notes || "").trim() || null,
+                };
+                if (form.id) await axios.put(`/api/requisition/material-candidates/${form.id}`, payload);
+                else {
+                  payload.customer_id = Number(form.customer_id);
+                  await axios.post("/api/requisition/material-candidates", payload);
+                }
+                await this.loadMaterialCandidates();
+                successMessage = form.id ? "客户材质候选已更新" : "客户材质候选已新增";
+              }
               if (this.modal.type === "quotationConvert") {
                 await this.saveQuotationConversion();
                 successMessage = "已转入常用箱，可在新建订单时直接选择";
@@ -11378,6 +11772,10 @@
                   product_expected_version:form.sync_product ? Number(form.product_version) : null,
                   product_change_reason:form.sync_product ? String(form.product_change_reason || "").trim() : null,
                   product_confirmation_token:form.sync_product && form._product_confirmed ? form.product_confirmation_token : null,
+                  candidate_id:form.candidate_id || null,
+                  source_type:form.source_type || "manual",
+                  source_reference:form.source_reference || null,
+                  selection_reason:String(form.selection_reason || "").trim() || null,
                 });
                 await Promise.all([this.loadRequisition(), this.loadProducts()]);
                 successMessage = data.message || "供应商和材质已更新";

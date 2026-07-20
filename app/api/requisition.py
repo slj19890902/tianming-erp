@@ -8,6 +8,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, exists, func, or_, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
@@ -29,6 +30,10 @@ from app.core.time_contract import (
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
+from app.models.customer_material import (
+    CustomerMaterialCandidate,
+    CustomerMaterialSelectionHistory,
+)
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -107,6 +112,11 @@ from app.services.composite_bom_execution import (
     calculate_effective_order_sets,
     calculate_requisition,
     require_positive_integer,
+)
+from app.services.customer_material_candidates import (
+    candidate_response,
+    normalize_material_candidate_key,
+    normalize_supplier_candidate_key,
 )
 
 
@@ -229,12 +239,59 @@ class PendingMaterialUpdate(BaseModel):
     product_expected_version: int | None = Field(default=None, ge=1)
     product_change_reason: str | None = Field(default=None, max_length=500)
     product_confirmation_token: str | None = Field(default=None, max_length=2000)
+    candidate_id: int | None = Field(default=None, gt=0)
+    source_type: str | None = Field(default=None, max_length=50)
+    source_reference: str | None = Field(default=None, max_length=250)
+    selection_reason: str | None = Field(default=None, max_length=1000)
 
     @field_validator("flute_type")
     @classmethod
     def normalize_flute(cls, value: str | None) -> str | None:
         normalized = str(value or "").strip().upper()
         return normalized or None
+
+
+class CustomerMaterialCandidateCreate(BaseModel):
+    customer_id: int = Field(gt=0)
+    original_material_code: str = Field(min_length=1, max_length=250)
+    material_id: int | None = Field(default=None, gt=0)
+    actual_material_id: int | None = Field(default=None, gt=0)
+    supplier_name: str | None = Field(default=None, max_length=200)
+    manual_priority: int = Field(default=0, ge=0, le=10000)
+    is_active: bool = True
+    source: str = Field(default="manual", min_length=1, max_length=50)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def normalize_material_id(self):
+        if self.material_id is not None and self.actual_material_id is not None:
+            if self.material_id != self.actual_material_id:
+                raise ValueError("material_id 与 actual_material_id 不能指向不同材质")
+        self.material_id = self.material_id or self.actual_material_id
+        if self.material_id is None:
+            raise ValueError("必须选择实际报料材质")
+        return self
+
+
+class CustomerMaterialCandidateUpdate(BaseModel):
+    original_material_code: str | None = Field(default=None, min_length=1, max_length=250)
+    material_id: int | None = Field(default=None, gt=0)
+    actual_material_id: int | None = Field(default=None, gt=0)
+    supplier_name: str | None = Field(default=None, max_length=200)
+    manual_priority: int | None = Field(default=None, ge=0, le=10000)
+    is_active: bool | None = None
+    source: str | None = Field(default=None, min_length=1, max_length=50)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def normalize_material_id(self):
+        if self.material_id is not None and self.actual_material_id is not None:
+            if self.material_id != self.actual_material_id:
+                raise ValueError("material_id 与 actual_material_id 不能指向不同材质")
+        if self.material_id is None and self.actual_material_id is not None:
+            self.material_id = self.actual_material_id
+            self.__pydantic_fields_set__.add("material_id")
+        return self
 
 
 class RequisitionBatchCreate(BaseModel):
@@ -1300,6 +1357,59 @@ def _item_or_404(db: Session, item_id: int) -> OrderItem:
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
     return item
+
+
+def _order_customer_for_item(
+    db: Session, item: OrderItem, user: User
+) -> tuple[Order, Customer]:
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, user, db)
+    customer = db.get(Customer, order.customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    return order, customer
+
+
+def _candidate_or_404(
+    db: Session, candidate_id: int
+) -> CustomerMaterialCandidate:
+    candidate = db.get(CustomerMaterialCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="客户材质候选不存在")
+    return candidate
+
+
+def _candidate_material_or_404(db: Session, material_id: int) -> Material:
+    material = db.get(Material, material_id)
+    if material is None or not material.is_active:
+        raise HTTPException(status_code=404, detail="候选材质不存在或已停用")
+    return material
+
+
+def _material_candidate_audit(
+    db: Session,
+    *,
+    user: User,
+    action: str,
+    candidate_id: int,
+    details: dict,
+    description: str,
+) -> None:
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action=action,
+            resource="CustomerMaterialCandidate",
+            details=json.dumps(details, ensure_ascii=False, default=str),
+            username=user.username,
+            role=user.role,
+            entity_type="customer_material_candidate",
+            entity_id=candidate_id,
+            description=description,
+        )
+    )
 
 
 def _allowed_customer_ids(user: User, db: Session) -> set[int] | None:
@@ -2755,6 +2865,14 @@ def _create_supplier_order_for_pending_entries(
             SupplierRequisitionOrderItem(
                 supplier_order_id=order.id,
                 order_item_id=order_item.id,
+                **_supplier_item_snapshot_values(
+                    db,
+                    order_item,
+                    fallback_material_id=order.material_id,
+                    fallback_supplier_name=order.supplier_name,
+                    fallback_layer_count=order.layer_count,
+                    fallback_flute_type=order.flute_type,
+                ),
                 order_number=order_item.item_order_number,
                 product_code=(
                     req_item.product_code_snapshot
@@ -2876,6 +2994,13 @@ def pending_requisitions(
                     "product_name": item.snapshot_product_name,
                     "specification": item.snapshot_spec,
                     "material": item.snapshot_material,
+                    "customer_material_code": item.snapshot_original_material_code
+                    or item.snapshot_material,
+                    "original_material_confidence": (
+                        "frozen"
+                        if item.snapshot_original_material_code
+                        else "legacy_fallback"
+                    ),
                     "material_display": _format_supplier_material(
                         material.code if material else item.snapshot_material,
                         item.layer_count or (material.layer_count if material else None),
@@ -2965,6 +3090,13 @@ def pending_requisitions(
                 "product_name": item.snapshot_product_name,
                 "specification": item.snapshot_spec,
                 "material": item.snapshot_material,
+                "customer_material_code": item.snapshot_original_material_code
+                or item.snapshot_material,
+                "original_material_confidence": (
+                    "frozen"
+                    if item.snapshot_original_material_code
+                    else "legacy_fallback"
+                ),
                 "material_display": _format_supplier_material(
                     material.code if material else item.snapshot_material,
                     item.layer_count or (material.layer_count if material else None),
@@ -3054,6 +3186,827 @@ def pending_requisitions(
     }
 
 
+@router.get("/pending/{item_id}/material-candidates")
+def pending_material_candidates(
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    item = _item_or_404(db, item_id)
+    _, customer = _order_customer_for_item(db, item, user)
+    original_is_frozen = bool(
+        str(item.snapshot_original_material_code or "").strip()
+    )
+    original_code = (
+        item.snapshot_original_material_code
+        if original_is_frozen
+        else item.snapshot_material
+    )
+    normalized_original = normalize_material_candidate_key(original_code)
+    if not normalized_original:
+        return {
+            "item_id": item.id,
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "original_material_code": None,
+            "original_material_confidence": "unknown",
+            "candidates": [],
+        }
+
+    candidates = db.scalars(
+        select(CustomerMaterialCandidate)
+        .where(
+            CustomerMaterialCandidate.customer_id == customer.id,
+            CustomerMaterialCandidate.normalized_original_material_code
+            == normalized_original,
+            CustomerMaterialCandidate.is_active.is_(True),
+        )
+        .order_by(
+            CustomerMaterialCandidate.manual_priority.desc(),
+            CustomerMaterialCandidate.id.asc(),
+        )
+    ).all()
+    history_rows = db.execute(
+        select(
+            CustomerMaterialSelectionHistory.selected_material_id,
+            CustomerMaterialSelectionHistory.selected_supplier_name_snapshot,
+            func.count(CustomerMaterialSelectionHistory.id),
+            func.max(CustomerMaterialSelectionHistory.selected_at),
+        )
+        .where(
+            CustomerMaterialSelectionHistory.customer_id == customer.id,
+            CustomerMaterialSelectionHistory.normalized_original_material_code_snapshot
+            == normalized_original,
+        )
+        .group_by(
+            CustomerMaterialSelectionHistory.selected_material_id,
+            CustomerMaterialSelectionHistory.selected_supplier_name_snapshot,
+        )
+    ).all()
+    history_stats = {
+        (
+            material_id,
+            normalize_supplier_candidate_key(supplier_name),
+        ): (int(history_count or 0), last_used_at)
+        for material_id, supplier_name, history_count, last_used_at in history_rows
+    }
+    eligible: list[tuple[CustomerMaterialCandidate, Material, int, datetime | None]] = []
+    for candidate in candidates:
+        if candidate.actual_material_id is None:
+            continue
+        material = db.get(Material, candidate.actual_material_id)
+        if material is None or not material.is_active:
+            continue
+        if item.layer_count is not None and material.layer_count != item.layer_count:
+            continue
+        if (
+            material.flute_type
+            and item.flute_type
+            and normalize_flute_type(material.flute_type)
+            != normalize_flute_type(item.flute_type)
+        ):
+            continue
+        if validate_flute_for_write(item.flute_type, material.layer_count):
+            continue
+        supplier_name = material.supplier_name or candidate.supplier_name
+        history_count, last_used_at = history_stats.get(
+            (material.id, normalize_supplier_candidate_key(supplier_name)),
+            (0, None),
+        )
+        eligible.append((candidate, material, history_count, last_used_at))
+    eligible.sort(
+        key=lambda entry: (
+            entry[0].manual_priority,
+            entry[2],
+            entry[3] or datetime.min,
+            entry[1].quote_price is not None
+            or entry[1].rule_base_price is not None,
+            -entry[0].id,
+        ),
+        reverse=True,
+    )
+    rows = []
+    for index, (candidate, material, history_count, last_used_at) in enumerate(
+        eligible
+    ):
+        row = candidate_response(
+            candidate,
+            material,
+            history_count=history_count,
+            last_used_at=last_used_at,
+            recommended=index == 0,
+        )
+        row["id"] = candidate.id
+        row["flute_type"] = item.flute_type
+        if not has_permission(user, "cost.view"):
+            row.pop("reference_price", None)
+            row.pop("price_unit", None)
+        rows.append(row)
+    return {
+        "item_id": item.id,
+        "customer_id": customer.id,
+        "customer_name": customer.name,
+        "original_material_code": original_code,
+        "original_material_confidence": "frozen" if original_is_frozen else "legacy_fallback",
+        "current_material_id": item.material_id,
+        "current_material_code": item.snapshot_material,
+        "candidates": rows,
+    }
+
+
+def _material_context_original_code(
+    product: Product,
+    current_material: Material | None,
+) -> str:
+    return str(
+        product.legacy_material_text
+        or product.default_material_code
+        or (current_material.code if current_material is not None else "")
+        or ""
+    ).strip()
+
+
+def _supplier_item_snapshot_values(
+    db: Session,
+    order_item: OrderItem | None,
+    *,
+    fallback_material_id: int | None,
+    fallback_supplier_name: str | None,
+    fallback_layer_count: int | None,
+    fallback_flute_type: str | None,
+) -> dict:
+    material_id = (
+        order_item.material_id
+        if order_item is not None and order_item.material_id is not None
+        else fallback_material_id
+    )
+    material = db.get(Material, material_id) if material_id is not None else None
+    material_code = (
+        material.code
+        if material is not None
+        else _clean_supplier_material_code(
+            order_item.snapshot_material if order_item is not None else None,
+            (
+                order_item.layer_count
+                if order_item is not None and order_item.layer_count is not None
+                else fallback_layer_count
+            ),
+        )
+        or None
+    )
+    supplier_name = (
+        (material.supplier_name if material is not None else None)
+        or (
+            order_item.snapshot_supplier_name
+            if order_item is not None
+            else None
+        )
+        or fallback_supplier_name
+    )
+    return {
+        "product_id": order_item.product_id if order_item is not None else None,
+        "material_id": material_id,
+        "material_code_snapshot": material_code,
+        "supplier_name_snapshot": supplier_name,
+        "layer_count_snapshot": (
+            order_item.layer_count
+            if order_item is not None and order_item.layer_count is not None
+            else (
+                material.layer_count
+                if material is not None
+                else fallback_layer_count
+            )
+        ),
+        "flute_type_snapshot": (
+            order_item.flute_type
+            if order_item is not None and order_item.flute_type
+            else fallback_flute_type
+        ),
+    }
+
+
+def _is_confirmed_supplier_order(order: SupplierRequisitionOrder) -> bool:
+    return str(order.status or "").strip().lower() == "confirmed"
+
+
+@router.get("/products/{product_id}/material-context")
+def product_material_context(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="常用箱不存在")
+    require_customer_access(product.customer_id, user, db)
+
+    current_material = (
+        db.get(Material, product.material_id)
+        if product.material_id is not None
+        else None
+    )
+    original_code = _material_context_original_code(product, current_material)
+    normalized_original = normalize_material_candidate_key(original_code)
+
+    official_rows = db.execute(
+        select(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrder,
+            OrderItem,
+        )
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .outerjoin(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
+        .where(
+            or_(
+                SupplierRequisitionOrderItem.product_id == product.id,
+                and_(
+                    SupplierRequisitionOrderItem.product_id.is_(None),
+                    OrderItem.product_id == product.id,
+                ),
+            )
+        )
+        .order_by(
+            SupplierRequisitionOrder.created_at.desc(),
+            SupplierRequisitionOrderItem.id.desc(),
+        )
+    ).all()
+
+    official_history: list[dict] = []
+    official_order_item_ids: set[int] = set()
+    official_usage: dict[tuple[int | None, str, str], dict] = {}
+    for supplier_item, supplier_order, order_item in official_rows:
+        if supplier_item.order_item_id is not None:
+            official_order_item_ids.add(supplier_item.order_item_id)
+        material_id = supplier_item.material_id
+        if material_id is None and order_item is not None:
+            material_id = order_item.material_id
+        material = db.get(Material, material_id) if material_id is not None else None
+        material_code = (
+            supplier_item.material_code_snapshot
+            or (material.code if material is not None else None)
+            or (order_item.snapshot_material if order_item is not None else None)
+        )
+        supplier_name = (
+            supplier_item.supplier_name_snapshot
+            or supplier_order.supplier_name
+            or (
+                order_item.snapshot_supplier_name
+                if order_item is not None
+                else None
+            )
+        )
+        confirmed = _is_confirmed_supplier_order(supplier_order)
+        row = {
+            "source_type": "supplier_order",
+            "source_confidence": (
+                "official_snapshot"
+                if supplier_item.material_code_snapshot
+                else "derived_from_order_item"
+            ),
+            "document_id": supplier_order.id,
+            "document_no": supplier_order.order_number,
+            "document_date": supplier_order.created_at,
+            "document_status": supplier_order.status,
+            "is_effective": confirmed,
+            "order_item_id": supplier_item.order_item_id,
+            "item_order_number": supplier_item.order_number,
+            "product_id": product.id,
+            "material_id": material_id,
+            "material_code": material_code,
+            "supplier_name": supplier_name,
+            "layer_count": (
+                supplier_item.layer_count_snapshot
+                if supplier_item.layer_count_snapshot is not None
+                else supplier_order.layer_count
+            ),
+            "flute_type": (
+                supplier_item.flute_type_snapshot
+                or supplier_order.flute_type
+            ),
+            "requisition_qty": supplier_item.requisition_qty,
+        }
+        official_history.append(row)
+        if confirmed:
+            key = (
+                material_id,
+                normalize_material_candidate_key(material_code),
+                normalize_supplier_candidate_key(supplier_name),
+            )
+            stat = official_usage.setdefault(
+                key,
+                {
+                    "count": 0,
+                    "last_used_at": None,
+                    "last_document_no": None,
+                },
+            )
+            stat["count"] += 1
+            if (
+                stat["last_used_at"] is None
+                or (supplier_order.created_at or datetime.min) > stat["last_used_at"]
+            ):
+                stat["last_used_at"] = supplier_order.created_at
+                stat["last_document_no"] = supplier_order.order_number
+
+    legacy_rows = db.execute(
+        select(RequisitionItem, Requisition, OrderItem)
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
+        .where(
+            OrderItem.product_id == product.id,
+            func.lower(RequisitionItem.status).notin_(
+                {
+                    "merged_pending",
+                    "supplier_requisition_created",
+                    "cancelled",
+                    "voided",
+                    "withdrawn",
+                    "invalid",
+                }
+            ),
+            func.lower(Requisition.status).notin_(
+                {
+                    "merged_pending",
+                    "supplier_requisition_created",
+                    "cancelled",
+                    "voided",
+                    "withdrawn",
+                    "invalid",
+                }
+            ),
+        )
+        .order_by(Requisition.requisition_date.desc(), RequisitionItem.id.desc())
+    ).all()
+    legacy_history: list[dict] = []
+    for requisition_item, requisition, order_item in legacy_rows:
+        if requisition_item.order_item_id in official_order_item_ids:
+            continue
+        legacy_history.append(
+            {
+                "source_type": "legacy_material_requisition",
+                "source_confidence": "legacy_snapshot",
+                "document_id": requisition.id,
+                "document_no": requisition.requisition_number,
+                "document_date": requisition.requisition_date,
+                "document_status": requisition.status,
+                "is_effective": True,
+                "order_item_id": requisition_item.order_item_id,
+                "item_order_number": order_item.item_order_number,
+                "product_id": product.id,
+                "material_id": order_item.material_id,
+                "material_code": requisition_item.material_snapshot,
+                "supplier_name": requisition.supplier_name,
+                "layer_count": order_item.layer_count,
+                "flute_type": order_item.flute_type,
+                "requisition_qty": requisition_item.requisition_qty,
+            }
+        )
+
+    history_rows = db.execute(
+        select(CustomerMaterialSelectionHistory, OrderItem)
+        .outerjoin(
+            OrderItem,
+            OrderItem.id == CustomerMaterialSelectionHistory.order_item_id,
+        )
+        .where(
+            or_(
+                CustomerMaterialSelectionHistory.product_id == product.id,
+                and_(
+                    CustomerMaterialSelectionHistory.product_id.is_(None),
+                    OrderItem.product_id == product.id,
+                ),
+            )
+        )
+        .order_by(
+            CustomerMaterialSelectionHistory.selected_at.desc(),
+            CustomerMaterialSelectionHistory.id.desc(),
+        )
+    ).all()
+    actor_ids = {
+        history.selected_by
+        for history, _order_item in history_rows
+        if history.selected_by is not None
+    }
+    actors = (
+        {
+            actor.id: actor
+            for actor in db.scalars(select(User).where(User.id.in_(actor_ids))).all()
+        }
+        if actor_ids
+        else {}
+    )
+    manual_history = [
+        {
+            "id": history.id,
+            "order_item_id": history.order_item_id,
+            "candidate_id": history.candidate_id,
+            "original_material_code": history.original_material_code_snapshot,
+            "material_id": history.selected_material_id,
+            "material_code": history.selected_material_code_snapshot,
+            "supplier_name": history.selected_supplier_name_snapshot,
+            "layer_count": history.layer_count_snapshot,
+            "flute_type": history.flute_type_snapshot,
+            "source_type": history.source_type,
+            "source_reference": history.source_reference,
+            "selection_reason": history.selection_reason,
+            "selected_at": history.selected_at,
+            "selected_by": history.selected_by,
+            "selected_by_name": (
+                actors[history.selected_by].display_name
+                or actors[history.selected_by].real_name
+                or actors[history.selected_by].username
+            )
+            if history.selected_by in actors
+            else None,
+        }
+        for history, _order_item in history_rows
+    ]
+
+    candidates = []
+    if normalized_original:
+        configured_candidates = db.scalars(
+            select(CustomerMaterialCandidate)
+            .where(
+                CustomerMaterialCandidate.customer_id == product.customer_id,
+                CustomerMaterialCandidate.normalized_original_material_code
+                == normalized_original,
+                CustomerMaterialCandidate.is_active.is_(True),
+            )
+            .order_by(
+                CustomerMaterialCandidate.manual_priority.desc(),
+                CustomerMaterialCandidate.id.asc(),
+            )
+        ).all()
+        for candidate in configured_candidates:
+            if candidate.actual_material_id is None:
+                continue
+            material = db.get(Material, candidate.actual_material_id)
+            if material is None or not material.is_active:
+                continue
+            supplier_name = material.supplier_name or candidate.supplier_name
+            stat = official_usage.get(
+                (
+                    material.id,
+                    normalize_material_candidate_key(material.code),
+                    normalize_supplier_candidate_key(supplier_name),
+                ),
+                {
+                    "count": 0,
+                    "last_used_at": None,
+                    "last_document_no": None,
+                },
+            )
+            reasons: list[str] = []
+            if candidate.manual_priority > 0:
+                reasons.append(f"人工优先级 {candidate.manual_priority}")
+            if stat["count"] > 0:
+                reasons.append(f"有效正式报料 {stat['count']} 次")
+            if stat["last_document_no"]:
+                reasons.append(f"最近单号 {stat['last_document_no']}")
+            if not reasons:
+                reasons.append("客户原始材质代码匹配")
+            candidates.append(
+                {
+                    "candidate_id": candidate.id,
+                    "material_id": material.id,
+                    "material_code": material.code,
+                    "supplier_name": supplier_name,
+                    "layer_count": material.layer_count,
+                    "flute_type": product.flute_type,
+                    "manual_priority": candidate.manual_priority,
+                    "effective_use_count": stat["count"],
+                    "history_count": stat["count"],
+                    "last_used_at": stat["last_used_at"],
+                    "last_document_no": stat["last_document_no"],
+                    "recommendation_reasons": reasons,
+                    "recommendation_reason": "；".join(reasons),
+                    "source": candidate.source,
+                    "notes": candidate.notes,
+                }
+            )
+        candidates.sort(
+            key=lambda row: (
+                row["manual_priority"],
+                row["effective_use_count"],
+                row["last_used_at"] or datetime.min,
+                -row["candidate_id"],
+            ),
+            reverse=True,
+        )
+        for index, row in enumerate(candidates):
+            row["recommended"] = index == 0
+
+    requisition_history = sorted(
+        [*official_history, *legacy_history],
+        key=lambda row: (
+            (
+                row["document_date"].isoformat()
+                if row["document_date"] is not None
+                else ""
+            ),
+            row["document_id"],
+        ),
+        reverse=True,
+    )
+    for row in requisition_history:
+        document_date = row.get("document_date")
+        if isinstance(document_date, datetime):
+            row["document_date"] = utc_naive_to_api(document_date)
+        elif isinstance(document_date, date):
+            row["document_date"] = (
+                f"{document_date.isoformat()}T00:00:00+08:00"
+            )
+    for row in candidates:
+        if isinstance(row.get("last_used_at"), datetime):
+            row["last_used_at"] = utc_naive_to_api(row["last_used_at"])
+    for row in manual_history:
+        if isinstance(row.get("selected_at"), datetime):
+            row["selected_at"] = utc_naive_to_api(row["selected_at"])
+    return {
+        "product_id": product.id,
+        "customer_id": product.customer_id,
+        "original_material_code": original_code or None,
+        "current_material": {
+            "material_id": current_material.id if current_material is not None else None,
+            "material_code": (
+                current_material.code if current_material is not None else None
+            ),
+            "supplier_name": (
+                current_material.supplier_name if current_material is not None else None
+            ),
+            "layer_count": product.layer_count,
+            "flute_type": product.flute_type,
+        },
+        "candidates": candidates,
+        "candidate_summary": candidates,
+        "requisition_history": requisition_history,
+        "manual_selection_history": manual_history,
+    }
+
+
+@router.get("/pending/{item_id}/material-history")
+def pending_material_history(
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    item = _item_or_404(db, item_id)
+    _order_customer_for_item(db, item, user)
+    rows = db.scalars(
+        select(CustomerMaterialSelectionHistory)
+        .where(CustomerMaterialSelectionHistory.order_item_id == item.id)
+        .order_by(
+            CustomerMaterialSelectionHistory.selected_at.asc(),
+            CustomerMaterialSelectionHistory.id.asc(),
+        )
+    ).all()
+    actor_ids = {row.selected_by for row in rows if row.selected_by is not None}
+    actors = (
+        {
+            actor.id: actor
+            for actor in db.scalars(select(User).where(User.id.in_(actor_ids))).all()
+        }
+        if actor_ids
+        else {}
+    )
+    history_items = [
+            {
+                "id": row.id,
+                "candidate_id": row.candidate_id,
+                "original_material_code": row.original_material_code_snapshot,
+                "original_material_confidence": row.original_material_confidence,
+                "original_material_code_snapshot": row.original_material_code_snapshot,
+                "selected_material_id": row.selected_material_id,
+                "selected_material_code": row.selected_material_code_snapshot,
+                "selected_material_code_snapshot": row.selected_material_code_snapshot,
+                "supplier_name": row.selected_supplier_name_snapshot,
+                "selected_supplier_name_snapshot": row.selected_supplier_name_snapshot,
+                "layer_count": row.layer_count_snapshot,
+                "flute_type": row.flute_type_snapshot,
+                "source_type": row.source_type,
+                "source_reference": row.source_reference,
+                "selection_reason": row.selection_reason,
+                "sync_product": row.sync_product,
+                "selected_by": row.selected_by,
+                "selected_by_name": (
+                    actors[row.selected_by].display_name
+                    or actors[row.selected_by].real_name
+                    or actors[row.selected_by].username
+                )
+                if row.selected_by in actors
+                else None,
+                "selected_at": row.selected_at,
+            }
+            for row in rows
+        ]
+    return {
+        "item_id": item.id,
+        "items": history_items,
+        "history": history_items,
+    }
+
+
+@router.get("/material-candidates")
+def list_material_candidates(
+    customer_id: int | None = Query(default=None, gt=0),
+    q: str | None = Query(default=None, max_length=250),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    query = select(CustomerMaterialCandidate).order_by(
+        CustomerMaterialCandidate.customer_id.asc(),
+        CustomerMaterialCandidate.original_material_code.asc(),
+        CustomerMaterialCandidate.manual_priority.desc(),
+        CustomerMaterialCandidate.id.asc(),
+    )
+    allowed = _allowed_customer_ids(user, db)
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+        query = query.where(CustomerMaterialCandidate.customer_id == customer_id)
+    elif allowed is not None:
+        query = query.where(CustomerMaterialCandidate.customer_id.in_(allowed))
+    if not include_inactive:
+        query = query.where(CustomerMaterialCandidate.is_active.is_(True))
+    keyword = str(q or "").strip()
+    if keyword:
+        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        query = query.where(
+            or_(
+                CustomerMaterialCandidate.original_material_code.ilike(pattern, escape="\\"),
+                CustomerMaterialCandidate.supplier_name.ilike(pattern, escape="\\"),
+                CustomerMaterialCandidate.actual_material_code_snapshot.ilike(pattern, escape="\\"),
+            )
+        )
+    candidates = db.scalars(query).all()
+    customers = {
+        row.id: row
+        for row in db.scalars(
+            select(Customer).where(
+                Customer.id.in_({candidate.customer_id for candidate in candidates})
+            )
+        ).all()
+    } if candidates else {}
+    items = []
+    for candidate in candidates:
+        material = (
+            db.get(Material, candidate.actual_material_id)
+            if candidate.actual_material_id is not None
+            else None
+        )
+        items.append(
+            {
+                "id": candidate.id,
+                "candidate_id": candidate.id,
+                "customer_id": candidate.customer_id,
+                "customer_name": customers.get(candidate.customer_id).name
+                if customers.get(candidate.customer_id)
+                else None,
+                "original_material_code": candidate.original_material_code,
+                "material_id": candidate.actual_material_id,
+                "material_code": material.code
+                if material is not None
+                else candidate.actual_material_code_snapshot,
+                "supplier_name": material.supplier_name
+                if material is not None
+                else candidate.supplier_name,
+                "layer_count": material.layer_count if material is not None else None,
+                "manual_priority": candidate.manual_priority,
+                "is_active": candidate.is_active,
+                "material_is_active": material.is_active if material is not None else False,
+                "source": candidate.source,
+                "notes": candidate.notes,
+                "created_at": candidate.created_at,
+                "updated_at": candidate.updated_at,
+            }
+        )
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/material-candidates", status_code=status.HTTP_201_CREATED)
+def create_material_candidate(
+    payload: CustomerMaterialCandidateCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    customer = db.get(Customer, payload.customer_id)
+    if customer is None or not customer.is_active:
+        raise HTTPException(status_code=404, detail="客户不存在或已停用")
+    require_customer_access(customer.id, user, db)
+    material = _candidate_material_or_404(db, payload.material_id)
+    original_code = payload.original_material_code.strip()
+    supplier_name = (material.supplier_name or "未设置供应商").strip()
+    candidate = CustomerMaterialCandidate(
+        customer_id=customer.id,
+        original_material_code=original_code,
+        normalized_original_material_code=normalize_material_candidate_key(original_code),
+        supplier_name=supplier_name,
+        normalized_supplier_name=normalize_supplier_candidate_key(supplier_name),
+        actual_material_id=material.id,
+        actual_material_code_snapshot=material.code,
+        manual_priority=payload.manual_priority,
+        is_active=payload.is_active,
+        source=payload.source.strip(),
+        notes=(payload.notes or "").strip() or None,
+        created_by=user.id,
+        updated_by=user.id,
+    )
+    db.add(candidate)
+    try:
+        db.flush()
+        _material_candidate_audit(
+            db,
+            user=user,
+            action="CREATE_MATERIAL_CANDIDATE",
+            candidate_id=candidate.id,
+            details={
+                "customer_id": customer.id,
+                "original_material_code": original_code,
+                "material_id": material.id,
+                "material_code": material.code,
+            },
+            description="新增客户材质候选",
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该客户材质候选已存在") from exc
+    return {"id": candidate.id, "message": "客户材质候选已保存"}
+
+
+@router.put("/material-candidates/{candidate_id}")
+def update_material_candidate(
+    candidate_id: int,
+    payload: CustomerMaterialCandidateUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    candidate = _candidate_or_404(db, candidate_id)
+    require_customer_access(candidate.customer_id, user, db)
+    before = {
+        "original_material_code": candidate.original_material_code,
+        "material_id": candidate.actual_material_id,
+        "manual_priority": candidate.manual_priority,
+        "is_active": candidate.is_active,
+        "source": candidate.source,
+        "notes": candidate.notes,
+    }
+    if "original_material_code" in payload.model_fields_set:
+        original_code = str(payload.original_material_code or "").strip()
+        candidate.original_material_code = original_code
+        candidate.normalized_original_material_code = normalize_material_candidate_key(
+            original_code
+        )
+    if "material_id" in payload.model_fields_set and payload.material_id is not None:
+        material = _candidate_material_or_404(db, payload.material_id)
+        supplier_name = (material.supplier_name or "未设置供应商").strip()
+        candidate.actual_material_id = material.id
+        candidate.actual_material_code_snapshot = material.code
+        candidate.supplier_name = supplier_name
+        candidate.normalized_supplier_name = normalize_supplier_candidate_key(
+            supplier_name
+        )
+    for field_name in ("manual_priority", "is_active", "source", "notes"):
+        if field_name not in payload.model_fields_set:
+            continue
+        value = getattr(payload, field_name)
+        if field_name in {"source", "notes"}:
+            value = str(value or "").strip() or ("manual" if field_name == "source" else None)
+        setattr(candidate, field_name, value)
+    candidate.updated_by = user.id
+    candidate.updated_at = utc_now_naive()
+    try:
+        db.flush()
+        _material_candidate_audit(
+            db,
+            user=user,
+            action="UPDATE_MATERIAL_CANDIDATE",
+            candidate_id=candidate.id,
+            details={
+                "before": before,
+                "after": {
+                    "original_material_code": candidate.original_material_code,
+                    "material_id": candidate.actual_material_id,
+                    "manual_priority": candidate.manual_priority,
+                    "is_active": candidate.is_active,
+                    "source": candidate.source,
+                    "notes": candidate.notes,
+                },
+            },
+            description="更新客户材质候选",
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="更新后与现有客户材质候选重复") from exc
+    return {"id": candidate.id, "message": "客户材质候选已更新"}
+
+
 @router.put("/pending/{item_id}/material")
 def update_pending_material(
     item_id: int,
@@ -3062,7 +4015,7 @@ def update_pending_material(
     user: User = Depends(can_operate),
 ) -> dict:
     item = _item_or_404(db, item_id)
-    _require_order_item_customer_access(db, item, user)
+    _, customer = _order_customer_for_item(db, item, user)
     if item.requisition_status != "未报料":
         raise HTTPException(status_code=409, detail="已生成报料单的明细不能更换供应商或材质")
     if item.material_status == "received":
@@ -3087,6 +4040,25 @@ def update_pending_material(
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
+    candidate: CustomerMaterialCandidate | None = None
+    original_code = (
+        item.snapshot_original_material_code or item.snapshot_material or ""
+    ).strip()
+    original_confidence = (
+        "frozen" if (item.snapshot_original_material_code or "").strip() else "legacy_fallback"
+    )
+    normalized_original = normalize_material_candidate_key(original_code)
+    if payload.candidate_id is not None:
+        candidate = _candidate_or_404(db, payload.candidate_id)
+        if not candidate.is_active:
+            raise HTTPException(status_code=409, detail="所选客户材质候选已停用")
+        if candidate.customer_id != customer.id:
+            raise HTTPException(status_code=400, detail="所选材质候选不属于当前客户")
+        if (
+            candidate.normalized_original_material_code != normalized_original
+            or candidate.actual_material_id != material.id
+        ):
+            raise HTTPException(status_code=400, detail="候选与当前客户原始材质或所选材质不一致")
     if payload.layer_count is not None and payload.layer_count != material.layer_count:
         raise HTTPException(status_code=400, detail="请求层数与所选材质真实层数不一致")
     layer_count = material.layer_count
@@ -3145,6 +4117,30 @@ def update_pending_material(
             source="requisition.pending-material.sync-product",
             confirmation_token=payload.product_confirmation_token,
         )
+    source_type = str(payload.source_type or "").strip() or (
+        "material_candidate" if candidate is not None else "manual"
+    )
+    history = CustomerMaterialSelectionHistory(
+        customer_id=customer.id,
+        order_item_id=item.id,
+        product_id=item.product_id,
+        candidate_id=candidate.id if candidate is not None else None,
+        original_material_code_snapshot=original_code or None,
+        normalized_original_material_code_snapshot=normalized_original or None,
+        original_material_confidence=original_confidence,
+        selected_material_id=material.id,
+        selected_material_code_snapshot=material.code,
+        selected_supplier_name_snapshot=material.supplier_name,
+        layer_count_snapshot=layer_count,
+        flute_type_snapshot=flute_type,
+        source_type=source_type,
+        source_reference=(payload.source_reference or "").strip() or None,
+        selection_reason=(payload.selection_reason or "").strip() or None,
+        sync_product=payload.sync_product,
+        selected_by=user.id,
+        selected_at=utc_now_naive(),
+    )
+    db.add(history)
     _audit(
         db,
         user=user,
@@ -3158,6 +4154,8 @@ def update_pending_material(
                 "layer_count": layer_count,
                 "flute_type": flute_type,
                 "sync_product": payload.sync_product,
+                "candidate_id": candidate.id if candidate is not None else None,
+                "source_type": source_type,
             },
         },
         description="更换未报料明细供应商和材质",
@@ -3170,6 +4168,9 @@ def update_pending_material(
         "supplier_name": material.supplier_name,
         "layer_count": layer_count,
         "flute_type": flute_type,
+        "selection_history_id": history.id,
+        "original_material_code": original_code or None,
+        "original_material_confidence": original_confidence,
         "message": (
             f"已将该明细改为 {material.supplier_name or '未设置供应商'} / "
             f"{material.code} / {flute_type or '-'}"
@@ -5033,6 +6034,14 @@ def create_supplier_order_from_merge_group(
                 SupplierRequisitionOrderItem(
                     supplier_order_id=order.id,
                     order_item_id=order_item.id,
+                    **_supplier_item_snapshot_values(
+                        db,
+                        order_item,
+                        fallback_material_id=order.material_id,
+                        fallback_supplier_name=order.supplier_name,
+                        fallback_layer_count=order.layer_count,
+                        fallback_flute_type=order.flute_type,
+                    ),
                     order_number=order_item.item_order_number,
                     product_code=req_item.product_code_snapshot,
                     product_name=req_item.product_name_snapshot,
@@ -5840,6 +6849,14 @@ def create_supplier_order(
         db.add(SupplierRequisitionOrderItem(
             supplier_order_id=order.id,
             order_item_id=m.item_id,
+            **_supplier_item_snapshot_values(
+                db,
+                oi,
+                fallback_material_id=order.material_id,
+                fallback_supplier_name=order.supplier_name,
+                fallback_layer_count=order.layer_count,
+                fallback_flute_type=order.flute_type,
+            ),
             order_number=m.order_number,
             product_code=m.product_code,
             product_name=m.product_name,

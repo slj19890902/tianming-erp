@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-07-19 N039/N040 | 复合产品生产闭环与客户材质候选追溯
+
+- N039 已经人工验收并合并到主功能分支，合并提交 `ba34b7e`；正式数据库已在在线备份后由 `cc59v8x9z48` 线性升级到 `cd60v8x9z49`，迁移后 `integrity_check=ok`、外键异常 0。升级前备份为 `data/backups/carton_erp_before_n039_cd60_20260719_160006.sqlite3`，SHA-256 为 `6FC7024D828858BA056F16F7ABC0F36A3102AD03C429FD5D9A31DA9FB1A10B0F`。
+- N040 独立 worktree：`D:\tm-worktrees\erp-material-candidate-trace-n040`；分支：`feature/material-candidate-trace-n040`。新增客户材质候选、不可变选择历史和订单原始材质快照；系统只给出可解释推荐，必须人工确认，默认不同步常用箱。
+- N040 迁移 `ce61v8x9z50` 线性接在 N039 `cd60v8x9z49` 后。正式库尚未执行 N040 迁移；副本已完成 `cd60 -> ce61 -> cd60 -> ce61`，空事实可回退，产生候选或历史事实后 downgrade fail-closed，历史 UPDATE/DELETE 被数据库触发器拒绝。
+- N040 业务契约与迁移专项 `7 passed`；候选维护入口位于“常用箱与材质”，待报料弹窗显示客户原始代码、候选供应商/材质/参考价/历史次数/推荐理由，并保留手工选择。本阶段未 commit、未 push，待跨模块回归与隔离 UAT。
+
 ## 2026-07-17 P2/P3 | PDF 预览客户范围隔离与成本脱敏（已集成，待统一隔离 UAT）
 
 - P2 独立分支 `feature/pdf-preview-customer-scope-p2` 提交 `06d0489`，合并提交 `6652b77`；P3 独立分支 `feature/pdf-preview-cost-redaction-p3` 提交 `87e9d46`，合并提交 `a791da0`。本轮没有新增 migration，没有连接或写入正式数据库，也没有创建正式订单。

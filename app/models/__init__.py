@@ -14,6 +14,10 @@ from app.models.access_control import (  # noqa: E402,F401
 )
 from app.models.audit import OperationLog  # noqa: E402,F401
 from app.models.customer import Customer  # noqa: E402,F401
+from app.models.customer_material import (  # noqa: E402,F401
+    CustomerMaterialCandidate,
+    CustomerMaterialSelectionHistory,
+)
 from app.models.material import Material  # noqa: E402,F401
 from app.models.master_data_object_version import (  # noqa: E402,F401
     MasterDataObjectVersion,

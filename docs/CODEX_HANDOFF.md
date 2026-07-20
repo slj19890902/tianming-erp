@@ -1,5 +1,17 @@
 # Codex 项目交接
 
+## 2026-07-20 | 消失主任务恢复与 N039 后总目标进度复核
+
+- 已从 Codex 本地任务索引恢复原主任务 `019eed2f-5814-7322-a462-c32d91b91bd1`（“天明ERP系统主优化”）。任务文件未丢失；该任务仍绑定旧工作目录 `C:\Users\Administrator\Documents\天明ERP系统搭建`，状态为 `notLoaded`，最后一轮在并行收口 N041/N042/N043/N045 时被中断。
+- 权威总目标已迁移到 `D:\tm-erp-support\project-data\artifacts\天明ERP_N039以后持续优化总目标_20260719.md`，阶段为 Phase 0 与 N039–N046；后续对话又增加 N047 订单明细全链路追溯、客户 xlsx 对账核对和 NAS 备份兼容任务。
+- 当前主功能分支 `feature/v0208-common-box-edit` 为 `fb0aaca`，与远端同名分支同步；正式服务 8000 健康检查为 `ok=true`，应用版本 `v0.22.16`。正式库只读核验为 `ce61v8x9z50`、`integrity_check=ok`、外键异常 0，说明 N039/N040 已合入且正式库已到 N040 迁移。启动日志确认 2026-07-20 17:43 由启动脚本自动执行 `cd60 -> ce61`；本轮未找到可现场验证的 N040 专用迁移前本地备份，NAS 备份目标又不可访问，因此迁移前备份审计链仍需补证或补做当前恢复点。
+- 按最终交付闸门，已完成 Phase 0 历史 worktree 收口、N039 复合产品闭环和 N040 客户材质候选追溯。当前又有 6 个活动 worktree 全部含未提交内容，超过原总目标“同时活动不超过 3 个”的约束，需要先收口再继续扩展。
+- N041 首版已人工验收、提交并推送为 `9cce9fa`，但独立复核后的并发、合同快照、跨客户和打印修补仍有 10 个文件未提交，需重新 UAT/提交/集成；正式库没有 N041 表。
+- N042 新振 Excel 已完成本地安全收口和临时副本迁移演练，但全部改动未提交，临时 revision `n042tmpv8x9z51` 禁止合并；必须在 N041 `df62v8x9z51` 集成后重新编号并重做迁移往返及人工 UAT。
+- N043 邮箱收单 P1 安全修补已有本地回归证据，但未提交、未连接专用测试邮箱；其 `cf62v8x9z51` 仍直接接 `ce61v8x9z50`，同样必须在线性化后重演练。N044 尚未实现，仍缺八方/鸣朋网站取证；N045 仅有只读库存规则和成本计算底座，实际成本覆盖为 0、AI 未就绪；N046 仅完成审计设计；N047 仅完成需求确认，尚未建 worktree。
+- 额外 WIP：客户 xlsx 对账核对已实现无迁移版本但未提交/UAT；NAS 映射盘备份清理兼容修复未提交，且本轮现场 `Z:\sata1-18015598002\BoxERP\backups` 不可访问。
+- 当前正式业务表为订单/明细 `33/175`，权威原始层 `legacy_ruida_orders/legacy_ruida_order_items` 为 `39,922/40,449`；约 4 万历史订单仍保留在 legacy 原始层，并非全部留在正式业务表。本轮仅执行任务恢复、Git/worktree、服务和 SQLite 只读核验；未执行测试写入、迁移、业务数据写入、提交、push 或分支合并。结论：现有 ERP 主系统可用，但 N039 后持续优化总目标尚未完成。
+
 ## 2026-07-19 N039/N040 | 复合产品生产闭环与客户材质候选追溯
 
 - N039 已经人工验收并合并到主功能分支，合并提交 `ba34b7e`；正式数据库已在在线备份后由 `cc59v8x9z48` 线性升级到 `cd60v8x9z49`，迁移后 `integrity_check=ok`、外键异常 0。升级前备份为 `data/backups/carton_erp_before_n039_cd60_20260719_160006.sqlite3`，SHA-256 为 `6FC7024D828858BA056F16F7ABC0F36A3102AD03C429FD5D9A31DA9FB1A10B0F`。
@@ -1480,3 +1492,22 @@ legacy_ruida_* 原始层
 - 自动验证：N038 后端/前端 `8 passed`；PDF 训练库前端 `6 passed`；N016 模板生命周期/执行 `27 passed`；订单 PDF 导入 `29 passed`；思迈尔/天华/高泰/PDF 修复回归 `22 passed`；Python 编译和 `git diff --check` 通过。按安全边界未运行会写现有数据库的 `tests/test_phase18_pdf_training.py` 集成测试。
 - 隔离 UAT 已启动于 `http://127.0.0.1:18067/`，数据库副本为 `D:\tm-uat\pdf_correction_n038_20260718_105028\carton_erp_uat.sqlite3`。启动日志明确打印该副本路径；副本 `integrity_check=ok`、外键异常 0、head=`bc56v8x9z46`，基线正式订单 31 条。测试账号 `admin` 的副本密码为 `123456`，正式账号密码未修改。
 - 下一步人工验证“订单管理 -> PDF 识别 -> 提交改进 -> 获得样本 ID -> 训练库待复核”，并再次确认正式订单数量不变；人工通过后才允许提交和推送子分支。
+
+## 72. Codex 会话目录迁移恢复诊断（2026-07-20）
+
+- 用户将原 `C:\Users\Administrator\.codex` 移到 `D:\.codex` 后，Codex 在默认 C 盘位置重新创建了新的最小数据目录，因此旧会话未显示；本轮仅做只读核验，未执行恢复、移动、覆盖或删除。
+- `D:\.codex\state_5.sqlite` 的 `PRAGMA integrity_check=ok`，包含 636 条线程记录，其中活动 629 条、归档 7 条；D 盘实际存在活动会话文件 629 个、归档文件 7 个，文件名中的 636 个线程 ID 与数据库线程 ID 完全一一对应，无缺失、无多余、无 0 字节文件，且每个文件首条 JSON 均可解析。
+- `D:\.codex\session_index.jsonl` 共 458 行，全部为有效 JSON，包含 403 个唯一索引会话；状态库中约 584 条线程标题或工作目录与天明 ERP/纸箱厂上下文相关。`D:\.codex\sqlite\codex-dev.db` 同样 `integrity_check=ok`。
+- 当前新建的 `C:\Users\Administrator\.codex` 仅有 1 个本轮新会话；旧状态库的 636 条 `rollout_path` 仍全部指向原 C 盘路径，因此会话消失的直接原因是路径失配，不是旧会话文件丢失。
+- 建议下一步在完全退出 Codex 后，分别备份当前 C 盘新目录和完整 D 盘旧目录，再把原 C 盘默认路径安全映射到 `D:\.codex` 并启动验证；优先使用可回退的目录链接方案，不直接批量改写 SQLite。恢复前另行确认进程已退出，并保留本轮新会话数据。
+- 本轮未连接、迁移或写入 ERP 数据库；仅更新本交接文档。
+
+## 73. Codex 用户数据目录正式切换到 D 盘（2026-07-20）
+
+- 用户明确要求不做备份、直接把 Codex 用户数据目录改为 `D:\.codex`，并计划在本轮完成后完全退出再重启 Codex；本轮未删除或移动当前 C 盘目录。
+- 已写入 Windows 当前用户环境变量 `CODEX_HOME=D:\.codex`，注册表 `HKCU\Environment` 查询值一致；本机 `codex-cli 0.145.0-alpha.18` 可识别 `CODEX_HOME`，使用 D 盘目录加载 `features list` 与 `mcp list` 成功，说明 `D:\.codex\config.toml` 可正常解析。
+- 已更新 D 盘配置中的 bundled marketplace、Node REPL `CODEX_HOME`、可信代码路径、shell 环境变量和 ERP 项目信任路径；Codex 应用本体及随应用安装的运行时仍位于 Windows 的 C 盘安装目录，历史会话与用户状态改由 D 盘承载。
+- 已在单个 SQLite 事务内把 `D:\.codex\state_5.sqlite` 的 636 条 `rollout_path` 全部改为实际 D 盘文件；复核活动 629、归档 7、636/636 文件存在、C 盘会话路径 0、`integrity_check=ok`。
+- 已把状态库中 578 条旧天明 ERP 工作目录以及 `sqlite\codex-dev.db` 目录缓存中的 8 条 ERP 工作目录改为 `D:\纸箱厂erp软件搭建`；旧 ERP 工作目录命中 0，两个 SQLite 状态库均 `integrity_check=ok`。
+- 已同步更新 `.codex-global-state.json` 及其既有 `.bak` 中非提示词历史的 Codex visualization 路径、ERP 保存/活动工作区、排队上下文和本地项目路径；结构性 C 盘 Codex/旧 ERP 路径均为 0。
+- 本轮未连接、迁移或写入 ERP 数据库；写入范围仅为 Codex 用户环境变量、`D:\.codex` 配置/状态元数据和本交接文档。重启后应从 D 盘加载旧会话；本轮运行在新 C 盘目录中的当前会话未合并到旧状态库，符合用户“不备份”的明确要求。

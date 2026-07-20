@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.customer_contract import CustomerContract
     from app.models.product import Product
 
 
@@ -50,6 +51,7 @@ class Order(Base):
             name="ck_sales_orders_payment_status",
         ),
         UniqueConstraint("order_number", name="uq_sales_orders_order_number"),
+        UniqueConstraint("source_contract_id", name="uq_sales_orders_source_contract_id"),
         Index("ix_sales_orders_customer_id", "customer_id"),
         Index("ix_sales_orders_customer_po", "customer_po"),
         Index("ix_sales_orders_customer_po_group", "customer_id", "customer_po"),
@@ -62,6 +64,10 @@ class Order(Base):
     customer_id: Mapped[int] = mapped_column(
         ForeignKey("customers.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    source_contract_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customer_contracts.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     customer_po: Mapped[str | None] = mapped_column(String(150), nullable=True)
     order_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -102,6 +108,9 @@ class Order(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="OrderItem.id",
+    )
+    source_contract: Mapped["CustomerContract | None"] = relationship(
+        foreign_keys=[source_contract_id], uselist=False
     )
 
 

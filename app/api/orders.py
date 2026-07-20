@@ -3052,11 +3052,13 @@ def update_order(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-def create_order(
+def _create_order_impl(
     payload: OrderCreate,
-    db: Session = Depends(get_db),
-    user: User = Depends(can_create),
+    db: Session,
+    user: User,
+    *,
+    commit: bool = True,
+    source_contract_id: int | None = None,
 ):
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, current_user=user, db=db)
@@ -3302,6 +3304,7 @@ def create_order(
         order = Order(
             order_number=reserve_next_order_number(db, order_date),
             customer_id=customer.id,
+            source_contract_id=source_contract_id,
             customer_po=customer_po,
             order_date=order_date,
             delivery_date=payload.delivery_date,
@@ -3530,8 +3533,11 @@ def create_order(
             if not is_composite_product(resolved_products[index]):
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
-        db.commit()
-        db.refresh(order)
+        if commit:
+            db.commit()
+            db.refresh(order)
+        else:
+            db.flush()
         response = _order_response(
             order,
             user,
@@ -3567,6 +3573,21 @@ def create_order(
     except Exception:
         db.rollback()
         raise
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_order(
+    payload: OrderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+):
+    """Create a normal order and preserve the existing public API behavior.
+
+    The delegated implementation still owns ``create_order_item_bom_snapshots``
+    and ``create_or_refresh_production_task`` so normal orders and contractual
+    orders follow the identical production workflow.
+    """
+    return _create_order_impl(payload, db, user, commit=True)
 
 
 @router.get("/items/{item_id}/bom")

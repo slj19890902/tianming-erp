@@ -1501,3 +1501,11 @@ legacy_ruida_* 原始层
 - 新迁移 `cf62v8x9z51` 线性接在 `ce61v8x9z50` 后，只给生产完工和转库存事实增加撤销审计字段，并把每任务唯一完工改为仅约束 `status=posted` 的活动唯一索引；不修改订单、来料或正式库存历史数据。
 - 隔离验证：新迁移从空库完整升级到 head，并完成 `cf62 -> ce61 -> cf62` 往返；撤销审计触发器的不可更新、不可删除和存在事实时禁止降级均通过。生产服务专项 `15 passed`；三楼/来料/PDF/前端组合 `102 passed`；本轮新增静态、匹配和迁移专项 `10 passed`；既有 N029 组合另有 `24 passed`，2 项仅因家庭环境缺少 `cv2` 未执行成功。Python 编译、两份前端内联 JavaScript 语法和 `git diff --check` 均通过。
 - 全程只使用 pytest 临时 SQLite 和单独临时迁移库；未连接、迁移或写入工厂正式数据库。验收前不得更新 `origin/factory-current-baseline`。人工验收通过后，把本提交及已独立完成的订单删除审计修复提交 `d8dec72` 合入交付分支，再由发布负责人把验收后的交付 SHA fast-forward 到 `factory-current-baseline`；工厂夜间更新脚本才会备份数据库、执行 `git merge --ff-only`、迁移并重启。
+
+## 73. 2026-07-21 工厂夜间更新发布集成
+
+- 用户已明确验收并授权集成订单删除审计修复 `d8dec72` 与订单录入/生产回退/库位联动 `8ab664f`，发布 worktree 为 `D:\tm-worktrees\erp-factory-release-20260721`，分支为 `codex/factory-release-20260721`。
+- 发布基线固定为远端 `origin/feature/v0208-common-box-edit` 的 `fb0aaca`。先集成订单删除修复，再集成工作流与 UI 修复；唯一内容冲突位于 `_flow_delete_message()`，最终同时保留有效来料、撤销来料审计、有效生产完工和撤销生产审计四类专用 409 文案。
+- 最终发布差异相对 `fb0aaca` 共 18 个文件：不删除 reversed 来料或生产审计，不绕过外键；新增迁移仍只有 `cf62v8x9z51`，Alembic 保持单一 head。
+- 发布前组合回归：订单及删除原子性、来料、三楼库位、PDF 导入、生产工作流、前端静态断言、迁移保护和工厂更新脚本共 `228 passed`。Python 全量编译、`static/index.html` 与 `static/warehouse.html` 内联 JavaScript 语法、`git diff --check` 均通过。
+- 验证只使用 pytest 隔离 SQLite 和测试迁移库，没有连接或写入工厂数据库。发布动作仅允许用带远端旧 SHA 租约的 fast-forward 推送更新 `origin/factory-current-baseline`；工厂电脑仍由 `scripts/admin/update_erp.ps1` 在夜间自行获取、备份、完整性检查、快进、迁移和重启。

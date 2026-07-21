@@ -128,6 +128,8 @@ class LocationPayload(BaseModel):
     location_code: str = Field(min_length=1, max_length=50)
     location_name: str = Field(min_length=1, max_length=100)
     warehouse_type: str
+    warehouse_floor: int | None = Field(default=None, ge=1, le=99)
+    area_code: str | None = Field(default=None, max_length=30)
     remarks: str | None = None
 
     @field_validator("location_code", "location_name")
@@ -141,6 +143,23 @@ class LocationPayload(BaseModel):
         if value not in {"finished", "semi_finished", "shared"}:
             raise ValueError("库位类型必须是成品、半成品或共用")
         return value
+
+    @field_validator("area_code")
+    @classmethod
+    def normalize_area(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip().upper()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_floor_area(self):
+        if self.warehouse_floor == 3:
+            if not self.area_code:
+                raise ValueError("三楼库位必须填写所属区域")
+            if self.warehouse_type == "semi_finished":
+                raise ValueError("三楼平面图目前只接入成品或共用库位")
+            if not self.location_code.upper().startswith(f"{self.area_code}-"):
+                raise ValueError("三楼货位编码必须以区域编码加连字符开头")
+        return self
 
 
 class Floor3PalletItemPayload(BaseModel):
@@ -3412,12 +3431,46 @@ def search_template_locations(
 def create_location(
     payload: LocationPayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(admin_only),
+    user: User = Depends(admin_only),
 ) -> dict:
-    row = WarehouseLocation(**payload.model_dump())
-    db.add(row)
     try:
+        if payload.warehouse_floor == 3:
+            existing_count = int(
+                db.scalar(
+                    select(func.count(Floor3LocationLayout.id))
+                    .join(WarehouseLocation, WarehouseLocation.id == Floor3LocationLayout.location_id)
+                    .where(WarehouseLocation.area_code == payload.area_code)
+                )
+                or 0
+            )
+            column_count = 8
+            row_index, column_index = divmod(existing_count, column_count)
+            if row_index >= 10:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该区域平面图的自动排位已满，请先在平面图调整现有货位大小或布局后再新增。",
+                )
+            row = create_layout_slot(
+                db,
+                area_code=payload.area_code or "",
+                location_code=payload.location_code,
+                location_name=payload.location_name,
+                left_pct=Decimal(column_index * 12),
+                top_pct=Decimal(row_index * 10),
+                width_pct=Decimal("10"),
+                height_pct=Decimal("8"),
+                z_index=4,
+                operator_id=user.id,
+            )
+            row.warehouse_type = payload.warehouse_type
+            row.remarks = payload.remarks
+        else:
+            row = WarehouseLocation(**payload.model_dump())
+            db.add(row)
         db.commit()
+    except Floor3LocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="库位编码已存在") from error
@@ -3435,6 +3488,11 @@ def update_location(
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
     _reject_v11_location_configuration(row)
+    if payload.warehouse_floor == 3:
+        raise HTTPException(
+            status_code=409,
+            detail="已有普通库位不能直接改成三楼平面图货位；请在三楼区域新增物理位后迁移库存。",
+        )
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     try:

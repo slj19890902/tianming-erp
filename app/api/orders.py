@@ -45,6 +45,7 @@ from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.production import ProductionCompletion
 from app.models.product_bom import (
     SalesOrderItemBomComponent,
     SalesOrderItemBomDemandAdjustment,
@@ -2295,6 +2296,19 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     ):
         labels.append("供应商报料单")
 
+    production_statuses = set(
+        db.scalars(
+            select(ProductionCompletion.status)
+            .join(OrderItem, OrderItem.id == ProductionCompletion.order_item_id)
+            .where(OrderItem.order_id.in_(order_ids))
+            .distinct()
+        ).all()
+    )
+    if "posted" in production_statuses:
+        labels.append("生产完工")
+    elif production_statuses:
+        labels.append("已撤销生产审计")
+
     if _active_predelivery_order_ids(db, order_ids):
         labels.append("有效预送货")
     return labels
@@ -2305,6 +2319,10 @@ def _flow_delete_message(labels: list[str]) -> str:
         return "该订单存在有效来料实收记录，不能物理删除。请先撤销来料，再将订单标记为作废或归档。"
     if "已撤销来料审计" in labels:
         return "该订单存在已撤销来料审计记录，不能物理删除。请将订单标记为作废或归档。"
+    if "生产完工" in labels:
+        return "该订单存在有效生产完工记录，不能物理删除。请先撤销生产确认，再将订单标记为作废或归档。"
+    if "已撤销生产审计" in labels:
+        return "该订单存在已撤销生产审计记录，不能物理删除。请将订单标记为作废或归档。"
     if "有效预送货" in labels:
         return "该订单仍存在有效预送货流程，请先撤回或作废预送货后再删除。"
     if "供应商报料单" in labels:

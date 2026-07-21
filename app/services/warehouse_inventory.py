@@ -980,6 +980,7 @@ def release_finished_reservation(
     release_reason: str,
     idempotency_key: str,
     allow_downstream: bool = False,
+    allow_production_reversal: bool = False,
 ) -> InventoryReservation:
     repeated = db.scalar(
         select(InventoryMovement).where(
@@ -1003,13 +1004,13 @@ def release_finished_reservation(
     lot = db.get(InventoryLot, reservation.inventory_lot_id)
     if lot is None:
         raise WarehouseInventoryError("关联库存批次不存在", 409)
-    if lot.source_ref_type == "production_completion":
+    if lot.source_ref_type == "production_completion" and not allow_production_reversal:
         raise WarehouseInventoryError(
             "生产完工自动预占属于完工事实，当前不允许手工释放", 409
         )
     from app.services.production_workflow import has_production_completion_facts
 
-    if reservation.order_item_id is not None and has_production_completion_facts(
+    if not allow_production_reversal and reservation.order_item_id is not None and has_production_completion_facts(
         db, [reservation.order_item_id]
     ):
         raise WarehouseInventoryError(

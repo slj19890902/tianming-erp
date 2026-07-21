@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -198,6 +199,19 @@ class TestStandardProductPriority:
         assert sm["size_differs"] is True  # PDF 与常用箱尺寸不同
         assert sm["pdf_material_code"] == "X9X/AB"
         assert "D4B" in sm["standard_material_label"]
+        assert item["product_manual_modified"] is False
+        assert sm["manual_modified"] is False
+
+    def test_standard_match_exposes_common_box_manual_modified_state(self):
+        from app.services.order_pdf_import import _apply_standard_product
+        prod, _mat = self._product()
+        prod.manual_modified = True
+        prod.manual_modified_at = datetime(2026, 7, 21, 8, 30)
+        item = {"product_name": "PDF识别内箱", "size_spec": "300*200*150mm"}
+        _apply_standard_product(item, prod)
+        assert item["product_manual_modified"] is True
+        assert item["product_manual_modified_at"] == "2026-07-21T08:30:00"
+        assert item["standard_match"]["manual_modified"] is True
 
     def test_material_label_format(self):
         from app.services.order_pdf_import import _material_label

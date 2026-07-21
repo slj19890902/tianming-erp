@@ -2416,6 +2416,12 @@ def _product_candidate(product: Product) -> dict:
         "material_id": product.material_id,
         "material_code": material.code if material else product.legacy_material_text,
         "sale_unit_price": str(product.sale_unit_price) if product.sale_unit_price is not None else None,
+        "manual_modified": bool(product.manual_modified),
+        "manual_modified_at": (
+            product.manual_modified_at.isoformat()
+            if product.manual_modified_at is not None
+            else None
+        ),
     }
 
 
@@ -2673,6 +2679,12 @@ def _apply_standard_product(item: dict, product: Product) -> None:
     item["base_crease_middle_mm"] = product.base_crease_middle_mm
     item["base_crease_right_mm"] = product.base_crease_right_mm
     item["base_report_notes"] = product.base_report_notes
+    item["product_manual_modified"] = bool(product.manual_modified)
+    item["product_manual_modified_at"] = (
+        product.manual_modified_at.isoformat()
+        if product.manual_modified_at is not None
+        else None
+    )
 
     # 对比信息（草稿页展示「已匹配常用箱 / 使用常用箱资料」）
     item["standard_match"] = {
@@ -2687,6 +2699,7 @@ def _apply_standard_product(item: dict, product: Product) -> None:
         "pdf_material_code": pdf_material_code,
         "standard_material_label": _material_label(material),
         "material_differs": bool(material and pdf_material_code),
+        "manual_modified": bool(product.manual_modified),
     }
 
 

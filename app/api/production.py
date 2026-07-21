@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     PermissionChecker,
+    RoleChecker,
     customer_scope_ids,
     get_db,
     has_permission,
@@ -17,6 +19,7 @@ from app.api.deps import (
     require_customer_access,
 )
 from app.models.order import Order, OrderItem
+from app.models.audit import OperationLog
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.user import User
 from app.services.production_workflow import (
@@ -33,6 +36,7 @@ from app.services.production_workflow import (
     list_production_completions,
     list_production_tasks,
     list_temporary_locations,
+    reverse_production_completion,
     transfer_direct_completion_to_stock,
 )
 from app.services.warehouse_inventory import WarehouseInventoryError
@@ -41,6 +45,7 @@ from app.services.warehouse_inventory import WarehouseInventoryError
 router = APIRouter()
 can_read = PermissionChecker("orders.view")
 can_complete = PermissionChecker("orders.status")
+admin_only = RoleChecker(["admin"])
 
 
 class CompletionBatchItem(BaseModel):
@@ -110,6 +115,18 @@ class StockTransferRequest(BaseModel):
     def trim_optional_text(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
         return normalized or None
+
+
+class CompletionReversalRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def trim_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("撤销生产确认必须填写原因")
+        return normalized
 
 
 def _allowed_customer_ids(user: User, db: Session) -> set[int] | None:
@@ -290,4 +307,67 @@ def post_completion_stock_transfer(
         raise HTTPException(
             status_code=409,
             detail="转库存记录已被其他请求修改，请刷新后重试",
+        ) from error
+
+
+@router.post("/completions/{completion_id}/revert")
+def revert_production_completion(
+    completion_id: int,
+    payload: CompletionReversalRequest,
+    user: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        customer_id = completion_customer_id(db, completion_id)
+        if customer_id is not None:
+            require_customer_access(customer_id, current_user=user, db=db)
+        result = reverse_production_completion(
+            db,
+            completion_id=completion_id,
+            operator_id=user.id,
+            reason=payload.reason,
+        )
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="REVERT_PRODUCTION_COMPLETION",
+                resource="ProductionCompletion",
+                details=json.dumps(
+                    {
+                        "reason": payload.reason,
+                        "completion_id": completion_id,
+                        "stock_transfer_id": result.transfer.id if result.transfer else None,
+                        "inventory_lot_id": result.inventory_lot_id,
+                        "reversed_semi_movement_ids": list(result.reversed_semi_movement_ids),
+                    },
+                    ensure_ascii=False,
+                ),
+                username=user.username,
+                role=user.role,
+                entity_type="production_completion",
+                entity_id=completion_id,
+                description="管理员撤销生产确认并回到待生产确认",
+            )
+        )
+        db.commit()
+        rows = list_production_completions(
+            db,
+            allowed_customer_ids=_allowed_customer_ids(user, db),
+            completion_ids=[completion_id],
+        )
+        return {
+            "message": "已撤销生产确认，订单已回到待生产确认",
+            "completion": rows[0] if rows else None,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except (ProductionWorkflowError, WarehouseInventoryError) as error:
+        db.rollback()
+        _raise_workflow_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="生产或库存记录已被其他操作修改，请刷新后重试",
         ) from error

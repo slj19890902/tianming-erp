@@ -117,7 +117,13 @@ class ProductionCompletionBatch(Base):
 class ProductionCompletion(Base):
     __tablename__ = "production_completions"
     __table_args__ = (
-        Index("uq_production_completions_task", "task_id", unique=True),
+        Index(
+            "uq_production_completions_task_active",
+            "task_id",
+            unique=True,
+            sqlite_where=text("status = 'posted'"),
+            postgresql_where=text("status = 'posted'"),
+        ),
         UniqueConstraint(
             "inventory_lot_id", name="uq_production_completions_inventory_lot"
         ),
@@ -127,6 +133,10 @@ class ProductionCompletion(Base):
         ),
         CheckConstraint(
             "quantity > 0", name="ck_production_completions_quantity"
+        ),
+        CheckConstraint(
+            "status IN ('posted','reversed')",
+            name="ck_production_completions_status",
         ),
         CheckConstraint(
             "initial_disposition IN ('direct','stock')",
@@ -161,10 +171,18 @@ class ProductionCompletion(Base):
         ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=True
     )
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), default="posted", server_default="posted", nullable=False
+    )
     completed_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    reversed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reversal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
@@ -186,6 +204,10 @@ class ProductionStockTransfer(Base):
             "length(request_hash) = 64",
             name="ck_production_stock_transfers_request_hash",
         ),
+        CheckConstraint(
+            "status IN ('posted','reversed')",
+            name="ck_production_stock_transfers_status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -200,10 +222,18 @@ class ProductionStockTransfer(Base):
     )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="posted", server_default="posted", nullable=False
+    )
     transferred_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     transferred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    reversed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reversal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )

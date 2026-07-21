@@ -28,6 +28,8 @@ from app.models.production import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryLot,
+    InventoryLocationMovement,
+    InventoryMovement,
     InventoryPallet,
     InventoryPalletItem,
     InventoryReservation,
@@ -45,6 +47,7 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     manual_finished_in,
+    release_finished_reservation,
     reserve_completed_finished_inventory,
 )
 from app.services.warehouse_inventory import _balances, _movement
@@ -108,6 +111,14 @@ class StockTransferResult:
     replayed: bool
 
 
+@dataclass(frozen=True)
+class CompletionReversalResult:
+    completion: ProductionCompletion
+    transfer: ProductionStockTransfer | None
+    inventory_lot_id: int | None
+    reversed_semi_movement_ids: tuple[int, ...]
+
+
 def _stable_key(*parts: object, max_length: int = 100) -> str:
     raw = ":".join(str(part).strip() for part in parts)
     if len(raw) <= max_length:
@@ -167,7 +178,10 @@ def has_production_completion_facts(
     return (
         db.scalar(
             select(ProductionCompletion.id)
-            .where(ProductionCompletion.order_item_id.in_(normalized))
+            .where(
+                ProductionCompletion.order_item_id.in_(normalized),
+                ProductionCompletion.status == "posted",
+            )
             .limit(1)
         )
         is not None
@@ -532,6 +546,7 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
             .where(
                 ProductionCompletion.order_item_id == item.id,
                 ProductionCompletion.initial_disposition == "direct",
+                ProductionCompletion.status == "posted",
                 ProductionStockTransfer.id.is_(None),
             )
         )
@@ -1020,7 +1035,10 @@ def complete_production_batch(
             raise ProductionWorkflowError("订单明细已送货，不能再确认生产完工", 409)
         existing_completion = db.scalar(
             select(ProductionCompletion.id)
-            .where(ProductionCompletion.task_id == task.id)
+            .where(
+                ProductionCompletion.task_id == task.id,
+                ProductionCompletion.status == "posted",
+            )
             .limit(1)
         )
         if existing_completion is not None:
@@ -1142,11 +1160,14 @@ def transfer_direct_completion_to_stock(
     completion = db.get(ProductionCompletion, completion_id)
     if completion is None:
         raise ProductionWorkflowError("生产完工记录不存在", 404)
+    if completion.status != "posted":
+        raise ProductionWorkflowError("生产完工记录已经撤销，不能再转入库存", 409)
     if completion.initial_disposition != "direct":
         raise ProductionWorkflowError("只有直接送货完工记录可以转库存", 409)
     existing_transfer = db.scalar(
         select(ProductionStockTransfer).where(
-            ProductionStockTransfer.completion_id == completion.id
+            ProductionStockTransfer.completion_id == completion.id,
+            ProductionStockTransfer.status == "posted",
         )
     )
     if existing_transfer is not None:
@@ -1206,7 +1227,8 @@ def transfer_direct_completion_to_stock(
         raise ProductionWorkflowError("订单明细已产生送货数量，不能转入库存", 409)
     existing_transfer = db.scalar(
         select(ProductionStockTransfer).where(
-            ProductionStockTransfer.completion_id == completion.id
+            ProductionStockTransfer.completion_id == completion.id,
+            ProductionStockTransfer.status == "posted",
         )
     )
     if existing_transfer is not None:
@@ -1234,6 +1256,274 @@ def transfer_direct_completion_to_stock(
     db.add(transfer)
     db.flush()
     return StockTransferResult(transfer, False)
+
+
+def _reverse_completion_semi_consumption(
+    db: Session,
+    *,
+    completion: ProductionCompletion,
+    operator_id: int | None,
+) -> tuple[int, ...]:
+    from app.services.semi_finished_inventory import reverse_semi_finished_consumption
+
+    prefix = _stable_key("production-completion", completion.id, "semi", "")
+    movements = db.scalars(
+        select(InventoryMovement)
+        .where(
+            InventoryMovement.movement_type == "consume",
+            InventoryMovement.related_order_item_id == completion.order_item_id,
+            InventoryMovement.idempotency_key.like(f"{prefix}%"),
+        )
+        .order_by(InventoryMovement.id.desc())
+    ).all()
+    reversed_ids: list[int] = []
+    for movement in movements:
+        if movement.reservation_id is None:
+            raise ProductionWorkflowError(
+                "生产完工半成品消耗缺少预占关联，不能自动回退", 409
+            )
+        reservation = db.get(InventoryReservation, movement.reservation_id)
+        if reservation is None:
+            raise ProductionWorkflowError("生产完工半成品预占不存在，不能自动回退", 409)
+        if int(reservation.consumed_stock_quantity or 0) != int(movement.quantity or 0):
+            raise ProductionWorkflowError(
+                "该半成品预占在生产完工后又发生了其他消耗，不能自动回退", 409
+            )
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if lot is None:
+            raise ProductionWorkflowError("生产完工消耗的半成品批次不存在", 409)
+        mutation = reverse_semi_finished_consumption(
+            db,
+            reservation_id=reservation.id,
+            stock_quantity=int(movement.quantity),
+            expected_version=int(lot.version),
+            operator_id=operator_id,
+            idempotency_key=_stable_key(
+                "production-completion-reversal", completion.id, "semi", reservation.id
+            ),
+        )
+        reversed_ids.append(mutation.movement.id)
+    return tuple(reversed_ids)
+
+
+def _reverse_completion_finished_lot(
+    db: Session,
+    *,
+    completion: ProductionCompletion,
+    lot_id: int,
+    operator_id: int | None,
+    reason: str,
+) -> None:
+    lot = db.get(InventoryLot, lot_id)
+    if lot is None:
+        raise ProductionWorkflowError("生产完工成品库存批次不存在", 409)
+    if (
+        lot.source_ref_type != "production_completion"
+        or int(lot.source_ref_id or 0) != completion.id
+        or lot.inventory_type != "finished"
+        or lot.status != "active"
+    ):
+        raise ProductionWorkflowError("关联批次已不是有效的生产完工入库，不能回退", 409)
+    if any(
+        int(value or 0) > 0
+        for value in (
+            lot.quantity_available,
+            lot.quantity_consumed,
+            lot.quantity_damaged,
+            lot.quantity_scrapped,
+        )
+    ) or int(lot.quantity_reserved or 0) != int(completion.quantity):
+        raise ProductionWorkflowError(
+            "成品库存已被使用、调整、报损或数量发生变化，不能回退生产确认", 409
+        )
+    movements = db.scalars(
+        select(InventoryMovement)
+        .where(InventoryMovement.inventory_lot_id == lot.id)
+        .order_by(InventoryMovement.id)
+    ).all()
+    if not movements or any(row.movement_type not in {"manual_in", "reserve"} for row in movements):
+        raise ProductionWorkflowError("成品库存已经发生后续业务流水，不能回退生产确认", 409)
+    reservations = db.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.inventory_lot_id == lot.id,
+            InventoryReservation.reservation_type == "finished_order",
+        )
+    ).all()
+    if len(reservations) != 1:
+        raise ProductionWorkflowError("生产完工成品预占记录异常，不能自动回退", 409)
+    reservation = reservations[0]
+    if (
+        int(reservation.consumed_stock_quantity or 0) != 0
+        or int(reservation.released_stock_quantity or 0) != 0
+        or int(reservation.reserved_stock_quantity or 0) != int(completion.quantity)
+    ):
+        raise ProductionWorkflowError("生产完工成品预占已发生后续变化，不能自动回退", 409)
+    pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
+    if pallet is not None and db.scalar(
+        select(InventoryLocationMovement.id)
+        .where(
+            InventoryLocationMovement.pallet_id == pallet.id,
+            InventoryLocationMovement.movement_type == "move",
+        )
+        .limit(1)
+    ) is not None:
+        raise ProductionWorkflowError("该成品入库后已经移过库位，不能自动回退", 409)
+
+    release_finished_reservation(
+        db,
+        reservation_id=reservation.id,
+        operator_id=operator_id,
+        release_reason=f"撤销生产完工入库：{reason}",
+        idempotency_key=_stable_key(
+            "production-completion-reversal", completion.id, "release-finished"
+        ),
+        allow_downstream=True,
+        allow_production_reversal=True,
+    )
+    db.expire(lot)
+    lot = db.get(InventoryLot, lot_id)
+    assert lot is not None
+    if int(lot.quantity_available or 0) != int(completion.quantity) or int(lot.quantity_reserved or 0) != 0:
+        raise ProductionWorkflowError("释放成品预占后的库存数量异常，已终止回退", 409)
+    before = _balances(lot)
+    now = utc_now_naive()
+    updated = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == lot.id,
+            InventoryLot.version == lot.version,
+            InventoryLot.quantity_available == int(completion.quantity),
+            InventoryLot.quantity_reserved == 0,
+        )
+        .values(
+            quantity_available=0,
+            status="closed",
+            version=InventoryLot.version + 1,
+            last_movement_at=now,
+            remarks=(f"{lot.remarks or ''}\n撤销生产完工入库：{reason}").strip(),
+        )
+    )
+    if updated.rowcount != 1:
+        raise ProductionWorkflowError("成品库存已被其他操作修改，请刷新后重试", 409)
+    db.expire(lot)
+    lot = db.get(InventoryLot, lot_id)
+    assert lot is not None
+    _movement(
+        db,
+        lot=lot,
+        movement_type="adjust",
+        quantity=int(completion.quantity),
+        before=before,
+        operator_id=operator_id,
+        reason=f"撤销生产完工入库：{reason}",
+        idempotency_key=_stable_key(
+            "production-completion-reversal", completion.id, "close-finished"
+        ),
+        related_order_item_id=completion.order_item_id,
+    )
+    if pallet is not None and pallet.is_current:
+        from app.services.floor3_locations import clear_pallet
+
+        other_balance = db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    ),
+                    0,
+                )
+            )
+            .join(InventoryPalletItem, InventoryPalletItem.inventory_lot_id == InventoryLot.id)
+            .where(InventoryPalletItem.pallet_id == pallet.id)
+        )
+        if int(other_balance or 0) == 0:
+            clear_pallet(
+                db,
+                pallet_id=pallet.id,
+                expected_version=int(pallet.version),
+                remarks=f"撤销生产完工入库：{reason}",
+                operator_id=operator_id,
+            )
+
+
+def reverse_production_completion(
+    db: Session,
+    *,
+    completion_id: int,
+    operator_id: int | None,
+    reason: str,
+) -> CompletionReversalResult:
+    normalized_reason = reason.strip()
+    if not normalized_reason:
+        raise ProductionWorkflowError("撤销生产确认必须填写原因")
+    completion = db.get(ProductionCompletion, completion_id)
+    if completion is None:
+        raise ProductionWorkflowError("生产完工记录不存在", 404)
+    if completion.status != "posted":
+        raise ProductionWorkflowError("该生产完工记录已经撤销，不能重复操作", 409)
+    task = db.get(ProductionTask, completion.task_id)
+    item = db.get(OrderItem, completion.order_item_id)
+    if task is None or item is None:
+        raise ProductionWorkflowError("生产完工关联任务或订单明细不存在", 409)
+    order = lock_order_rows_for_production_transition(db, [item.order_id])[item.order_id]
+    if order.status not in MUTABLE_ORDER_STATUSES or item.is_force_closed:
+        raise ProductionWorkflowError("订单已经结档、作废或强制关闭，不能撤销生产确认", 409)
+    if int(item.delivered_quantity or 0) > 0 or has_dispatched_delivery_facts(db, [item.id]):
+        raise ProductionWorkflowError("订单已经发货，请先撤销发货后再回退生产确认", 409)
+    if task.status != COMPLETED:
+        raise ProductionWorkflowError("生产任务当前不是已完工状态，不能撤销", 409)
+    direct_allocation = db.scalar(
+        select(BomComponentDirectDeliveryAllocation.id)
+        .where(
+            BomComponentDirectDeliveryAllocation.production_completion_id == completion.id,
+            BomComponentDirectDeliveryAllocation.status.in_(("active", "partial")),
+        )
+        .limit(1)
+    )
+    if direct_allocation is not None:
+        raise ProductionWorkflowError("该生产组件已经用于组合送货，不能撤销生产确认", 409)
+    transfer = db.scalar(
+        select(ProductionStockTransfer).where(
+            ProductionStockTransfer.completion_id == completion.id,
+            ProductionStockTransfer.status == "posted",
+        )
+    )
+    lot_id = transfer.inventory_lot_id if transfer is not None else completion.inventory_lot_id
+    if lot_id is not None:
+        _reverse_completion_finished_lot(
+            db,
+            completion=completion,
+            lot_id=lot_id,
+            operator_id=operator_id,
+            reason=normalized_reason,
+        )
+    reversed_semi_ids = _reverse_completion_semi_consumption(
+        db,
+        completion=completion,
+        operator_id=operator_id,
+    )
+    now = utc_now_naive()
+    if transfer is not None:
+        transfer.status = "reversed"
+        transfer.reversed_by = operator_id
+        transfer.reversed_at = now
+        transfer.reversal_reason = normalized_reason
+    completion.status = "reversed"
+    completion.reversed_by = operator_id
+    completion.reversed_at = now
+    completion.reversal_reason = normalized_reason
+    task.status = PENDING
+    task.version = int(task.version) + 1
+    db.flush()
+    refresh_order_production_status(db, order.id)
+    return CompletionReversalResult(
+        completion=completion,
+        transfer=transfer,
+        inventory_lot_id=lot_id,
+        reversed_semi_movement_ids=reversed_semi_ids,
+    )
 
 
 def _task_query(db: Session, allowed_customer_ids: set[int] | None):
@@ -1459,6 +1749,7 @@ def list_production_completions(
                     parent_product=product,
                 ),
                 "quantity": int(completion.quantity),
+                "status": completion.status,
                 "initial_disposition": completion.initial_disposition,
                 "warehouse_location_id": effective_location_id,
                 "warehouse_location_code": location.location_code if location else None,
@@ -1471,10 +1762,25 @@ def list_production_completions(
                     if completion.completed_at
                     else None
                 ),
+                "reversed_by": completion.reversed_by,
+                "reversed_at": (
+                    utc_naive_to_api(completion.reversed_at)
+                    if completion.reversed_at
+                    else None
+                ),
+                "reversal_reason": completion.reversal_reason,
                 "stock_transfer_id": transfer.id if transfer is not None else None,
                 "can_transfer_to_stock": (
                     completion.initial_disposition == "direct"
                     and transfer is None
+                    and int(item.delivered_quantity or 0) == 0
+                    and item.id not in dispatched_item_ids
+                    and order.status in MUTABLE_ORDER_STATUSES
+                    and not item.is_force_closed
+                ),
+                "can_revert": (
+                    completion.status == "posted"
+                    and task.status == COMPLETED
                     and int(item.delivered_quantity or 0) == 0
                     and item.id not in dispatched_item_ids
                     and order.status in MUTABLE_ORDER_STATUSES

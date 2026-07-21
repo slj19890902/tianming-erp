@@ -18,6 +18,7 @@ from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
 from app.models import Base
 from app.models.access_control import UserCustomerScope, UserPermissionOverride
+from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
@@ -663,6 +664,122 @@ def _delivery_item(db: Session, *, item_id: int, customer_id: int, quantity: int
     db.add(row)
     db.flush()
     return row
+
+
+def test_admin_can_revert_stock_completion_and_complete_again(production_app) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "stock",
+            idempotency_key="stock-reversal-first",
+            disposition="stock",
+            location_id=ids["temp1"],
+        )
+        assert completed.status_code == 200, completed.text
+        completion_id = completed.json()["items"][0]["id"]
+        reverted = client.post(
+            f"/api/production/completions/{completion_id}/revert",
+            json={"reason": "管理员误操作，退回待生产确认"},
+        )
+        assert reverted.status_code == 200, reverted.text
+        with factory() as db:
+            reverted_task = db.get(ProductionTask, ids["cases"]["stock"]["task"])
+            reverted_order = db.get(Order, ids["cases"]["stock"]["order"])
+            assert (reverted_task.status, reverted_task.version) == ("pending", 3)
+            assert reverted_order.status == "pending_production"
+        recompleted = _complete(
+            client,
+            ids,
+            "stock",
+            idempotency_key="stock-reversal-second",
+            disposition="stock",
+            expected_version=3,
+            location_id=ids["temp1"],
+        )
+        assert recompleted.status_code == 200, recompleted.text
+
+    with factory() as db:
+        original = db.get(ProductionCompletion, completion_id)
+        original_lot = db.get(InventoryLot, original.inventory_lot_id)
+        task = db.get(ProductionTask, ids["cases"]["stock"]["task"])
+        order = db.get(Order, ids["cases"]["stock"]["order"])
+        audit = db.scalar(
+            select(OperationLog).where(
+                OperationLog.action == "REVERT_PRODUCTION_COMPLETION",
+                OperationLog.entity_id == completion_id,
+            )
+        )
+        completions = db.scalars(
+            select(ProductionCompletion)
+            .where(ProductionCompletion.task_id == task.id)
+            .order_by(ProductionCompletion.id)
+        ).all()
+        assert original.status == "reversed"
+        assert original.reversal_reason == "管理员误操作，退回待生产确认"
+        assert original.reversed_by is not None and original.reversed_at is not None
+        assert (original_lot.status, original_lot.quantity_available, original_lot.quantity_reserved) == (
+            "closed",
+            0,
+            0,
+        )
+        assert audit is not None and "管理员误操作" in audit.details
+        assert [row.status for row in completions] == ["reversed", "posted"]
+        assert task.status == "completed"
+        assert order.status == "pending_delivery"
+
+
+def test_production_reversal_is_admin_only_and_downstream_change_is_atomic(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "stock",
+            idempotency_key="stock-reversal-blocked",
+            disposition="stock",
+            location_id=ids["temp1"],
+        )
+        assert completed.status_code == 200, completed.text
+        completion_id = completed.json()["items"][0]["id"]
+        _login(client, "n029-direct-only")
+        denied = client.post(
+            f"/api/production/completions/{completion_id}/revert",
+            json={"reason": "非管理员不应成功"},
+        )
+        assert denied.status_code == 403
+
+        _login(client)
+        with factory() as db:
+            completion = db.get(ProductionCompletion, completion_id)
+            lot = db.get(InventoryLot, completion.inventory_lot_id)
+            lot.quantity_damaged = 1
+            db.commit()
+        blocked = client.post(
+            f"/api/production/completions/{completion_id}/revert",
+            json={"reason": "存在后续库存变化"},
+        )
+        assert blocked.status_code == 409
+        assert "库存已被使用、调整、报损或数量发生变化" in blocked.json()["detail"]
+
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        task = db.get(ProductionTask, ids["cases"]["stock"]["task"])
+        finished_reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.inventory_lot_id == completion.inventory_lot_id,
+                InventoryReservation.reservation_type == "finished_order",
+            )
+        )
+        assert completion.status == "posted"
+        assert completion.reversed_at is None and completion.reversal_reason is None
+        assert task.status == "completed"
+        assert finished_reservation.status == "active"
 
 
 def test_task_refresh_tracks_finished_coverage_and_release(production_app) -> None:

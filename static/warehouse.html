@@ -126,6 +126,7 @@
         <div class="toolbar">
           <button id="openInForm" class="btn primary operate-only">入成品仓</button>
           <select id="statusFilter" style="width:140px"><option value="">全部状态</option><option value="active">正常</option><option value="frozen">冻结</option><option value="closed">关闭</option></select>
+          <select id="areaFilter" style="width:150px"><option value="">全部区域</option></select>
           <select id="locationFilter" style="width:180px"><option value="">全部库位</option></select>
           <select id="staleFilter" style="width:180px"><option value="">全部库龄</option><option value="attention">超过1年</option><option value="handling">超过18个月</option><option value="cleanup">超过2年</option></select>
           <input id="keywordFilter" style="width:260px" placeholder="批次 / 库位 / 存货编码 / 产品">
@@ -143,7 +144,8 @@
           <div class="field" style="grid-column:span 2"><label>已选择常用箱 / 产品</label><input id="fgProduct" type="hidden"><div id="fgProductSelected" class="muted">尚未选择（必须点击下方候选）</div></div>
           <div class="field" style="grid-column:1/-1"><label>匹配候选</label><div id="fgProductCandidates" class="floor3-candidates"><span class="muted">请先选择客户，再输入存货编码或产品名称</span></div></div>
           <div class="field"><label>实际成品数量（个）</label><input id="fgQuantity" type="number" min="1" required></div>
-          <div class="field"><label>三楼具体货位</label><select id="fgLocation" required></select></div>
+          <div class="field"><label>先选区域</label><select id="fgArea" required></select></div>
+          <div class="field"><label>再选具体货位</label><select id="fgLocation" required></select></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">入成品仓</button></div>
           <details style="grid-column:1/-1"><summary>可选：修改日期、来源或备注</summary><div class="grid" style="margin-top:10px">
             <div class="field"><label>入库日期</label><input id="fgDate" type="date" required></div>
@@ -164,7 +166,8 @@
           <div class="field"><label>实际宽（mm）</label><input id="siWidth" type="number" min="1" required></div>
           <div class="field"><label>实际张/片数</label><input id="siQuantity" type="number" min="1" required></div>
           <div class="field"><label>片料类型</label><select id="siSheetType"><option value="raw_board">未分切大张</option><option value="net_sheet">已开净片</option><option value="creased_sheet">已压线片料</option></select></div>
-          <div class="field"><label>库位</label><select id="siLocation" required></select><div id="siLocationHint" class="muted hidden" style="margin-top:4px;color:#b45309">暂无半成品库位，请先完成 SF-TEMP 迁移或新增半成品库位。</div></div>
+          <div class="field"><label>先选区域</label><select id="siArea" required></select></div>
+          <div class="field"><label>再选库位</label><select id="siLocation" required></select><div id="siLocationHint" class="muted hidden" style="margin-top:4px;color:#b45309">暂无半成品库位，请先完成 SF-TEMP 迁移或新增半成品库位。</div></div>
           <div class="field"><label>入库日期</label><input id="siDate" type="date" required></div>
           <div class="field"><label>供应商</label><input id="siSupplier"></div>
           <div class="field"><label>归属客户（可空）</label><select id="siCustomer"></select></div>
@@ -196,7 +199,8 @@
             <div class="field" style="grid-column:span 2"><label>已选择产品</label><input id="lotEditProduct" type="hidden"><div id="lotEditProductSelected" class="lot-edit-selected muted">尚未选择产品</div></div>
             <div class="field" style="grid-column:span 3"><label>匹配候选</label><div id="lotEditProductCandidates" class="floor3-candidates"><span class="muted">选择客户后输入存货编码或产品名称</span></div></div>
             <div class="field"><label for="lotEditQuantity">可用数量（个）</label><input id="lotEditQuantity" type="number" min="0" step="1" required></div>
-            <div class="field" style="grid-column:span 2"><label for="lotEditLocation">三楼具体货位</label><select id="lotEditLocation" required></select></div>
+            <div class="field"><label for="lotEditArea">先选区域</label><select id="lotEditArea" required></select></div>
+            <div class="field"><label for="lotEditLocation">再选具体货位</label><select id="lotEditLocation" required></select></div>
             <div class="field" style="grid-column:span 2"><label for="lotEditStockDate">入库日期（决定库龄）</label><input id="lotEditStockDate" type="date" required></div>
           </div>
           <div class="notice info" style="margin-top:12px">若选择客户专用库存，必须从该客户候选中点击存货编码；不能只改客户而保留其他客户的产品。</div>
@@ -262,7 +266,7 @@
       <div id="floor3MoveConfirm" class="panel hidden"></div>
       <div id="floor3Workspace" class="floor3-workspace hidden">
         <div class="floor3-workspace-head"><div><h2 id="floor3WorkspaceTitle">请选择区域</h2><div id="floor3WorkspaceHint" class="muted">请先在平面图上点击一个区域，随后显示该区域的具体货位。</div></div><div class="actions"><button id="floor3AreaLayoutEditToggle" class="btn admin-only hidden" type="button">调整平面图布局</button><button id="floor3ClearArea" class="btn hidden" type="button">返回平面图</button></div></div>
-        <div id="floor3AreaFocus" class="floor3-area-focus hidden"><div><div id="floor3AreaSlotMap" class="floor3-area-slot-map" aria-label="区域货位缩略布局" ondragover="floor3AllowLayoutDrop(event)" ondrop="floor3DropLayout(event)"></div><div id="floor3LayoutEditor" class="floor3-layout-editor admin-only hidden"></div></div><div id="floor3AreaDetailRail"><div id="floor3DetailPanel" class="panel hidden"></div><div id="floor3BindPanel" class="panel hidden operate-only"><div class="floor3-panel-head"><h2>快速绑定到当前货位</h2><button id="floor3BindClose" class="btn" type="button">关闭</button></div><p class="muted">输入客户和关键词后只展示候选；必须点击候选才能绑定。匹配成品会同步正式成品仓；没有确定产品时，可勾选“暂存为待匹配”保存现场快照。</p><form id="floor3BindForm"><div class="grid"><div class="field"><label>栈板编号（可空）</label><input id="floor3PalletCode" placeholder="例如 PLT-3F-0048"></div><div class="field" style="grid-column:span 2"><label>栈板备注</label><input id="floor3PalletRemarks" placeholder="现场备注"></div></div><div id="floor3BindRows"></div><div class="actions" style="margin-top:10px"><button id="addFloor3BindRow" class="btn" type="button">添加同栈板产品（至少可加到5行）</button><button class="btn primary" type="submit">保存栈板绑定</button></div></form></div><div id="floor3AddItemPanel" class="panel hidden operate-only"><div class="floor3-panel-head"><h2>增加同栈板产品</h2><button class="btn" type="button" onclick="toggleFloor3AddItemPanel()">关闭</button></div><p class="muted">仍需先搜索并点击选择候选；匹配成品会同步正式成品仓，待匹配行只保存快照。</p><div class="floor3-bind-row-grid"><div class="field"><label>客户</label><select id="floor3AddCustomer"></select></div><div class="field"><label>关键词</label><input id="floor3AddKeyword" placeholder="客户 / 编码 / 订单 / 产品"></div><button id="floor3AddSearch" class="btn" type="button">搜索候选</button><div class="field"><label>产品候选</label><div id="floor3AddSelected" class="muted">尚未选择</div></div><div class="field"><label>数量</label><input id="floor3AddQuantity" type="number" min="0.01" step="any" required></div><label class="field"><span>暂存为待匹配</span><input id="floor3AddPending" type="checkbox"></label></div><div id="floor3AddCandidates" class="floor3-candidates"></div><div class="actions" style="margin-top:10px"><button id="floor3AddSave" class="btn primary" type="button">加入当前栈板</button></div></div></div></div>
+        <div id="floor3AreaFocus" class="floor3-area-focus hidden"><div><div id="floor3AreaSlotMap" class="floor3-area-slot-map" aria-label="区域货位缩略布局" ondragover="floor3AllowLayoutDrop(event)" ondrop="floor3DropLayout(event)"></div><div id="floor3LayoutEditor" class="floor3-layout-editor admin-only hidden"></div></div><div id="floor3AreaDetailRail"><div id="floor3DetailPanel" class="panel hidden"></div><div id="floor3BindPanel" class="panel hidden operate-only"><div class="floor3-panel-head"><h2>快速绑定到当前货位</h2><button id="floor3BindClose" class="btn" type="button">关闭</button></div><p class="muted">每行只需选择客户、存货编码和数量；匹配成品会同步正式成品仓。</p><form id="floor3BindForm"><details><summary>可选：栈板编号和备注</summary><div class="grid" style="margin-top:8px"><div class="field"><label>栈板编号</label><input id="floor3PalletCode" placeholder="例如 PLT-3F-0048"></div><div class="field" style="grid-column:span 2"><label>栈板备注</label><input id="floor3PalletRemarks" placeholder="现场备注"></div></div></details><div id="floor3BindRows"></div><div class="actions" style="margin-top:10px"><button id="addFloor3BindRow" class="btn" type="button">增加一行产品</button><button class="btn primary" type="submit">保存绑定并入成品仓</button></div></form></div><div id="floor3AddItemPanel" class="panel hidden operate-only"><div class="floor3-panel-head"><h2>增加同栈板产品</h2><button class="btn" type="button" onclick="toggleFloor3AddItemPanel()">关闭</button></div><p class="muted">选择客户、存货编码和数量后加入当前栈板。</p><div class="floor3-bind-row-grid"><div class="field"><label>客户</label><select id="floor3AddCustomer"></select></div><div class="field"><label>关键词</label><input id="floor3AddKeyword" placeholder="存货编码 / 产品名称"></div><button id="floor3AddSearch" class="btn" type="button">搜索</button><div class="field"><label>已选择</label><div id="floor3AddSelected" class="muted">尚未选择</div></div><div class="field"><label>数量</label><input id="floor3AddQuantity" type="number" min="0.01" step="any" required></div><label class="field"><span>高级：暂存待匹配</span><input id="floor3AddPending" type="checkbox"></label></div><div id="floor3AddCandidates" class="floor3-candidates"></div><div class="actions" style="margin-top:10px"><button id="floor3AddSave" class="btn primary" type="button">加入当前栈板</button></div></div></div></div>
         <div id="floor3LocationCards" class="floor3-location-grid hidden"></div>
         <div id="floor3LocationEmpty" class="panel empty hidden">暂无符合条件的三楼货位</div>
       </div>
@@ -285,11 +289,13 @@
           <div class="field"><label>库位编码</label><input id="locationCode" required></div>
           <div class="field"><label>库位名称</label><input id="locationName" required></div>
           <div class="field"><label>类型</label><select id="locationType"><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="shared">共用</option></select></div>
+          <div class="field"><label>所属楼层</label><select id="locationFloor"><option value="">其他 / 未指定</option><option value="1">一楼</option><option value="2">二楼</option><option value="3">三楼（同步平面图）</option></select></div>
+          <div class="field"><label>所属区域</label><input id="locationArea" maxlength="30" placeholder="例如 C1；三楼必须填写"></div>
           <div class="field"><label>备注</label><input id="locationRemarks"></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存库位</button></div>
         </div>
       </form>
-      <div class="panel table-wrap"><table><thead><tr><th>编码</th><th>名称</th><th>类型</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody id="locationBody"></tbody></table></div>
+      <div class="panel table-wrap"><table><thead><tr><th>编码</th><th>名称</th><th>类型</th><th>楼层 / 区域</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody id="locationBody"></tbody></table></div>
     </section>
 
     <section id="moldSection" class="hidden">
@@ -423,14 +429,26 @@
         try{await loadLocations()}catch(error){throw new Error(`库位加载失败：${error.message}`)}
         try{await loadCustomers()}catch(error){throw new Error(`客户资料加载失败：${error.message}`)}
         try{await loadLots()}catch(error){throw new Error(`库存批次加载失败：${error.message}`)}
+        await applyWarehouseDeepLink();
       }catch(error){
         showPageError(`仓库页面初始化失败：${error.message}`);
       }
+    }
+    async function applyWarehouseDeepLink(){
+      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),locationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id"));
+      if(requestedTab&&["finished","semi_finished"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
+      if(locationId)selectLocationCascade("areaFilter","locationFilter",locationId,state.tab);
+      if(lotId){
+        const row=(state.lots||[]).find(item=>Number(item.id)===lotId);
+        if(row){$("keywordFilter").value=row.lot_number||"";if(row.location?.id)selectLocationCascade("areaFilter","locationFilter",row.location.id,state.tab)}
+      }
+      if(locationId||lotId){await loadLots();const target=lotId?(state.lots||[]).find(item=>Number(item.id)===lotId):null;toast(target?`已定位库存批次 ${target.lot_number}`:"已按生产记录定位库存货位");$("lotTable").scrollIntoView({behavior:"smooth",block:"start"})}
     }
     function bind(){
       document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
       document.querySelectorAll("[data-location-view]").forEach(btn=>btn.onclick=()=>switchLocationView(btn.dataset.locationView));
       $("refreshLots").onclick=loadLots;$("refreshMovements").onclick=loadMovements;
+      $("areaFilter").onchange=()=>{refreshLocationCascade("areaFilter","locationFilter",state.tab);loadLots()};
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};$("refreshStocktakeReviews").onclick=loadStocktakeReviews;$("stocktakeStatusFilter").onchange=renderStocktakeReviews;$("stocktakeDifferenceFilter").onchange=renderStocktakeReviews;
       $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
@@ -472,9 +490,12 @@
       $("floor3AddSave").onclick=saveFloor3AdditionalItem;
       $("openInForm").onclick=()=>{(state.tab==="finished"?$("finishedForm"):$("semiForm")).classList.toggle("hidden")};
       $("fgCustomer").onchange=resetFinishedProductSearch;
+      $("fgArea").onchange=()=>refreshLocationCascade("fgArea","fgLocation","finished");
       $("fgProductKeyword").oninput=scheduleFinishedProductSearch;
       $("fgProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchFinishedProductCandidates()}};
       $("siLayer").onchange=updateFlutes;updateFlutes();
+      $("siArea").onchange=()=>refreshLocationCascade("siArea","siLocation","semi_finished");
+      $("lotEditArea").onchange=()=>refreshLocationCascade("lotEditArea","lotEditLocation","finished");
       $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;$("moldForm").onsubmit=saveMold;
       $("lotEditForm").onsubmit=saveLotEditor;$("lotEditClose").onclick=$("lotEditCancel").onclick=closeLotEditor;$("lotEditMask").onclick=event=>{if(event.target===$("lotEditMask"))closeLotEditor()};
       $("lotEditOwnership").onchange=()=>updateLotEditOwnership();$("lotEditCustomer").onchange=resetLotEditProductSearch;$("lotEditProductKeyword").oninput=scheduleLotEditProductSearch;$("lotEditProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchLotEditProductCandidates()}};
@@ -510,7 +531,7 @@
         $("floor3AreaFilter").value="";$("floor3CustomerFilter").value="";$("floor3KeywordFilter").value="";$("floor3OccupancyFilter").value="";closeFloor3Detail();
         await switchLocationView("floor3");return
       }
-      if(["finished","semi_finished"].includes(tab))loadLots();else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else if(tab==="stocktake_review")loadStocktakeReviews();
+      if(["finished","semi_finished"].includes(tab)){refreshAreaOptions("areaFilter",tab,"全部区域");$("areaFilter").value="";refreshLocationCascade("areaFilter","locationFilter",tab,"全部库位");loadLots()}else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else if(tab==="stocktake_review")loadStocktakeReviews();
     }
     async function loadInsights(){
       try{state.insights=await api("/api/warehouse/insights");renderInsights()}catch(err){toast(`库存经营看板加载失败：${err.message}`,true)}
@@ -558,14 +579,44 @@
     }
     async function loadLocations(includeInactive=false){
       const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;
-      const active=data.items.filter(x=>x.is_active), all=active.map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`}));
-      options($("locationFilter"),all,"全部库位");
-      const finishedLocations=active.filter(x=>["finished","shared"].includes(x.warehouse_type)).sort((a,b)=>(b.source_version==="V11")-(a.source_version==="V11")||String(a.location_code).localeCompare(String(b.location_code))).map(x=>({id:x.id,label:`${x.source_version==="V11"?`三楼 ${x.area_code||""}`:"其他库位"}｜${x.location_code} ${x.location_name}`}));
-      options($("fgLocation"),finishedLocations,"请选择三楼货位");options($("lotEditLocation"),finishedLocations,"请选择三楼货位");
-      const semiLocations=active.filter(x=>["semi_finished","shared"].includes(x.warehouse_type)).sort((a,b)=>(String(a.location_code).toUpperCase()==="SF-TEMP"?-1:0)-(String(b.location_code).toUpperCase()==="SF-TEMP"?-1:0)||String(a.location_code).localeCompare(String(b.location_code),"zh-CN",{numeric:true}));
-      options($("siLocation"),semiLocations.map(x=>({id:x.id,label:`${x.location_code} ${x.location_name}`})),semiLocations.length?"请选择半成品库位":"暂无半成品库位");
+      const active=data.items.filter(x=>x.is_active);
+      refreshAreaOptions("areaFilter",state.tab,"全部区域");refreshLocationCascade("areaFilter","locationFilter",state.tab,"全部库位");
+      refreshAreaOptions("fgArea","finished","请选择区域");refreshLocationCascade("fgArea","fgLocation","finished","请先选择区域");
+      refreshAreaOptions("lotEditArea","finished","请选择区域");refreshLocationCascade("lotEditArea","lotEditLocation","finished","请先选择区域");
+      refreshAreaOptions("siArea","semi_finished","请选择区域");refreshLocationCascade("siArea","siLocation","semi_finished","请先选择区域");
+      const semiLocations=active.filter(x=>["semi_finished","shared"].includes(x.warehouse_type));
       $("siLocation").disabled=!semiLocations.length;$("siLocationHint").classList.toggle("hidden",Boolean(semiLocations.length));
       if(includeInactive)renderLocations();
+    }
+    function locationAreaKey(row){
+      const floor=row.warehouse_floor?`${row.warehouse_floor}F`:"其他";
+      const area=String(row.area_code||"").trim().toUpperCase();
+      return `${floor}|${area||"未分区"}`;
+    }
+    function locationAreaLabel(row){
+      const floor=row.warehouse_floor?`${row.warehouse_floor} 楼`:"其他库位";
+      return row.area_code?`${floor} · ${row.area_code} 区`:`${floor} · 未分区`;
+    }
+    function locationsForInventoryType(inventoryType){
+      const allowed=inventoryType==="semi_finished"?["semi_finished","shared"]:["finished","shared"];
+      return (state.locations||[]).filter(row=>row.is_active&&allowed.includes(row.warehouse_type)).sort((a,b)=>locationAreaLabel(a).localeCompare(locationAreaLabel(b),"zh-CN",{numeric:true})||String(a.location_code).localeCompare(String(b.location_code),"zh-CN",{numeric:true}));
+    }
+    function refreshAreaOptions(selectId,inventoryType,placeholder){
+      const select=$(selectId),previous=select.value,seen=new Map();
+      locationsForInventoryType(inventoryType).forEach(row=>seen.set(locationAreaKey(row),locationAreaLabel(row)));
+      options(select,[...seen].map(([id,label])=>({id,label})),placeholder||"请选择区域");
+      if([...seen].some(([id])=>id===previous))select.value=previous;
+    }
+    function refreshLocationCascade(areaSelectId,locationSelectId,inventoryType,placeholder){
+      const area=$(areaSelectId),select=$(locationSelectId),previous=select.value,areaKey=area.value;
+      const rows=locationsForInventoryType(inventoryType).filter(row=>!areaKey||locationAreaKey(row)===areaKey);
+      options(select,rows.map(row=>({id:row.id,label:`${row.location_code} ${row.location_name}`})),areaKey?(placeholder||"请选择具体货位"):(placeholder||"请先选择区域"));
+      if(rows.some(row=>String(row.id)===String(previous)))select.value=previous;
+      select.disabled=!rows.length||(!areaKey&&areaSelectId!=="areaFilter");
+    }
+    function selectLocationCascade(areaSelectId,locationSelectId,locationId,inventoryType){
+      const row=(state.locations||[]).find(item=>Number(item.id)===Number(locationId));if(!row)return;
+      $(areaSelectId).value=locationAreaKey(row);refreshLocationCascade(areaSelectId,locationSelectId,inventoryType);$(locationSelectId).value=String(row.id);
     }
     async function loadCustomers(){
       const data=await api("/api/warehouse/references/customers");state.customers=data.items;
@@ -645,7 +696,7 @@
     function openLotEditor(lotId){
       const row=state.lots.find(item=>Number(item.id)===Number(lotId));if(!row||row.inventory_type!=="finished"){toast("未找到可编辑的成品库存批次",true);return}
       const detail=row.detail||{},currentProduct={id:detail.product_id,product_id:detail.product_id,product_code:detail.inventory_code,product_name:detail.product_name,customer_id:detail.owner_customer_id},sessionId=state.lotEdit.sessionId+1;state.lotEdit={lotId:row.id,version:row.version,candidates:[],selectedProduct:currentProduct,searchTimer:null,requestId:state.lotEdit.requestId+1,sessionId,saving:false};
-      $("lotEditTitle").textContent=`编辑 ${row.lot_number}`;$("lotEditOwnership").value=detail.is_general?"general":"customer";$("lotEditCustomer").value=detail.owner_customer_id||"";$("lotEditProduct").value=detail.product_id||"";$("lotEditProductKeyword").value="";$("lotEditProductSelected").textContent=`当前：${detail.inventory_code||"-"} · ${detail.product_name||"-"}`;$("lotEditProductSelected").classList.remove("muted");$("lotEditQuantity").value=row.quantity_available;$("lotEditLocation").value=row.location?.id||"";$("lotEditStockDate").value=String(row.stock_date||"").slice(0,10);updateLotEditOwnership(true);$("lotEditMask").classList.remove("hidden");
+      $("lotEditTitle").textContent=`编辑 ${row.lot_number}`;$("lotEditOwnership").value=detail.is_general?"general":"customer";$("lotEditCustomer").value=detail.owner_customer_id||"";$("lotEditProduct").value=detail.product_id||"";$("lotEditProductKeyword").value="";$("lotEditProductSelected").textContent=`当前：${detail.inventory_code||"-"} · ${detail.product_name||"-"}`;$("lotEditProductSelected").classList.remove("muted");$("lotEditQuantity").value=row.quantity_available;selectLocationCascade("lotEditArea","lotEditLocation",row.location?.id,"finished");$("lotEditStockDate").value=String(row.stock_date||"").slice(0,10);updateLotEditOwnership(true);$("lotEditMask").classList.remove("hidden");
       $("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";setTimeout(()=>$("lotEditOwnership").focus(),0);
     }
     function closeLotEditor(){clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.sessionId+=1;state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";$("lotEditMask").classList.add("hidden")}
@@ -839,12 +890,14 @@
     }
     async function toggleMold(id,active){try{await api(`/api/warehouse/molds/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadMolds()}catch(err){toast(err.message,true)}}
     function renderLocations(){
-      $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${x.location_code}</td><td>${x.location_name}</td><td>${labels[x.warehouse_type]}</td><td>${x.is_active?"启用":"停用"}</td><td>${x.remarks||"-"}</td><td><button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button></td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无库位</td></tr>`
+      $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${h(x.location_code)}</td><td>${h(x.location_name)}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${x.source_version==="V11"?'<br><span class="tag">已联动三楼平面图</span>':""}</td><td>${x.is_active?"启用":"停用"}</td><td>${h(x.remarks||"-")}</td><td>${x.source_version==="V11"?`<button class="btn" onclick="locateLedgerFloor3Location(${x.id})">平面图定位</button>`:`<button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button>`}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库位</td></tr>`
     }
-    function editLocation(id){const x=state.locations.find(v=>v.id===id);$("locationId").value=x.id;$("locationCode").value=x.location_code;$("locationName").value=x.location_name;$("locationType").value=x.warehouse_type;$("locationRemarks").value=x.remarks||""}
+    async function locateLedgerFloor3Location(id){await switchLocationView("floor3");await focusFloor3SearchResult(id)}
+    function editLocation(id){const x=state.locations.find(v=>v.id===id);$("locationId").value=x.id;$("locationCode").value=x.location_code;$("locationName").value=x.location_name;$("locationType").value=x.warehouse_type;$("locationFloor").value=x.warehouse_floor||"";$("locationArea").value=x.area_code||"";$("locationRemarks").value=x.remarks||""}
     async function saveLocation(e){
-      e.preventDefault();const id=$("locationId").value,payload={location_code:$("locationCode").value,location_name:$("locationName").value,warehouse_type:$("locationType").value,remarks:$("locationRemarks").value||null};
-      try{await api(`/api/warehouse/locations${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast("库位保存成功");e.target.reset();$("locationId").value="";await loadLocations(true)}catch(err){toast(err.message,true)}
+      e.preventDefault();const id=$("locationId").value,floor=$("locationFloor").value?Number($("locationFloor").value):null,area=$("locationArea").value.trim().toUpperCase(),payload={location_code:$("locationCode").value.trim().toUpperCase(),location_name:$("locationName").value.trim(),warehouse_type:$("locationType").value,warehouse_floor:floor,area_code:area||null,remarks:$("locationRemarks").value||null};
+      if(floor===3&&!area){toast("三楼库位必须选择或填写区域，例如 C1",true);return}if(floor===3&&!payload.location_code.startsWith(`${area}-`)){toast(`三楼货位编码必须以 ${area}- 开头`,true);return}
+      try{await api(`/api/warehouse/locations${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast(floor===3?"库位已保存，并与三楼平面图联动":"库位保存成功");e.target.reset();$("locationId").value="";await loadLocations(true);if(floor===3)await refreshFloor3LocationData()}catch(err){toast(err.message,true)}
     }
     async function toggleLocation(id,active){try{await api(`/api/warehouse/locations/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadLocations(true)}catch(err){toast(err.message,true)}}
 
@@ -1428,7 +1481,7 @@
     function floor3BindCandidateButtons(row,index){if(row.searching)return '<span class="muted">正在匹配候选…</span>';return (row.candidates||[]).map((item,candidateIndex)=>`<button class="floor3-candidate ${row.candidate===item?"selected":""}" type="button" onclick="selectFloor3BindCandidate(${index},${candidateIndex})">${h(floor3CandidateLabel(item))} · 点击选择</button>`).join("")||'<span class="muted">请输入关键词搜索候选</span>'}
     function floor3BindRowHtml(row,index){
       const candidate=row.candidate,selectedText=candidate?floor3CandidateLabel(candidate):"尚未选择（搜索后必须点击候选）";
-      return `<div class="floor3-bind-row" data-floor3-bind-row="${index}"><div class="floor3-bind-row-grid"><div class="field"><label>客户</label><select class="floor3-bind-customer" onchange="scheduleFloor3BindCandidateSearch(${index})">${floor3CustomerOptions(row.customerId)}</select></div><div class="field"><label>关键词</label><input class="floor3-bind-query" value="${h(row.keyword)}" placeholder="客户 / 编码 / 订单 / 产品" oninput="scheduleFloor3BindCandidateSearch(${index})" onkeydown="if(event.key==='Enter'){event.preventDefault();searchFloor3BindCandidates(${index})}"></div><button class="btn floor3-search-candidates" type="button" onclick="searchFloor3BindCandidates(${index})">搜索候选</button><div class="field"><label>已选择候选</label><div class="muted">${h(selectedText)}</div></div><div class="field"><label>数量（必须&gt;0）</label><input class="floor3-bind-quantity" type="number" min="0.01" step="any" value="${h(row.quantity)}" required></div><button class="btn danger" type="button" onclick="removeFloor3BindRow(${index})">删除行</button></div><div class="floor3-candidates" data-floor3-bind-candidates="${index}">${floor3BindCandidateButtons(row,index)}</div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px"><div class="field"><label>存货编码快照</label><input class="floor3-bind-inventory-code" value="${h(row.inventoryCode)}"></div><div class="field"><label>订单号快照</label><input class="floor3-bind-order-no" value="${h(row.orderNo)}"></div><div class="field"><label>产品名称快照</label><input class="floor3-bind-product-name" value="${h(row.productName)}"></div><div class="field"><label>货物类型</label><select class="floor3-bind-item-type">${FLOOR3_ITEM_TYPES.map(x=>`<option value="${x[0]}" ${row.itemType===x[0]?"selected":""}>${x[1]}</option>`).join("")}</select></div></div><label style="display:block;margin-top:8px"><input class="floor3-bind-pending" type="checkbox" ${row.pending?"checked":""}> 暂存为待匹配（保存以上快照）</label></div>`;
+      return `<div class="floor3-bind-row" data-floor3-bind-row="${index}"><div class="floor3-bind-row-grid"><div class="field"><label>客户</label><select class="floor3-bind-customer" onchange="scheduleFloor3BindCandidateSearch(${index})">${floor3CustomerOptions(row.customerId)}</select></div><div class="field"><label>存货编码 / 产品</label><input class="floor3-bind-query" value="${h(row.keyword)}" placeholder="输入编码后自动匹配" oninput="scheduleFloor3BindCandidateSearch(${index})" onkeydown="if(event.key==='Enter'){event.preventDefault();searchFloor3BindCandidates(${index})}"></div><button class="btn floor3-search-candidates" type="button" onclick="searchFloor3BindCandidates(${index})">搜索</button><div class="field"><label>已选择</label><div class="muted">${h(selectedText)}</div></div><div class="field"><label>数量</label><input class="floor3-bind-quantity" type="number" min="1" step="1" value="${h(row.quantity)}" required></div><button class="btn danger" type="button" onclick="removeFloor3BindRow(${index})">删除行</button></div><div class="floor3-candidates" data-floor3-bind-candidates="${index}">${floor3BindCandidateButtons(row,index)}</div><details style="margin-top:8px"><summary>高级：待匹配快照</summary><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px"><div class="field"><label>存货编码快照</label><input class="floor3-bind-inventory-code" value="${h(row.inventoryCode)}"></div><div class="field"><label>订单号快照</label><input class="floor3-bind-order-no" value="${h(row.orderNo)}"></div><div class="field"><label>产品名称快照</label><input class="floor3-bind-product-name" value="${h(row.productName)}"></div><div class="field"><label>货物类型</label><select class="floor3-bind-item-type">${FLOOR3_ITEM_TYPES.map(x=>`<option value="${x[0]}" ${row.itemType===x[0]?"selected":""}>${x[1]}</option>`).join("")}</select></div></div><label style="display:block;margin-top:8px"><input class="floor3-bind-pending" type="checkbox" ${row.pending?"checked":""}> 暂存为待匹配</label></details></div>`;
     }
     function renderFloor3BindRows(){
       $("floor3BindRows").innerHTML=state.floor3.bindRows.map(floor3BindRowHtml).join("");

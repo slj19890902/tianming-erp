@@ -2042,6 +2042,58 @@ def test_floor3_add_finished_idempotency_key_cannot_cross_pallets(floor3_app) ->
         assert "其它物理栈板" in response.json()["detail"]
 
 
+def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate(
+    floor3_app,
+) -> None:
+    app, _ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        floor3 = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "A1-L99",
+                "location_name": "A1 新增联动位",
+                "warehouse_type": "finished",
+                "warehouse_floor": 3,
+                "area_code": "a1",
+                "remarks": "从全部库位台账新增",
+            },
+        )
+        assert floor3.status_code == 200, floor3.text
+        floor3_row = floor3.json()
+        assert floor3_row["source_version"] == "V11"
+        assert floor3_row["warehouse_floor"] == 3
+        assert floor3_row["area_code"] == "A1"
+
+        mapped = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"area_code": "A1", "include_inactive": True},
+        )
+        assert mapped.status_code == 200, mapped.text
+        mapped_row = next(
+            row for row in mapped.json()["items"] if row["id"] == floor3_row["id"]
+        )
+        assert mapped_row["layout"]["source_type"] == "manual"
+
+        floor1 = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "1F-C1-L01",
+                "location_name": "一楼 C1 预留位",
+                "warehouse_type": "finished",
+                "warehouse_floor": 1,
+                "area_code": "C1",
+                "remarks": "未来一楼区域",
+            },
+        )
+        assert floor1.status_code == 200, floor1.text
+        assert floor1.json()["warehouse_floor"] == 1
+        assert floor1.json()["source_version"] is None
+        assert floor1.json()["id"] not in {
+            row["id"] for row in mapped.json()["items"]
+        }
+
+
 def test_floor3_official_create_requires_target_location_to_be_empty(floor3_app) -> None:
     app, ids, factory = floor3_app
     with TestClient(app) as client:

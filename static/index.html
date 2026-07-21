@@ -3195,6 +3195,7 @@
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
                     <button v-if="canRollbackOrders" class="btn small danger" @click="dangerRollbackOrderGroup()">撤回到未报料</button>
                     <button v-if="canStatusOrders" class="btn small" @click="dangerChangeOrderGroupStatus('closed')">已结档</button>
+                    <button v-if="canStatusOrders" class="btn small danger" @click="dangerChangeOrderGroupStatus('cancelled')">标记作废</button>
                     <button v-if="canStatusOrders" class="btn small danger" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
                     <button v-if="canDeleteOrders" class="btn small danger" @click="dangerDeleteOrderGroup()">删除此订单组</button>
                   </div>
@@ -10245,7 +10246,7 @@
             if (!orders.length) return;
             const groupName = this.orderEditGroup?.customer_po || this.displayOrderNumber(orders[0]);
             if (!confirm(`确认删除订单组 ${groupName} 吗？删除后不可恢复。`)) return;
-            if (!confirm("请再次确认：已进入报料、送货或对账流程的订单组不能直接删除。")) return;
+            if (!confirm("请再次确认：已进入报料、送货或对账流程的订单组不能直接删除。订单一旦产生来料记录，即使来料已经撤销，也不能物理删除，请改为作废或归档。")) return;
             this.loading = true;
             try {
               const {data} = await axios.post("/api/orders/group-delete", {
@@ -10605,7 +10606,7 @@
             this.closeModal();
           },
           async changeOrderStatus(order, status) {
-            const label=status === "dead" ? "死单" : "已结档";
+            const label=({dead:"死单",closed:"已结档",cancelled:"已作废",archived:"已归档"})[status] || status;
             const remark=prompt(`标记为${label}必须填写备注原因：`);
             if (!remark?.trim()) { this.showToast(`${label}必须填写备注`,true); return; }
             try {
@@ -10616,7 +10617,7 @@
           },
           async deleteWholeOrder(order) {
             if (!confirm(`确认完全删除订单 ${this.displayOrderNumber(order)} 吗？此操作不可撤销，订单编号不会复用。`)) return;
-            if (!confirm("请再次确认：仅无送货、开票、收款关联的订单可删除。")) return;
+            if (!confirm("请再次确认：仅无报料、来料、送货、开票、收款关联的订单可删除。订单一旦产生来料记录，即使来料已经撤销，也不能物理删除，请改为作废或归档。")) return;
             try {
               await axios.delete(`/api/orders/${order.id}`,{params:{confirm:true}});
               await this.loadOrders();

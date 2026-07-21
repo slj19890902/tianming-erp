@@ -233,6 +233,29 @@ def test_order_forms_show_cost_reference_and_closure_actions() -> None:
     assert 'orderStatus:"business"' in INDEX
 
 
+def test_order_delete_incoming_audit_guard_has_cancel_action_and_specific_copy() -> None:
+    assert (
+        '@click="dangerChangeOrderGroupStatus(\'cancelled\')">标记作废</button>'
+        in INDEX
+    )
+    assert (
+        'const label=({dead:"死单",closed:"已结档",cancelled:"已作废",archived:"已归档"})[status] || status;'
+        in INDEX
+    )
+    assert (
+        "订单一旦产生来料记录，即使来料已经撤销，也不能物理删除，请改为作废或归档。"
+        in INDEX
+    )
+    group_delete = INDEX.split("async dangerDeleteOrderGroup() {", 1)[1].split(
+        "async handleOrderCustomerChange", 1
+    )[0]
+    single_delete = INDEX.split("async deleteWholeOrder(order) {", 1)[1].split(
+        "async rollbackOrderWorkflow", 1
+    )[0]
+    assert "this.showToast(this.errorMessage(error), true)" in group_delete
+    assert "this.showToast(this.errorMessage(error),true)" in single_delete
+
+
 def test_order_badge_uses_undelivered_count_and_has_workflow_rollback() -> None:
     assert "ordersUnfinishedTotal" in INDEX
     assert 'count: this.ordersUnfinishedTotal' in INDEX

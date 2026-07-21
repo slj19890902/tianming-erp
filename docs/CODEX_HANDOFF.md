@@ -1,5 +1,14 @@
 # Codex 项目交接
 
+## 2026-07-21 | 撤销来料后订单删除提示修复
+
+- 独立 worktree：`D:\tm-worktrees\erp-order-delete-incoming-audit-fix`；分支：`codex/order-delete-incoming-audit-fix`；基线：`fb0aacaba5463fa7b2444a5cef166df1fb79a461`。未修改主目录、N041 WIP、报料更新回退 WIP 或 `D:\ERP交接备份`。
+- 已确认的业务原因是 `incoming_receipt_items.order_id/order_item_id` 使用不可置空的 `ON DELETE RESTRICT`，撤销来料仅撤销业务效果，`status=reversed` 的审计事实必须永久保留。订单删除前置依赖检查过去未查询该表，导致提交阶段才被外键拒绝并返回通用误导文案。
+- `app/api/orders.py` 的订单删除依赖检查现在优先识别来料事实：任一 `posted` 返回“有效来料实收”专用 409；没有 `posted` 但存在 `reversed` 或其他历史事实时返回“已撤销来料审计”专用 409。检查继续位于预送货解绑、库存释放、旧报料删除和删除日志写入之前，单删与组删均原子阻断；未删除、改空或绕过任何来料审计外键。
+- `static/index.html` 的订单危险操作区新增“标记作废”，复用现有状态接口写入 `cancelled`；状态中文映射补齐死单、已结档、已作废和已归档。单删与组删确认文字明确提示撤销来料后仍不能物理删除，后端专用 409 继续通过统一错误解析原样显示。
+- 自动验证：新增核心场景 `6 passed`；订单、来料、N029 生产集成和相关前端推荐回归主运行 `145 passed, 2 failed`，两项仅因当前系统 Python 缺少未声明的 `cv2`；N029 其余用例复跑 `11 passed, 2 deselected`，缺依赖两项使用一次性临时目录中的 `opencv-python-headless` 复跑 `2 passed`。前端内联 JavaScript 语法 `2 passed`，Python 编译与 `git diff --check` 通过。
+- 本修复不含数据库迁移；所有自动测试均显式使用临时 SQLite 路径，未连接、迁移或写入工厂正式数据库。
+
 ## 2026-07-19 N039/N040 | 复合产品生产闭环与客户材质候选追溯
 
 - N039 已经人工验收并合并到主功能分支，合并提交 `ba34b7e`；正式数据库已在在线备份后由 `cc59v8x9z48` 线性升级到 `cd60v8x9z49`，迁移后 `integrity_check=ok`、外键异常 0。升级前备份为 `data/backups/carton_erp_before_n039_cd60_20260719_160006.sqlite3`，SHA-256 为 `6FC7024D828858BA056F16F7ABC0F36A3102AD03C429FD5D9A31DA9FB1A10B0F`。

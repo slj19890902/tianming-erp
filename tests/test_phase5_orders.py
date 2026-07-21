@@ -769,6 +769,200 @@ def test_order_delete_requires_double_confirmation_and_does_not_reuse_number(
     assert second["order_number"] == "TM20260613002"
 
 
+def _seed_order_incoming_receipt(
+    session_factory,
+    *,
+    order: dict,
+    receipt_status: str,
+    suffix: str,
+) -> tuple[int, int]:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.user import User
+
+    received_at = datetime(2026, 7, 20, 9, 15)
+    reversed_at = datetime(2026, 7, 20, 10, 30) if receipt_status == "reversed" else None
+    reversal_reason = "来料数量录入错误，已由仓库撤销" if receipt_status == "reversed" else None
+    with session_factory() as session:
+        admin_id = session.scalar(select(User.id).where(User.username == "admin"))
+        receipt = IncomingReceipt(
+            receipt_number=f"IR-ORDER-DELETE-{suffix}",
+            status=receipt_status,
+            received_at=received_at,
+            received_by=admin_id,
+            idempotency_key=f"order-delete-incoming-{suffix}",
+            remarks="订单删除保护测试来料",
+            reversed_at=reversed_at,
+            reversed_by=admin_id if reversed_at else None,
+            reversal_reason=reversal_reason,
+        )
+        session.add(receipt)
+        session.flush()
+        receipt_item = IncomingReceiptItem(
+            receipt_id=receipt.id,
+            order_id=order["id"],
+            order_item_id=order["items"][0]["id"],
+            planned_quantity=200,
+            received_quantity=200,
+            cumulative_received_quantity=200,
+            variance_quantity=0,
+            variance_type="matched",
+            resolution_status="not_required",
+            status=receipt_status,
+            reversal_reason=reversal_reason,
+            reversed_by=admin_id if reversed_at else None,
+            reversed_at=reversed_at,
+        )
+        session.add(receipt_item)
+        session.commit()
+        return receipt.id, receipt_item.id
+
+
+def _incoming_audit_snapshot(session, receipt_id: int, receipt_item_id: int) -> tuple:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+
+    receipt = session.get(IncomingReceipt, receipt_id)
+    receipt_item = session.get(IncomingReceiptItem, receipt_item_id)
+    assert receipt is not None
+    assert receipt_item is not None
+    return (
+        receipt.status,
+        receipt.received_at,
+        receipt.received_by,
+        receipt.remarks,
+        receipt.reversed_at,
+        receipt.reversed_by,
+        receipt.reversal_reason,
+        receipt_item.order_id,
+        receipt_item.order_item_id,
+        receipt_item.status,
+        receipt_item.received_quantity,
+        receipt_item.reversal_reason,
+        receipt_item.reversed_at,
+        receipt_item.reversed_by,
+    )
+
+
+def test_order_delete_blocks_posted_incoming_with_specific_message(
+    order_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PO-DELETE-POSTED-INCOMING"
+    with TestClient(app) as client:
+        _login(client)
+        order = client.post("/api/orders", json=payload).json()
+        receipt_id, receipt_item_id = _seed_order_incoming_receipt(
+            session_factory,
+            order=order,
+            receipt_status="posted",
+            suffix="POSTED",
+        )
+        with session_factory() as session:
+            before = _incoming_audit_snapshot(session, receipt_id, receipt_item_id)
+        response = client.delete(
+            f"/api/orders/{order['id']}",
+            params={"confirm": "true"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "该订单存在有效来料实收记录，不能物理删除。"
+        "请先撤销来料，再将订单标记为作废或归档。"
+    )
+    with session_factory() as session:
+        assert session.get(Order, order["id"]) is not None
+        assert _incoming_audit_snapshot(session, receipt_id, receipt_item_id) == before
+        assert session.scalar(select(func.count()).select_from(IncomingReceipt)) == 1
+        assert session.scalar(select(func.count()).select_from(IncomingReceiptItem)) == 1
+
+
+def test_order_delete_blocks_reversed_incoming_and_preserves_audit(
+    order_api_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = "PO-DELETE-REVERSED-INCOMING"
+    with TestClient(app) as client:
+        _login(client)
+        order = client.post("/api/orders", json=payload).json()
+        receipt_id, receipt_item_id = _seed_order_incoming_receipt(
+            session_factory,
+            order=order,
+            receipt_status="reversed",
+            suffix="REVERSED",
+        )
+        with session_factory() as session:
+            before = _incoming_audit_snapshot(session, receipt_id, receipt_item_id)
+        response = client.delete(
+            f"/api/orders/{order['id']}",
+            params={"confirm": "true"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "该订单存在已撤销来料审计记录，不能物理删除。"
+        "请将订单标记为作废或归档。"
+    )
+    with session_factory() as session:
+        assert session.get(Order, order["id"]) is not None
+        assert _incoming_audit_snapshot(session, receipt_id, receipt_item_id) == before
+        assert session.scalar(select(func.count()).select_from(IncomingReceipt)) == 1
+        assert session.scalar(select(func.count()).select_from(IncomingReceiptItem)) == 1
+
+
+def test_order_group_delete_is_atomic_when_one_order_has_reversed_incoming(
+    order_api_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    blocked_payload = _payload()
+    blocked_payload["customer_po"] = "PO-GROUP-REVERSED-INCOMING"
+    clean_payload = _payload()
+    clean_payload["customer_po"] = blocked_payload["customer_po"]
+    clean_payload["items"][0]["quantity"] = 201
+    with TestClient(app) as client:
+        _login(client)
+        blocked_order = client.post("/api/orders", json=blocked_payload).json()
+        clean_order = client.post("/api/orders", json=clean_payload).json()
+        receipt_id, receipt_item_id = _seed_order_incoming_receipt(
+            session_factory,
+            order=blocked_order,
+            receipt_status="reversed",
+            suffix="GROUP-REVERSED",
+        )
+        with session_factory() as session:
+            before = _incoming_audit_snapshot(session, receipt_id, receipt_item_id)
+        response = client.post(
+            "/api/orders/group-delete",
+            json={
+                "order_ids": [clean_order["id"], blocked_order["id"]],
+                "confirm": True,
+            },
+        )
+
+    assert response.status_code == 409
+    assert "已撤销来料审计" in response.json()["detail"]
+    with session_factory() as session:
+        assert session.get(Order, blocked_order["id"]) is not None
+        assert session.get(Order, clean_order["id"]) is not None
+        assert _incoming_audit_snapshot(session, receipt_id, receipt_item_id) == before
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action == "DELETE",
+                OperationLog.entity_type == "order",
+                OperationLog.entity_id.in_([blocked_order["id"], clean_order["id"]]),
+            )
+        ) == 0
+
+
 def test_pdf_import_order_group_delete_is_atomic_and_returns_chinese_blocker(
     order_api_app,
 ) -> None:
@@ -2329,6 +2523,29 @@ def test_closed_order_is_excluded_from_business(order_api_app) -> None:
     assert business.status_code == 200
     ids = [row["id"] for row in business.json()["items"]]
     assert created["id"] not in ids
+
+
+def test_cancelled_order_is_hidden_from_business_and_remains_traceable(
+    order_api_app,
+) -> None:
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = _create_order(
+            client, customer_po="PO-CANCELLED-TRACE", order_date="2026-06-13"
+        )
+        marked = client.put(
+            f"/api/orders/{created['id']}/status",
+            json={"status": "cancelled", "remark": "来料撤销后保留审计，订单作废"},
+        )
+        assert marked.status_code == 200, marked.text
+        business = client.get("/api/orders", params={"status": "business"})
+        cancelled = client.get("/api/orders", params={"status": "cancelled"})
+
+    assert business.status_code == 200
+    assert created["id"] not in [row["id"] for row in business.json()["items"]]
+    assert cancelled.status_code == 200
+    assert created["id"] in [row["id"] for row in cancelled.json()["items"]]
 
 
 def test_frontend_delivery_group_status_uses_aggregate_quantities() -> None:

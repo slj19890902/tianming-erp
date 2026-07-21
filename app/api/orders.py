@@ -2240,6 +2240,24 @@ def _unlink_predelivery_order_bindings(
 
 def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     labels: list[str] = []
+    has_posted_incoming = bool(
+        db.scalar(
+            select(func.count())
+            .select_from(IncomingReceiptItem)
+            .where(
+                IncomingReceiptItem.order_id.in_(order_ids),
+                IncomingReceiptItem.status == "posted",
+            )
+        )
+    )
+    if has_posted_incoming:
+        labels.append("有效来料实收")
+    elif db.scalar(
+        select(func.count())
+        .select_from(IncomingReceiptItem)
+        .where(IncomingReceiptItem.order_id.in_(order_ids))
+    ):
+        labels.append("已撤销来料审计")
     if db.scalar(
         select(func.count())
         .select_from(DeliveryItem)
@@ -2283,6 +2301,10 @@ def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
 
 
 def _flow_delete_message(labels: list[str]) -> str:
+    if "有效来料实收" in labels:
+        return "该订单存在有效来料实收记录，不能物理删除。请先撤销来料，再将订单标记为作废或归档。"
+    if "已撤销来料审计" in labels:
+        return "该订单存在已撤销来料审计记录，不能物理删除。请将订单标记为作废或归档。"
     if "有效预送货" in labels:
         return "该订单仍存在有效预送货流程，请先撤回或作废预送货后再删除。"
     if "供应商报料单" in labels:

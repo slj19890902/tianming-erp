@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-07-22 | 历史材质派生规范化（家里 UAT 工具）
+
+- 独立 worktree：`D:\tm-worktrees\erp-historical-material-derived-mapping-20260722`；分支：`codex/historical-material-derived-mapping-20260722`；基线：`c5cffa2123973b3f30b74be7f6dc198d1f070210`。正式目录、正式分支和正式数据库未被修改。
+- 新工具 `scripts/admin/derive_historical_material_normalizations.py` 仅以 SQLite `mode=ro + query_only` 读取 `historical_requisition_maps`，生成独立派生 CSV/JSON；绝不 UPDATE 原始 `material_code`。只有已经带有合法楞型的格式文本才产生 `format_safe` 派生结果；五层单楞、复合文本和缺失楞型均保持 pending，不能猜 AB/BE。
+- 使用工厂 2026-07-22 17:52 的 SQLite Backup API 副本创建隔离 UAT 库后验证：2,313 条原始档案中 `format_safe=663`、`pending_ambiguous=58`、`pending_missing_flute=1,592`；UAT 库前后 SHA-256 完全一致，`integrity_check=ok`、外键异常 0。定向测试 `2 passed`、Python 编译和 `git diff --check` 通过。
+- 此工具尚未集成 ERP 页面，也没有 migration 或正式库 Apply。未来如需在 ERP 中读取派生结果，必须新增追加式结果表并先在隔离库演练，禁止回写原始档案。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。

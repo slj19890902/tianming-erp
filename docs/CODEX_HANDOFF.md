@@ -7,7 +7,11 @@
 - 最小修复只删除多余结束标签并恢复缩进；新增静态回归断言，确保订单分组明细内只有一个对应的 `</template>`，避免再次导致首页空白。
 - 隔离验证使用更新前备份的字节级副本 `D:\tm-uat\factory_blank_fix_20260722\carton_erp_blank_fix_uat.sqlite3`，副本 SHA-256 与备份一致、`integrity_check=ok`，未迁移；修复分支运行在 `127.0.0.1:18072`，首页显示登录页、Console 无错误、所有脚本 200、`/api/health` 返回 200。
 - 自动验证：定向前端与内联 JavaScript 语法 `34 passed`；更宽组合 `45 passed, 1 failed`，失败项为旧 Phase 10 销售菜单文案断言，已在未修改的正式基线独立复现。`git diff --check` 通过（仅 Git 提示现有 LF/CRLF 转换策略）。
-- 本修复不含数据库迁移，不连接、迁移或写入工厂正式数据库。正式目录仍为 `factory-current-baseline@5f2fb67` 且工作区干净；待用户审阅修复提交后再决定是否重启并快进正式基线。
+- 修复提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3` 于 2026-07-22 09:53（北京时间）使用旧 SHA `5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34` 的精确租约 fast-forward 到 `origin/factory-current-baseline`；`origin/main` 未修改。正式目录随后 fetch 核验并执行 `git merge --ff-only origin/factory-current-baseline`，最终 HEAD 精确为 `ff9b4eb` 且工作区干净。
+- 停服后使用项目 SQLite Backup API 创建一致性备份 `D:\纸箱厂erp软件搭建\data\backups\carton_erp_20260722_095310_079318_pre_update.sqlite3`，大小 `219447296` 字节，SHA-256 `9DC776DFC80C997707314FD44E44E58DE9A8C76BB402BBBA3E4BF0F8F9286A46`，`integrity_check=ok`；备份保留策略清理 1 个旧常规备份，用户指定的 `carton_erp_20260722_092247_695745_pre_update.sqlite3` 仍保留。
+- 本修复无新增迁移；发布前后 Alembic current/head 均为 `cf62v8x9z51`。首次直接调用项目 PowerShell 启动脚本被系统执行策略阻止，按门禁停止；用户随后授权进程级 `ExecutionPolicy Bypass`，同一项目启动脚本于 09:55 成功启动 PID 17672，`/api/health` 返回 200 / `ok=true`。
+- 正式浏览器验证：普通未登录页、无缓存强刷和独立干净浏览器会话均正常渲染，Vue/Axios/pinyin-pro/本地资源均为 200，ERP 来源 Console error/warn 为 0；Chrome 现有已登录会话成功显示“业务中心 / 首页仪表盘”。Chrome 的 MetaMask 扩展自身产生 warning，与 ERP 页面无关。
+- 安全分支 `factory-local-handoff-20260722`、`factory-local-baseline-before-update-20260722` 和 `stash@{0}` 全部保留。本轮未手工修改数据库，启动器的 `alembic upgrade head` 为无变更确认。
 
 ## 2026-07-21 | 撤销来料后订单删除提示修复
 

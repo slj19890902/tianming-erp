@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 from typing import Literal
 
 import jwt
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from fastapi.responses import JSONResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -120,6 +122,23 @@ from app.services.composite_bom_workflow import (
     is_composite_order_item,
 )
 from app.services.report_crease import crease_width_error, product_crease_width_error
+from app.services.product_drawings import (
+    DrawingValidationError,
+    remove_drawing_files,
+    save_product_drawing_files,
+)
+from app.services.secure_uploads import (
+    DRAWING_POLICY,
+    PDF_POLICY,
+    UploadTokenError,
+    UploadValidationError,
+    consume_temporary_token,
+    create_temporary_token,
+    read_validated_upload,
+    resolve_stored_reference,
+    stored_file_metadata,
+    temporary_token_file,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -176,6 +195,26 @@ _PRODUCTION_FACT_CONFLICT = "订单明细已有生产完工或转库存事实，
 
 
 _PRODUCT_ID_SENTINELS = {"", "new_product", "null", "undefined", "none", "nan"}
+
+
+def _safe_drawing_suffix(reference: str | None) -> str:
+    suffix = Path(reference or "").suffix.lower()
+    return suffix if suffix in {".jpg", ".jpeg", ".png", ".webp", ".pdf"} else ".bin"
+
+
+def _order_drawing_url(item_id: int, reference: str | None) -> str | None:
+    if not reference:
+        return None
+    return f"/api/orders/items/{item_id}/drawing/content/file{_safe_drawing_suffix(reference)}"
+
+
+def _product_drawing_url(drawing) -> str | None:
+    if drawing is None:
+        return None
+    return (
+        f"/api/master/products/drawings/{drawing.id}/content/"
+        f"original{_safe_drawing_suffix(drawing.image_path)}"
+    )
 
 
 def _require_product_drawing_edit(user: User) -> None:
@@ -260,10 +299,19 @@ class OrderItemCreate(BaseModel):
     material_id: int | None = None
     layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
     flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
-    temp_drawing_file: str | None = None   # 新建订单前临时上传的图纸路径
+    temp_drawing_token: str | None = Field(default=None, min_length=32, max_length=32)
     drawing_save_option: Literal[
         "order_only", "save_to_product", "overwrite_product"
     ] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_client_filesystem_path(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("temp_drawing_file") not in (None, ""):
+            raise ValueError(
+                "temp_drawing_file 已停用；请先上传图纸并提交一次性 temp_drawing_token"
+            )
+        return value
 
     @field_validator("product_id", "material_id", mode="before")
     @classmethod
@@ -1306,7 +1354,7 @@ def _order_response(
                 "material_id": item.material_id,
                 "snapshot_supplier_name": item.snapshot_supplier_name,
                 "snapshot_weight": item.snapshot_weight,
-                "drawing_file": item.drawing_file,
+                "drawing_file": _order_drawing_url(item.id, item.drawing_file),
                 # v0.19.2-B: 报料快照
                 "snapshot_report_length_mm": item.snapshot_report_length_mm,
                 "snapshot_report_width_mm": item.snapshot_report_width_mm,
@@ -1327,7 +1375,7 @@ def _order_response(
                 "snapshot_flap_mm": item.snapshot_flap_mm,
                 # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
                 "product_drawing_file": (
-                    item.product.drawings[0].image_path
+                    _product_drawing_url(item.product.drawings[0])
                     if item.product_id
                     and item.product is not None
                     and item.product.drawings
@@ -1880,12 +1928,12 @@ async def preview_order_pdf(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
-    filename = (file.filename or "").strip()
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="只支持上传 PDF 文件")
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="上传的 PDF 为空")
+    try:
+        upload = await read_validated_upload(file, PDF_POLICY)
+    except UploadValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    filename = upload.original_filename
+    content = upload.content
     template_rules = load_active_pdf_template_rules(db)
     try:
         draft = _parse_order_pdf_preview(content, filename, template_rules)
@@ -1913,19 +1961,23 @@ async def preview_order_pdf_batch(
 ) -> dict:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个 PDF 文件")
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="单次最多上传 20 个 PDF 文件")
     drafts: list[dict] = []
     seen_hashes: set[str] = set()
     template_rules = load_active_pdf_template_rules(db)
+    request_total_bytes = 0
     for file in files:
         filename = (file.filename or "uploaded.pdf").strip()
         digest = ""
         try:
-            if not filename.lower().endswith(".pdf"):
-                raise ValueError("只支持 PDF 文件")
-            content = await file.read()
-            if not content:
-                raise ValueError("文件为空")
-            digest = file_sha256(content)
+            upload = await read_validated_upload(file, PDF_POLICY)
+            filename = upload.original_filename
+            content = upload.content
+            request_total_bytes += upload.size
+            if request_total_bytes > 100 * 1024 * 1024:
+                raise ValueError("单次请求文件总大小不能超过 100MB")
+            digest = upload.sha256
             if digest in seen_hashes:
                 drafts.append(
                     _finalize_pdf_preview_for_user(
@@ -2109,17 +2161,70 @@ async def upload_draft_drawing(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
-    """新建订单未保存前的临时图纸上传。写入临时目录，不写 DB，前端持有路径直到提交。"""
-    import os, uuid
-    content = await file.read()
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
-    fname = f"draft_{uuid.uuid4().hex}.{ext}"
-    draft_dir = "static/uploads/order_drafts"
-    os.makedirs(draft_dir, exist_ok=True)
-    fpath = f"{draft_dir}/{fname}"
-    with open(fpath, "wb") as fp:
-        fp.write(content)
-    return {"temp_path": f"/static/uploads/order_drafts/{fname}", "filename": file.filename or fname}
+    """Store a validated draft outside static and return only a short-lived token."""
+    try:
+        upload = await read_validated_upload(file, DRAWING_POLICY)
+    except UploadValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    token = create_temporary_token(upload, owner_id=user.id)
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="UPLOAD_DRAFT_DRAWING",
+            resource="OrderDraftDrawing",
+            details=json.dumps(
+                {
+                    "original_filename": upload.original_filename,
+                    "content_type": upload.content_type,
+                    "size": upload.size,
+                    "sha256": upload.sha256,
+                },
+                ensure_ascii=False,
+            ),
+            username=user.username,
+            role=user.role,
+            entity_type="order_draft_drawing",
+            description="上传订单临时图纸",
+        )
+    )
+    db.commit()
+    return {"token": token}
+
+
+@router.get("/draft-drawing/{token}/content/{display_name}")
+def preview_draft_drawing(
+    token: str,
+    display_name: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> FileResponse:
+    del display_name
+    try:
+        stored = temporary_token_file(token, owner_id=user.id)
+    except UploadTokenError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="VIEW_DRAFT_DRAWING",
+            resource="OrderDraftDrawing",
+            details=json.dumps({"sha256": stored.sha256}, ensure_ascii=False),
+            username=user.username,
+            role=user.role,
+            entity_type="order_draft_drawing",
+            description="预览订单临时图纸",
+        )
+    )
+    db.commit()
+    return FileResponse(
+        stored.path,
+        media_type=stored.content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/items/{item_id}/drawing", status_code=status.HTTP_200_OK)
@@ -2131,7 +2236,6 @@ async def upload_order_item_drawing(
     user: User = Depends(can_edit),
 ) -> dict:
     """上传订单明细图纸。默认只写 order_item；save_to_product=true 时同步写入 product_drawings（需用户确认）。"""
-    import os, uuid
     if save_to_product:
         _require_product_drawing_edit(user)
     item = db.get(OrderItem, item_id)
@@ -2141,15 +2245,12 @@ async def upload_order_item_drawing(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
-    content = await file.read()
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
-    fname = f"{uuid.uuid4().hex}.{ext}"
-    draw_dir = "static/uploads/drawings"
-    os.makedirs(draw_dir, exist_ok=True)
-    fpath = f"{draw_dir}/{fname}"
-    with open(fpath, "wb") as fp:
-        fp.write(content)
-    item.drawing_file = f"/static/uploads/drawings/{fname}"
+    try:
+        upload = await read_validated_upload(file, DRAWING_POLICY)
+        saved = save_product_drawing_files(product_id=item.product_id or 0, upload=upload)
+    except (DrawingValidationError, UploadValidationError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    item.drawing_file = saved.image_path
     if save_to_product and item.product_id:
         from app.models.product_drawing import ProductDrawing
         product_drawing = ProductDrawing(
@@ -2159,8 +2260,90 @@ async def upload_order_item_drawing(
             uploaded_by=user.id,
         )
         db.add(product_drawing)
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="UPLOAD_ORDER_DRAWING",
+            resource="OrderItem",
+            details=json.dumps(
+                {
+                    "original_filename": upload.original_filename,
+                    "content_type": upload.content_type,
+                    "size": upload.size,
+                    "sha256": upload.sha256,
+                    "saved_to_product": bool(save_to_product and item.product_id),
+                },
+                ensure_ascii=False,
+            ),
+            username=user.username,
+            role=user.role,
+            entity_type="order_item",
+            entity_id=item.id,
+            description="上传订单明细图纸",
+        )
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        remove_drawing_files(saved.image_path, saved.thumbnail_path)
+        raise
+    return {
+        "drawing_file": _order_drawing_url(item.id, item.drawing_file),
+        "saved_to_product": save_to_product,
+    }
+
+
+@router.get("/items/{item_id}/drawing/content/{display_name}")
+def download_order_item_drawing(
+    item_id: int,
+    display_name: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> FileResponse:
+    del display_name
+    item = db.get(OrderItem, item_id)
+    if item is None or not item.drawing_file:
+        raise HTTPException(status_code=404, detail="订单图纸不存在")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    try:
+        path = resolve_stored_reference(item.drawing_file)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="订单图纸文件不存在") from error
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="订单图纸文件不存在")
+    metadata = stored_file_metadata(path)
+    content_type = str(
+        metadata.get("content_type")
+        or mimetypes.guess_type(path.name)[0]
+        or "application/octet-stream"
+    )
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="VIEW_ORDER_DRAWING",
+            resource="OrderItem",
+            details=json.dumps({"order_id": order.id}, ensure_ascii=False),
+            username=user.username,
+            role=user.role,
+            entity_type="order_item",
+            entity_id=item.id,
+            description="查看订单明细图纸",
+        )
+    )
     db.commit()
-    return {"drawing_file": item.drawing_file, "saved_to_product": save_to_product}
+    return FileResponse(
+        path,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 PREDELIVERY_INVALIDATION_ACTIONS = {
@@ -3455,21 +3638,18 @@ def create_order(
                 snapshot_flap_mm=product.flap_mm or 30,
                 requisition_status="未报料",
             )
-            # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细
-            if item_payload.temp_drawing_file:
-                import os, uuid, shutil
-                tmp_path = item_payload.temp_drawing_file.lstrip("/")
-                if os.path.isfile(tmp_path):
-                    ext = tmp_path.rsplit(".", 1)[-1].lower() or "png"
-                    fname = f"{uuid.uuid4().hex}.{ext}"
-                    draw_dir = "static/uploads/drawings"
-                    os.makedirs(draw_dir, exist_ok=True)
-                    dest = f"{draw_dir}/{fname}"
-                    shutil.copy2(tmp_path, dest)
-                    item.drawing_file = f"/static/uploads/drawings/{fname}"
-                else:
-                    # 路径不合法时直接使用原路径（保底）
-                    item.drawing_file = item_payload.temp_drawing_file
+            # P0-B: the client can submit only a short-lived, owner-bound token.
+            # A filesystem path is never interpreted from request data.
+            if item_payload.temp_drawing_token:
+                try:
+                    stored_drawing = consume_temporary_token(
+                        item_payload.temp_drawing_token,
+                        owner_id=user.id,
+                        category="drawings",
+                    )
+                except UploadTokenError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                item.drawing_file = stored_drawing.reference
             db.add(item)
             created_items.append(item)
 

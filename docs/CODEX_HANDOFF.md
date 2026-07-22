@@ -1,5 +1,17 @@
 # Codex 项目交接
 
+## 2026-07-22 P0-B | 上传路径、私有图纸与统一文件校验（家庭本地完成，待人工 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-p0b-upload-security-20260722`；分支：`codex/release-p0b-upload-security`；基线：`c5cffa2123973b3f30b74be7f6dc198d1f070210`。本轮没有连接、迁移或写入工厂正式数据库，也没有新增 Alembic migration。
+- 已移除订单创建对客户端 `temp_drawing_file` 本地路径的解释、`isfile/copy2` 和失败后原样落库逻辑。订单草稿图纸现在只返回 32 位随机、15 分钟、绑定上传用户的一次性 token；token 映射和临时文件仅位于固定私有临时目录，消费后不能重放，过期文件会清理。
+- 新图纸存储在 `data/private_uploads`（可由 `ERP_FILE_STORAGE_DIR` 显式覆盖），不再写入公开 `static/uploads`。数据库只保存随机私有引用；原文件名、MIME、大小和 SHA-256 只保存在私有 metadata 与操作日志中。
+- 产品图纸、订单图纸和草稿预览统一通过带登录、权限、客户范围和查看审计的 API 提供；通用静态挂载对 `/static/uploads` 一律返回 404。历史数据库中的 `/static/uploads/...` 引用仍可由鉴权接口在安全根目录内兼容读取，没有移动或删除历史文件。
+- 新增统一上传校验：1MB 分块读取、单文件上限、30 秒分块超时、扩展名白名单、MIME 与文件签名三方一致校验、HTML/SVG/JS/XML 主动内容拒绝、批量 PDF 最多 20 个且请求总量最多 100MB、临时 token 清理。订单 PDF、PDF 训练样本、产品/订单图纸和天华预送货图片均已接入；Excel 校验策略要求真实 XLSX ZIP 结构。
+- 依赖更新为 `python-multipart==0.0.27`、`pypdf==6.7.3`、`PyJWT==2.13.0`；隔离环境实测版本一致且 `pip check` 无冲突。生产配置现有至少 32 字符会话密钥门禁继续有效，本轮未发现文件泄露证据，因此没有轮换任何密钥。
+- 家庭副本 `D:\纸箱厂erp软件搭建\static\uploads` 不存在；只读审计未发现异常文件，但该结果不能替代工厂主机复核。报告：`docs/security_reports/P0B_PUBLIC_UPLOADS_AUDIT_20260722.md`；只读审计脚本：`scripts/audit/public_uploads_audit.py`，没有删除/apply 模式。
+- 自动验证：P0-B 核心与图纸权限 `17 passed`；新版依赖下上传、登录、PDF/OCR、图纸、客户隔离和权限组合 `150 passed, 1 skipped`；相关前端与内联 JavaScript `93 passed`；Python 编译和 `git diff --check` 通过。另有三个旧断言/用例已在未修改的 `c5cffa2` 基线复现（旧常用箱 DOM 标记、sales 账号预送货执行权限、PDF 训练路由清单漏列 correction），与 P0-B 无关。
+- 人工验收：`docs/security_reports/P0B_UPLOAD_SECURITY_UAT_20260722.md`。今晚只保留家庭本地提交；按用户要求，明早到工厂后再共同决定推送、PR、合并和工厂发布。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。

@@ -2904,10 +2904,10 @@
                       </td>
                       <!-- 图纸 -->
                       <td v-if="draft._show_advanced_details" style="font-size:12px;padding:4px 6px;vertical-align:top">
-                        <div v-if="item.temp_drawing_file || item.product_drawing_file" style="margin-bottom:3px">
+                        <div v-if="item.temp_drawing_token || item.product_drawing_file" style="margin-bottom:3px">
                           <a href="#" class="btn small" style="display:block;margin-bottom:2px"
-                             @click.prevent="previewDrawingFile(item.temp_drawing_file || item.product_drawing_file)">
-                            {{ item.temp_drawing_file ? "查看订单图纸" : "查看常用箱图纸" }}
+                             @click.prevent="previewDrawingFile(item.temp_drawing_preview_url || item.product_drawing_file)">
+                            {{ item.temp_drawing_token ? "查看订单图纸" : "查看常用箱图纸" }}
                           </a>
                         </div>
                         <label class="btn small" style="cursor:pointer;display:inline-block;font-size:11px">
@@ -3122,11 +3122,11 @@
                     <td class="sensitive-price"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
                     <!-- 图纸 -->
                     <td style="font-size:12px;padding:4px 6px">
-                      <div v-if="item.temp_drawing_file || item.drawing_file" style="margin-bottom:4px">
-                        <a v-if="isImageDrawing(item.temp_drawing_file || item.drawing_file)"
+                      <div v-if="item.temp_drawing_token || item.drawing_file" style="margin-bottom:4px">
+                        <a v-if="isImageDrawing(item.temp_drawing_preview_url || item.drawing_file)"
                            href="#" class="btn small" style="display:block;margin-bottom:2px"
-                           @click.prevent="previewDrawingFile(item.temp_drawing_file || item.drawing_file)">查看图纸</a>
-                        <a v-else :href="item.temp_drawing_file || item.drawing_file" target="_blank" class="btn small" style="display:block;margin-bottom:2px">查看图纸(PDF)</a>
+                           @click.prevent="previewDrawingFile(item.temp_drawing_preview_url || item.drawing_file)">查看图纸</a>
+                        <a v-else :href="item.temp_drawing_preview_url || item.drawing_file" target="_blank" class="btn small" style="display:block;margin-bottom:2px">查看图纸(PDF)</a>
                         <div style="font-size:11px;color:#6b7280">
                           <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
                             <input type="radio" :name="'drawing_opt_'+index" value="order_only"
@@ -10091,7 +10091,9 @@
             formData.append("file", file);
             try {
               const resp = await axios.post("/api/orders/draft-drawing", formData);
-              item.temp_drawing_file = resp.data.temp_path;
+              item.temp_drawing_token = resp.data.token;
+              const ext = String(file.name || "").match(/\.[A-Za-z0-9]+$/)?.[0] || ".bin";
+              item.temp_drawing_preview_url = `/api/orders/draft-drawing/${encodeURIComponent(resp.data.token)}/content/preview${ext}`;
               this.invalidateImportDraftConfirmation(draft);
               this.showToast("图纸上传成功");
             } catch (err) {
@@ -10173,8 +10175,9 @@
                 _material_supplier_name: item.material_supplier_name || "",
                 _material_weight: item.material_weight_structure || "",
                 _product_drawings: item.product_drawing_file ? [{ image_path: item.product_drawing_file }] : [],
-                temp_drawing_file: item.temp_drawing_file || null,
-                drawing_save_option: item.temp_drawing_file ? "order_only" : null,
+                temp_drawing_token: item.temp_drawing_token || null,
+                temp_drawing_preview_url: item.temp_drawing_preview_url || null,
+                drawing_save_option: item.temp_drawing_token ? "order_only" : null,
                 _original_product: item.matched_product_id ? {
                   specification: item.specification, sale_unit_price: item.product_default_price,
                   layer_count: item.layer_count, flute_type: item.flute_type
@@ -10238,8 +10241,8 @@
                         production_notes: item.production_notes || null,
                         layer_count: item.layer_count || null,
                         flute_type: item.flute_type || null,
-                        temp_drawing_file: item.temp_drawing_file || null,
-                        drawing_save_option: item.temp_drawing_file ? "order_only" : null,
+                        temp_drawing_token: item.temp_drawing_token || null,
+                        drawing_save_option: item.temp_drawing_token ? "order_only" : null,
                         quantity: Number(item.quantity),
                         unit_price: item.unit_price,
                       };
@@ -10400,7 +10403,8 @@
               _material_weight: "",         // 克重结构（仅显示用）
               _product_drawings: [],        // 常用箱图纸列表
               drawing_file: null,           // 订单级图纸（保存后）
-              temp_drawing_file: null,      // 新建订单临时图纸路径
+              temp_drawing_token: null,     // 新建订单短期一次性图纸 token
+              temp_drawing_preview_url: null,
               drawing_save_option: "order_only", // "order_only"|"save_to_product"|"overwrite_product"
               client_line_id: createIdempotencyKey(),
               _inventory: this.newOrderInventoryState(),
@@ -10492,7 +10496,9 @@
               // 不手动设置 Content-Type，让 axios/FormData 自动附带 boundary
               const resp = await axios.post("/api/orders/draft-drawing", formData);
               const item = this.orderForm.items[index];
-              item.temp_drawing_file = resp.data.temp_path;
+              item.temp_drawing_token = resp.data.token;
+              const ext = String(file.name || "").match(/\.[A-Za-z0-9]+$/)?.[0] || ".bin";
+              item.temp_drawing_preview_url = `/api/orders/draft-drawing/${encodeURIComponent(resp.data.token)}/content/preview${ext}`;
               if (!item.drawing_save_option) item.drawing_save_option = "order_only";
               this.showToast("图纸上传成功");
             } catch (err) {
@@ -11814,8 +11820,8 @@
                     layer_count: item.layer_count || item._layer_filter || null,
                     flute_type: item.flute_type || item._flute_filter || null,
                     is_new_product: item.is_new_product || false,
-                    temp_drawing_file: item.temp_drawing_file || null,
-                    drawing_save_option: item.temp_drawing_file ? (item.drawing_save_option || "order_only") : null,
+                    temp_drawing_token: item.temp_drawing_token || null,
+                    drawing_save_option: item.temp_drawing_token ? (item.drawing_save_option || "order_only") : null,
                   })),
                 };
                 await axios.post("/api/orders", orderPayload);

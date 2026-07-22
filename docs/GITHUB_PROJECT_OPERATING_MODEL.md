@@ -34,8 +34,9 @@ Tianming ERP 总 Project
 | Priority | P0 / P1 / P2 / P3 |
 | Area | 与 `area:*` 标签一致 |
 | Work type | Program / Epic / Audit / Remediation / Work item / Bug |
-| Risk gate | None / Human approval / Backup / Migration / Network / Production data |
+| Risk gate | None / Human approval / Backup required / Migration / Network / Production data |
 | Target | Stabilization / Later / PostgreSQL gate |
+| Codex Task | 专属任务标题和任务 ID |
 
 视图：
 
@@ -45,6 +46,8 @@ Tianming ERP 总 Project
 4. `安全与稳定`：安全、数据库、QE/发布、前端平台。
 5. `待人工门禁`：所有 `gate:*` 或 `risk:*` 项。
 6. `PostgreSQL 评估`：只显示门槛与证据，不提前创建迁移实施任务。
+
+GitHub Project API 当前没有创建或修改视图的 mutation。上述视图需要在 GitHub Web UI 手工建立；字段、选项和 28 个项目项已经配置完成，可直接按这里的筛选条件保存视图。
 
 ## 4. 长期模块与专属 Codex 任务
 
@@ -62,8 +65,29 @@ Tianming ERP 总 Project
 | 前端平台 | 本地依赖、路由、API 客户端、表格、弹窗、打印导出 | 不定义业务状态机 |
 | 安全与权限 | 登录、会话、RBAC、客户数据范围、上传、网络边界 | 不代替业务负责人验收规则 |
 | QE / 发布可靠性 | CI、测试分层、迁移演练、备份恢复、日志告警 | 不代替模块负责人写领域测试 |
+| 瑞达历史数据迁移 | `BoxDB20_REPRO`、`legacy_ruida_*`、dry-run、100 条试迁移与隔离验收 | 不把 `erp.db` 当历史源，不绕过迁移门禁 |
 
 路由规则示例：修改订单录入先进入“订单与 PDF 录入”任务；若触及状态跳转，同时关联“工作流状态与审计”；若增加迁移，再关联“QE / 发布可靠性”并加备份和人工门禁。PM 只协调依赖和验收顺序，不把实现重新收回总任务。
+
+已创建的专属 Codex 任务：
+
+| 专属任务 | Epic | Codex 任务 ID |
+|---|---:|---|
+| PM 总控与范围门禁 | #3 | `019f87c3-8d6d-7891-a3bc-6fe129e595b7` |
+| 跨模块工作流与审计 | #4 | `019f87c3-a57e-7150-ab34-741fb333b6b2` |
+| 主数据、产品与报价 | #5 | `019f87e4-476a-7993-b5b3-368ddb15a89e` |
+| 订单与 PDF 录入 | #6 | `019f87c3-be12-78d2-acb6-142d3014444f` |
+| 报料与来料 | #7 | `019f87c3-d6d4-7e81-8742-8b718f8184b4` |
+| 生产与 BOM | #8 | `019f87e4-5fd5-7e43-b3c2-a6ae10f6bd56` |
+| 仓库与轻库存 | #9 | `019f87e4-884a-7a03-8915-4eb70aa7d6cf` |
+| 送货与回单 | #10 | `019f87c3-e2f1-7c31-9910-44a98bda112e` |
+| 对账、开票与收款 | #11 | `019f87e4-9b90-7992-b7df-98f404b08aab` |
+| 前端平台与文员体验 | #12 | `019f87e4-b409-7250-81de-8c305da407fa` |
+| 安全、登录与 RBAC | #13 | `019f87c3-f94f-7c02-811c-d6680ff8d084` |
+| QE、发布与恢复 | #14 | `019f87c4-1174-7cf1-8820-a7b02d07c941` |
+| 瑞达历史数据迁移 | #15 | `019f87e4-c4cf-7010-b831-1081d411443c` |
+
+PM 任务已固定在 Codex 侧边栏。每个 Epic 的 `Codex Task` Project 字段也保存了对应标题与任务 ID；后续需求先按 Epic 路由到专属任务，跨域时再由 PM 增加依赖，不在 Program #3 内直接堆实现细节。
 
 ## 5. 首批安全 Epic 顺序
 
@@ -103,4 +127,9 @@ Tianming ERP 总 Project
 - 首批只读安全 Epic：[#16](https://github.com/slj19890902/tianming-erp/issues/16) 至 [#23](https://github.com/slj19890902/tianming-erp/issues/23)。
 - 已登记但禁止自动实施的整改项：[#24](https://github.com/slj19890902/tianming-erp/issues/24) 至 [#30](https://github.com/slj19890902/tianming-erp/issues/30)。
 - 已同步 38 个自定义标签。Issue Forms、PR 模板和 CODEOWNERS 位于本治理分支，合并前不会在仓库默认分支生效。
-- 总 GitHub Project v2 尚未创建：当前 CLI 令牌只有 `repo` scope，仍需补充 `project`、`read:project`、`read:org`、`read:discussion`。网页登录授权尝试未保存新令牌；不影响现有 Issues 和只读审计继续进行。
+- 总 Project 已创建并链接仓库：[`Tianming ERP — Stabilization & Modular Ownership`](https://github.com/users/slj19890902/projects/1)。Token 已验证具备 `project`、`repo`、`read:org`、`read:discussion` scope。
+- #3-#30 共 28 个 Issue 已全部进入 Project；#4-#23 是 Program #3 的子 Issue，#24-#30 已分别挂到主责安全/工作流 Epic。
+- Project 已配置 Status、Priority、Area、Work Type、Risk Gate、Target 和 Codex Task 字段；Program 为 In progress，只读安全审计为 Discovery，未经授权的整改项为 Blocked。
+- 13 个职能专属 Codex 任务已建立并回填到 Project；首轮只允许形成职责章程和只读审计，不授权直接改代码或数据。
+- 自定义视图受 GitHub Project API 能力限制，需要按第 3 节在 Web UI 手工保存；这不影响字段、Issue 层级和任务路由使用。
+- 治理变更位于 Draft PR [#31](https://github.com/slj19890902/tianming-erp/pull/31)，目标为 `factory-current-baseline`，尚未合并、部署或替换 `main`。

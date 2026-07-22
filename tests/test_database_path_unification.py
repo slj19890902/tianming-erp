@@ -147,7 +147,7 @@ def test_health_only_reports_minimal_liveness_status(
     assert str(database_path) not in response.text
 
 
-def test_start_script_uses_complete_backend_entrypoint() -> None:
+def test_start_script_uses_complete_backend_entrypoint_without_migration() -> None:
     from app.core.config import DEFAULT_DATABASE_PATH
 
     bat = (PROJECT_ROOT / "start_erp.bat").read_text(encoding="utf-8")
@@ -159,5 +159,9 @@ def test_start_script_uses_complete_backend_entrypoint() -> None:
     assert "app.main:app" in launcher
     assert "phase1_postgres.main:app" not in launcher
     assert ".venv\\Scripts\\python.exe" in launcher
-    assert "alembic upgrade head" in launcher
+    assert "release_erp.py" in launcher
+    assert "check-startup" in launcher
+    assert "ERP_ENVIRONMENT=production" in launcher
+    assert "alembic upgrade head" not in launcher
+    assert '"-m", "alembic", "upgrade"' not in launcher
     assert DEFAULT_DATABASE_PATH.resolve() == FORMAL_DATABASE

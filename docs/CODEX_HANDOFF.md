@@ -1526,3 +1526,15 @@ legacy_ruida_* 原始层
 - 独立 worktree 为 `D:\tm-worktrees\erp-pdf-flute-correction-fix-20260722`，分支为 `codex/pdf-flute-correction-fix-20260722`，基线为正式提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`。最小修复让常用箱层数/楞型优先，材质和 PDF 仅作为缺省回退，并新增 `BC14C/A -> 常用箱 5/AB` 回归断言。
 - 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
 - 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。
+
+## 75. 2026-07-22 P0-A 启动、发布迁移与 UAT 隔离收口
+
+- 用户已明确确认唯一候选基线为 `origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`，并授权开始 P0-A；对应 GitHub 整改项为 #24（普通启动/发布迁移）与 #26（生产配置/UAT 隔离）。独立 worktree 为 `D:\tm-worktrees\erp-p0a-startup-migration-safety-20260722`，分支为 `codex/release-p0a-startup-migration-safety`。
+- `scripts/windows/start_erp.ps1` 已移除普通启动中的 `alembic upgrade head`。正式启动现在强制 `ERP_ENVIRONMENT=production`、正式数据库绝对路径、loopback/HTTPS/单 worker 配置，并通过 `scripts/admin/release_erp.py check-startup` 只读检查数据库可访问性、`integrity_check`、外键、核心业务表和 `current == code head`；任何不一致都拒绝启动，不会自动迁移。
+- 旧 `scripts/admin/update_erp.ps1` 已 fail-closed 停用。新 `scripts/admin/release_erp.ps1` 只允许干净的 `factory-current-baseline` 和已批准 40 位 SHA，采用 Prepare / Apply 两阶段：Prepare 停服后创建 SQLite Backup API 备份、记录 source/backup SHA-256、核验完整性/外键/revision/核心计数、从备份建立隔离演练副本并精确迁移到指定 revision；随后生成与本次证据绑定的 `APPLY-...` 口令并保持停服。Apply 再次核对代码、正式库主文件及 WAL 指纹、revision、计数、服务停机和人工口令，才允许精确迁移；失败保持停服，迁移及普通启动健康检查成功后才把报告标为 completed。
+- `scripts/windows/start_erp_uat.ps1` 强制使用独立数据库副本、`18000-19999` 端口、`127.0.0.1`、`ERP_ENVIRONMENT=test` 和只读 revision 门禁；同时拒绝当前工作树默认库及已确认工厂绝对正式库 `D:\纸箱厂erp软件搭建\data\carton_erp.sqlite3`。详细操作与失败恢复边界记录在 `docs/P0A_STARTUP_RELEASE_RUNBOOK.md`。
+- 自动验证：P0-A、启动、既有发布、数据库路径及生产安全组合 `34 passed`；Python 编译、4 个 PowerShell 脚本语法解析、`git diff --check` 均通过。系统 Python 缺少 `cv2`，最终测试改用已有隔离 UAT venv `D:\tm-uat\home-n041\.venv`，没有改动工厂正式 venv。
+- 隔离迁移验证位于 `D:\tm-uat\p0a_release_gate_20260722_203300`：新空库迁移前先创建并验证备份（SHA-256 一致、`integrity_check=ok`），随后完整升级到唯一 head `cf62v8x9z51`。P0-A Prepare 又从该隔离库创建备份和演练副本，结果为 source hash 不变、backup/rehearsal `integrity_check=ok`、外键异常 0、核心业务表齐全、演练 revision=`cf62v8x9z51`；明确未执行 Apply。
+- 隔离 UAT 已运行在 `http://127.0.0.1:18080/`，数据库为上述隔离目录的 `carton_erp_uat.sqlite3`；首页与 `/api/health` 均为 200，监听地址仅为 `127.0.0.1`，启动入口明确未迁移数据库，供人工验收。
+- 本轮未修改工厂正式 `.env`、正式目录、正式数据库、正式服务、`origin/main` 或任何 Alembic revision，未启动 N081。当前正式部署仍被 `development + LAN HTTP + 未确认 HTTPS 反向代理` 阻断；不得直接把本分支替换进工厂启动目录。
+- 只读复核还发现外部运行状态已较用户最初快照变化：本轮检查时端口 8000 的监听命令行指向 `D:\tm-worktrees\erp-factory-latest-uat-20260722`，不是已确认的工厂正式目录。本轮没有停止或修改该进程；任何正式发布前必须重新确认 8000 进程归属、正式启动目录和维护窗口。

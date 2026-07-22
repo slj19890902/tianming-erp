@@ -9,6 +9,7 @@ $BrowserUrl = $null
 $ErpPort = $null
 $BindHost = $null
 $RuntimeEnvironment = $null
+$DatabasePath = $null
 $LogDir = Join-Path $ProjectRoot "logs"
 $LogFile = Join-Path $LogDir "erp_startup.log"
 $ServerLog = Join-Path $LogDir "erp_server.log"
@@ -112,20 +113,36 @@ try {
     }
 
     $runtimeConfig = @(
-        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.health_url); print(s.browser_url)" 2>&1
+        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.health_url); print(s.browser_url); print(s.database_path)" 2>&1
     )
-    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 6) {
+    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 7) {
         $runtimeConfig | ForEach-Object { Write-Log $_ }
         throw "ERP runtime configuration is invalid."
     }
-    $BindHost = $runtimeConfig[-6].ToString().Trim()
-    $ErpPort = [int]$runtimeConfig[-5].ToString().Trim()
-    $Workers = [int]$runtimeConfig[-4].ToString().Trim()
-    $RuntimeEnvironment = $runtimeConfig[-3].ToString().Trim()
-    $ExternalHealthUrl = $runtimeConfig[-2].ToString().Trim()
-    $BrowserUrl = $runtimeConfig[-1].ToString().Trim()
+    $BindHost = $runtimeConfig[-7].ToString().Trim()
+    $ErpPort = [int]$runtimeConfig[-6].ToString().Trim()
+    $Workers = [int]$runtimeConfig[-5].ToString().Trim()
+    $RuntimeEnvironment = $runtimeConfig[-4].ToString().Trim()
+    $ExternalHealthUrl = $runtimeConfig[-3].ToString().Trim()
+    $BrowserUrl = $runtimeConfig[-2].ToString().Trim()
+    $DatabasePath = [System.IO.Path]::GetFullPath($runtimeConfig[-1].ToString().Trim())
+    if ($RuntimeEnvironment -ne "production") {
+        throw (
+            "Factory launcher requires ERP_ENVIRONMENT=production. " +
+            "Use scripts\windows\start_erp_uat.ps1 for an isolated UAT copy."
+        )
+    }
     if ($Workers -ne 1) {
         throw "ERP must run with exactly one worker for atomic login throttling."
+    }
+    $FormalDatabasePath = [System.IO.Path]::GetFullPath(
+        (Join-Path $ProjectRoot "data\carton_erp.sqlite3")
+    )
+    if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals(
+        $DatabasePath,
+        $FormalDatabasePath
+    )) {
+        throw "Factory launcher only accepts the formal database path: $FormalDatabasePath"
     }
     $LocalHealthUrl = "http://127.0.0.1:$ErpPort/api/health"
     if ($RuntimeEnvironment -eq "production") {
@@ -140,6 +157,15 @@ try {
     }
     Write-Log ("Runtime bind: {0}:{1}" -f $BindHost, $ErpPort)
 
+    $releaseGate = Join-Path $ProjectRoot "scripts\admin\release_erp.py"
+    if (-not (Test-Path -LiteralPath $releaseGate -PathType Leaf)) {
+        throw "Release gate helper not found: $releaseGate"
+    }
+    Write-Log "Checking database integrity and Alembic revision without migration."
+    Invoke-PythonCommand `
+        -Label "startup_revision_check" `
+        -Arguments @($releaseGate, "check-startup", "--database", $DatabasePath)
+
     if (Test-LocalErpRunning) {
         Write-Log "ERP already running."
         Confirm-ProductionExternalHealth
@@ -153,12 +179,6 @@ try {
         Write-Log ("Port {0} is already in use." -f $ErpPort)
         throw ("Port {0} is already in use. ERP cannot start." -f $ErpPort)
     }
-
-    Write-Log "Running alembic upgrade head."
-    Invoke-PythonCommand -Label "alembic_upgrade" -Arguments @("-m", "alembic", "upgrade", "head")
-
-    Write-Log "Running alembic current."
-    Invoke-PythonCommand -Label "alembic_current" -Arguments @("-m", "alembic", "current")
 
     Write-Log "Starting uvicorn."
     $arguments = @(

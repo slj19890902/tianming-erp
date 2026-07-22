@@ -184,6 +184,25 @@ class TestStandardProductPriority:
         assert item["unit_price"] == "1.88"
         assert item["customer_po"] == "PO123"
 
+    def test_common_box_flute_overrides_stale_pdf_history(self):
+        from app.services.order_pdf_import import _apply_standard_product
+
+        prod, mat = self._product()
+        prod.layer_count = 5
+        prod.flute_type = "AB"
+        mat.layer_count = 5
+        mat.flute_type = None
+        item = {
+            "old_material_code": "BC14C/A",
+            "layer_count": 5,
+            "flute_type": "A",
+        }
+
+        _apply_standard_product(item, prod)
+
+        assert item["layer_count"] == 5
+        assert item["flute_type"] == "AB"
+
     def test_standard_match_comparison_info(self):
         from app.services.order_pdf_import import _apply_standard_product
         prod, mat = self._product()

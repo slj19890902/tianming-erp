@@ -1518,3 +1518,11 @@ legacy_ruida_* 原始层
 - 最终发布差异相对 `fb0aaca` 共 18 个文件：不删除 reversed 来料或生产审计，不绕过外键；新增迁移仍只有 `cf62v8x9z51`，Alembic 保持单一 head。
 - 发布前组合回归：订单及删除原子性、来料、三楼库位、PDF 导入、生产工作流、前端静态断言、迁移保护和工厂更新脚本共 `228 passed`。Python 全量编译、`static/index.html` 与 `static/warehouse.html` 内联 JavaScript 语法、`git diff --check` 均通过。
 - 验证只使用 pytest 隔离 SQLite 和测试迁移库，没有连接或写入工厂数据库。发布动作仅允许用带远端旧 SHA 租约的 fast-forward 推送更新 `origin/factory-current-baseline`；工厂电脑仍由 `scripts/admin/update_erp.ps1` 在夜间自行获取、备份、完整性检查、快进、迁移和重启。
+
+## 74. 2026-07-22 PDF 订单常用箱楞型修正
+
+- 故障单据为 `PO2026070628.pdf`。第 2 条历史报料文本含 `BC14C/A`；`A` 对五层纸板确属非法，但管理员把常用箱改为 `5 层 / AB` 并成功保存后，PDF 草稿重新匹配仍保留旧 `A`，导致批量加入订单继续失败。
+- 根因在 `order_pdf_import._apply_standard_product()`：代码声明标准字段以常用箱为准，实际却只读取关联材质的楞型；当材质字典的 `flute_type` 为空时回退 PDF 历史值，漏掉常用箱自身的 `flute_type` 和 `layer_count`。正式库只读证据确认产品 `21302001` 已为 `5 / AB`，关联材质 `BC14C` 为 5 层且楞型为空。
+- 独立 worktree 为 `D:\tm-worktrees\erp-pdf-flute-correction-fix-20260722`，分支为 `codex/pdf-flute-correction-fix-20260722`，基线为正式提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`。最小修复让常用箱层数/楞型优先，材质和 PDF 仅作为缺省回退，并新增 `BC14C/A -> 常用箱 5/AB` 回归断言。
+- 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
+- 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。

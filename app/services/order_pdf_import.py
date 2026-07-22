@@ -2646,8 +2646,12 @@ def _apply_standard_product(item: dict, product: Product) -> None:
     if product.material_id is not None:
         item["matched_material_id"] = product.material_id
     if material is not None:
-        item["flute_type"] = material.flute_type or item.get("flute_type")
-        item["layer_count"] = material.layer_count or item.get("layer_count")
+        item["flute_type"] = (
+            product.flute_type or material.flute_type or item.get("flute_type")
+        )
+        item["layer_count"] = (
+            product.layer_count or material.layer_count or item.get("layer_count")
+        )
         item["material_supplier_name"] = material.supplier_name
         # 材质基础代码（去掉 -B/E 报价后缀），供前端显示 A6D/A 格式
         code_raw = material.code or ""

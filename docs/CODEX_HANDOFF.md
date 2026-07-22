@@ -1,5 +1,20 @@
 # Codex 项目交接
 
+## 2026-07-22 | 历史报料材质安全规范化工具（待厂机 dry-run）
+
+- 独立 worktree：`D:\tm-worktrees\erp-historical-material-cleanup-20260722`；分支：`codex/historical-material-cleanup-20260722`；基线：`c5cffa2123973b3f30b74be7f6dc198d1f070210`。本轮没有迁移或写入任何现有 SQLite；除 pytest 临时库外，仅对家用电脑旧副本执行了一次只读兼容 dry-run。
+- 新增 `scripts/admin/normalize_historical_requisition_materials.py`。脚本要求显式 `--database`，默认以 SQLite `mode=ro + PRAGMA query_only=ON` 执行 dry-run；支持当前 `historical_purchase_entries`，并兼容存在时的 `historical_requisition_maps`。可用 `--table` 分阶段处理，缺省审计两张表。
+- 规范矩阵为：三层 `3 位字母数字/A|B|E`，五层 `5 位字母数字/AB|BE`，七层 `7 位字母数字/AAA|ABC`。七层合法值只读透传；缺失/非法七层楞型进入人工清单，不依据产品自动猜测。
+- 只有三类记录进入自动计划：无歧义格式清理；历史基码与产品 `default_material_code` / 关联 `materials.code` 唯一一致，且产品有合法 3/5 层楞型；逐行人工批准映射。材质字典的旧 `flute_type` 不作为自动权威。事故回归已锁定：`BC14C/A` 只有在产品基码 `BC14C`、五层、`AB` 证据同时成立时才计划为 `BC14C/AB`；无产品/基码证据时必须保持待复核。`K618A/B楞`、`K618A/AB/BE楞` 同理不得无证据猜测。
+- 已规范历史值即使与当前产品层数/楞型不同也保持不变，仅输出 warning，避免把真实旧状态静默改成当前状态。人工审批 CSV 必须逐行绑定表名、ID、旧值、审核人和审核时间；如需以人工历史判断覆盖当前产品，必须显式填写 `authority_override=approved/manual`。
+- `historical_purchase_entries.material_code` 变更时同步重建其派生 `normalized_search_text`；`search_text`、`source_fingerprint`、`source_file_sha256` 等原始来源字段不变。旧表的 `search_key`、`normalized_search_key`、`raw_data` 保持不变。工具通过更新前后受保护列快照验证这些边界。
+- Apply 门禁：待复核数必须为 0；精确确认短语；现场停服确认；主文件预期 SHA-256；`journal_mode` 必须精确为 `delete`；非空 `-wal` / `-shm` / `-journal` 必须不存在；SQLite 在线备份先写 `.pending`，通过完整性、外键、SHA-256 和大小验证后原子发布，再从最终发布路径重新执行完整性、外键、SHA-256 和大小验证；失败时清理临时/最终文件或明确报告残留位置；加独占锁后以完整 `RowDecision` 证据指纹重建同一计划；逐行 CAS 更新。
+- 从 commit 后只读复核开始，到执行后 SHA-256、`Path.stat`、成功报告发布及返回前报告/数据库二次审计，全部处于同一个自动恢复保护边界；任一步骤失败都会尝试删除已发布成功报告并恢复已验证备份。恢复临时副本创建、哈希、完整性、sidecar 清点/隔离、主文件原子替换以及替换后完整性/哈希均有独立结构化紧急门禁。只有能够确定主文件尚未替换时才会把已隔离 sidecar 补偿回原路径；只要替换已经完成或结果无法确定，旧 sidecar 必须继续隔离。任一恢复阶段失败会尽力写出 `EMERGENCY_RESTORE_FAILED` 并明确“禁止启动 ERP”。若成功/临时 APPLY 报告无法删除，数据库仍先恢复并验证，残留 JSON 会被原位替换成 `INVALIDATED_APPLY_REPORT`，其他残留报告会生成 `.INVALIDATED.json`；随后写出 `EMERGENCY_REPORT_CLEANUP_FAILED`，禁止把残留报告当作清洗成功证据。
+- JSON、主 CSV、人工复核 CSV 和 Markdown 的全部 `.pending` 写入与最终原子发布现在位于同一个异常清理边界；任何一种格式在创建、写入、关闭或发布阶段失败，都会检查并删除本轮全部 pending 及已经发布/尝试发布的最终文件。若任一文件无法删除，则抛出携带逐路径清理记录的 `ReportPublicationError`；对于已经 commit 的 Apply，随后必须恢复并验证备份、失效标记残留报告并进入 `EMERGENCY_REPORT_CLEANUP_FAILED`。所有目标在首次 pending 写入前完成路径构造与冲突检查，拒绝覆盖同名报告。
+- 正式步骤见 `docs/HISTORICAL_MATERIAL_NORMALIZATION_RUNBOOK.md`。推荐先在厂机停止 ERP 后分别执行两次 dry-run：先 `--table historical_purchase_entries`，再 `--table historical_requisition_maps`。只有相应 REVIEW CSV 的待复核项全部完成并再次 dry-run 为 0，才可用实时 SHA-256 和显式备份目录申请 Apply；不得直接把家庭电脑旧库结果当正式库计划。现有历史导入器在源指纹/映射不变时不会重写，但源工作簿或映射变化时仍可能重新带入旧材质；任何重导后都必须重新执行本工具 dry-run，禁止直接沿用旧清洗报告或跳过复核。
+- 家用电脑旧副本兼容 dry-run（非正式库）：`historical_requisition_maps` 共 `2,313` 行，其中 `663` 行 `unchanged_canonical`、`1,650` 行 `review_ambiguous`、`0` 行自动计划；主文件 SHA-256、大小和 mtime 均未变化。报告仅存于 `D:\tm-test-data\home-old-historical-dryrun-20260722`，不纳入 Git，也不得作为厂机正式清洗依据。
+- 自动验证：专项测试 `35 passed`；连同历史采购查询和旧报料导入回归共 `53 passed`。最终回归通过显式 `--basetemp D:\tm-test-data\pytest-historical-material-staging-final-20260722-1540` 运行。故障注入覆盖 commit 后 SHA-256/`Path.stat` 失败、在线备份原子发布及最终路径复验失败、恢复临时副本/哈希/完整性失败、主文件替换失败、主文件已经替换后才抛错、替换后完整性失败、sidecar 安全补偿/继续隔离、四种报告暂存写失败及 pending 删除失败、报告部分发布清理失败和权威 APPLY JSON 清理失败。Python 编译与所有改动文件的 `git diff --check` 通过；独立终审未发现 P0/P1。尚未对工厂正式库运行 dry-run 或 Apply。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。

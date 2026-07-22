@@ -1179,7 +1179,7 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
     monkeypatch.setattr(
         pdf_pipeline,
         "extract_text_from_pdf_bytes",
-        lambda content: SAMPLE_PO_TEXT if content == b"good" else "",
+        lambda content: SAMPLE_PO_TEXT if content.endswith(b"good") else "",
     )
     monkeypatch.setattr(
         pdf_pipeline,
@@ -1194,9 +1194,9 @@ def test_batch_preview_isolates_failures_and_skips_duplicate_files(
         response = client.post(
             "/api/orders/pdf-preview-batch",
             files=[
-                ("files", ("first.pdf", b"good", "application/pdf")),
-                ("files", ("duplicate.pdf", b"good", "application/pdf")),
-                ("files", ("bad.pdf", b"bad", "application/pdf")),
+                ("files", ("first.pdf", b"%PDF-1.4\ngood", "application/pdf")),
+                ("files", ("duplicate.pdf", b"%PDF-1.4\ngood", "application/pdf")),
+                ("files", ("bad.pdf", b"%PDF-1.4\nbad", "application/pdf")),
             ],
         )
 

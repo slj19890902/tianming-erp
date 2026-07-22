@@ -50,10 +50,11 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
     app.dependency_overrides[get_db]=override
     with TestClient(app) as client:
         assert client.post("/api/auth/login",json={"username":"admin","password":"RolePass123!"}).status_code==200
-        up=client.post("/api/deliveries/tianhua-preimport/upload",files={"file":("x.png",b"x","image/png")})
+        png=b"\x89PNG\r\n\x1a\nstub"
+        up=client.post("/api/deliveries/tianhua-preimport/upload",files={"file":("x.png",png,"image/png")})
         assert up.status_code==201 and up.json()["items"][0]["status"]=="ok"
         item_id=up.json()["items"][0]["item_id"]
-        other=client.post("/api/deliveries/tianhua-preimport/upload",files={"file":("y.png",b"y","image/png")})
+        other=client.post("/api/deliveries/tianhua-preimport/upload",files={"file":("y.png",png,"image/png")})
         wrong_batch=client.post(
             f"/api/deliveries/tianhua-preimport/{other.json()['batch_id']}/create-draft",
             json={"items":[{"item_id":item_id,"row_no":1,"selected":True,"final_delivery_qty":200}]},
@@ -67,7 +68,7 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
         )
         blocked_responses=[]
         for blocked_status in ("not_matched","ocr_failed"):
-            blocked=client.post("/api/deliveries/tianhua-preimport/upload",files={"file":(f"{blocked_status}.png",b"x","image/png")})
+            blocked=client.post("/api/deliveries/tianhua-preimport/upload",files={"file":(f"{blocked_status}.png",png,"image/png")})
             blocked_item=blocked.json()["items"][0]
             with factory() as db:
                 db.get(TianhuaPreDeliveryImportItem,blocked_item["item_id"]).status=blocked_status

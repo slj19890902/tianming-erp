@@ -42,7 +42,7 @@ def phase12_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.models.user import User
 
     upload_dir = tmp_path / "uploads"
-    monkeypatch.setenv("ERP_DRAWING_DIR", str(upload_dir))
+    monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(upload_dir))
     engine = create_sqlite_engine(tmp_path / "phase12.sqlite3")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -289,9 +289,12 @@ def test_product_drawing_upload_saves_compressed_files_not_base64(phase12_app):
 
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["drawing_path"].startswith("/static/uploads/drawings/")
-    assert data["thumbnail_path"].startswith("/static/uploads/drawings/")
-    files = list(upload_dir.glob("*"))
+    assert data["drawing_path"].startswith("/api/master/products/drawings/")
+    assert data["thumbnail_path"].startswith("/api/master/products/drawings/")
+    files = [
+        path for path in upload_dir.rglob("*")
+        if path.is_file() and not path.name.endswith(".metadata.json")
+    ]
     assert len(files) == 2
     assert all(path.stat().st_size < len(source.getvalue()) for path in files)
     assert "base64" not in str(data).lower()

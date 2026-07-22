@@ -5,6 +5,7 @@ import json
 import socket
 from datetime import datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from uuid import uuid4
 
 import qrcode
@@ -61,6 +62,26 @@ from app.services.composite_bom_workflow import is_composite_order_item
 router = APIRouter()
 can_read = PermissionChecker("incoming.view")
 can_operate = PermissionChecker("incoming.execute")
+
+
+def _drawing_suffix(reference: str | None) -> str:
+    suffix = Path(reference or "").suffix.lower()
+    return suffix if suffix in {".jpg", ".jpeg", ".png", ".webp", ".pdf"} else ".bin"
+
+
+def _order_drawing_url(item_id: int, reference: str | None) -> str | None:
+    if not reference:
+        return None
+    return f"/api/orders/items/{item_id}/drawing/content/file{_drawing_suffix(reference)}"
+
+
+def _product_drawing_url(drawing: ProductDrawing | None) -> str | None:
+    if drawing is None:
+        return None
+    return (
+        f"/api/master/products/drawings/{drawing.id}/content/"
+        f"original{_drawing_suffix(drawing.image_path)}"
+    )
 
 
 def _utc_now() -> datetime:
@@ -643,13 +664,18 @@ def _rows(
         # v0.23.0 P0-3：订单/明细上传的图纸优先于常用箱图纸——车间来料页面
         # 需要能看到"这一单"实际上传的图纸，而不仅仅是常用箱历史图纸。
         product_drawing = latest_drawings.get(row.get("product_id"))
-        product_drawing_path = product_drawing.image_path if product_drawing else None
-        order_drawing_path = (row.get("order_item_drawing_file") or "").strip() or None
+        product_drawing_reference = product_drawing.image_path if product_drawing else None
+        order_drawing_reference = (row.get("order_item_drawing_file") or "").strip() or None
+        product_drawing_path = _product_drawing_url(product_drawing)
+        order_drawing_path = _order_drawing_url(row["item_id"], order_drawing_reference)
         final_path = order_drawing_path or product_drawing_path
         row["order_drawing_path"] = order_drawing_path
         row["product_drawing_path"] = product_drawing_path
         row["drawing_path"] = final_path
-        row["drawing_is_pdf"] = bool(final_path and final_path.lower().endswith(".pdf"))
+        final_reference = order_drawing_reference or product_drawing_reference
+        row["drawing_is_pdf"] = bool(
+            final_reference and final_reference.lower().endswith(".pdf")
+        )
         summary = source_summary_for_item(db, row["item_id"])
         if summary is not None:
             row.update(summary)
@@ -1034,14 +1060,16 @@ def _receipt_fact_rows(
             requisition_item.material_snapshot if requisition_item else None
         ) or item.snapshot_material or ""
         display_number = display_order_number(order, registry)
-        drawing_path = (item.drawing_file or "").strip() or None
-        if drawing_path is None and product is not None:
+        drawing_reference = (item.drawing_file or "").strip() or None
+        drawing_path = _order_drawing_url(item.id, drawing_reference)
+        if drawing_reference is None and product is not None:
             drawing = db.scalar(
                 select(ProductDrawing)
                 .where(ProductDrawing.product_id == product.id)
                 .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
             )
-            drawing_path = drawing.image_path if drawing else None
+            drawing_reference = drawing.image_path if drawing else None
+            drawing_path = _product_drawing_url(drawing)
         receiver = db.get(User, fact.receipt.received_by) if fact.receipt.received_by else None
         row = {
             "history_key": f"receipt-{fact.id}",
@@ -1119,7 +1147,9 @@ def _receipt_fact_rows(
             "received_by_name": receiver.real_name if receiver else None,
             "component_type": component or "single",
             "drawing_path": drawing_path,
-            "drawing_is_pdf": bool(drawing_path and drawing_path.lower().endswith(".pdf")),
+            "drawing_is_pdf": bool(
+                drawing_reference and drawing_reference.lower().endswith(".pdf")
+            ),
         }
         _apply_component_crease(row, component)
         rows.append(row)

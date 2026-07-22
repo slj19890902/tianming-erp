@@ -32,6 +32,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, field_serializer
@@ -66,6 +67,11 @@ from app.services.pdf_customer_templates import (
 from app.services.pdf_ocr import ocr_available, ocr_engine_name
 from app.services.pdf_parse_pipeline import PdfParsePipelineError, parse_pdf_bytes
 from app.services.pdf_scoring import compute_stats, correction_candidates, score_sample
+from app.services.secure_uploads import (
+    PDF_POLICY,
+    UploadValidationError,
+    read_validated_upload,
+)
 
 router = APIRouter()
 
@@ -182,8 +188,8 @@ def _ensure_sample_pdf(
             pass
 
     _SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
-    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(source_name).stem)[:40] or "sample"
-    destination = _SAMPLE_DIR / f"{expected_sha[:16]}_{safe_stem}.pdf"
+    del source_name
+    destination = _SAMPLE_DIR / f"{uuid4().hex}.pdf"
     try:
         already_saved = destination.is_file() and file_sha256(destination.read_bytes()) == expected_sha
     except OSError:
@@ -601,14 +607,12 @@ async def upload_sample(
     store_pdf=True 时将 PDF 原文件保存到 data/pdf_training_samples/（仅限本地；
     该目录已被 .gitignore 排除，不会进入 Git 仓库）。
     """
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="仅接受 .pdf 文件",
-        )
-
-    content = await file.read()
-    sha = file_sha256(content)
+    try:
+        upload = await read_validated_upload(file, PDF_POLICY)
+    except UploadValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    content = upload.content
+    sha = upload.sha256
 
     # 重复上传检测
     existing = db.query(PdfOrderTrainingSample).filter(
@@ -620,7 +624,7 @@ async def upload_sample(
             detail=f"该 PDF 已上传（样本 ID={existing.id}，文件 SHA256 重复）",
         )
 
-    parse_payload = _parse_pdf_sample_content(db, content, file.filename)
+    parse_payload = _parse_pdf_sample_content(db, content, upload.original_filename)
     extracted_text = parse_payload["extracted_text"]
     ocr_text_raw = parse_payload["ocr_text_raw"]
     parser_result_json = parse_payload["parser_result_json"]
@@ -630,7 +634,7 @@ async def upload_sample(
     file_path: str | None = None
     if store_pdf:
         _SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
-        safe_name = f"{sha[:16]}_{Path(file.filename).stem[:40]}.pdf"
+        safe_name = f"{uuid4().hex}.pdf"
         dest = _SAMPLE_DIR / safe_name
         dest.write_bytes(content)
         file_path = str(dest)
@@ -638,7 +642,7 @@ async def upload_sample(
     sample = PdfOrderTrainingSample(
         batch_id=batch_id,
         customer_id=customer_id,
-        file_name=file.filename,
+        file_name=upload.original_filename,
         file_sha256=sha,
         file_path=file_path,
         parser_result_json=parser_result_json,
@@ -653,7 +657,7 @@ async def upload_sample(
         db,
         user,
         "pdf_training.sample.upload",
-        f"上传样本: {file.filename} (sha={sha[:12]}…, method={parse_method})",
+        f"上传样本: {upload.original_filename} (sha={sha[:12]}…, method={parse_method})",
     )
     db.commit()
     db.refresh(sample)
@@ -677,8 +681,10 @@ async def submit_correction_sample(
     user: User = Depends(require_pdf_training_manage),
 ):
     """保存人工纠正样本；不会创建正式订单或启用客户模板。"""
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只支持 PDF 文件")
+    try:
+        upload = await read_validated_upload(file, PDF_POLICY)
+    except UploadValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     if customer_id is not None and db.get(Customer, customer_id) is None:
         raise HTTPException(
@@ -686,8 +692,8 @@ async def submit_correction_sample(
             detail="所选客户不存在，请刷新后重新选择。",
         )
 
-    content = await file.read()
-    sha = file_sha256(content)
+    content = upload.content
+    sha = upload.sha256
     sample = db.query(PdfOrderTrainingSample).filter(
         PdfOrderTrainingSample.file_sha256 == sha
     ).first()
@@ -707,10 +713,10 @@ async def submit_correction_sample(
             sample.customer_id = customer_id
             customer_changed = True
     else:
-        parse_payload = _parse_pdf_sample_content(db, content, file.filename)
+        parse_payload = _parse_pdf_sample_content(db, content, upload.original_filename)
         sample = PdfOrderTrainingSample(
             customer_id=customer_id,
-            file_name=file.filename,
+            file_name=upload.original_filename,
             file_sha256=sha,
             parser_result_json=parse_payload["parser_result_json"],
             extracted_text=parse_payload["extracted_text"],
@@ -721,7 +727,7 @@ async def submit_correction_sample(
         db.add(sample)
         db.flush()
 
-    file_changed = _ensure_sample_pdf(sample, content, file.filename)
+    file_changed = _ensure_sample_pdf(sample, content, upload.original_filename)
     labeled = _apply_ground_truth(
         db,
         sample,

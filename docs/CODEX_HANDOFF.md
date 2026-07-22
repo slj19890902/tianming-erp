@@ -1526,3 +1526,12 @@ legacy_ruida_* 原始层
 - 独立 worktree 为 `D:\tm-worktrees\erp-pdf-flute-correction-fix-20260722`，分支为 `codex/pdf-flute-correction-fix-20260722`，基线为正式提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`。最小修复让常用箱层数/楞型优先，材质和 PDF 仅作为缺省回退，并新增 `BC14C/A -> 常用箱 5/AB` 回归断言。
 - 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
 - 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。
+
+## 75. 2026-07-22 历史订单与报料材质快照规范化
+
+- `PO2026070622` 编辑常用箱 `23201018` 后的服务日志实际记录为一次预期的 P4 异常变更确认 `409`、随后保存 `200`；保存后的 PDF 草稿重匹配为 `409`，最终创建订单为 `400`，未发现服务端 `500`。根因仍是第 74 节所述：正式代码在重匹配时优先使用材质主数据中的候选楞型 `AB/BE`，没有优先使用常用箱的精确楞型 `AB`。
+- 用户明确授权清洗正式数据库历史报料材质。写入前分别生成 SQLite Backup API 在线备份 `D:\纸箱厂erp软件搭建\data\backups\carton_erp_20260722_113329_145033_pre_historical_material_cleanup.sqlite3` 和停机一致性备份 `D:\纸箱厂erp软件搭建\data\backups\carton_erp_20260722_113651_124104_offline_pre_historical_material_cleanup.sqlite3`；两者大小均为 `219447296` 字节、SHA-256 均为 `6a41167b26fb0046dfcbf64e273d68a6d718c77b622b7d701879c3850ecaf16a`、`integrity_check=ok`、外键错误 0。
+- 第一阶段正式事务规范化 `sales_order_items=22`、`material_requisition_items=18`、`supplier_requisition_order_items=23`。第二阶段写入前又生成 `D:\纸箱厂erp软件搭建\data\backups\carton_erp_20260722_114411_437691_pre_supplier_snapshot_completion.sqlite3`，大小 `219447296` 字节，SHA-256 `240a2b33788166b765be358bfebc9ac259331fcc2d99c256c1d7657523af4922`，`integrity_check=ok`、外键错误 0；随后补齐 92 条供应商报料明细的精确材质/层数/楞型快照，并把 13 张包含多种层数或楞型的单头统一字段清空，准确值保留在每条明细。
+- 清洗规则为：3 层材质代码必须为 3 位字母数字且楞型只能为 `A/B/E`；5 层材质代码必须为 5 位字母数字且楞型只能为 `AB/BE`。清洗后脚本二次扫描四个目标集合均为 0；样例 `K618A / 5 / AB` 已规范，混合单 `SRO-20260715-0002` 的三条明细分别为 `G717N/5/AB`、`K616F/5/AB`、`A6A/3/B`，单头层数和楞型为空；正式库 `integrity_check=ok`、外键错误 0。
+- 清洗只处理订单与报料历史快照，没有修改版本化的材质主数据，没有迁移。`historical_requisition_maps` 是原始只读历史档案且不参与当前报料上下文，本轮未改写。材质主数据中用于表达候选楞型的 `AB/BE` 仍保留；待发布提交 `c5cffa2123973b3f30b74be7f6dc198d1f070210` 会让 PDF 重匹配以常用箱精确楞型为准。
+- ERP 已用项目启动器重启，Alembic 仍为 `cf62v8x9z51 (head)`；`/api/health` 返回 `200 / ok=true`，首页返回 `200 text/html`，浏览器可见登录页且 Console 无 error/warn。正式目录仍为 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3` 且工作区干净；两个安全分支和 `stash@{0}` 均保留。

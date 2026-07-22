@@ -1,0 +1,186 @@
+{
+  "database": "D:\\tm-uat\\historical_material_cleanup_headers_20260722_1140\\carton_erp_uat.sqlite3",
+  "apply": true,
+  "counts": {
+    "sales_order_items": 0,
+    "material_requisition_items": 0,
+    "supplier_requisition_order_items": 0,
+    "supplier_requisition_orders": 13
+  },
+  "changes": {
+    "sales_order_items": [],
+    "material_requisition_items": [],
+    "supplier_requisition_order_items": [],
+    "supplier_requisition_orders": [
+      {
+        "table": "supplier_requisition_orders",
+        "id": 21,
+        "order_number": "SRO-20260710-0003",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 22,
+        "order_number": "SRO-20260710-0004",
+        "before": [
+          3,
+          "A"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 29,
+        "order_number": "SRO-20260713-0003",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 30,
+        "order_number": "SRO-20260713-0004",
+        "before": [
+          5,
+          "BE"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 32,
+        "order_number": "SRO-20260714-0002",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 35,
+        "order_number": "SRO-20260715-0002",
+        "before": [
+          5,
+          "AB/BE"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 36,
+        "order_number": "SRO-20260715-0003",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 37,
+        "order_number": "SRO-20260716-0001",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 38,
+        "order_number": "SRO-20260716-0002",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 39,
+        "order_number": "SRO-20260720-0001",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 41,
+        "order_number": "SRO-20260721-0002",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 42,
+        "order_number": "SRO-20260721-0003",
+        "before": [
+          5,
+          "BE"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 43,
+        "order_number": "SRO-20260721-0004",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,2119 @@
+{
+  "database": "D:\\tm-uat\\historical_material_fullsnap_20260722_1145\\carton_erp_uat.sqlite3",
+  "apply": true,
+  "counts": {
+    "sales_order_items": 0,
+    "material_requisition_items": 0,
+    "supplier_requisition_order_items": 92,
+    "supplier_requisition_orders": 13
+  },
+  "changes": {
+    "sales_order_items": [],
+    "material_requisition_items": [],
+    "supplier_requisition_order_items": [
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 1,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 2,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 3,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 4,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "W616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 5,
+        "product_code": "21301411",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 6,
+        "product_code": "21301501",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 7,
+        "product_code": "21311386",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 8,
+        "product_code": "21311372",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 9,
+        "product_code": "21311378",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 10,
+        "product_code": "21311377",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 11,
+        "product_code": "21311374",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 12,
+        "product_code": "21311373",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 13,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 14,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 15,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 16,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 17,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 18,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 19,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 20,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 21,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 22,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 23,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 24,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 25,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 26,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 27,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 28,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 29,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 30,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 31,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 32,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 33,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 34,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 35,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "F616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 36,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 37,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 38,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 39,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 40,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 41,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 42,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 43,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 44,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 45,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 46,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 47,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "after": [
+          "N7N",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 48,
+        "product_code": "23203017",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 49,
+        "product_code": "23203017",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 50,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 51,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 52,
+        "product_code": "23201126",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N717K",
+          5,
+          "AB"
+        ],
+        "after": [
+          "N717K",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 53,
+        "product_code": "23201028",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K817F",
+          5,
+          "AB"
+        ],
+        "after": [
+          "K817F",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 54,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "A"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "A"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 55,
+        "product_code": "23203017",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 56,
+        "product_code": "23203017",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 57,
+        "product_code": "21301204",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "AB"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 59,
+        "product_code": "23201126",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N717K",
+          5,
+          "AB"
+        ],
+        "after": [
+          "N717K",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 60,
+        "product_code": "23201028",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K817F",
+          5,
+          "AB"
+        ],
+        "after": [
+          "K817F",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 61,
+        "product_code": "21302013",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "A"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "A"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 63,
+        "product_code": "21308001",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A6A",
+          3,
+          "B"
+        ],
+        "after": [
+          "A6A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 64,
+        "product_code": "21301752",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K8K",
+          3,
+          "B"
+        ],
+        "after": [
+          "K8K",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 65,
+        "product_code": "21301753",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A414B",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A414B",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 66,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K618A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "K618A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 67,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K618A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "K618A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 68,
+        "product_code": "23201057",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "J416A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "J416A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 69,
+        "product_code": "23203079",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 70,
+        "product_code": "23201105",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "N817N",
+          5,
+          "AB"
+        ],
+        "after": [
+          "N817N",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 71,
+        "product_code": "21312013",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A414B",
+          5,
+          "AB"
+        ],
+        "after": [
+          "A414B",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 74,
+        "product_code": "21301854",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "Y414A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "Y414A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 75,
+        "product_code": "21302001",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "BC14C",
+          5,
+          "AB"
+        ],
+        "after": [
+          "BC14C",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 76,
+        "product_code": "21302006",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "BC14C",
+          5,
+          "AB"
+        ],
+        "after": [
+          "BC14C",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 77,
+        "product_code": "21301861",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 78,
+        "product_code": "21301852",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 80,
+        "product_code": "21301864",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "after": [
+          "W618K",
+          5,
+          "BE"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 81,
+        "product_code": "3D30285",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "G719N",
+          5,
+          "AB"
+        ],
+        "after": [
+          "G719N",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 82,
+        "product_code": "21308001",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A6A",
+          3,
+          "B"
+        ],
+        "after": [
+          "A6A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 84,
+        "product_code": "21301023",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F6A",
+          3,
+          "B"
+        ],
+        "after": [
+          "F6A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 86,
+        "product_code": "21301021",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F6A",
+          3,
+          "B"
+        ],
+        "after": [
+          "F6A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 89,
+        "product_code": "21308002",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "A"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "A"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 90,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K616A",
+          5,
+          "AB"
+        ],
+        "after": [
+          "K616A",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 94,
+        "product_code": "21302101",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "B414B",
+          5,
+          "AB"
+        ],
+        "after": [
+          "B414B",
+          5,
+          "AB"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 96,
+        "product_code": "21302048",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "F7A",
+          3,
+          "B"
+        ],
+        "after": [
+          "F7A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 99,
+        "product_code": "21302053",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "B4C",
+          3,
+          "B"
+        ],
+        "after": [
+          "B4C",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 100,
+        "product_code": "21302046",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 102,
+        "product_code": "21312009",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "D4B",
+          3,
+          "B"
+        ],
+        "after": [
+          "D4B",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 104,
+        "product_code": "21311025",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "R7A",
+          3,
+          "B"
+        ],
+        "after": [
+          "R7A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 105,
+        "product_code": "21308002",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "after": [
+          "CCC",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 106,
+        "product_code": null,
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "W7K",
+          3,
+          "B"
+        ],
+        "after": [
+          "W7K",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 107,
+        "product_code": "21301777",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "S7Q",
+          3,
+          "B"
+        ],
+        "after": [
+          "S7Q",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 112,
+        "product_code": "21308001",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "A6A",
+          3,
+          "B"
+        ],
+        "after": [
+          "A6A",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "id": 114,
+        "product_code": "21301193",
+        "before": [
+          null,
+          null,
+          null
+        ],
+        "effective_before": [
+          "K8F",
+          3,
+          "B"
+        ],
+        "after": [
+          "K8F",
+          3,
+          "B"
+        ],
+        "source": "material:existing"
+      }
+    ],
+    "supplier_requisition_orders": [
+      {
+        "table": "supplier_requisition_orders",
+        "id": 21,
+        "order_number": "SRO-20260710-0003",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 22,
+        "order_number": "SRO-20260710-0004",
+        "before": [
+          3,
+          "A"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 29,
+        "order_number": "SRO-20260713-0003",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 30,
+        "order_number": "SRO-20260713-0004",
+        "before": [
+          5,
+          "BE"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 32,
+        "order_number": "SRO-20260714-0002",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 35,
+        "order_number": "SRO-20260715-0002",
+        "before": [
+          5,
+          "AB/BE"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 36,
+        "order_number": "SRO-20260715-0003",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 37,
+        "order_number": "SRO-20260716-0001",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 38,
+        "order_number": "SRO-20260716-0002",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 39,
+        "order_number": "SRO-20260720-0001",
+        "before": [
+          3,
+          "B"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 41,
+        "order_number": "SRO-20260721-0002",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 42,
+        "order_number": "SRO-20260721-0003",
+        "before": [
+          5,
+          "BE"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "id": 43,
+        "order_number": "SRO-20260721-0004",
+        "before": [
+          5,
+          "AB"
+        ],
+        "after": [
+          null,
+          null
+        ]
+      }
+    ]
+  }
+}

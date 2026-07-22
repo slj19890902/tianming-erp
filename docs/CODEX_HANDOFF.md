@@ -12,6 +12,16 @@
 - 自动验证：P0-B 核心与图纸权限 `17 passed`；新版依赖下上传、登录、PDF/OCR、图纸、客户隔离和权限组合 `150 passed, 1 skipped`；相关前端与内联 JavaScript `93 passed`；Python 编译和 `git diff --check` 通过。另有三个旧断言/用例已在未修改的 `c5cffa2` 基线复现（旧常用箱 DOM 标记、sales 账号预送货执行权限、PDF 训练路由清单漏列 correction），与 P0-B 无关。
 - 人工验收：`docs/security_reports/P0B_UPLOAD_SECURITY_UAT_20260722.md`。今晚只保留家庭本地提交；按用户要求，明早到工厂后再共同决定推送、PR、合并和工厂发布。
 
+## 2026-07-22 N081 Phase 0 | 库存盘点与首次数据入库路线重排（文档完成，未开发）
+
+- 用户将近期开发优先级调整为 N081，先解决库存盘点和首次数据入库，再继续扩展此前 P0 包；本轮只做只读审计和路线修订，没有开发 API/页面/迁移。
+- 权威候选基线仍为 `origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`；独立 worktree 为 `D:\tm-worktrees\erp-n081-inventory-count-roadmap-20260722`，分支为 `codex/n081-inventory-count-roadmap-20260722`。
+- 当前正式数量权威已存在：`inventory_lots` + `inventory_movements`；客户专用/通用成品、栈板和三楼位置也已存在。N035 手机盘点只覆盖已有成品批次，不能登记账外库存或盘半成品。
+- N081 改为“空间主数据 → 归属/来源/日期口径 → 账外库存导入草稿 → 3～5 个成品栈板与 2～3 个半成品栈板试盘 → 分区域入账 → 移动/拆板/复盘”。N080-B 的最小归属语义提前，完整备库生产/直接出库仍后置。
+- N066 后移到 N081 全部盘点入账闭环之后，不再阻塞近期盘点；其位置仍必须复用 N081 的稳定 `location_id`。审计报告：`docs/warehouse_reports/N081_PHASE0_INVENTORY_COUNT_READINESS_AUDIT_20260722.md`。
+- 开发优先级与工厂发布门禁分离：可先在家庭隔离环境开发 N081，但 P0-A/P0-B 未进入工厂基线前，禁止发布 N081 新迁移、文件导入或正式盘点确认。
+- 本轮未找到 `天明包装ERP_新增需求长期记忆_20260630.md` 和 `天华模具明细(1).xls`；未连接、迁移或写入任何数据库，未 push。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。

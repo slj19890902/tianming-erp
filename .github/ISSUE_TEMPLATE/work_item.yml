@@ -1,0 +1,56 @@
+name: 模块工作项
+description: 在既有模块 Epic 下创建一个可独立验收的最小任务。
+title: "[TASK][模块] "
+labels:
+  - type:work-item
+  - status:needs-triage
+body:
+  - type: input
+    id: parent
+    attributes:
+      label: 父 Epic
+      placeholder: "#123"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 当前问题与业务价值
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 最小修改范围
+      description: 列出预计文件、接口、表和明确排除项；未知时先写只读调查范围。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收场景
+      placeholder: |
+        - [ ] 正常流程
+        - [ ] 权限拒绝
+        - [ ] 非法状态跳转
+        - [ ] 重复点击 / 幂等
+        - [ ] 打印、导出或审计（如适用）
+    validations:
+      required: true
+  - type: dropdown
+    id: database
+    attributes:
+      label: 数据库动作
+      options:
+        - 不涉及数据库写入
+        - 仅临时测试库
+        - 涉及迁移，需独立迁移计划
+        - 涉及正式库，尚未授权
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: 验证命令与人工 UAT
+    validations:
+      required: true

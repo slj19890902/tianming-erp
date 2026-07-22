@@ -1,5 +1,14 @@
 # Codex 项目交接
 
+## 2026-07-22 | GitHub 模块化治理骨架
+
+- 基于只读核对后的 `origin/factory-current-baseline@ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`，在独立 worktree `D:\tm-worktrees\erp-github-governance-20260722` 和分支 `codex/github-governance-bootstrap-20260722` 创建 GitHub 治理骨架；正式目录检出、正式数据库、部署、网络和旧 `main` 均未修改。
+- 新增模块 Epic、安全审计和最小工作项 Issue Forms，新增 PR 安全清单、CODEOWNERS、可复现标签清单，以及 `docs/GITHUB_PROJECT_OPERATING_MODEL.md`。
+- 治理模型采用“总 Project → Program Epic → 模块/安全 Epic → 最小工作项”，并将 PM、工作流、主数据、订单、报料来料、生产、仓库、送货回单、财务、前端平台、安全权限、QE 发布划为稳定责任域；一个工作项只绑定一个主要 Codex 任务。
+- 第一批安全任务限定为只读审计与威胁建模，不授权修改正式数据库、迁移、部署、网络或替换 `main`。SQLite 继续稳定化；PostgreSQL 仅保留评估门禁。
+- GitHub 已实际创建 38 个自定义标签、Program #3、模块 Epic #4-#15、首批只读安全 Epic #16-#23，以及标记为 blocked、需要人工授权的整改项 #24-#30。
+- GitHub CLI 当前只有 `repo` scope，可创建标签、Issue、分支和 PR；GitHub Project v2 仍缺 `project/read:project/read:org/read:discussion` scope。官方网页登录补授权尝试没有保存新令牌，因此总 Project 仍待补 scope 后创建。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。

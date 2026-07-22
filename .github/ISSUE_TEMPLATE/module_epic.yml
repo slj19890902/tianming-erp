@@ -1,0 +1,76 @@
+name: 模块 Epic
+description: 为一个稳定的 ERP 业务域建立长期维护边界、目标和验收标准。
+title: "[EPIC][模块] "
+labels:
+  - type:epic
+  - status:needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        一个 Epic 只对应一个稳定业务域。跨模块规则必须显式列出依赖，不能把所有需求继续堆进一个总任务。
+  - type: input
+    id: owner
+    attributes:
+      label: 负责角色 / Codex 任务
+      placeholder: 例如：订单域负责人 / 订单管理专属 Codex 任务
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: 业务目标
+      description: 说明该模块为三级纸箱厂解决什么问题，以及不解决什么问题。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与边界
+      description: 列出包含项、排除项、权威数据和跨模块接口。
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: 状态与业务规则
+      description: 写明合法状态、前置条件、禁止跳转、审计要求和回退规则。
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 分阶段交付物
+      description: 使用可勾选清单，按最小可验证闭环拆分。
+      placeholder: |
+        - [ ] 现状与风险基线
+        - [ ] 接口与数据契约
+        - [ ] 最小实现
+        - [ ] 自动回归与人工 UAT
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 必须可复现、可测试，并包含权限、异常、审计、打印或导出等相关场景。
+    validations:
+      required: true
+  - type: dropdown
+    id: data_impact
+    attributes:
+      label: 数据影响
+      options:
+        - 只读，不写数据库
+        - 仅测试或 UAT 数据库
+        - 涉及迁移，必须另走备份与迁移门禁
+        - 可能影响正式数据，等待人工授权
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖、风险与决策
+      description: 写明依赖 Epic、阻塞条件、未决问题和需要人工批准的动作。
+    validations:
+      required: true

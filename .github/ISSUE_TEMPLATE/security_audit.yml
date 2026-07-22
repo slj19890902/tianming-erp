@@ -1,0 +1,66 @@
+name: 安全审计 / 威胁建模
+description: 创建只读安全审计任务；默认不修代码、不改数据库、不改网络。
+title: "[SEC][只读审计] "
+labels:
+  - type:security-audit
+  - type:threat-model
+  - scope:read-only
+  - scope:no-db-write
+  - status:discovery
+body:
+  - type: markdown
+    attributes:
+      value: |
+        首轮只收集证据、建立攻击路径和修复门禁。任何正式数据库、部署、网络或 main 变更都必须另开实施 Issue 并重新授权。
+  - type: textarea
+    id: assets
+    attributes:
+      label: 资产与信任边界
+      description: 列出账号、会话、业务数据、数据库、备份、主机、局域网和第三方依赖。
+    validations:
+      required: true
+  - type: textarea
+    id: attack_surface
+    attributes:
+      label: 攻击面与滥用场景
+      description: 说明入口、攻击者能力、前置条件、影响和可检测性。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据要求
+      description: 指定要读取的代码、配置、日志、GitHub 元数据和只读数据库查询；禁止包含秘密。
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 交付物
+      placeholder: |
+        - [ ] 威胁模型
+        - [ ] 按 P0/P1/P2 排序的发现
+        - [ ] 每项发现的证据与影响
+        - [ ] 最小修复方案与回归计划
+        - [ ] 需要人工批准的动作清单
+    validations:
+      required: true
+  - type: textarea
+    id: forbidden
+    attributes:
+      label: 本任务禁止动作
+      value: |
+        - 不修改正式数据库或其备份
+        - 不运行迁移
+        - 不部署、不重启正式服务
+        - 不修改防火墙、代理或网络配置
+        - 不替换 main、不合并实施 PR
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完成标准
+      description: 说明哪些证据齐全后审计才算完成，以及如何把发现转成独立整改 Issue。
+    validations:
+      required: true

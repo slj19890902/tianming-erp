@@ -1,0 +1,16 @@
+# 当前仓库只有一个 GitHub 账号。下面先建立路径级审阅责任边界；
+# 专属 Codex 任务名称与模块接口边界见 docs/GITHUB_PROJECT_OPERATING_MODEL.md。
+* @slj19890902
+
+/app/api/orders.py @slj19890902
+/app/api/requisition.py @slj19890902
+/app/api/incoming.py @slj19890902
+/app/api/production.py @slj19890902
+/app/api/deliveries.py @slj19890902
+/app/api/finance.py @slj19890902
+/app/api/warehouse.py @slj19890902
+/app/core/ @slj19890902
+/alembic/ @slj19890902
+/scripts/ @slj19890902
+/tests/ @slj19890902
+/.github/ @slj19890902

@@ -1,5 +1,14 @@
 # Codex 项目交接
 
+## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
+
+- 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。
+- 根因是 `static/index.html` 的订单分组明细表在 `0dab789` 中多出一个 `</template>`，提前截断顶层 `activePage` 条件链，导致 Vue 3.5.40 抛出 compiler error 30（后续 `v-else-if` 失去相邻 `v-if`）并清空 `#app`。无缓存刷新仍可复现，排除旧缓存和静态资源加载故障。
+- 最小修复只删除多余结束标签并恢复缩进；新增静态回归断言，确保订单分组明细内只有一个对应的 `</template>`，避免再次导致首页空白。
+- 隔离验证使用更新前备份的字节级副本 `D:\tm-uat\factory_blank_fix_20260722\carton_erp_blank_fix_uat.sqlite3`，副本 SHA-256 与备份一致、`integrity_check=ok`，未迁移；修复分支运行在 `127.0.0.1:18072`，首页显示登录页、Console 无错误、所有脚本 200、`/api/health` 返回 200。
+- 自动验证：定向前端与内联 JavaScript 语法 `34 passed`；更宽组合 `45 passed, 1 failed`，失败项为旧 Phase 10 销售菜单文案断言，已在未修改的正式基线独立复现。`git diff --check` 通过（仅 Git 提示现有 LF/CRLF 转换策略）。
+- 本修复不含数据库迁移，不连接、迁移或写入工厂正式数据库。正式目录仍为 `factory-current-baseline@5f2fb67` 且工作区干净；待用户审阅修复提交后再决定是否重启并快进正式基线。
+
 ## 2026-07-21 | 撤销来料后订单删除提示修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-order-delete-incoming-audit-fix`；分支：`codex/order-delete-incoming-audit-fix`；基线：`fb0aacaba5463fa7b2444a5cef166df1fb79a461`。未修改主目录、N041 WIP、报料更新回退 WIP 或 `D:\ERP交接备份`。

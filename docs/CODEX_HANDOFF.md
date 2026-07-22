@@ -1545,3 +1545,11 @@ legacy_ruida_* 原始层
 - 验收对应实现提交为 `9eb2ebd755d4732a625c63d2bf4de2e354558cb4`；验收记录提交为 `189c09a46cc1ecbe0d085adbc2f5fa885e1ac26b`。用户随后明确授权推送并创建 Draft PR，分支 `codex/release-p0a-startup-migration-safety` 已推送，Draft PR 为 `https://github.com/slj19890902/tianming-erp/pull/35`，目标分支仅为 `factory-current-baseline`，未触碰 `origin/main`，未部署。
 - 验收完成后已精确核对端口 18080 进程命令行为当前 P0-A worktree、`app.main:app`、loopback 和端口 18080，并只停止该隔离 UAT 进程；端口 18080 已不再监听。隔离数据库、备份、演练副本和报告继续保留在 `D:\tm-uat\p0a_release_gate_20260722_203300`，未删除。
 - 本轮未停止或修改端口 8000 的进程，未修改工厂正式目录、正式 `.env` 或正式数据库。PR #35 当前保持 Draft，GitHub 复核为 CLEAN / MERGEABLE；合并与任何正式部署仍需独立人工批准，并继续要求确认 8000 进程归属、生产 HTTPS 配置和维护窗口。
+
+## 77. 2026-07-22 P0-A 合并与正式发布预检阻断
+
+- 用户已明确授权“审查后直接合并并正式发布”。代码审查复跑 P0-A、启动、既有发布、数据库路径及生产安全组合，结果仍为 `34 passed`；相对 `origin/factory-current-baseline` 没有 Alembic 文件变化，普通启动和旧更新入口均不存在 `alembic upgrade head`。P0-A 代码本身未发现新的 P0/P1 阻断缺陷。
+- 正式发布只读预检与此前口径不一致：`D:\纸箱厂erp软件搭建` 当前为 `feature/v0208-common-box-edit@fb0aacaba5463fa7b2444a5cef166df1fb79a461`，不是 `factory-current-baseline@c5cffa2`；正式目录 `.env` 中生产运行变量均未配置。
+- `D:\纸箱厂erp软件搭建\data\carton_erp.sqlite3` 实测 revision 为 `t68n0r1s7u50`，不是此前确认的 `cf62v8x9z51`；`integrity_check=ok`、外键异常 0，但缺少后续迁移才创建的 `incoming_receipts`。若直接部署 P0-A，普通启动会按设计拒绝 `current != code head`；若直接 Apply，则会跨越大量历史 revision，已超出本轮“无正式迁移”的既定验收前提。
+- 当前 8000 监听仍为 PID 38552，命令行 `--app-dir D:\tm-worktrees\erp-factory-latest-uat-20260722`；该工作树为 `c5cffa2` 且 `docs/CODEX_HANDOFF.md` 有未提交修改，没有 `.env`，默认工作树数据库文件也不存在，因此进程实际继承的数据库路径无法仅从命令行证明。端口 80/443 均无监听，未发现可承接 production HTTPS 的本机代理。
+- 因正式代码、数据库 revision、进程归属和网络配置四项门禁同时不满足，本轮在合并前安全停止：PR #35 继续保持 Draft，未合并、未部署、未停止 8000、未创建正式备份、未写正式数据库。下一步必须先重新确认唯一正式运行实例和权威数据库；若权威库确为 `t68`，需另开“t68 → cf62 隔离副本全链迁移与正式发布”闭环，完成备份、哈希、往返/失败恢复和人工批准；同时确定生产 HTTPS/反向代理方案后，才能重新申请合并与正式发布。

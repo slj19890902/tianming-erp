@@ -1,5 +1,18 @@
 # Codex 项目交接
 
+## 2026-07-22 | GitHub 模块化治理骨架
+
+- 基于只读核对后的 `origin/factory-current-baseline@ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`，在独立 worktree `D:\tm-worktrees\erp-github-governance-20260722` 和分支 `codex/github-governance-bootstrap-20260722` 创建 GitHub 治理骨架；正式目录检出、正式数据库、部署、网络和旧 `main` 均未修改。
+- 新增模块 Epic、安全审计和最小工作项 Issue Forms，新增 PR 安全清单、CODEOWNERS、可复现标签清单，以及 `docs/GITHUB_PROJECT_OPERATING_MODEL.md`。
+- 治理模型采用“总 Project → Program Epic → 模块/安全 Epic → 最小工作项”，并将 PM、工作流、主数据、订单、报料来料、生产、仓库、送货回单、财务、前端平台、安全权限、QE 发布划为稳定责任域；一个工作项只绑定一个主要 Codex 任务。
+- 第一批安全任务限定为只读审计与威胁建模，不授权修改正式数据库、迁移、部署、网络或替换 `main`。SQLite 继续稳定化；PostgreSQL 仅保留评估门禁。
+- GitHub 已实际创建 38 个自定义标签、Program #3、模块 Epic #4-#15、首批只读安全 Epic #16-#23，以及标记为 blocked、需要人工授权的整改项 #24-#30。
+- GitHub Token 已验证具备 `project`、`repo`、`read:org`、`read:discussion` scope。总 Project [`Tianming ERP — Stabilization & Modular Ownership`](https://github.com/users/slj19890902/projects/1) 已创建并链接仓库，#3-#30 共 28 个 Issue 已全部入板。
+- #4-#23 已作为 Program #3 的子 Issue；#24-#30 分别挂到对应安全/工作流 Epic。Project 已配置 Status、Priority、Area、Work Type、Risk Gate、Target 和 Codex Task 字段。
+- 已创建并命名 13 个职能专属 Codex 任务：PM、工作流、主数据、订单、报料来料、生产、仓库、送货回单、财务、前端平台、安全权限、QE 发布、瑞达历史迁移；PM 任务已固定，标题和任务 ID 已回填 Project。首轮均为只读职责章程或审计任务。
+- GitHub Project API 当前不支持创建/修改自定义视图；PM 总览、每日核心、月底财务、安全、人工门禁和 PostgreSQL 门禁视图需在 Web UI 按 `docs/GITHUB_PROJECT_OPERATING_MODEL.md` 手工保存。
+- 治理文件已推送到 `codex/github-governance-bootstrap-20260722`，Draft PR #31 目标为 `factory-current-baseline`；尚未合并、部署、替换 `main` 或写入正式数据库。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。

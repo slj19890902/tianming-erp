@@ -1535,3 +1535,10 @@ legacy_ruida_* 原始层
 - 清洗规则为：3 层材质代码必须为 3 位字母数字且楞型只能为 `A/B/E`；5 层材质代码必须为 5 位字母数字且楞型只能为 `AB/BE`。清洗后脚本二次扫描四个目标集合均为 0；样例 `K618A / 5 / AB` 已规范，混合单 `SRO-20260715-0002` 的三条明细分别为 `G717N/5/AB`、`K616F/5/AB`、`A6A/3/B`，单头层数和楞型为空；正式库 `integrity_check=ok`、外键错误 0。
 - 清洗只处理订单与报料历史快照，没有修改版本化的材质主数据，没有迁移。`historical_requisition_maps` 是原始只读历史档案且不参与当前报料上下文，本轮未改写。材质主数据中用于表达候选楞型的 `AB/BE` 仍保留；待发布提交 `c5cffa2123973b3f30b74be7f6dc198d1f070210` 会让 PDF 重匹配以常用箱精确楞型为准。
 - ERP 已用项目启动器重启，Alembic 仍为 `cf62v8x9z51 (head)`；`/api/health` 返回 `200 / ok=true`，首页返回 `200 text/html`，浏览器可见登录页且 Console 无 error/warn。正式目录仍为 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3` 且工作区干净；两个安全分支和 `stash@{0}` 均保留。
+
+## 76. 2026-07-22 PDF 常用箱楞型修复正式发布
+
+- 用户授权后，提交 `c5cffa2123973b3f30b74be7f6dc198d1f070210` 已以旧 SHA `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3` 租约 fast-forward 推送到 `origin/factory-current-baseline`；未修改 `origin/main`。发布前已确认修复提交包含正式基线、远端仍为旧 SHA、修复 worktree 与正式目录均干净。
+- 正式目录 fetch 后确认远端精确为 `c5cffa2`，停止唯一 ERP 进程并通过 SQLite Backup API 创建 `D:\纸箱厂erp软件搭建\data\backups\carton_erp_20260722_123739_378691_pre_pdf_flute_release.sqlite3`：大小 `219447296` 字节、SHA-256 `a4f4c2831e75573d0e25f4084b45e977a99d504df51d9be5344b301444504699`、`integrity_check=ok`、外键错误 0。
+- 正式目录仅执行 `git merge --ff-only origin/factory-current-baseline`，最终 HEAD 为 `c5cffa2123973b3f30b74be7f6dc198d1f070210` 且工作区干净。项目启动器执行现有 Alembic head 确认 `cf62v8x9z51 (head)`，没有新增迁移或手工数据库修改。
+- 发布后 `/api/health` 返回 `200 / ok=true`，首页 `200 text/html`，强制刷新后浏览器显示登录页、Console 无 error/warn，最近服务日志无 Traceback、500 或静态资源 404。安全分支与 `stash@{0}` 均保持。

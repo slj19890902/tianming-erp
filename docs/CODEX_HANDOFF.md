@@ -1,5 +1,17 @@
 # Codex 项目交接
 
+## 2026-07-22 | 订单创建与图纸路径安全收口（隔离分支，未提交）
+
+- 独立 worktree：`D:\tm-worktrees\erp-security-orders-20260722`；分支：`codex/security-orders-20260722`；基线：`c5cffa2123973b3f30b74be7f6dc198d1f070210`。本轮未连接、迁移或写入正式数据库。
+- `POST /api/orders` 不再把缺失 `items` 的请求委托给根目录 `main.py` 旧 writer；`_legacy_create` 及其动态 `import main` 已删除。仅提供 `customer_name`、完全省略 `customer_id/items` 的原旁路载荷现在以明确 400 拒绝，测试断言旧 writer 未调用且订单表零写入。
+- 新建订单只接受 `pending_production / unpaid` 初始状态。非默认 `status` 或 `payment_status` 在请求校验阶段返回 422；持久化时仍由服务端写死安全默认值，普通 `orders.create` 不能借新建订单直接伪造完成或已付款状态。
+- 草稿图纸只接受 `/api/orders/draft-drawing` 生成的 `/static/uploads/order_drafts/draft_<32位随机值>.webp|pdf`。绝对路径、正式数据库路径、反斜杠、`..`、其他静态目录、非随机文件名、失效文件、符号链接、Windows reparse point 和硬链接均拒绝；创建订单前先完成路径门禁，再对内容复验并重新保存到正式图纸目录，不再复制任意服务器文件或把不合法字符串原样落库。
+- 草稿读取使用同一个已打开文件句柄完成 `fstat -> 有界 read(20MB+1) -> fstat`，并把句柄身份与不跟随链接的路径状态前后核对；不再使用 `Path.read_bytes()`。草稿上传及订单明细图纸上传统一限制 20MB，拒绝 HTML、SVG、伪装图片和超限文件。
+- 图片只接受实际格式与声明 MIME 一致的 JPEG/PNG/WEBP，单边不超过 16,384 像素、总像素不超过 25,000,000；在 `load()` 前检查尺寸，并把 Pillow `DecompressionBombWarning/Error` 作为 400 拒绝。GIF/TIFF/BMP 即使伪装为 PNG 也不能通过；合法图片统一重新编码为 WEBP。
+- PDF 使用项目既有强依赖 `pypdf` 的 strict 模式检查真实 header、`startxref`、`%%EOF`、trailer、页树和每页 media box，不再只看 `%PDF-`。零页、header-only、截断、损坏或加密 PDF 均拒绝；对象图策略会先解析动作值的间接对象并 fail-closed，明确拒绝 JavaScript、OpenAction、Launch、EmbeddedFiles/FileAttachment、RichMedia（键及 Subtype）、SubmitForm 和 ImportData，合法静态 PDF 才以随机 `.pdf` 保存。
+- 最终定向命令覆盖订单旧 writer、初始状态、客户权限、产品图纸既有压缩以及完整恶意图纸矩阵，结果 `13 passed`。此前订单/客户权限整组为 `92 passed`；Python 编译和 `git diff --check` 通过。所有测试显式使用 `D:\tm-test-data\...` 临时数据库及 pytest 临时图纸目录；worktree 的 `static/uploads/order_drafts` 和 `static/uploads/drawings` 文件数均为 0。
+- 剩余边界：草稿 URL 当前仍是可重复使用的 opaque 引用，草稿文件不会在订单成功后自动删除；静态图纸/PDF 下载也尚未增加逐次登录鉴权。因此本轮解决的是任意服务器文件复制、危险类型和无界读取，不应宣称已经完成图纸下载授权或草稿生命周期治理。后续应独立增加一次性消费/定时清理与受权限保护的下载接口。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。
@@ -1526,3 +1538,15 @@ legacy_ruida_* 原始层
 - 独立 worktree 为 `D:\tm-worktrees\erp-pdf-flute-correction-fix-20260722`，分支为 `codex/pdf-flute-correction-fix-20260722`，基线为正式提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`。最小修复让常用箱层数/楞型优先，材质和 PDF 仅作为缺省回退，并新增 `BC14C/A -> 常用箱 5/AB` 回归断言。
 - 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
 - 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。
+
+## 75. 2026-07-22 订单与产品图纸私有存储安全闭环
+
+- 独立 worktree 为 `D:\tm-worktrees\erp-security-orders-20260722`，当前基线为 `c5cffa2`。本轮只在现有第二轮订单安全改动上增量实现，未提交、未推送、未迁移，也未连接或写入工厂正式数据库。
+- 订单草稿图纸与正式产品/订单图纸不再以公开静态目录作为可信存储。开发/测试默认目录改为 `data/private/drawings` 与 `data/private/order_drafts`；非测试运行必须显式配置项目目录之外的 `ERP_PRIVATE_STORAGE_TRUST_ROOT`、`ERP_DRAWING_DIR` 与 `ERP_ORDER_DRAFT_DRAWING_DIR`，并在启动时校验目录边界、重解析点和 Windows ACL。目录或任一上级目录存在宽泛写入、删除子项、改 ACL、取得所有权权限时启动失败。
+- 草稿上传返回保持前端兼容的 `/static/uploads/order_drafts/<token>/<filename>` 引用，但令牌已绑定上传用户、`auth_version`、过期时间、内容类型和 SHA-256；预览与创建订单时都会重新核验令牌、所有者、会话撤销版本、有效期、文件摘要及图像/PDF 格式。成功创建订单后尽力删除已消费草稿，创建失败则保留草稿供重试且不会产生订单或正式文件副作用。
+- 历史数据库中的 `/static/uploads/drawings/...` 与 `static/uploads/drawings/...` URL 无需迁移，应用中间件会把它们转入受保护接口。正式图纸必须先通过数据库反向定位客户，再同时校验客户范围和对应 `orders.view` / `products.view` 权限；匿名访问返回 401，跨客户返回 403，未知或多客户歧义返回 404。响应禁止公共缓存并支持受控 GET/HEAD。
+- 静态挂载增加独立物理路径防线：即使 URL 中包含反斜杠、大小写变化、点段、末尾空格/点、盘符绝对路径或 junction 别名，只要最终物理路径落入 `static/uploads` 就不由公开静态服务返回；普通 CSS、JavaScript 和 HTML 保持公开。
+- 删除产品图纸前增加跨 `ProductDrawing` 与历史 `OrderItem.drawing_file` 的精确引用计数，并兼容有/无前导斜杠 URL；只有数据库提交后且引用数为零才删除物理文件，避免产品版本删除连带破坏历史订单图纸。
+- 新增 `docs/PRIVATE_DRAWING_STORAGE_RUNBOOK.md`，提供不执行的管理员操作模板：建议在 `C:\TianmingERPPrivate` 建立项目外信任根、备份 ACL、收紧目录权限、按 SHA-256 复制历史文件、只读核验、UAT 与回滚。上线前还必须先处理安全 Issue #18：正式环境不得继续依赖项目树内的 `data/session_secret.key`，应显式设置强 `ERP_SECRET_KEY` 或受保护的外部 `ERP_SECRET_KEY_FILE`；密钥轮换会使既有登录会话与草稿令牌失效，必须单独审批。
+- 最终 ACL 复核补充拦截叶级图纸/草稿目录上的 inherit-only 宽泛授权；例如 `(A;OICIIO;GA;;;AU)` 或数字 SID `S-1-5-11` 虽不直接作用于目录本身，却会让新建文件继承普通用户全控，因此叶目录不得跳过 `IO` ACE。上级目录检查仍只判断能直接替换可信边界的有效 ACE。
+- 最终自动验证：`python -m py_compile` 覆盖根入口、应用入口、图纸接口、订单/产品接口和图纸服务；补齐 inherit-only ACL 门禁后，私有图纸、订单图纸权限、产品图纸、客户隔离与订单核心组合回归为 `124 passed`；私有存储与产品图纸二次定向复核为 `19 passed`；`git diff --check` 通过。测试仅使用 pytest 临时 SQLite 与临时文件目录，没有执行实际 ACL 修改。

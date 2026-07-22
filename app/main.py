@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
+import ntpath
 from pathlib import Path
 import sqlite3
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +26,7 @@ from app.api.deliveries import (
     router as deliveries_router,
 )
 from app.api.dashboard import router as dashboard_router
+from app.api.drawings import router as drawings_router
 from app.api.finance import router as finance_router
 from app.api.incoming import router as incoming_router
 from app.api.master_data_versions import router as master_data_versions_router
@@ -44,6 +46,7 @@ from app.api.tianhua_pre_delivery import (
     router as tianhua_pre_delivery_router,
 )
 from app.core.config import load_settings
+from app.services.product_drawings import verify_private_drawing_storage
 
 
 @asynccontextmanager
@@ -54,6 +57,7 @@ async def phase2_lifespan(_: FastAPI):
     # 确保 PDF 训练样本存储目录存在（不进入 Git，.gitkeep 已追踪目录结构）
     _pdf_dir = Path(__file__).resolve().parent.parent / "data" / "pdf_training_samples"
     _pdf_dir.mkdir(parents=True, exist_ok=True)
+    verify_private_drawing_storage()
     yield
 
 
@@ -117,6 +121,64 @@ class CookieOriginCSRFMiddleware(BaseHTTPMiddleware):
                 content={"detail": "安全校验失败：请求来源无效，请刷新页面后重试。"},
             )
         return await call_next(request)
+
+
+class ProtectedDrawingPathMiddleware:
+    """Keep historical drawing URLs while bypassing the anonymous static mount."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    @staticmethod
+    def _normalized_static_target(path: str) -> str | None:
+        decoded = unquote(path).replace("\\", "/")
+        raw_components = decoded.split("/")
+        win32_components = [component.rstrip(" .") for component in raw_components]
+        canonical_path = ntpath.normpath("/".join(win32_components)).replace(
+            "\\",
+            "/",
+        )
+        if not canonical_path.startswith("/"):
+            canonical_path = f"/{canonical_path}"
+        static_prefix = "/static"
+        if canonical_path[: len(static_prefix)].casefold() != static_prefix:
+            return None
+        if (
+            len(canonical_path) > len(static_prefix)
+            and canonical_path[len(static_prefix)] not in {
+            "/",
+            "\\",
+            }
+        ):
+            return None
+        relative = canonical_path[len(static_prefix) :].lstrip("/\\")
+        normalized = ntpath.normpath(relative).replace("\\", "/").lstrip("/")
+        return normalized
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            path = scope.get("path", "")
+            target = self._normalized_static_target(path)
+            if target is not None:
+                components = target.split("/")
+                folded = [
+                    component.rstrip(" .").casefold() for component in components
+                ]
+                if folded and folded[0] == "uploads":
+                    if len(folded) >= 2 and folded[1] == "drawings":
+                        protected_prefix = "/api/private-drawings/files"
+                        suffix = "/".join(components[2:])
+                    elif len(folded) >= 2 and folded[1] == "order_drafts":
+                        protected_prefix = "/api/private-drawings/drafts"
+                        suffix = "/".join(components[2:])
+                    else:
+                        protected_prefix = "/api/private-drawings/blocked"
+                        suffix = ""
+                    rewritten = f"{protected_prefix}/{suffix}"
+                    scope = dict(scope)
+                    scope["path"] = rewritten
+                    scope["raw_path"] = rewritten.encode("utf-8")
+        await self.app(scope, receive, send)
 
 
 class HTTPSRedirectMiddleware(StarletteHTTPSRedirectMiddleware):
@@ -378,6 +440,15 @@ def create_app() -> FastAPI:
             prefix="/api/orders",
             tags=["orders"],
         )
+    if not any(
+        route.path == "/api/private-drawings/files/{filename}"
+        for route in application.routes
+    ):
+        application.include_router(
+            drawings_router,
+            prefix="/api/private-drawings",
+            tags=["private-drawings"],
+        )
     if not any(route.path == "/api/pricing/calculate" for route in application.routes):
         application.include_router(
             pricing_router,
@@ -498,6 +569,7 @@ def create_app() -> FastAPI:
         HSTSMiddleware,
         CookieOriginCSRFMiddleware,
         ProxyHeadersMiddleware,
+        ProtectedDrawingPathMiddleware,
     }
     application.user_middleware = [
         middleware
@@ -514,6 +586,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    application.add_middleware(ProtectedDrawingPathMiddleware)
     apply_production_security(application, current)
     apply_transport_security(application, current)
     return application

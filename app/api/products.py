@@ -16,7 +16,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import String, cast, delete, func, or_, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -37,6 +37,7 @@ from app.models.customer import Customer
 from app.models.material import Material
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.mold_tool import MoldTool
+from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.product_drawing import ProductDrawing
 from app.models.user import User
@@ -47,6 +48,7 @@ from app.services.flute_mapping import (
 )
 from app.services.product_drawings import (
     DrawingValidationError,
+    MAX_DRAWING_BYTES,
     remove_drawing_files,
     save_product_drawing_files,
 )
@@ -904,7 +906,7 @@ async def _create_drawing_version(
 ) -> ProductDrawing:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
-    content = await file.read()
+    content = await file.read(MAX_DRAWING_BYTES + 1)
     try:
         saved = save_product_drawing_files(
             product_id=product.id,
@@ -913,29 +915,31 @@ async def _create_drawing_version(
         )
     except DrawingValidationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    drawing = ProductDrawing(
-        product_id=product.id,
-        image_path=saved.image_path,
-        thumbnail_path=saved.thumbnail_path,
-        uploaded_by=user.id,
-    )
-    db.add(drawing)
-    audit_master_change(
-        db,
-        user=user,
-        action="UPLOAD_DRAWING",
-        resource="Product",
-        resource_id=product.id,
-        details={
-            "image_path": saved.image_path,
-            "thumbnail_path": saved.thumbnail_path,
-        },
-    )
     try:
+        drawing = ProductDrawing(
+            product_id=product.id,
+            image_path=saved.image_path,
+            thumbnail_path=saved.thumbnail_path,
+            uploaded_by=user.id,
+        )
+        db.add(drawing)
+        audit_master_change(
+            db,
+            user=user,
+            action="UPLOAD_DRAWING",
+            resource="Product",
+            resource_id=product.id,
+            details={
+                "image_path": saved.image_path,
+                "thumbnail_path": saved.thumbnail_path,
+            },
+        )
         db.commit()
-    except SQLAlchemyError:
-        db.rollback()
-        remove_drawing_files(saved.image_path, saved.thumbnail_path)
+    except Exception:
+        try:
+            db.rollback()
+        finally:
+            remove_drawing_files(saved.image_path, saved.thumbnail_path)
         raise
     db.refresh(drawing)
     return drawing
@@ -996,8 +1000,30 @@ def delete_product_drawing(
     )
     db.delete(drawing)
     db.flush()
+    removable_paths: list[str] = []
+    for stored_path in {image_path, thumbnail_path}:
+        normalized_reference = stored_path.lstrip("/")
+        reference_variants = (normalized_reference, f"/{normalized_reference}")
+        order_reference = db.scalar(
+            select(OrderItem.id)
+            .where(OrderItem.drawing_file.in_(reference_variants))
+            .limit(1)
+        )
+        product_reference = db.scalar(
+            select(ProductDrawing.id)
+            .where(
+                or_(
+                    ProductDrawing.image_path.in_(reference_variants),
+                    ProductDrawing.thumbnail_path.in_(reference_variants),
+                )
+            )
+            .limit(1)
+        )
+        if order_reference is None and product_reference is None:
+            removable_paths.append(stored_path)
     db.commit()
-    remove_drawing_files(image_path, thumbnail_path)
+    for stored_path in removable_paths:
+        remove_drawing_files(stored_path, stored_path)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

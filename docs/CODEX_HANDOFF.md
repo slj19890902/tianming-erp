@@ -1542,6 +1542,6 @@ legacy_ruida_* 原始层
 ## 76. 2026-07-22 P0-A 人工 UAT 验收通过
 
 - 用户已在本机打开 `http://127.0.0.1:18080/`，确认 UAT 页面正常，并明确回复“UAT 页面正常，验收通过”。P0-A 的人工 UAT 门禁记录为通过。
-- 验收对应实现提交为 `9eb2ebd755d4732a625c63d2bf4de2e354558cb4`；分支 `codex/release-p0a-startup-migration-safety` 仍只存在于本地，尚未 push、未创建 PR、未部署。
+- 验收对应实现提交为 `9eb2ebd755d4732a625c63d2bf4de2e354558cb4`；验收记录提交为 `189c09a46cc1ecbe0d085adbc2f5fa885e1ac26b`。用户随后明确授权推送并创建 Draft PR，分支 `codex/release-p0a-startup-migration-safety` 已推送，Draft PR 为 `https://github.com/slj19890902/tianming-erp/pull/35`，目标分支仅为 `factory-current-baseline`，未触碰 `origin/main`，未部署。
 - 验收完成后已精确核对端口 18080 进程命令行为当前 P0-A worktree、`app.main:app`、loopback 和端口 18080，并只停止该隔离 UAT 进程；端口 18080 已不再监听。隔离数据库、备份、演练副本和报告继续保留在 `D:\tm-uat\p0a_release_gate_20260722_203300`，未删除。
-- 本轮未停止或修改端口 8000 的进程，未修改工厂正式目录、正式 `.env` 或正式数据库。下一步仍需用户单独授权 push / Draft PR；任何正式部署继续要求确认 8000 进程归属、生产 HTTPS 配置和维护窗口。
+- 本轮未停止或修改端口 8000 的进程，未修改工厂正式目录、正式 `.env` 或正式数据库。PR #35 当前保持 Draft，GitHub 复核为 CLEAN / MERGEABLE；合并与任何正式部署仍需独立人工批准，并继续要求确认 8000 进程归属、生产 HTTPS 配置和维护窗口。

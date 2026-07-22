@@ -23,6 +23,26 @@ DB_FILENAME = "carton_erp.sqlite3"
 SERVER_PORT = 8000
 
 
+class PublicStaticFiles(StaticFiles):
+    """Serve public UI assets while excluding every uploads descendant."""
+
+    def lookup_path(self, path: str):
+        full_path, stat_result = super().lookup_path(path)
+        if not full_path:
+            return full_path, stat_result
+        uploads_root = os.path.normcase(
+            os.path.realpath(os.path.join(str(self.directory), "uploads"))
+        )
+        candidate = os.path.normcase(os.path.realpath(full_path))
+        try:
+            inside_uploads = os.path.commonpath((uploads_root, candidate)) == uploads_root
+        except ValueError:
+            inside_uploads = False
+        if inside_uploads:
+            return "", None
+        return full_path, stat_result
+
+
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
@@ -1920,7 +1940,11 @@ def ensure_static_files_exist() -> None:
 
 def mount_static_files(app_instance: FastAPI) -> None:
     ensure_static_files_exist()
-    app_instance.mount("/static", StaticFiles(directory=static_dir()), name="static")
+    app_instance.mount(
+        "/static",
+        PublicStaticFiles(directory=static_dir()),
+        name="static",
+    )
 
 
 def get_lan_ip() -> str:

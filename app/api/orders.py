@@ -9,7 +9,6 @@ from typing import Literal
 
 import jwt
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -97,6 +96,17 @@ from app.services.product_import import (
     NewProductInput,
     parse_dimensions,
     resolve_or_create_product,
+)
+from app.services.product_drawings import (
+    DrawingValidationError,
+    MAX_DRAWING_BYTES,
+    SavedDrawing,
+    load_order_draft_drawing,
+    remove_drawing_files,
+    remove_order_draft_drawing,
+    resolve_order_draft_drawing,
+    save_order_draft_drawing_files,
+    save_product_drawing_files,
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
@@ -368,6 +378,20 @@ class OrderCreate(BaseModel):
     cost_unit_price: float | None = None
     warning_confirmed: bool = False
     created_by: int | None = None
+
+    @field_validator("status")
+    @classmethod
+    def _validate_initial_status(cls, value: str) -> str:
+        if value != "pending_production":
+            raise ValueError("新建订单只能从待生产状态开始")
+        return "pending_production"
+
+    @field_validator("payment_status")
+    @classmethod
+    def _validate_initial_payment_status(cls, value: str) -> str:
+        if value != "unpaid":
+            raise ValueError("新建订单只能从未付款状态开始")
+        return "unpaid"
 
 
 def _validated_order_quantity(value: int | float, index: int) -> int:
@@ -1137,31 +1161,6 @@ def _display_material(value: str | None) -> str | None:
         return text
     cleaned = re.sub(r"^\s*\d+\s+", "", text).strip()
     return cleaned or text
-
-
-def _legacy_create(payload: OrderCreate, user: User) -> JSONResponse:
-    import main as legacy
-
-    legacy_payload = legacy.OrderCreateRequest(
-        **{
-            **payload.model_dump(
-                exclude={"items", "order_date", "delivery_date", "status", "payment_status"}
-            ),
-            "created_by": user.id,
-        }
-    )
-    result = legacy.create_order_record(legacy_payload)
-    if result["conflict"]:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "ok": False,
-                "code": "ORDER_HISTORY_CONFLICT",
-                "message": result["message"],
-                "differences": result["differences"],
-            },
-        )
-    return JSONResponse({"ok": True, "order": result["order"]})
 
 
 def _order_group_key(order: Order) -> str:
@@ -2109,17 +2108,22 @@ async def upload_draft_drawing(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
-    """新建订单未保存前的临时图纸上传。写入临时目录，不写 DB，前端持有路径直到提交。"""
-    import os, uuid
-    content = await file.read()
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
-    fname = f"draft_{uuid.uuid4().hex}.{ext}"
-    draft_dir = "static/uploads/order_drafts"
-    os.makedirs(draft_dir, exist_ok=True)
-    fpath = f"{draft_dir}/{fname}"
-    with open(fpath, "wb") as fp:
-        fp.write(content)
-    return {"temp_path": f"/static/uploads/order_drafts/{fname}", "filename": file.filename or fname}
+    """验证图纸后写入受控草稿目录，不写数据库。"""
+    del db
+    content = await file.read(MAX_DRAWING_BYTES + 1)
+    try:
+        saved = save_order_draft_drawing_files(
+            content=content,
+            content_type=file.content_type,
+            owner_user_id=user.id,
+            owner_auth_version=user.auth_version,
+        )
+    except DrawingValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {
+        "temp_path": saved.image_path,
+        "filename": file.filename or saved.image_path.rsplit("/", 1)[-1],
+    }
 
 
 @router.post("/items/{item_id}/drawing", status_code=status.HTTP_200_OK)
@@ -2131,7 +2135,6 @@ async def upload_order_item_drawing(
     user: User = Depends(can_edit),
 ) -> dict:
     """上传订单明细图纸。默认只写 order_item；save_to_product=true 时同步写入 product_drawings（需用户确认）。"""
-    import os, uuid
     if save_to_product:
         _require_product_drawing_edit(user)
     item = db.get(OrderItem, item_id)
@@ -2141,25 +2144,35 @@ async def upload_order_item_drawing(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
-    content = await file.read()
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
-    fname = f"{uuid.uuid4().hex}.{ext}"
-    draw_dir = "static/uploads/drawings"
-    os.makedirs(draw_dir, exist_ok=True)
-    fpath = f"{draw_dir}/{fname}"
-    with open(fpath, "wb") as fp:
-        fp.write(content)
-    item.drawing_file = f"/static/uploads/drawings/{fname}"
-    if save_to_product and item.product_id:
-        from app.models.product_drawing import ProductDrawing
-        product_drawing = ProductDrawing(
-            product_id=item.product_id,
-            image_path=item.drawing_file,
-            thumbnail_path=item.drawing_file,
-            uploaded_by=user.id,
+    content = await file.read(MAX_DRAWING_BYTES + 1)
+    try:
+        saved = save_product_drawing_files(
+            product_id=item.product_id or item.id,
+            content=content,
+            content_type=file.content_type,
+            include_thumbnail=bool(save_to_product and item.product_id),
         )
-        db.add(product_drawing)
-    db.commit()
+    except DrawingValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    try:
+        item.drawing_file = saved.image_path
+        if save_to_product and item.product_id:
+            from app.models.product_drawing import ProductDrawing
+
+            product_drawing = ProductDrawing(
+                product_id=item.product_id,
+                image_path=saved.image_path,
+                thumbnail_path=saved.thumbnail_path,
+                uploaded_by=user.id,
+            )
+            db.add(product_drawing)
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        finally:
+            remove_drawing_files(saved.image_path, saved.thumbnail_path)
+        raise
     return {"drawing_file": item.drawing_file, "saved_to_product": save_to_product}
 
 
@@ -3101,11 +3114,16 @@ def create_order(
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, current_user=user, db=db)
     if payload.items is None:
-        return _legacy_create(payload, user)
+        raise HTTPException(
+            status_code=400,
+            detail="新版订单接口必须提交 items 明细；旧版单行订单写入已停用",
+        )
     if not payload.items:
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    if payload.status != "pending_production" or payload.payment_status != "unpaid":
+        raise HTTPException(status_code=400, detail="新建订单初始状态不合法")
     pdf_safety_override_reasons, pdf_safety_claims = _validate_pdf_import_safety(
         payload,
         user,
@@ -3129,6 +3147,20 @@ def create_order(
             status_code=403,
             detail="无常用箱图纸覆盖权限",
         )
+    for index, item in enumerate(payload.items, start=1):
+        if not item.temp_drawing_file:
+            continue
+        try:
+            resolve_order_draft_drawing(
+                item.temp_drawing_file,
+                owner_user_id=user.id,
+                owner_auth_version=user.auth_version,
+            )
+        except DrawingValidationError as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条明细图纸无效：{error}",
+            ) from error
     if (
         payload.import_integrity_status == "failed"
         and payload.pdf_import_confirmation is None
@@ -3142,6 +3174,10 @@ def create_order(
             message = f"{message} {'；'.join(errors)}"
         raise HTTPException(status_code=400, detail=message)
 
+    created_drawing_files: list[SavedDrawing] = []
+    saved_drawings_by_item_index: dict[int, SavedDrawing] = {}
+    consumed_draft_references: set[str] = set()
+    drawing_files_committed = False
     try:
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
@@ -3345,8 +3381,8 @@ def create_order(
             customer_po=customer_po,
             order_date=order_date,
             delivery_date=payload.delivery_date,
-            status=payload.status,
-            payment_status=payload.payment_status,
+            status="pending_production",
+            payment_status="unpaid",
             total_amount=Decimal("0"),
             remark=(payload.remark or "").strip() or None,
             created_by=user.id,
@@ -3457,19 +3493,30 @@ def create_order(
             )
             # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细
             if item_payload.temp_drawing_file:
-                import os, uuid, shutil
-                tmp_path = item_payload.temp_drawing_file.lstrip("/")
-                if os.path.isfile(tmp_path):
-                    ext = tmp_path.rsplit(".", 1)[-1].lower() or "png"
-                    fname = f"{uuid.uuid4().hex}.{ext}"
-                    draw_dir = "static/uploads/drawings"
-                    os.makedirs(draw_dir, exist_ok=True)
-                    dest = f"{draw_dir}/{fname}"
-                    shutil.copy2(tmp_path, dest)
-                    item.drawing_file = f"/static/uploads/drawings/{fname}"
-                else:
-                    # 路径不合法时直接使用原路径（保底）
-                    item.drawing_file = item_payload.temp_drawing_file
+                try:
+                    drawing_content, drawing_content_type = load_order_draft_drawing(
+                        item_payload.temp_drawing_file,
+                        owner_user_id=user.id,
+                        owner_auth_version=user.auth_version,
+                    )
+                    saved_drawing = save_product_drawing_files(
+                        product_id=product.id,
+                        content=drawing_content,
+                        content_type=drawing_content_type,
+                        include_thumbnail=(
+                            item_payload.drawing_save_option
+                            in _PRODUCT_DRAWING_SAVE_OPTIONS
+                        ),
+                    )
+                except DrawingValidationError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"第{index}条明细图纸无效：{error}",
+                    ) from error
+                created_drawing_files.append(saved_drawing)
+                saved_drawings_by_item_index[index] = saved_drawing
+                consumed_draft_references.add(item_payload.temp_drawing_file)
+                item.drawing_file = saved_drawing.image_path
             db.add(item)
             created_items.append(item)
 
@@ -3544,17 +3591,18 @@ def create_order(
                 continue
             create_or_refresh_production_task(db, created_item.id)
         # v0.19.2-B: 图纸保存到常用箱
-        for i, item in enumerate(created_items):
-            opt = payload.items[i].drawing_save_option if i < len(payload.items) else None
+        for i, item in enumerate(created_items, start=1):
+            opt = payload.items[i - 1].drawing_save_option
             if item.drawing_file and item.product_id and opt in ("save_to_product", "overwrite_product"):
                 from app.models.product_drawing import ProductDrawing
+                saved_drawing = saved_drawings_by_item_index[i]
                 if opt == "overwrite_product":
                     from sqlalchemy import delete as _del
                     db.execute(_del(ProductDrawing).where(ProductDrawing.product_id == item.product_id))
                 db.add(ProductDrawing(
                     product_id=item.product_id,
-                    image_path=item.drawing_file,
-                    thumbnail_path=item.drawing_file,
+                    image_path=saved_drawing.image_path,
+                    thumbnail_path=saved_drawing.thumbnail_path,
                     uploaded_by=user.id,
                 ))
         _apply_order_reservation_plans(
@@ -3571,6 +3619,7 @@ def create_order(
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
         db.commit()
+        drawing_files_committed = True
         db.refresh(order)
         response = _order_response(
             order,
@@ -3607,6 +3656,20 @@ def create_order(
     except Exception:
         db.rollback()
         raise
+    finally:
+        if drawing_files_committed:
+            for reference in consumed_draft_references:
+                remove_order_draft_drawing(
+                    reference,
+                    owner_user_id=user.id,
+                    owner_auth_version=user.auth_version,
+                )
+        else:
+            for saved_drawing in created_drawing_files:
+                remove_drawing_files(
+                    saved_drawing.image_path,
+                    saved_drawing.thumbnail_path,
+                )
 
 
 @router.get("/items/{item_id}/bom")

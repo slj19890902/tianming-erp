@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
+from PIL import Image
+
+
+def _tiny_png() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (1, 1), "white").save(output, "PNG")
+    return output.getvalue()
+
+
+TINY_PNG = _tiny_png()
 
 
 @pytest.fixture()
@@ -237,7 +248,11 @@ def _product_payload(customer_id: int, *, code: str, name: str) -> dict:
     }
 
 
-def _overwrite_order_payload(customer_id: int, product_id: int) -> dict:
+def _overwrite_order_payload(
+    customer_id: int,
+    product_id: int,
+    temp_drawing_file: str = "/static/uploads/drawings/replacement.png",
+) -> dict:
     return {
         "customer_id": customer_id,
         "items": [
@@ -245,7 +260,7 @@ def _overwrite_order_payload(customer_id: int, product_id: int) -> dict:
                 "product_id": product_id,
                 "quantity": 1,
                 "unit_price": "9.00",
-                "temp_drawing_file": "/static/uploads/drawings/replacement.png",
+                "temp_drawing_file": temp_drawing_file,
                 "drawing_save_option": "overwrite_product",
             }
         ],
@@ -1827,10 +1842,20 @@ def test_sales_cost_payload_is_ignored_while_admin_and_boss_can_write_costs(
 
 def test_sales_cannot_overwrite_product_drawings_but_admin_can(
     n028_customer_scope_app,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.models.product_drawing import ProductDrawing
 
     app, ids, factory = n028_customer_scope_app
+    monkeypatch.setenv(
+        "ERP_ORDER_DRAFT_DRAWING_DIR",
+        str(tmp_path / "uploads" / "order_drafts"),
+    )
+    monkeypatch.setenv(
+        "ERP_DRAWING_DIR",
+        str(tmp_path / "uploads" / "drawings"),
+    )
     with TestClient(app) as client:
         _login(client, "n028-sales", "SalesPass123!")
         denied = client.post(
@@ -1840,8 +1865,18 @@ def test_sales_cannot_overwrite_product_drawings_but_admin_can(
         client.post("/api/auth/logout")
 
         _login(client, "n028-admin", "AdminPass123!")
+        draft = client.post(
+            "/api/orders/draft-drawing",
+            files={"file": ("replacement.png", TINY_PNG, "image/png")},
+        )
+        assert draft.status_code == 200, draft.text
         allowed = client.post(
-            "/api/orders", json=_overwrite_order_payload(ids["customer"], ids["product"])
+            "/api/orders",
+            json=_overwrite_order_payload(
+                ids["customer"],
+                ids["product"],
+                draft.json()["temp_path"],
+            ),
         )
         assert allowed.status_code == 201
 
@@ -1850,5 +1885,5 @@ def test_sales_cannot_overwrite_product_drawings_but_admin_can(
             select(ProductDrawing).where(ProductDrawing.product_id == ids["product"])
         ).all()
         assert len(drawings) == 1
-        assert drawings[0].image_path.endswith("replacement.png")
+        assert drawings[0].image_path.endswith(".webp")
         assert db.scalar(select(func.count()).select_from(ProductDrawing)) == 1

@@ -141,10 +141,82 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
     assert body["items"][0]["snapshot_spec"] == "520脳350脳300mm"
     assert body["items"][0]["snapshot_material"] == "K=A-BC"
     assert body["items"][0]["material_status"] == "pending"
+    assert body["status"] == "pending_production"
+    assert body["payment_status"] == "unpaid"
 
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
         assert session.scalar(select(func.count()).select_from(OrderItem)) == 2
+
+
+def test_create_order_rejects_legacy_payload_without_calling_root_writer(
+    order_api_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = order_api_app
+    writer_called = False
+
+    def fail_if_called(_payload):
+        nonlocal writer_called
+        writer_called = True
+        raise AssertionError("root main.py legacy writer must not be called")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "main",
+        SimpleNamespace(
+            OrderCreateRequest=lambda **kwargs: kwargs,
+            create_order_record=fail_if_called,
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.post(
+            "/api/orders",
+            json={
+                "customer_name": "苏州思迈尔包装有限公司",
+                "style_no": "LEGACY-001",
+                "product_name": "旧版单行订单",
+                "order_quantity": 10,
+                "sale_unit_price": 1.5,
+            },
+        )
+
+    assert response.status_code == 400
+    assert "items" in response.json()["detail"]
+    assert writer_called is False
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Order)) == 0
+        assert session.scalar(select(func.count()).select_from(OrderItem)) == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [("status", "completed"), ("payment_status", "paid")],
+)
+def test_orders_create_cannot_set_privileged_initial_state(
+    order_api_app,
+    field: str,
+    unsafe_value: str,
+) -> None:
+    from app.models.order import Order, OrderItem
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload[field] = unsafe_value
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 422
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Order)) == 0
+        assert session.scalar(select(func.count()).select_from(OrderItem)) == 0
 
 
 def test_create_order_accepts_editable_product_snapshot(order_api_app) -> None:

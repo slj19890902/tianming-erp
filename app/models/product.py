@@ -46,6 +46,10 @@ class Product(Base):
             "box_category IN ('normal', 'die_cut')",
             name="ck_products_box_category",
         ),
+        CheckConstraint(
+            "default_cutting_mode IN ('一开一', '一开二', '一开三', '一开四', '一开五')",
+            name="ck_products_default_cutting_mode",
+        ),
         CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
@@ -144,6 +148,12 @@ class Product(Base):
     base_report_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     splice_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    default_cutting_mode: Mapped[str] = mapped_column(
+        String(20),
+        default="一开一",
+        server_default="一开一",
+        nullable=False,
+    )
     flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_composite: Mapped[bool] = mapped_column(
         Boolean,

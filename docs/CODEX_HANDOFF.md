@@ -1610,3 +1610,21 @@ legacy_ruida_* 原始层
 - 正式 `.env` 仅切换为明确的 `ERP_ENVIRONMENT=production` 与 `ERP_PRODUCTION_TRANSPORT=lan_http`，保留 `0.0.0.0:8000` 局域网入口并限制为明确的 `192.168.3.80:8000` Origin/URL、可信 Host、单 worker 和已有会话密钥文件；未改动防火墙、路由器、HTTPS、反向代理或正式数据库 revision。
 - 隔离 UAT 使用外部 SQLite 副本和 `127.0.0.1:18081` 单 worker，未迁移数据库。登录、订单、报料、来料、送货只读接口均为 200，浏览器 Console 无 error/warn。为隔离测试创建的临时 admin 密码及其审计仅写入 UAT 副本，未写入正式数据库。
 - 正式启动器执行只读 `current == code head`、完整性、外键和核心表门禁后成功启动。最终局域网 `/api/health` 为 200 `{"ok":true}`，登录页为 200，监听 PID 使用正式目录、`0.0.0.0:8000` 与单 worker。停服前备份与上线后正式 SQLite 的文件哈希不同，但逐表行数与逻辑内容哈希完全一致，确认本次没有业务数据写入。
+
+## 84. 2026-07-23 库存正式转换与常用箱默认开料方式紧急修复
+
+- 独立 worktree：`D:\tm-worktrees\erp-urgent-inventory-cutting-20260723`；分支：`codex/urgent-inventory-cutting-default-20260723`；唯一开发与隔离 UAT 基线：`origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`。紧急修复提交后，以普通合并方式纳入已由工厂验收并推送的正式基线 `28d90525da514d2a88bf36baedeca0f0c4eefee7`，仅为解决 Draft PR 基线前移，不改写原提交历史、不强推、不修改 `origin/main`。
+- 工厂副本原件、只读核验副本和迁移前备份的 SHA-256 均逐字符等于 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC`；只有工作副本 `D:\tm-uat\urgent_inventory_cutting_20260723\working\carton_erp_urgent_inventory_cutting_uat.sqlite3` 被迁移和写入 UAT 数据。
+- 22000022 在 E1-L09 的 300 张记录是已匹配但未绑定 `inventory_lot_id` 的 `semi_finished/sheets` 现场快照。订单库存候选只读取正式 `InventoryLot`，因此初始不可抵扣；修复没有增加快照直扣后门，而是让页面经权限、版本、幂等和两次确认调用既有正式入库流程，生成客户专用成品批次并保留库位、栈板、流水和操作日志。
+- 常用箱新增独立字段 `products.default_cutting_mode`，合法值为一开一至一开五，默认一开一；新迁移 `cg63v8x9z52` 线性接在 `cf62v8x9z51` 后且为唯一 head。新订单把默认值冻结到明细 `special_process`；修改常用箱不回写旧订单。当前报料草稿允许人工改开料方式并立即重算采购张数，不复用 `pieces_per_box`。
+- 定向及相邻自动测试：订单组合 `67 passed`；报料、主数据版本和前端组合 `45 passed`；三楼库存组合 `79 passed, 3 failed`。3 个失败均为 `c5cffa2` 基线中未修改位置的旧前端文本/排序断言，与本轮改动无关；本轮新增的库存转换、客户隔离、幂等、默认开料和采购张数用例均通过。纳入正式基线 `28d9052` 后再次运行 6 个本任务定向用例，结果 `6 passed`。Python 编译、两份内联 JavaScript 语法、`git diff --check` 均通过。
+- 隔离页面 UAT 已复现快照初始不可抵扣；转换后创建正式批次并可供同客户订单发现和预占，其他客户候选为空且强行预占被拒绝，重复转换返回幂等结果。常用箱一开二保存重读成功，新订单 100 个冻结一开二并带出 50 张，报料页手改一开一立即变为 100 张；随后把常用箱改为一开三，旧订单仍保持一开二。
+- 工作副本最终为 `cg63v8x9z52`、`integrity_check=ok`、外键异常 0；UAT 服务已停止。工厂正式数据库未连接、未迁移、未写入。将来正式发布需要先备份并验证、执行线性迁移、再重启服务，且必须另行授权。
+
+## 85. 2026-07-23 常用箱开料字段按箱型显示优化（人工验收通过）
+
+- 在同一紧急修复分支继续最小修改：“平卡”选择项改名为“模切内盒”，旧 `box_style=平卡` 在编辑和保存时兼容归一为“模切内盒”；“模切内盒、隔板”仅允许压线类型 `净料/毛片/其他`，页面不提供“压线”选项。
+- `default_cutting_mode` 从常用箱首行移到压线类型右侧，只在“模切内盒、隔板”显示；页面标签缩短为“开料方式”，并在这两类箱型下隐藏无关的“压线尺寸”、加宽压线类型与开料方式区域，避免字体遮挡。A1、A3、异形箱等其他箱型不显示开料方式且后端保存时强制为“一开一”，新订单也只对“模切内盒、隔板”冻结该默认值。
+- 本轮不新增 Alembic revision，继续使用 `cg63v8x9z52`。定向 API、订单冻结和前端显示用例 `7 passed`；Python 编译、内联 JavaScript 语法和 `git diff --check` 通过。扩大运行旧 `test_v0208_common_box_edit.py` 时另有 3 个 `28d9052` 基线既有布局断言失败，均在未修改断言位置查找已不存在的 `product-material-row`。
+- 人工 UAT 地址为 `http://127.0.0.1:18082/`，数据库为 `D:\tm-uat\cutting_mode_visibility_20260723_113848\carton_erp_uat.sqlite3`，由指定 SHA-256 为 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC` 的工厂副本重新复制并升级；revision=`cg63v8x9z52`、`integrity_check=ok`、外键异常 0。临时账号 `codex_uat`，密码 `123456`。
+- 页面自动 UAT 已确认：模切内盒和隔板显示净/毛/其他及右侧“开料方式”，不再显示压线尺寸，标签与选择框无重叠遮挡；A1、A3 不显示开料方式；浏览器 Console 无 warn/error。用户已于 2026-07-23 明确确认人工验收通过并授权推送给工厂 ERP；正式发布仍须由工厂主机按“备份验证 → 线性迁移 → 重启 → 完整性与页面复核”执行。本轮家庭侧正式数据库未连接、未迁移、未写入。

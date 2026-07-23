@@ -112,6 +112,7 @@ _PRODUCT_FIELDS = (
     "base_report_notes",
     "splice_mode",
     "pieces_per_box",
+    "default_cutting_mode",
     "flap_mm",
     "is_active",
 ) + tuple(

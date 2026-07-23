@@ -1145,7 +1145,7 @@
       $("floor3PlanZoomLabel").textContent=`${state.floor3.planZoom}%`;
     }
     function floor3PromotionButton(item,pallet,locationId){
-      const version=floor3ExpectedPalletVersion(pallet);return item?.official_inventory===false&&item?.match_status==="matched"&&item?.item_type==="finished"&&item?.id&&pallet?.id&&version&&locationId&&canOperate()?`<button class="btn primary" style="margin-top:7px" type="button" onclick="event.stopPropagation();promoteFloor3FinishedItem(${pallet.id},${item.id},${version},${locationId})">一键同步成品仓</button>`:"";
+      const version=floor3ExpectedPalletVersion(pallet),convertibleType=["finished","semi_finished"].includes(item?.item_type);return item?.official_inventory===false&&item?.match_status==="matched"&&convertibleType&&item?.customer_id&&item?.product_id&&item?.id&&pallet?.id&&version&&locationId&&canOperate()?`<button class="btn primary" style="margin-top:7px" type="button" onclick="event.stopPropagation();promoteFloor3FinishedItem(${pallet.id},${item.id},${version},${locationId})">转为正式成品库存</button>`:"";
     }
     function floor3PalletSummary(row){
       const pallet=floor3CurrentPallet(row),items=floor3Items(row);
@@ -1539,8 +1539,14 @@
       try{await api(`/api/warehouse/pallets/${pallet.id}/items`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,item})});toast("同栈板产品已增加");await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`增加同栈板产品失败：${error.message}`,true)}
     }
     async function promoteFloor3FinishedItem(palletId,itemId,expectedVersion,locationId){
-      if(!canOperate()||state.floor3.promotionPending.has(Number(itemId)))return;if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}const idempotencyKey=state.floor3.promotionKeys[itemId]||(state.floor3.promotionKeys[itemId]=createIdempotencyKey());state.floor3.promotionPending.add(Number(itemId));
-      try{await api(`/api/warehouse/pallets/${palletId}/items/${itemId}/promote-finished`,{method:"POST",body:JSON.stringify({expected_version:Number(expectedVersion),stock_date:today(),idempotency_key:idempotencyKey})});delete state.floor3.promotionKeys[itemId];toast("已同步到正式成品仓");await refreshFloor3LocationData();if(state.floor3.viewMode==="areaFocus"&&locationId)await openFloor3Location(locationId);else{state.floor3.mapPopoverLocationId=locationId;renderFloor3Plan()}}catch(error){if(error.status===409){toast("栈板或库存状态已变化，已刷新详情",true);await refreshFloor3LocationData();if(state.floor3.viewMode==="areaFocus"&&locationId)await openFloor3Location(locationId);return}toast(`同步成品仓失败：${error.message}`,true)}finally{state.floor3.promotionPending.delete(Number(itemId))}
+      if(!canOperate()||state.floor3.promotionPending.has(Number(itemId)))return;if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
+      const rows=[...(state.floor3.mapLocations||[]),...(state.floor3.locations||[])],location=rows.find(row=>Number(row.id)===Number(locationId))||(state.floor3.detail?.location||state.floor3.detail),pallet=Number((state.floor3.detail?.current_pallet||state.floor3.detail?.pallet)?.id)===Number(palletId)?(state.floor3.detail.current_pallet||state.floor3.detail.pallet):floor3CurrentPallet(location),item=(pallet?.items||[]).find(row=>Number(row.id)===Number(itemId)),stockDate=today();
+      if(!item){toast("快照详情已变化，请刷新后重试",true);return}
+      const customer=item.customer_name||item.customer||pallet?.customer_name||"-",inventoryCode=item.inventory_code||item.product_code||"-",productName=item.product_name||item.name||"-",quantity=`${item.quantity??"-"} ${floor3UnitLabel(item.unit)}`,locationCode=location?.location_code||location?.code||locationId;
+      if(!confirm(`请核对正式入库信息：\n客户：${customer}\n存货编码：${inventoryCode}\n产品：${productName}\n数量：${quantity}\n当前库位：${locationCode}\n入库日期：${stockDate}`))return;
+      if(!confirm("再次确认：该操作会创建正式成品库存批次，之后同客户、同产品订单才可预占；不会直接用盘点快照抵扣。是否继续？"))return;
+      const idempotencyKey=state.floor3.promotionKeys[itemId]||(state.floor3.promotionKeys[itemId]=createIdempotencyKey());state.floor3.promotionPending.add(Number(itemId));
+      try{await api(`/api/warehouse/pallets/${palletId}/items/${itemId}/promote-finished`,{method:"POST",body:JSON.stringify({expected_version:Number(expectedVersion),stock_date:stockDate,idempotency_key:idempotencyKey,confirmed:true})});delete state.floor3.promotionKeys[itemId];toast("已转为正式成品库存");await refreshFloor3LocationData();if(state.floor3.viewMode==="areaFocus"&&locationId)await openFloor3Location(locationId);else{state.floor3.mapPopoverLocationId=locationId;renderFloor3Plan()}}catch(error){if(error.status===409){toast("栈板或库存状态已变化，已刷新详情",true);await refreshFloor3LocationData();if(state.floor3.viewMode==="areaFocus"&&locationId)await openFloor3Location(locationId);return}toast(`转为正式成品库存失败：${error.message}`,true)}finally{state.floor3.promotionPending.delete(Number(itemId))}
     }
     async function moveFloor3Pallet(palletId){
       if(!canOperate()||!state.floor3.moveMode){toast("请先进入移动栈板模式",true);return}const target=$("floor3MoveTarget").value;if(!target){toast("请选择空闲启用货位",true);return}

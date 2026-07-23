@@ -108,6 +108,11 @@ def _box_style_uses_tongue(box_style: str | None) -> bool:
     )
 
 
+def _box_style_uses_default_cutting_mode(box_style: str | None) -> bool:
+    value = (box_style or "").strip()
+    return value in {"平卡", "模切内盒", "隔板"}
+
+
 def _production_process_uses_mold(value: str | None) -> bool:
     return "模切" in {
         item.strip()
@@ -274,6 +279,7 @@ class ProductPayload(BaseModel):
     base_report_notes: str | None = None
     splice_mode: str | None = "single"
     pieces_per_box: int | None = None
+    default_cutting_mode: Literal["一开一", "一开二", "一开三", "一开四", "一开五"] = "一开一"
     flap_mm: int | None = 30
 
     @model_validator(mode="after")
@@ -290,6 +296,13 @@ class ProductPayload(BaseModel):
         if err:
             raise ValueError(err)
         self.box_style = (self.box_style or "").strip() or None
+        if self.box_style == "平卡":
+            self.box_style = "模切内盒"
+        if _box_style_uses_default_cutting_mode(self.box_style):
+            if self.crease_type == "压线":
+                raise ValueError("模切内盒和隔板的压线类型仅允许：净、毛、其他")
+        else:
+            self.default_cutting_mode = "一开一"
         splice_mode = (self.splice_mode or "single").strip().lower()
         if _box_style_uses_splice(self.box_style):
             if splice_mode not in {"single", "double"}:

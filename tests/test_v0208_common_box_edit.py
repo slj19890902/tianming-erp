@@ -312,7 +312,7 @@ def test_common_box_type_list_preserves_legacy_and_supports_standard_formulas() 
     for box_type in (
         "A1/0201 普通开槽箱",
         "A3 天地盖",
-        "平卡",
+        "模切内盒",
         "刀卡",
         "隔板",
         "围套",
@@ -354,7 +354,7 @@ def test_telescoping_lid_edit_layout_separates_cover_and_base_rows() -> None:
     assert "v-model.trim=\"productForm.report_notes\"" in print_row
     assert "compact-remark-field" in source
     assert "A3 天地盖推荐" in source
-    assert '["平卡", "刀卡", "隔板"]' in source
+    assert '["平卡", "模切内盒", "刀卡", "隔板"]' in source
     assert "围套推荐" in source
     assert "半开槽箱推荐" in source
     assert "全搭盖箱推荐" in source

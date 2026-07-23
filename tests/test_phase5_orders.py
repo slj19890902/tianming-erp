@@ -169,6 +169,8 @@ def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
                 "customer_material_code": "CUT-002",
                 "product_name": "一开二测试外箱",
                 "box_category": "normal",
+                "box_style": "模切内盒",
+                "crease_type": "净料",
                 "default_cutting_mode": "一开二",
             },
         )
@@ -208,6 +210,8 @@ def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
                 "customer_material_code": "CUT-002",
                 "product_name": "一开二测试外箱",
                 "box_category": "normal",
+                "box_style": "模切内盒",
+                "crease_type": "净料",
                 "default_cutting_mode": "一开三",
                 "expected_version": product["version"],
                 "change_reason": "验证常用箱修改只影响后续订单",
@@ -224,6 +228,81 @@ def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
 
     assert _purchase_qty(100, 0, "一开二") == 50
     assert _purchase_qty(100, 0, "一开一") == 100
+
+
+def test_default_cutting_mode_is_limited_to_die_cut_inner_box_and_partition(
+    order_api_app,
+) -> None:
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        rejected_crease = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "CUT-PRESS",
+                "customer_material_code": "CUT-PRESS",
+                "product_name": "模切内盒错误压线类型",
+                "box_category": "normal",
+                "box_style": "模切内盒",
+                "crease_type": "压线",
+                "default_cutting_mode": "一开二",
+            },
+        )
+        assert rejected_crease.status_code == 422
+        assert "压线类型仅允许" in rejected_crease.text
+
+        legacy_flat = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "CUT-LEGACY-FLAT",
+                "customer_material_code": "CUT-LEGACY-FLAT",
+                "product_name": "旧平卡名称兼容",
+                "box_category": "normal",
+                "box_style": "平卡",
+                "crease_type": "毛片",
+                "default_cutting_mode": "一开二",
+            },
+        )
+        assert legacy_flat.status_code == 201, legacy_flat.text
+        assert legacy_flat.json()["box_style"] == "模切内盒"
+        assert legacy_flat.json()["default_cutting_mode"] == "一开二"
+
+        a1_product = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "CUT-A1-HIDDEN",
+                "customer_material_code": "CUT-A1-HIDDEN",
+                "product_name": "A1 不使用默认开料方式",
+                "box_category": "normal",
+                "box_style": "A1/0201 普通开槽箱",
+                "crease_type": "净料",
+                "default_cutting_mode": "一开二",
+            },
+        )
+        assert a1_product.status_code == 201, a1_product.text
+        assert a1_product.json()["default_cutting_mode"] == "一开一"
+
+        a1_order = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "PO-CUTTING-A1",
+                "order_date": "2026-07-23",
+                "delivery_date": "2026-07-30",
+                "items": [
+                    {
+                        "product_id": a1_product.json()["id"],
+                        "quantity": 100,
+                        "unit_price": "1.00",
+                    }
+                ],
+            },
+        )
+        assert a1_order.status_code == 201, a1_order.text
+        assert a1_order.json()["items"][0]["special_process"] == "一开一"
 
 
 def test_create_order_accepts_editable_product_snapshot(order_api_app) -> None:

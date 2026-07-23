@@ -7,13 +7,45 @@ INDEX_HTML = (Path(__file__).resolve().parents[1] / "static" / "index.html").rea
 
 
 def test_product_form_exposes_independent_default_cutting_mode() -> None:
-    assert "默认开料方式（每张报料纸产出）" in INDEX_HTML
-    assert 'v-model="productForm.default_cutting_mode"' in INDEX_HTML
+    product_form = INDEX_HTML.split("modal.type === 'product'", 1)[1].split(
+        "modal.type === 'customerScope'", 1
+    )[0]
+    core_row = product_form.split('class="product-form-row product-core-row"', 1)[1].split(
+        'class="product-form-row product-size-report-row"', 1
+    )[0]
+    report_row = product_form.split('class="product-form-row product-size-report-row"', 1)[1]
+    assert "<label>开料方式</label>" in report_row
+    assert 'v-if="usesProductDefaultCuttingMode(productForm.box_style)"' in report_row
+    assert 'v-model="productForm.default_cutting_mode"' in report_row
+    assert "productForm.default_cutting_mode" not in core_row
+    assert report_row.index('v-model="productForm.crease_type"') < report_row.index(
+        'v-model="productForm.default_cutting_mode"'
+    ) < report_row.index('class="field product-crease-field"')
+    assert (
+        'v-if="!usesProductDefaultCuttingMode(productForm.box_style)" '
+        'class="field product-crease-field"'
+        in report_row
+    )
     assert 'default_cutting_mode: "一开一"' in INDEX_HTML
     assert "default_cutting_mode: f.default_cutting_mode" in INDEX_HTML
-    assert "productForm.default_cutting_mode" not in INDEX_HTML.split(
-        '<label>每箱片数</label>', 1
-    )[0][-200:]
+
+
+def test_cutting_mode_visibility_and_flat_card_rename_follow_box_style() -> None:
+    options = INDEX_HTML.split("productBoxStyleOptions: [", 1)[1].split("],", 1)[0]
+    assert '"模切内盒"' in options
+    assert '"平卡"' not in options
+    assert '"隔板"' in options
+    assert 'return value === "模切内盒" || value === "平卡" || value === "隔板"' in INDEX_HTML
+    assert '"平卡": "模切内盒"' in INDEX_HTML
+    assert (
+        'v-if="!usesProductDefaultCuttingMode(productForm.box_style)" value="压线"'
+        in INDEX_HTML
+    )
+    special_select = INDEX_HTML.split(
+        'class="field product-crease-type-field"', 1
+    )[1].split("</select>", 1)[0]
+    for value, label in (("净料", "净"), ("毛片", "毛"), ("其他", "其他")):
+        assert f'<option value="{value}">{label}</option>' in special_select
 
 
 def test_requisition_form_keeps_manual_cutting_mode_override() -> None:

@@ -577,7 +577,8 @@
       .product-splice-field { grid-column: span 2; }
       .product-flap-field { grid-column: span 1; }
       .product-report-field { grid-column: span 4; min-width: 0; }
-      .product-crease-type-field { grid-column: span 1; }
+      .product-crease-type-field { grid-column: span 2; }
+      .product-cutting-mode-field { grid-column: span 2; min-width: 0; }
       .product-crease-field { grid-column: span 3; min-width: 0; }
       .product-crease-warning { grid-column: 1 / -1; }
       .product-material-workbench {
@@ -786,6 +787,7 @@
         .product-flap-field { grid-column: span 1; }
         .product-report-field { grid-column: span 3; }
         .product-crease-type-field { grid-column: span 1; }
+        .product-cutting-mode-field { grid-column: span 2; }
         .product-crease-field { grid-column: span 3; }
         .telescoping-component-grid { grid-template-columns: 1fr; }
       }
@@ -2401,11 +2403,6 @@
                     <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
-                <div class="field"><label>默认开料方式（每张报料纸产出）</label>
-                  <select class="select" v-model="productForm.default_cutting_mode">
-                    <option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option>
-                  </select>
-                </div>
               </div>
 
               <div class="product-form-row product-size-report-row">
@@ -2497,13 +2494,18 @@
                   <div class="field product-crease-type-field"><label>压线类型</label>
                     <select class="select" v-model="productForm.crease_type">
                       <option :value="null">未设置</option>
-                      <option value="压线">压线</option>
-                      <option value="毛片">毛</option>
                       <option value="净料">净</option>
+                      <option value="毛片">毛</option>
                       <option value="其他">其他</option>
+                      <option v-if="!usesProductDefaultCuttingMode(productForm.box_style)" value="压线">压线</option>
                     </select>
                   </div>
-                  <div class="field product-crease-field"><label>压线尺寸</label>
+                  <div v-if="usesProductDefaultCuttingMode(productForm.box_style)" class="field product-cutting-mode-field"><label>开料方式</label>
+                    <select class="select" v-model="productForm.default_cutting_mode">
+                      <option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option>
+                    </select>
+                  </div>
+                  <div v-if="!usesProductDefaultCuttingMode(productForm.box_style)" class="field product-crease-field"><label>压线尺寸</label>
                     <div v-if="productForm.crease_type === '压线'" class="crease-segments">
                       <input class="input" type="number" min="0" step="1" v-model.number="productForm.crease_left_mm" @input="onCreaseLeftInput" placeholder="上摇盖" aria-label="上摇盖" />
                       <span class="crease-segment-plus" aria-hidden="true">+</span>
@@ -4506,7 +4508,7 @@
             productBoxStyleOptions: [
               "A1/0201 普通开槽箱",
               "A3 天地盖",
-              "平卡",
+              "模切内盒",
               "刀卡",
               "隔板",
               "围套",
@@ -8568,6 +8570,16 @@
             form.default_cutting_mode = ["一开一","一开二","一开三","一开四","一开五"].includes(form.default_cutting_mode)
               ? form.default_cutting_mode
               : "一开一";
+            if (this.usesProductDefaultCuttingMode(form.box_style)) {
+              if (form.crease_type === "压线") {
+                form.crease_type = null;
+                form.crease_left_mm = null;
+                form.crease_middle_mm = null;
+                form.crease_right_mm = null;
+              }
+            } else {
+              form.default_cutting_mode = "一开一";
+            }
             form.flap_mm = this.usesProductTongue(form.box_style)
               ? (this.normalizeMmInteger(form.flap_mm) || 30)
               : null;
@@ -9212,6 +9224,10 @@
             return upper.includes("A1") || upper.includes("0201")
               || value.includes("围套") || value.includes("半开槽") || value.includes("全搭盖");
           },
+          usesProductDefaultCuttingMode(boxType) {
+            const value = String(boxType || "").trim();
+            return value === "模切内盒" || value === "平卡" || value === "隔板";
+          },
           // 旧数据箱型字符串 → 现行箱型显示名（仅展示层，保存时才落库）
           // 需要兼容：无空格、"WCX1 五层箱1"这类中间带空格、以及下拉框自带的
           // "原记录：xxx" 前缀三种历史写法，统一折叠后再匹配。
@@ -9220,7 +9236,10 @@
             if (!trimmed) return trimmed;
             const withoutLegacyPrefix = trimmed.replace(/^原记录[:：]\s*/, "");
             const collapsed = withoutLegacyPrefix.replace(/\s+/g, "");
-            const legacyMap = { "WCX1五层箱1": "A1/0201 普通开槽箱" };
+            const legacyMap = {
+              "WCX1五层箱1": "A1/0201 普通开槽箱",
+              "平卡": "模切内盒",
+            };
             return legacyMap[collapsed] || withoutLegacyPrefix;
           },
           calculateBoardSizeByBoxType(boxType, length, width, height, spliceMode, flapMm) {
@@ -9249,7 +9268,7 @@
                 formula_label: "A3 天地盖推荐：盖=L+2H / W+2H，底=(L-25)+2H / (W-25)+2H",
               };
             }
-            if (["平卡", "刀卡", "隔板"].some(name => style.includes(name))) {
+            if (["平卡", "模切内盒", "刀卡", "隔板"].some(name => style.includes(name))) {
               return {
                 board_length: L,
                 board_width: W,
@@ -9412,9 +9431,20 @@
             );
           },
           onProductBoxStyleChange() {
+            this.productForm.box_style = this.normalizeBoxTypeDisplay(this.productForm.box_style);
             const selected = this.productForm.box_style;
             if (this.productBoxStyleOptions.includes(selected)) {
               this.productForm.box_category = selected === "异形箱" ? "die_cut" : "normal";
+            }
+            if (this.usesProductDefaultCuttingMode(selected)) {
+              if (this.productForm.crease_type === "压线") {
+                this.productForm.crease_type = null;
+                this.productForm.crease_left_mm = null;
+                this.productForm.crease_middle_mm = null;
+                this.productForm.crease_right_mm = null;
+              }
+            } else {
+              this.productForm.default_cutting_mode = "一开一";
             }
             this.autoApplyProductRecommendations();
           },

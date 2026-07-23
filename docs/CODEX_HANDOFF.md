@@ -1595,3 +1595,10 @@ legacy_ruida_* 原始层
 - `root/SecurityCenter2/FirewallProduct` 返回产品数量 0，未发现已向 Windows Security Center 注册的第三方防火墙；Windows Defender Firewall 服务 `mpssvc` 为 `Running/Auto`，但活动以太网为 `Private` 且该配置文件仍关闭。因此目前没有证据表明第三方产品正在替代 Windows Firewall 提供主机入站保护。
 - 非 loopback TCP 监听除 ERP `0.0.0.0:8000` 外，还包括 SMB/RPC（135、139、445 及动态端口）、打印后台、`BSZnetSignServer:6026` 和 `wpscloudsvr`；UDP 监听还包括网络发现、IPsec、`AweSun`、极空间及 WPS 服务。直接开启 Private Firewall 可能中断共享、打印、税控签名、NAS/极空间或当前远程会话，必须先只读映射已有入站规则并设计现场可回退窗口。
 - 本轮没有修改防火墙配置文件或规则，没有停止任何进程，没有修改正式 `.env`、代码或数据库。正式发布继续阻断；不得在仅有向日葵远程通道时直接启用 Private Firewall。
+
+## 82. 2026-07-23 工厂现有入站规则映射
+
+- 38 条相关已启用 Allow 规则中，`AweSun.exe` 与 `agent\AweSun.exe` 均已有 Private TCP/UDP 且按程序路径限定的规则；网络发现的 Private 规则均限定 `LocalSubnet`。因此启用 Private Firewall 后向日葵和本地网络发现具备既有放行依据，但仍须使用自动回退窗口实测，不能把规则存在等同于远程一定不会中断。
+- 未在相关规则中看到 SMB 139/445 的文件共享放行；当前快照没有活动入站 TCP 连接，但这不能证明工厂日常无人使用共享。税控现有规则限定 `BSZXInput.exe`，没有覆盖当前监听 TCP 6026 的 `BSZnetSignServer` 证据；极空间监听也没有匹配的入站规则。WPS 则存在 Any Profile/Any Protocol/Any Port/Any Remote 的程序规则，范围较宽，但不属于本次 ERP 发布必须改动的规则。
+- ERP 仍是三条规则：一条 Any Profile/LocalSubnet，两条 Any Profile/RemoteAddress=Any。启用 Private Firewall 前必须先确认共享、共享打印机、税控签名与极空间是否需要被其他局域网主机主动连接；随后以可自动回退的维护窗口启用 Private，并把 ERP 收敛到单一 Private + `192.168.3.0/24` 规则。
+- 本轮继续只读：未更改任何工厂规则、配置文件、进程或数据库，正式发布继续阻断。

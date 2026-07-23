@@ -1582,3 +1582,10 @@ legacy_ruida_* 原始层
 - 联合后端、上传、图纸权限、客户范围、PDF、天华、认证、传输、启动、发布与数据库路径回归为 `163 passed, 1 skipped`；前端、权限显示和内联 JavaScript 扩大回归为 `185 passed`。最初出现的 2 个 Phase 12 客户测试和 3 个旧前端断言均在未修改的 `c5cffa2` 复现；候选仅把测试请求补齐现有 `expected_version/change_reason`，并同步当前销售/车间菜单及常用箱材质区 DOM，修正后全部通过，业务代码未为旧断言降级。
 - 工厂历史公开上传目录 21 个文件的扩展名/签名只读核验已全部一致，无活动类型、无大于 25MB 文件；未移动或删除历史文件。正式发布仍需先只读确认 Windows 防火墙没有公网/Any 宽规则，并将 TCP 8000 限定到 Private 配置文件和 `192.168.3.0/24`。
 - 本轮没有停止工厂 8000 服务，没有修改工厂正式 `.env`，没有安装正式依赖，没有创建或写入正式备份/数据库。发布时 P0-B 需要把正式 venv 依赖核验到 `python-multipart==0.0.27`、`pypdf==6.7.3`、`PyJWT==2.13.0`；该依赖更新必须与代码、备份、配置切换和人工 UAT 放在同一受控维护窗口。
+
+## 80. 2026-07-23 工厂防火墙精确预检阻断
+
+- 工厂以太网连接类别为 `Private`，但 `Get-NetFirewallProfile` 显示 Windows Firewall 的 `Private=False`、`Public=False`，只有 `Domain=True`；当前主机未加入本轮确认的域网络。因此现有 Private/Any 入站规则不能作为 TCP 8000 的有效保护证据，正式发布继续阻断。
+- 8000 监听仍为 PID 10248，命令行确认是正式目录 `D:\纸箱厂erp软件搭建`、`app.main:app`、`0.0.0.0:8000`、单 worker。发现三条已启用的本地 Allow 规则：`{7c358cec-bfac-4f88-8887-30bb351389f8}` 允许 Any Profile/LocalSubnet；`{8E8A6B0B-8918-4E86-8207-C651FEFF4F7A}` 与 `{8dab25df-2ad2-42d8-ac31-ca3758c4b1bf}` 均允许 Any Profile/RemoteAddress=Any。后两条范围过宽，第一条也未限定到 Private 与 `192.168.3.0/24`。
+- `EdgeTraversal=Block` 只限制边缘穿越，不等于阻止普通 TCP 入站。不能仅新增窄规则后保留宽规则，也不能在未核对第三方防火墙和其他局域网监听前直接开启 Windows Private Firewall，以免误伤工厂共享或管理服务。
+- 本轮仍为只读预检：没有启用/禁用/删除防火墙规则，没有停止 ERP，没有修改 `.env` 或正式数据库。下一步先核实 Security Center 是否由第三方防火墙接管、Windows Firewall 服务状态及所有非 loopback 监听，再决定精确的防火墙切换和验证闭环。

@@ -2,17 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
-import os
-from pathlib import Path
-from uuid import uuid4
 
 from PIL import Image, UnidentifiedImageError
 
+from app.services.secure_uploads import (
+    ValidatedUpload,
+    remove_stored_reference,
+    store_private_upload,
+)
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 PDF_CONTENT_TYPE = "application/pdf"
-ALLOWED_DRAWING_TYPES = {*ALLOWED_IMAGE_TYPES, PDF_CONTENT_TYPE}
-MAX_DRAWING_BYTES = 20 * 1024 * 1024
 
 
 class DrawingValidationError(ValueError):
@@ -25,39 +24,20 @@ class SavedDrawing:
     thumbnail_path: str
 
 
-def drawing_dir() -> Path:
-    configured = os.getenv("ERP_DRAWING_DIR")
-    if configured:
-        return Path(configured)
-    return Path(__file__).resolve().parents[2] / "static" / "uploads" / "drawings"
-
-
-def _drawing_url(filename: str) -> str:
-    return f"/static/uploads/drawings/{filename}"
-
-
 def save_product_drawing_files(
     *,
     product_id: int,
-    content: bytes,
-    content_type: str | None,
+    upload: ValidatedUpload,
 ) -> SavedDrawing:
-    if content_type not in ALLOWED_DRAWING_TYPES:
-        raise DrawingValidationError("图纸仅支持 JPG、PNG、WEBP、PDF")
-    if not content or len(content) > MAX_DRAWING_BYTES:
-        raise DrawingValidationError("图纸文件不能为空且不能超过 20MB")
-    target = drawing_dir()
-    target.mkdir(parents=True, exist_ok=True)
-    stem = f"product_{product_id}_{uuid4().hex}"
-    if content_type == PDF_CONTENT_TYPE:
-        if not content.lstrip().startswith(b"%PDF-"):
-            raise DrawingValidationError("PDF 图纸文件无法识别")
-        pdf_name = f"{stem}.pdf"
-        (target / pdf_name).write_bytes(content)
-        pdf_path = _drawing_url(pdf_name)
-        return SavedDrawing(image_path=pdf_path, thumbnail_path=pdf_path)
+    del product_id  # Random server-side names deliberately contain no business identifier.
+    if upload.content_type == PDF_CONTENT_TYPE:
+        saved = store_private_upload(upload, category="drawings")
+        return SavedDrawing(
+            image_path=saved.reference,
+            thumbnail_path=saved.reference,
+        )
     try:
-        image = Image.open(BytesIO(content))
+        image = Image.open(BytesIO(upload.content))
         image.load()
     except (UnidentifiedImageError, OSError) as error:
         raise DrawingValidationError("图纸文件无法识别") from error
@@ -72,30 +52,40 @@ def save_product_drawing_files(
     else:
         image = image.convert("RGB")
 
-    high_name = f"{stem}.webp"
-    thumb_name = f"{stem}_thumb.webp"
     high = image.copy()
     high.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
     thumb = image.copy()
     thumb.thumbnail((480, 480), Image.Resampling.LANCZOS)
-    high.save(target / high_name, "WEBP", quality=82, method=6)
-    thumb.save(target / thumb_name, "WEBP", quality=76, method=6)
+    high_buffer = BytesIO()
+    thumb_buffer = BytesIO()
+    high.save(high_buffer, "WEBP", quality=82, method=6)
+    thumb.save(thumb_buffer, "WEBP", quality=76, method=6)
+    saved_high = store_private_upload(
+        upload,
+        category="drawings",
+        content=high_buffer.getvalue(),
+        extension=".webp",
+        content_type="image/webp",
+    )
+    try:
+        saved_thumb = store_private_upload(
+            upload,
+            category="drawing_thumbnails",
+            content=thumb_buffer.getvalue(),
+            extension=".webp",
+            content_type="image/webp",
+        )
+    except Exception:
+        remove_stored_reference(saved_high.reference)
+        raise
     return SavedDrawing(
-        image_path=_drawing_url(high_name),
-        thumbnail_path=_drawing_url(thumb_name),
+        image_path=saved_high.reference,
+        thumbnail_path=saved_thumb.reference,
     )
 
 
 def remove_drawing_files(image_path: str, thumbnail_path: str) -> list[str]:
-    target = drawing_dir().resolve()
     errors: list[str] = []
     for stored_path in {image_path, thumbnail_path}:
-        candidate = (target / Path(stored_path).name).resolve()
-        if candidate.parent != target:
-            errors.append(f"unsafe path: {stored_path}")
-            continue
-        try:
-            candidate.unlink(missing_ok=True)
-        except OSError as error:
-            errors.append(f"{stored_path}: {error}")
+        errors.extend(remove_stored_reference(stored_path))
     return errors

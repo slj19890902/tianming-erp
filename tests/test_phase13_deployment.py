@@ -153,8 +153,9 @@ def test_start_batch_uses_project_venv_one_worker_and_production_port(
     assert '"--host", $BindHost' in launcher
     assert '"--port", $ErpPort.ToString()' in launcher
     assert "from app.core.config import load_settings" in launcher
-    assert "Production requires ERP_HEALTH_URL" in launcher
-    assert "Production requires ERP_BROWSER_URL" in launcher
+    assert "https_proxy requires ERP_HEALTH_URL" in launcher
+    assert "https_proxy requires ERP_BROWSER_URL" in launcher
+    assert "lan_http requires ERP_HEALTH_URL and ERP_BROWSER_URL" in launcher
     assert '"--workers", "1"' in launcher
     assert "erp_server.log" in launcher
     monkeypatch.setenv("ERP_ENVIRONMENT", "production")
@@ -200,9 +201,11 @@ def test_generated_production_config_loads_with_loopback_and_https(
 
     current = load_settings()
     assert current.bind_host == "127.0.0.1"
+    assert current.production_transport == "https_proxy"
     assert current.workers == 1
     assert current.allowed_origins == ("https://erp.example.com",)
     assert values["ERP_WORKERS"] == "1"
+    assert values["ERP_PRODUCTION_TRANSPORT"] == "https_proxy"
     assert values["ERP_HEALTH_URL"] == "https://erp.example.com/api/health"
     assert values["ERP_BROWSER_URL"] == "https://erp.example.com/"
 

@@ -26,6 +26,8 @@ data/
 *.key
 *.bak
 docs/migration_reports/config_backups/
+docs/migration_reports/release_runtime_*.json
+docs/migration_reports/release_runtime_*.json.tmp
 
 # Backups, uploads, logs — local only.
 backups/

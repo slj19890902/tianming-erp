@@ -19,6 +19,7 @@
 
 ```ini
 ERP_ENVIRONMENT=production
+ERP_PRODUCTION_TRANSPORT=https_proxy
 ERP_BIND_HOST=127.0.0.1
 ERP_PORT=8000
 ERP_WORKERS=1
@@ -32,7 +33,13 @@ ERP_SECRET_KEY_FILE=D:\secure\erp-session-secret.key
 
 密钥至少 32 个字符。生产环境的来源必须是显式 HTTPS 地址，代理信任范围只能是实际的本机代理地址。
 
-## 3. 代理头与 Cookie 约束
+## 3. 工厂本地局域网直连例外
+
+没有跨网直接访问需求、ERP 仅供受控工厂私网电脑使用时，可以显式配置 `ERP_PRODUCTION_TRANSPORT=lan_http`。该例外不是远程访问方案，不允许路由器端口映射或公网暴露；TCP 8000 必须由 Windows 防火墙限定到工厂 Private 网段。具体配置、启动和发布门禁见 `docs/P0A_STARTUP_RELEASE_RUNBOOK.md`。
+
+该模式禁止 `ERP_TRUSTED_PROXY_IPS`，不启用 HTTPS 跳转/HSTS，Cookie 因 HTTP 不能使用 `Secure`；可信 Host、精确 Origin/CORS、写请求 CSRF、`HttpOnly`、`SameSite=Lax` 和其他安全响应头仍保持启用。需要跨网络直接使用 ERP 时，必须改回本手册推荐的 VPN/HTTPS 架构。
+
+## 4. 代理头与 Cookie 约束
 
 代理必须覆盖而不是追加：
 
@@ -43,7 +50,7 @@ ERP_SECRET_KEY_FILE=D:\secure\erp-session-secret.key
 
 生产 Cookie 使用 `Secure + HttpOnly + SameSite=Lax`。带 ERP 会话 Cookie 的写请求还必须携带与 `ERP_ALLOWED_ORIGINS` 一致的 `Origin`。浏览器会自动完成；命令行或交接脚本必须主动添加同源 `Origin`。
 
-## 4. 上线步骤
+## 5. 上线步骤
 
 1. 备份正式 SQLite 数据库，并记录当前 Alembic 版本。
 2. 校验 Caddy/NGINX 配置，不要先开放公网端口。
@@ -55,7 +62,7 @@ ERP_SECRET_KEY_FILE=D:\secure\erp-session-secret.key
 8. 验证退出后旧会话失效，连续错误登录会被限流。
 9. 确认证书自动续期及代理日志目录可写。
 
-## 5. 回滚
+## 6. 回滚
 
 1. 保存故障时间和日志，停止反向代理入口，不删除数据库。
 2. 恢复上一份已验证的代理配置并重新校验。
@@ -65,7 +72,7 @@ ERP_SECRET_KEY_FILE=D:\secure\erp-session-secret.key
 
 数据库恢复或迁移降级必须单独确认，禁止直接覆盖正式库。
 
-## 6. 配置示例
+## 7. 配置示例
 
 - Caddy：`docs/go_live_checklists/Caddyfile.n031.example`
 - NGINX：`docs/go_live_checklists/nginx.n031.example.conf`

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
+from PIL import Image
 
 
 @pytest.fixture()
@@ -27,6 +29,8 @@ def n028_order_drawing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.models.user import User
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(tmp_path / "private_uploads"))
+    monkeypatch.setenv("ERP_UPLOAD_TEMP_DIR", str(tmp_path / "upload_tokens"))
     engine = create_sqlite_engine(tmp_path / "n028-order-drawings.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -123,7 +127,18 @@ def _login(client: TestClient, username: str, password: str) -> None:
     assert response.status_code == 200
 
 
-def _save_to_product_order_payload(customer_id: int, product_id: int) -> dict:
+def _png_bytes() -> bytes:
+    image = Image.new("RGB", (32, 32), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _save_to_product_order_payload(
+    customer_id: int,
+    product_id: int,
+    token: str,
+) -> dict:
     return {
         "customer_id": customer_id,
         "items": [
@@ -131,7 +146,7 @@ def _save_to_product_order_payload(customer_id: int, product_id: int) -> dict:
                 "product_id": product_id,
                 "quantity": 1,
                 "unit_price": "9.00",
-                "temp_drawing_file": "/incoming.png",
+                "temp_drawing_token": token,
                 "drawing_save_option": "save_to_product",
             }
         ],
@@ -145,19 +160,20 @@ def test_explicit_products_edit_deny_blocks_both_product_drawing_paths_before_pe
     from app.models.product_drawing import ProductDrawing
 
     app, ids, factory = n028_order_drawing_app
-    Path("incoming.png").write_bytes(b"drawing")
     with TestClient(app) as client:
         _login(client, "n028-drawing-sales", "SalesPass123!")
         standalone = client.post(
             f"/api/orders/items/{ids['item']}/drawing",
             params={"save_to_product": "true"},
-            files={"file": ("drawing.png", b"drawing", "image/png")},
+            files={"file": ("drawing.png", _png_bytes(), "image/png")},
         )
         assert standalone.status_code == 403
 
         create = client.post(
             "/api/orders",
-            json=_save_to_product_order_payload(ids["customer"], ids["product"]),
+            json=_save_to_product_order_payload(
+                ids["customer"], ids["product"], "a" * 32
+            ),
         )
         assert create.status_code == 403
 
@@ -176,12 +192,18 @@ def test_products_edit_allows_order_and_standalone_product_drawing_saves(
     from app.models.product_drawing import ProductDrawing
 
     app, ids, factory = n028_order_drawing_app
-    Path("incoming.png").write_bytes(b"drawing")
     with TestClient(app) as client:
         _login(client, "n028-drawing-admin", "AdminPass123!")
+        draft_upload = client.post(
+            "/api/orders/draft-drawing",
+            files={"file": ("incoming.png", _png_bytes(), "image/png")},
+        )
+        assert draft_upload.status_code == 200, draft_upload.text
         created = client.post(
             "/api/orders",
-            json=_save_to_product_order_payload(ids["customer"], ids["product"]),
+            json=_save_to_product_order_payload(
+                ids["customer"], ids["product"], draft_upload.json()["token"]
+            ),
         )
         assert created.status_code == 201
         created_item_id = created.json()["items"][0]["id"]
@@ -189,7 +211,7 @@ def test_products_edit_allows_order_and_standalone_product_drawing_saves(
         standalone = client.post(
             f"/api/orders/items/{created_item_id}/drawing",
             params={"save_to_product": "true"},
-            files={"file": ("replacement.png", b"replacement", "image/png")},
+            files={"file": ("replacement.png", _png_bytes(), "image/png")},
         )
         assert standalone.status_code == 200
         assert standalone.json()["saved_to_product"] is True

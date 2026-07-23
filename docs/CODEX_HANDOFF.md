@@ -1,5 +1,17 @@
 # Codex 项目交接
 
+## 2026-07-22 P0-B | 上传路径、私有图纸与统一文件校验（家庭本地完成，待人工 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-p0b-upload-security-20260722`；分支：`codex/release-p0b-upload-security`；基线：`c5cffa2123973b3f30b74be7f6dc198d1f070210`。本轮没有连接、迁移或写入工厂正式数据库，也没有新增 Alembic migration。
+- 已移除订单创建对客户端 `temp_drawing_file` 本地路径的解释、`isfile/copy2` 和失败后原样落库逻辑。订单草稿图纸现在只返回 32 位随机、15 分钟、绑定上传用户的一次性 token；token 映射和临时文件仅位于固定私有临时目录，消费后不能重放，过期文件会清理。
+- 新图纸存储在 `data/private_uploads`（可由 `ERP_FILE_STORAGE_DIR` 显式覆盖），不再写入公开 `static/uploads`。数据库只保存随机私有引用；原文件名、MIME、大小和 SHA-256 只保存在私有 metadata 与操作日志中。
+- 产品图纸、订单图纸和草稿预览统一通过带登录、权限、客户范围和查看审计的 API 提供；通用静态挂载对 `/static/uploads` 一律返回 404。历史数据库中的 `/static/uploads/...` 引用仍可由鉴权接口在安全根目录内兼容读取，没有移动或删除历史文件。
+- 新增统一上传校验：1MB 分块读取、单文件上限、30 秒分块超时、扩展名白名单、MIME 与文件签名三方一致校验、HTML/SVG/JS/XML 主动内容拒绝、批量 PDF 最多 20 个且请求总量最多 100MB、临时 token 清理。订单 PDF、PDF 训练样本、产品/订单图纸和天华预送货图片均已接入；Excel 校验策略要求真实 XLSX ZIP 结构。
+- 依赖更新为 `python-multipart==0.0.27`、`pypdf==6.7.3`、`PyJWT==2.13.0`；隔离环境实测版本一致且 `pip check` 无冲突。生产配置现有至少 32 字符会话密钥门禁继续有效，本轮未发现文件泄露证据，因此没有轮换任何密钥。
+- 家庭副本 `D:\纸箱厂erp软件搭建\static\uploads` 不存在；只读审计未发现异常文件，但该结果不能替代工厂主机复核。报告：`docs/security_reports/P0B_PUBLIC_UPLOADS_AUDIT_20260722.md`；只读审计脚本：`scripts/audit/public_uploads_audit.py`，没有删除/apply 模式。
+- 自动验证：P0-B 核心与图纸权限 `17 passed`；新版依赖下上传、登录、PDF/OCR、图纸、客户隔离和权限组合 `150 passed, 1 skipped`；相关前端与内联 JavaScript `93 passed`；Python 编译和 `git diff --check` 通过。另有三个旧断言/用例已在未修改的 `c5cffa2` 基线复现（旧常用箱 DOM 标记、sales 账号预送货执行权限、PDF 训练路由清单漏列 correction），与 P0-B 无关。
+- 人工验收：`docs/security_reports/P0B_UPLOAD_SECURITY_UAT_20260722.md`。今晚只保留家庭本地提交；按用户要求，明早到工厂后再共同决定推送、PR、合并和工厂发布。
+
 ## 2026-07-22 | 工厂 ERP 首页 Vue 模板空白页修复
 
 - 独立 worktree：`D:\tm-worktrees\erp-factory-blank-page-fix-20260722`；分支：`codex/factory-blank-page-fix-20260722`；基线：`5f2fb671ed64eeda7dcf0f4d72240acf7d4f9e34`。正式目录、正式分支、数据库、备份、安全分支和 stash 均未修改。
@@ -1527,12 +1539,84 @@ legacy_ruida_* 原始层
 - 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
 - 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。
 
-## 75. 2026-07-23 库存正式转换与常用箱默认开料方式紧急修复
+## 75. 2026-07-22 P0-A 启动、发布迁移与 UAT 隔离收口
 
-- 独立 worktree：`D:\tm-worktrees\erp-urgent-inventory-cutting-20260723`；分支：`codex/urgent-inventory-cutting-default-20260723`；唯一基线：`origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`。没有修改 `origin/main` 或工厂正式目录。
+- 用户已明确确认唯一候选基线为 `origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`，并授权开始 P0-A；对应 GitHub 整改项为 #24（普通启动/发布迁移）与 #26（生产配置/UAT 隔离）。独立 worktree 为 `D:\tm-worktrees\erp-p0a-startup-migration-safety-20260722`，分支为 `codex/release-p0a-startup-migration-safety`。
+- `scripts/windows/start_erp.ps1` 已移除普通启动中的 `alembic upgrade head`。正式启动现在强制 `ERP_ENVIRONMENT=production`、正式数据库绝对路径、loopback/HTTPS/单 worker 配置，并通过 `scripts/admin/release_erp.py check-startup` 只读检查数据库可访问性、`integrity_check`、外键、核心业务表和 `current == code head`；任何不一致都拒绝启动，不会自动迁移。
+- 旧 `scripts/admin/update_erp.ps1` 已 fail-closed 停用。新 `scripts/admin/release_erp.ps1` 只允许干净的 `factory-current-baseline` 和已批准 40 位 SHA，采用 Prepare / Apply 两阶段：Prepare 停服后创建 SQLite Backup API 备份、记录 source/backup SHA-256、核验完整性/外键/revision/核心计数、从备份建立隔离演练副本并精确迁移到指定 revision；随后生成与本次证据绑定的 `APPLY-...` 口令并保持停服。Apply 再次核对代码、正式库主文件及 WAL 指纹、revision、计数、服务停机和人工口令，才允许精确迁移；失败保持停服，迁移及普通启动健康检查成功后才把报告标为 completed。
+- `scripts/windows/start_erp_uat.ps1` 强制使用独立数据库副本、`18000-19999` 端口、`127.0.0.1`、`ERP_ENVIRONMENT=test` 和只读 revision 门禁；同时拒绝当前工作树默认库及已确认工厂绝对正式库 `D:\纸箱厂erp软件搭建\data\carton_erp.sqlite3`。详细操作与失败恢复边界记录在 `docs/P0A_STARTUP_RELEASE_RUNBOOK.md`。
+- 自动验证：P0-A、启动、既有发布、数据库路径及生产安全组合 `34 passed`；Python 编译、4 个 PowerShell 脚本语法解析、`git diff --check` 均通过。系统 Python 缺少 `cv2`，最终测试改用已有隔离 UAT venv `D:\tm-uat\home-n041\.venv`，没有改动工厂正式 venv。
+- 隔离迁移验证位于 `D:\tm-uat\p0a_release_gate_20260722_203300`：新空库迁移前先创建并验证备份（SHA-256 一致、`integrity_check=ok`），随后完整升级到唯一 head `cf62v8x9z51`。P0-A Prepare 又从该隔离库创建备份和演练副本，结果为 source hash 不变、backup/rehearsal `integrity_check=ok`、外键异常 0、核心业务表齐全、演练 revision=`cf62v8x9z51`；明确未执行 Apply。
+- 隔离 UAT 已运行在 `http://127.0.0.1:18080/`，数据库为上述隔离目录的 `carton_erp_uat.sqlite3`；首页与 `/api/health` 均为 200，监听地址仅为 `127.0.0.1`，启动入口明确未迁移数据库，供人工验收。
+- 本轮未修改工厂正式 `.env`、正式目录、正式数据库、正式服务、`origin/main` 或任何 Alembic revision，未启动 N081。当前正式部署仍被 `development + LAN HTTP + 未确认 HTTPS 反向代理` 阻断；不得直接把本分支替换进工厂启动目录。
+- 只读复核还发现外部运行状态已较用户最初快照变化：本轮检查时端口 8000 的监听命令行指向 `D:\tm-worktrees\erp-factory-latest-uat-20260722`，不是已确认的工厂正式目录。本轮没有停止或修改该进程；任何正式发布前必须重新确认 8000 进程归属、正式启动目录和维护窗口。
+
+## 76. 2026-07-22 P0-A 人工 UAT 验收通过
+
+- 用户已在本机打开 `http://127.0.0.1:18080/`，确认 UAT 页面正常，并明确回复“UAT 页面正常，验收通过”。P0-A 的人工 UAT 门禁记录为通过。
+- 验收对应实现提交为 `9eb2ebd755d4732a625c63d2bf4de2e354558cb4`；验收记录提交为 `189c09a46cc1ecbe0d085adbc2f5fa885e1ac26b`。用户随后明确授权推送并创建 Draft PR，分支 `codex/release-p0a-startup-migration-safety` 已推送，Draft PR 为 `https://github.com/slj19890902/tianming-erp/pull/35`，目标分支仅为 `factory-current-baseline`，未触碰 `origin/main`，未部署。
+- 验收完成后已精确核对端口 18080 进程命令行为当前 P0-A worktree、`app.main:app`、loopback 和端口 18080，并只停止该隔离 UAT 进程；端口 18080 已不再监听。隔离数据库、备份、演练副本和报告继续保留在 `D:\tm-uat\p0a_release_gate_20260722_203300`，未删除。
+- 本轮未停止或修改端口 8000 的进程，未修改工厂正式目录、正式 `.env` 或正式数据库。PR #35 当前保持 Draft，GitHub 复核为 CLEAN / MERGEABLE；合并与任何正式部署仍需独立人工批准，并继续要求确认 8000 进程归属、生产 HTTPS 配置和维护窗口。
+
+## 77. 2026-07-22 P0-A 合并与正式发布预检阻断
+
+- 用户已明确授权“审查后直接合并并正式发布”。代码审查复跑 P0-A、启动、既有发布、数据库路径及生产安全组合，结果仍为 `34 passed`；相对 `origin/factory-current-baseline` 没有 Alembic 文件变化，普通启动和旧更新入口均不存在 `alembic upgrade head`。P0-A 代码本身未发现新的 P0/P1 阻断缺陷。
+- 正式发布只读预检与此前口径不一致：`D:\纸箱厂erp软件搭建` 当前为 `feature/v0208-common-box-edit@fb0aacaba5463fa7b2444a5cef166df1fb79a461`，不是 `factory-current-baseline@c5cffa2`；正式目录 `.env` 中生产运行变量均未配置。
+- `D:\纸箱厂erp软件搭建\data\carton_erp.sqlite3` 实测 revision 为 `t68n0r1s7u50`，不是此前确认的 `cf62v8x9z51`；`integrity_check=ok`、外键异常 0，但缺少后续迁移才创建的 `incoming_receipts`。若直接部署 P0-A，普通启动会按设计拒绝 `current != code head`；若直接 Apply，则会跨越大量历史 revision，已超出本轮“无正式迁移”的既定验收前提。
+- 当前 8000 监听仍为 PID 38552，命令行 `--app-dir D:\tm-worktrees\erp-factory-latest-uat-20260722`；该工作树为 `c5cffa2` 且 `docs/CODEX_HANDOFF.md` 有未提交修改，没有 `.env`，默认工作树数据库文件也不存在，因此进程实际继承的数据库路径无法仅从命令行证明。端口 80/443 均无监听，未发现可承接 production HTTPS 的本机代理。
+- 因正式代码、数据库 revision、进程归属和网络配置四项门禁同时不满足，本轮在合并前安全停止：PR #35 继续保持 Draft，未合并、未部署、未停止 8000、未创建正式备份、未写正式数据库。下一步必须先重新确认唯一正式运行实例和权威数据库；若权威库确为 `t68`，需另开“t68 → cf62 隔离副本全链迁移与正式发布”闭环，完成备份、哈希、往返/失败恢复和人工批准；同时确定生产 HTTPS/反向代理方案后，才能重新申请合并与正式发布。
+
+## 78. 2026-07-23 工厂只读复核与 P0-A 局域网生产模式
+
+- 用户已在工厂主机 `PC-20250926DZYH` 只读确认：正式目录 `D:\纸箱厂erp软件搭建` 为干净的 `factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`；实际 8000 服务命令行的 `--app-dir` 指向该正式目录；正式库为 `data\carton_erp.sqlite3`，revision=`cf62v8x9z51`、`quick_check=ok`、外键异常 0，`/api/health` 返回 200。此前家庭电脑对另一目录/副本得到的 `t68` 结果不再作为工厂正式事实。
+- 工厂网络为 `192.168.3.80/24`，服务监听 `0.0.0.0:8000`；核验时没有活动客户端连接，也未发现 80/443 监听或 HTTPS 代理证据。项目 `.venv` 存在，关键运行依赖版本可导入且 `pip check` 无损坏；会话密钥文件长度 64，未显示密钥内容。
+- `static/uploads` 共 21 个历史文件（PDF 9、WebP 6、JPG 4、PNG 2），扩展名与文件签名全部一致，无签名不匹配文件；没有活动上传扩展名，也没有超过 25 MB 的文件。以上核验均未修改代码、配置、Git、服务或数据库。
+- P0-A 新增显式 `ERP_PRODUCTION_TRANSPORT`：默认 `https_proxy` 继续要求 loopback、HTTPS、受信 loopback 代理、Secure Cookie、HTTPS 跳转与 HSTS；仅显式 `lan_http` 才允许工厂私网 HTTP，并强制私网 Origin/URL、明确端口、可信 Host、禁止代理信任、单 worker 和至少 32 字符密钥。局域网模式不启用跳转/HSTS且 Cookie 不带 Secure，但仍启用精确 CORS、带 Cookie 写请求的 Origin/CSRF、HttpOnly、SameSite=Lax、Host 门禁和其余安全响应头。
+- Windows 启动器和两阶段发布脚本均读取同一传输模式并按模式 fail-closed；普通启动仍只读检查 revision，未恢复任何自动迁移。工厂 `lan_http` 必须额外确认 Windows 防火墙把 TCP 8000 限定到 Private 配置文件和 `192.168.3.0/24`，且不存在更宽的旧入站规则；发现公网/Any 规则时停止发布。
+- 当前配置、认证、系统、部署、数据库路径、发布安全及 P0-A 相邻扩大回归为 `111 passed`；随后补充未知传输模式和 Host 子域通配符 fail-closed 用例，传输安全专项为 `30 passed`。覆盖 HTTPS 默认不降级、LAN HTTP 私网/Host/Origin/CSRF/安全头、LAN Cookie 登录、启动/发布脚本和备份发布门禁。Python 编译、4 个 PowerShell 脚本语法、工厂实际 LAN 参数的纯配置加载和 `git diff --check` 通过。测试使用 P0-B 隔离工作树已有 venv；没有向工厂或家庭正式 venv 安装测试包。正式 `.env`、正式服务和正式数据库仍未修改，PR #35 尚未合并，本轮也没有新增 Alembic revision。
+
+## 79. 2026-07-23 P0-A + P0-B 工厂发布集成候选
+
+- 独立候选工作树为 `D:\tm-worktrees\erp-p0ab-factory-candidate-20260723`，分支为 `codex/release-p0ab-factory-candidate-20260723`。它以已推送的 P0-A `2addb5bb4fee5632507346a07431943f9ac2f9e9` 为起点，线性集成 P0-B 原提交 `804a90cbb0e4cc12a87392ed4878cb3f37bcf8fe`（候选中的等价提交为 `5315e14`）；P0-B 独立分支也已推送备审。没有更新 `origin/factory-current-baseline` 或 `origin/main`。
+- 自动集成同时保留 P0-A 的 `https_proxy/lan_http` 生产传输、Host/Origin/CSRF/启动发布门禁，以及 P0-B 的 `/static/uploads` 强制 404、私有图纸鉴权 API、统一文件签名/大小/超时校验和一次性草稿 token。相对 `c5cffa2` 没有 Alembic 文件变化。
+- 联合后端、上传、图纸权限、客户范围、PDF、天华、认证、传输、启动、发布与数据库路径回归为 `163 passed, 1 skipped`；前端、权限显示和内联 JavaScript 扩大回归为 `185 passed`。最初出现的 2 个 Phase 12 客户测试和 3 个旧前端断言均在未修改的 `c5cffa2` 复现；候选仅把测试请求补齐现有 `expected_version/change_reason`，并同步当前销售/车间菜单及常用箱材质区 DOM，修正后全部通过，业务代码未为旧断言降级。
+- 工厂历史公开上传目录 21 个文件的扩展名/签名只读核验已全部一致，无活动类型、无大于 25MB 文件；未移动或删除历史文件。正式发布仍需先只读确认 Windows 防火墙没有公网/Any 宽规则，并将 TCP 8000 限定到 Private 配置文件和 `192.168.3.0/24`。
+- 本轮没有停止工厂 8000 服务，没有修改工厂正式 `.env`，没有安装正式依赖，没有创建或写入正式备份/数据库。发布时 P0-B 需要把正式 venv 依赖核验到 `python-multipart==0.0.27`、`pypdf==6.7.3`、`PyJWT==2.13.0`；该依赖更新必须与代码、备份、配置切换和人工 UAT 放在同一受控维护窗口。
+
+## 80. 2026-07-23 工厂防火墙精确预检阻断
+
+- 工厂以太网连接类别为 `Private`，但 `Get-NetFirewallProfile` 显示 Windows Firewall 的 `Private=False`、`Public=False`，只有 `Domain=True`；当前主机未加入本轮确认的域网络。因此现有 Private/Any 入站规则不能作为 TCP 8000 的有效保护证据，正式发布继续阻断。
+- 8000 监听仍为 PID 10248，命令行确认是正式目录 `D:\纸箱厂erp软件搭建`、`app.main:app`、`0.0.0.0:8000`、单 worker。发现三条已启用的本地 Allow 规则：`{7c358cec-bfac-4f88-8887-30bb351389f8}` 允许 Any Profile/LocalSubnet；`{8E8A6B0B-8918-4E86-8207-C651FEFF4F7A}` 与 `{8dab25df-2ad2-42d8-ac31-ca3758c4b1bf}` 均允许 Any Profile/RemoteAddress=Any。后两条范围过宽，第一条也未限定到 Private 与 `192.168.3.0/24`。
+- `EdgeTraversal=Block` 只限制边缘穿越，不等于阻止普通 TCP 入站。不能仅新增窄规则后保留宽规则，也不能在未核对第三方防火墙和其他局域网监听前直接开启 Windows Private Firewall，以免误伤工厂共享或管理服务。
+- 本轮仍为只读预检：没有启用/禁用/删除防火墙规则，没有停止 ERP，没有修改 `.env` 或正式数据库。下一步先核实 Security Center 是否由第三方防火墙接管、Windows Firewall 服务状态及所有非 loopback 监听，再决定精确的防火墙切换和验证闭环。
+
+## 81. 2026-07-23 工厂防火墙产品与监听服务复核
+
+- `root/SecurityCenter2/FirewallProduct` 返回产品数量 0，未发现已向 Windows Security Center 注册的第三方防火墙；Windows Defender Firewall 服务 `mpssvc` 为 `Running/Auto`，但活动以太网为 `Private` 且该配置文件仍关闭。因此目前没有证据表明第三方产品正在替代 Windows Firewall 提供主机入站保护。
+- 非 loopback TCP 监听除 ERP `0.0.0.0:8000` 外，还包括 SMB/RPC（135、139、445 及动态端口）、打印后台、`BSZnetSignServer:6026` 和 `wpscloudsvr`；UDP 监听还包括网络发现、IPsec、`AweSun`、极空间及 WPS 服务。直接开启 Private Firewall 可能中断共享、打印、税控签名、NAS/极空间或当前远程会话，必须先只读映射已有入站规则并设计现场可回退窗口。
+- 本轮没有修改防火墙配置文件或规则，没有停止任何进程，没有修改正式 `.env`、代码或数据库。正式发布继续阻断；不得在仅有向日葵远程通道时直接启用 Private Firewall。
+
+## 82. 2026-07-23 工厂现有入站规则映射
+
+- 38 条相关已启用 Allow 规则中，`AweSun.exe` 与 `agent\AweSun.exe` 均已有 Private TCP/UDP 且按程序路径限定的规则；网络发现的 Private 规则均限定 `LocalSubnet`。因此启用 Private Firewall 后向日葵和本地网络发现具备既有放行依据，但仍须使用自动回退窗口实测，不能把规则存在等同于远程一定不会中断。
+- 未在相关规则中看到 SMB 139/445 的文件共享放行；当前快照没有活动入站 TCP 连接，但这不能证明工厂日常无人使用共享。税控现有规则限定 `BSZXInput.exe`，没有覆盖当前监听 TCP 6026 的 `BSZnetSignServer` 证据；极空间监听也没有匹配的入站规则。WPS 则存在 Any Profile/Any Protocol/Any Port/Any Remote 的程序规则，范围较宽，但不属于本次 ERP 发布必须改动的规则。
+- ERP 仍是三条规则：一条 Any Profile/LocalSubnet，两条 Any Profile/RemoteAddress=Any。启用 Private Firewall 前必须先确认共享、共享打印机、税控签名与极空间是否需要被其他局域网主机主动连接；随后以可自动回退的维护窗口启用 Private，并把 ERP 收敛到单一 Private + `192.168.3.0/24` 规则。
+- 本轮继续只读：未更改任何工厂规则、配置文件、进程或数据库，正式发布继续阻断。
+
+## 83. 2026-07-23 P0-A/P0-B 工厂本机受控发布完成
+
+- 工厂正式目录 `D:\纸箱厂erp软件搭建` 已从 `factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210` fast-forward 至经验证候选 `00263ec12de63a8fd67f410b58da7d8b7bbc8843`。本次未修改或推送 `origin/main`；候选功能代码来自已验证的远端候选，离线 bundle 仅额外包含本交接文档前序记录。
+- 发布前已在 `D:\tm-release-backups\p0ab-factory-20260723\formal-sqlite-backup\carton_erp_before_p0ab_release.sqlite3` 创建 SQLite Backup API 一致性备份：大小 `219,447,296` 字节、SHA-256 `DF56C603722D7672BD1606970B9DB70D524C8EB9EEAF77F9E5007EC62C6A34A2`、revision=`cf62v8x9z51`、`integrity_check=ok`、外键异常 0。代码基线与原 `.env` 也已备份到同一外部发布备份根目录。
+- 正式 `.env` 仅切换为明确的 `ERP_ENVIRONMENT=production` 与 `ERP_PRODUCTION_TRANSPORT=lan_http`，保留 `0.0.0.0:8000` 局域网入口并限制为明确的 `192.168.3.80:8000` Origin/URL、可信 Host、单 worker 和已有会话密钥文件；未改动防火墙、路由器、HTTPS、反向代理或正式数据库 revision。
+- 隔离 UAT 使用外部 SQLite 副本和 `127.0.0.1:18081` 单 worker，未迁移数据库。登录、订单、报料、来料、送货只读接口均为 200，浏览器 Console 无 error/warn。为隔离测试创建的临时 admin 密码及其审计仅写入 UAT 副本，未写入正式数据库。
+- 正式启动器执行只读 `current == code head`、完整性、外键和核心表门禁后成功启动。最终局域网 `/api/health` 为 200 `{"ok":true}`，登录页为 200，监听 PID 使用正式目录、`0.0.0.0:8000` 与单 worker。停服前备份与上线后正式 SQLite 的文件哈希不同，但逐表行数与逻辑内容哈希完全一致，确认本次没有业务数据写入。
+
+## 84. 2026-07-23 库存正式转换与常用箱默认开料方式紧急修复
+
+- 独立 worktree：`D:\tm-worktrees\erp-urgent-inventory-cutting-20260723`；分支：`codex/urgent-inventory-cutting-default-20260723`；唯一开发与隔离 UAT 基线：`origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`。紧急修复提交后，以普通合并方式纳入已由工厂验收并推送的正式基线 `28d90525da514d2a88bf36baedeca0f0c4eefee7`，仅为解决 Draft PR 基线前移，不改写原提交历史、不强推、不修改 `origin/main`。
 - 工厂副本原件、只读核验副本和迁移前备份的 SHA-256 均逐字符等于 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC`；只有工作副本 `D:\tm-uat\urgent_inventory_cutting_20260723\working\carton_erp_urgent_inventory_cutting_uat.sqlite3` 被迁移和写入 UAT 数据。
 - 22000022 在 E1-L09 的 300 张记录是已匹配但未绑定 `inventory_lot_id` 的 `semi_finished/sheets` 现场快照。订单库存候选只读取正式 `InventoryLot`，因此初始不可抵扣；修复没有增加快照直扣后门，而是让页面经权限、版本、幂等和两次确认调用既有正式入库流程，生成客户专用成品批次并保留库位、栈板、流水和操作日志。
 - 常用箱新增独立字段 `products.default_cutting_mode`，合法值为一开一至一开五，默认一开一；新迁移 `cg63v8x9z52` 线性接在 `cf62v8x9z51` 后且为唯一 head。新订单把默认值冻结到明细 `special_process`；修改常用箱不回写旧订单。当前报料草稿允许人工改开料方式并立即重算采购张数，不复用 `pieces_per_box`。
-- 定向及相邻自动测试：订单组合 `67 passed`；报料、主数据版本和前端组合 `45 passed`；三楼库存组合 `79 passed, 3 failed`。3 个失败均为 `c5cffa2` 基线中未修改位置的旧前端文本/排序断言，与本轮改动无关；本轮新增的库存转换、客户隔离、幂等、默认开料和采购张数用例均通过。Python 编译、两份内联 JavaScript 语法、`git diff --check` 均通过。
+- 定向及相邻自动测试：订单组合 `67 passed`；报料、主数据版本和前端组合 `45 passed`；三楼库存组合 `79 passed, 3 failed`。3 个失败均为 `c5cffa2` 基线中未修改位置的旧前端文本/排序断言，与本轮改动无关；本轮新增的库存转换、客户隔离、幂等、默认开料和采购张数用例均通过。纳入正式基线 `28d9052` 后再次运行 6 个本任务定向用例，结果 `6 passed`。Python 编译、两份内联 JavaScript 语法、`git diff --check` 均通过。
 - 隔离页面 UAT 已复现快照初始不可抵扣；转换后创建正式批次并可供同客户订单发现和预占，其他客户候选为空且强行预占被拒绝，重复转换返回幂等结果。常用箱一开二保存重读成功，新订单 100 个冻结一开二并带出 50 张，报料页手改一开一立即变为 100 张；随后把常用箱改为一开三，旧订单仍保持一开二。
 - 工作副本最终为 `cg63v8x9z52`、`integrity_check=ok`、外键异常 0；UAT 服务已停止。工厂正式数据库未连接、未迁移、未写入。将来正式发布需要先备份并验证、执行线性迁移、再重启服务，且必须另行授权。

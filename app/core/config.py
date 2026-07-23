@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -23,6 +23,14 @@ PRIVATE_LAN_ORIGIN_REGEX = (
     r"192\.168\.\d{1,3}\.\d{1,3}|"
     r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})"
     r"(?::\d{1,5})?$"
+)
+PRIVATE_LAN_NETWORKS = tuple(
+    ip_network(value)
+    for value in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    )
 )
 
 
@@ -62,6 +70,7 @@ class Settings:
     health_url: str
     browser_url: str
     environment: str
+    production_transport: str
     sqlite_busy_timeout_ms: int = 5_000
     session_cookie_name: str = "erp_session"
     session_expire_minutes: int = 480
@@ -74,6 +83,10 @@ class Settings:
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def uses_https_proxy(self) -> bool:
+        return self.is_production and self.production_transport == "https_proxy"
 
 
 def normalize_path(value: str | Path) -> Path:
@@ -140,17 +153,46 @@ def _allowed_origins() -> tuple[str, ...]:
     return origins or DEFAULT_ALLOWED_ORIGINS
 
 
-def _production_allowed_origins() -> tuple[str, ...]:
+def _is_private_lan_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or any(
+        address.version == network.version and address in network
+        for network in PRIVATE_LAN_NETWORKS
+    )
+
+
+def _production_transport(*, production: bool) -> str:
+    if not production:
+        return "development"
+    value = os.getenv("ERP_PRODUCTION_TRANSPORT", "https_proxy").strip().lower()
+    if value not in {"https_proxy", "lan_http"}:
+        raise ValueError(
+            "ERP_PRODUCTION_TRANSPORT must be one of: https_proxy, lan_http"
+        )
+    return value
+
+
+def _production_allowed_origins(
+    *,
+    transport: str,
+    port: int,
+) -> tuple[str, ...]:
     """Allow only explicitly configured origins in production."""
     raw = os.getenv("ERP_ALLOWED_ORIGINS", "")
     if not raw.strip():
-        raise ValueError("生产环境必须显式配置 ERP_ALLOWED_ORIGINS HTTPS 来源")
+        raise ValueError("生产环境必须显式配置 ERP_ALLOWED_ORIGINS 来源")
     origins = tuple(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
+    expected_scheme = "https" if transport == "https_proxy" else "http"
     for origin in origins:
         parsed = urlsplit(origin)
         if (
             origin == "*"
-            or parsed.scheme != "https"
+            or parsed.scheme != expected_scheme
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
@@ -158,7 +200,19 @@ def _production_allowed_origins() -> tuple[str, ...]:
             or parsed.fragment
             or parsed.path not in {"", "/"}
         ):
-            raise ValueError("生产环境 ERP_ALLOWED_ORIGINS 只允许显式 HTTPS 来源")
+            raise ValueError(
+                "ERP_ALLOWED_ORIGINS 协议不匹配：https_proxy 只允许 HTTPS，"
+                "lan_http 只允许 HTTP"
+            )
+        if transport == "lan_http":
+            if not _is_private_lan_host(parsed.hostname):
+                raise ValueError("lan_http 的 ERP_ALLOWED_ORIGINS 只允许私网 IP 或 localhost")
+            try:
+                origin_port = parsed.port
+            except ValueError as error:
+                raise ValueError("ERP_ALLOWED_ORIGINS 端口无效") from error
+            if origin_port != port:
+                raise ValueError("lan_http 的 ERP_ALLOWED_ORIGINS 必须显式使用 ERP_PORT")
     return origins
 
 
@@ -167,16 +221,18 @@ def _trusted_hosts(*, production: bool) -> tuple[str, ...]:
         return ()
     raw = os.getenv("ERP_TRUSTED_HOSTS", "")
     hosts = tuple(item.strip() for item in raw.split(",") if item.strip())
-    if not hosts or "*" in hosts:
+    if not hosts or any("*" in host for host in hosts):
         raise ValueError("ERP_TRUSTED_HOSTS must contain explicit hosts")
     return hosts
 
 
-def _trusted_proxy_ips(*, production: bool) -> tuple[str, ...]:
+def _trusted_proxy_ips(*, production: bool, transport: str) -> tuple[str, ...]:
     raw = os.getenv("ERP_TRUSTED_PROXY_IPS", "")
     values = tuple(item.strip() for item in raw.split(",") if item.strip())
-    if production and not values:
+    if production and transport == "https_proxy" and not values:
         raise ValueError("生产环境必须显式配置 ERP_TRUSTED_PROXY_IPS")
+    if production and transport == "lan_http" and values:
+        raise ValueError("lan_http 直连模式禁止配置 ERP_TRUSTED_PROXY_IPS")
     for value in values:
         if value == "*":
             raise ValueError("ERP_TRUSTED_PROXY_IPS must contain explicit IPs")
@@ -184,7 +240,7 @@ def _trusted_proxy_ips(*, production: bool) -> tuple[str, ...]:
             address = ip_address(value)
         except ValueError as error:
             raise ValueError("ERP_TRUSTED_PROXY_IPS only accepts IP addresses") from error
-        if production and not address.is_loopback:
+        if production and transport == "https_proxy" and not address.is_loopback:
             raise ValueError(
                 "生产环境 ERP_TRUSTED_PROXY_IPS 只允许 loopback TCP peer"
             )
@@ -200,16 +256,23 @@ def _environment() -> str:
     return environment
 
 
-def _bind_host(*, production: bool) -> str:
-    default = "127.0.0.1" if production else "0.0.0.0"
+def _bind_host(*, production: bool, transport: str) -> str:
+    default = "127.0.0.1" if production and transport == "https_proxy" else "0.0.0.0"
     value = os.getenv("ERP_BIND_HOST", default).strip() or default
-    if production:
+    if production and transport == "https_proxy":
         try:
             address = ip_address(value)
         except ValueError as error:
             raise ValueError("生产环境 ERP_BIND_HOST 必须是显式 loopback IP") from error
         if not address.is_loopback:
             raise ValueError("生产环境 ERP_BIND_HOST 只允许 loopback IP")
+    if production and transport == "lan_http":
+        try:
+            address = ip_address(value)
+        except ValueError as error:
+            raise ValueError("lan_http 的 ERP_BIND_HOST 必须是显式 IP") from error
+        if value != "0.0.0.0" and not _is_private_lan_host(value):
+            raise ValueError("lan_http 的 ERP_BIND_HOST 只允许 0.0.0.0、私网或 loopback IP")
     return value
 
 
@@ -217,12 +280,14 @@ def _service_url(
     env_name: str,
     *,
     production: bool,
+    transport: str,
+    port: int,
     default: str,
 ) -> str:
     value = os.getenv(env_name, "").strip()
     if not value:
         if production:
-            raise ValueError(f"生产环境必须显式配置 {env_name} HTTPS URL")
+            raise ValueError(f"生产环境必须显式配置 {env_name} URL")
         return default
     parsed = urlsplit(value)
     if (
@@ -234,8 +299,21 @@ def _service_url(
         or parsed.fragment
     ):
         raise ValueError(f"{env_name} 必须是无凭据的 HTTP/HTTPS URL")
-    if production and parsed.scheme != "https":
-        raise ValueError(f"生产环境 {env_name} 必须使用 HTTPS")
+    if production and transport == "https_proxy" and parsed.scheme != "https":
+        raise ValueError(f"https_proxy 模式的 {env_name} 必须使用 HTTPS")
+    if production and transport == "lan_http":
+        if parsed.scheme != "http" or not _is_private_lan_host(parsed.hostname):
+            raise ValueError(f"lan_http 的 {env_name} 只允许私网 HTTP URL")
+        try:
+            service_port = parsed.port
+        except ValueError as error:
+            raise ValueError(f"{env_name} 端口无效") from error
+        if service_port != port:
+            raise ValueError(f"lan_http 的 {env_name} 必须显式使用 ERP_PORT")
+        expected_path = "/api/health" if env_name == "ERP_HEALTH_URL" else "/"
+        actual_path = parsed.path or "/"
+        if actual_path != expected_path:
+            raise ValueError(f"lan_http 的 {env_name} 路径必须为 {expected_path}")
     return value
 
 
@@ -245,6 +323,7 @@ def load_settings() -> Settings:
     secret_file = _resolved_path("ERP_SECRET_KEY_FILE", DEFAULT_SECRET_FILE)
     environment = _environment()
     is_production = environment == "production"
+    production_transport = _production_transport(production=is_production)
     configured_secret = os.getenv("ERP_SECRET_KEY", "").strip()
     secret_key = configured_secret or _load_or_create_secret(
         secret_file,
@@ -258,30 +337,69 @@ def load_settings() -> Settings:
         raise ValueError(
             "ERP_WORKERS must be 1 because login throttling uses process-local keyed locks"
         )
+    cookie_secure_requested = os.getenv(
+        "ERP_SESSION_COOKIE_SECURE",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if is_production and production_transport == "lan_http" and cookie_secure_requested:
+        raise ValueError(
+            "lan_http 模式必须关闭 ERP_SESSION_COOKIE_SECURE，否则 HTTP 登录会话不可用"
+        )
+    allowed_origins = (
+        _production_allowed_origins(
+            transport=production_transport,
+            port=port,
+        )
+        if is_production
+        else _allowed_origins()
+    )
+    health_url = _service_url(
+        "ERP_HEALTH_URL",
+        production=is_production,
+        transport=production_transport,
+        port=port,
+        default=f"http://127.0.0.1:{port}/api/health",
+    )
+    browser_url = _service_url(
+        "ERP_BROWSER_URL",
+        production=is_production,
+        transport=production_transport,
+        port=port,
+        default=f"http://127.0.0.1:{port}/",
+    )
+    if is_production and production_transport == "lan_http":
+        allowed_origin_values = {value.lower() for value in allowed_origins}
+        for env_name, value in (
+            ("ERP_HEALTH_URL", health_url),
+            ("ERP_BROWSER_URL", browser_url),
+        ):
+            parsed = urlsplit(value)
+            service_origin = f"{parsed.scheme}://{parsed.netloc}".lower()
+            if service_origin not in allowed_origin_values:
+                raise ValueError(
+                    f"lan_http 的 {env_name} 来源必须包含在 ERP_ALLOWED_ORIGINS"
+                )
     return Settings(
         database_path=database_path,
         backup_dir=backup_dir,
-        allowed_origins=(
-            _production_allowed_origins() if is_production else _allowed_origins()
-        ),
+        allowed_origins=allowed_origins,
         allowed_origin_regex=None if is_production else PRIVATE_LAN_ORIGIN_REGEX,
         trusted_hosts=_trusted_hosts(production=is_production),
-        trusted_proxy_ips=_trusted_proxy_ips(production=is_production),
+        trusted_proxy_ips=_trusted_proxy_ips(
+            production=is_production,
+            transport=production_transport,
+        ),
         secret_key=secret_key,
-        bind_host=_bind_host(production=is_production),
+        bind_host=_bind_host(
+            production=is_production,
+            transport=production_transport,
+        ),
         port=port,
         workers=workers,
-        health_url=_service_url(
-            "ERP_HEALTH_URL",
-            production=is_production,
-            default=f"http://127.0.0.1:{port}/api/health",
-        ),
-        browser_url=_service_url(
-            "ERP_BROWSER_URL",
-            production=is_production,
-            default=f"http://127.0.0.1:{port}/",
-        ),
+        health_url=health_url,
+        browser_url=browser_url,
         environment=environment,
+        production_transport=production_transport,
         sqlite_busy_timeout_ms=int(os.getenv("ERP_SQLITE_BUSY_TIMEOUT_MS", "5000")),
         session_cookie_name=os.getenv(
             "ERP_SESSION_COOKIE_NAME",
@@ -291,12 +409,8 @@ def load_settings() -> Settings:
         session_expire_minutes=int(
             os.getenv("ERP_SESSION_EXPIRE_MINUTES", "480")
         ),
-        session_cookie_secure=is_production
-        or os.getenv(
-            "ERP_SESSION_COOKIE_SECURE",
-            "false",
-        ).strip().lower()
-        in {"1", "true", "yes", "on"},
+        session_cookie_secure=(is_production and production_transport == "https_proxy")
+        or cookie_secure_requested,
     )
 
 

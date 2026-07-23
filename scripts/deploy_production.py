@@ -179,6 +179,7 @@ def build_production_env_values(
     origin = f"https://{parsed.netloc}"
     values = {
         "ERP_ENVIRONMENT": "production",
+        "ERP_PRODUCTION_TRANSPORT": "https_proxy",
         "ERP_DATABASE_PATH": str(normalize_path(database_path)),
         "ERP_BACKUP_DIR": str(normalize_path(backup_dir)),
         "ERP_ALLOWED_ORIGINS": origin,
@@ -224,7 +225,11 @@ def validate_production_env_values(values: dict[str, str]) -> None:
     try:
         os.environ.update(values)
         current = load_settings()
-        if not current.is_production or current.bind_host != "127.0.0.1":
+        if (
+            not current.is_production
+            or not current.uses_https_proxy
+            or current.bind_host != "127.0.0.1"
+        ):
             raise RuntimeError("生成的生产配置未通过 loopback 安全校验")
         if current.workers != 1:
             raise RuntimeError("生成的生产配置未通过单 worker 安全校验")

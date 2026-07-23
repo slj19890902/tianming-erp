@@ -23,6 +23,7 @@ from app.models.tianhua_pre_delivery import (
 )
 from app.models.user import User
 from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, ensure_draft_delivery, save_draft
+from app.services.secure_uploads import IMAGE_POLICY, UploadValidationError, read_validated_upload
 
 router=APIRouter()
 mobile_router=APIRouter()
@@ -63,11 +64,12 @@ def _batch_for_user(db:Session,batch_id:int,user:User) -> TianhuaPreDeliveryImpo
 
 @router.post("/tianhua-preimport/upload",status_code=status.HTTP_201_CREATED)
 async def upload(file:UploadFile=File(...),pre_delivery_date:date|None=Form(default=None),db:Session=Depends(get_db),user:User=Depends(can_operate)):
-    filename=(file.filename or "").strip()
-    if not any(filename.lower().endswith(s) for s in (".jpg",".jpeg",".png")): raise HTTPException(400,"仅支持 jpg、jpeg、png 图片")
-    content=await file.read(12*1024*1024+1)
-    if not content: raise HTTPException(400,"上传图片为空")
-    if len(content)>12*1024*1024: raise HTTPException(413,"图片不能超过 12MB")
+    try:
+        validated=await read_validated_upload(file,IMAGE_POLICY)
+    except UploadValidationError as error:
+        raise HTTPException(400,str(error)) from error
+    filename=validated.original_filename
+    content=validated.content
     try:
         batch=create_batch(db,content,filename,user.id,pre_delivery_date or beijing_today()+timedelta(days=1))
         try:

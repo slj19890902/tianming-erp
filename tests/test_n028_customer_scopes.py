@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()
-def n028_customer_scope_app(tmp_path: Path):
+def n028_customer_scope_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.customers import router as customers_router
     from app.api.deps import get_db
@@ -31,6 +31,8 @@ def n028_customer_scope_app(tmp_path: Path):
     from app.models.product_drawing import ProductDrawing
     from app.models.user import User
 
+    monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(tmp_path / "private_uploads"))
+    monkeypatch.setenv("ERP_UPLOAD_TEMP_DIR", str(tmp_path / "upload_tokens"))
     engine = create_sqlite_engine(tmp_path / "n028-customer-scopes.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -223,6 +225,10 @@ def _login(client: TestClient, username: str, password: str) -> None:
     assert response.status_code == 200
 
 
+def _pdf_stub(value: str) -> bytes:
+    return b"%PDF-1.4\n" + value.encode("ascii")
+
+
 def _product_payload(customer_id: int, *, code: str, name: str) -> dict:
     return {
         "customer_id": customer_id,
@@ -237,7 +243,11 @@ def _product_payload(customer_id: int, *, code: str, name: str) -> dict:
     }
 
 
-def _overwrite_order_payload(customer_id: int, product_id: int) -> dict:
+def _overwrite_order_payload(
+    customer_id: int,
+    product_id: int,
+    token: str = "a" * 32,
+) -> dict:
     return {
         "customer_id": customer_id,
         "items": [
@@ -245,7 +255,7 @@ def _overwrite_order_payload(customer_id: int, product_id: int) -> dict:
                 "product_id": product_id,
                 "quantity": 1,
                 "unit_price": "9.00",
-                "temp_drawing_file": "/static/uploads/drawings/replacement.png",
+                "temp_drawing_token": token,
                 "drawing_save_option": "overwrite_product",
             }
         ],
@@ -367,19 +377,19 @@ def test_pdf_preview_customer_scope_fails_closed_before_product_matching(
     )
     other_name_draft.pop("customer_route")
     drafts = {
-        b"own": _locked_pdf_draft(
+        _pdf_stub("own"): _locked_pdf_draft(
             "own.pdf",
             customer_id=ids["customer"],
             customer_name="N028 Customer",
             product_code="N028-BASE",
         ),
-        b"other": _locked_pdf_draft(
+        _pdf_stub("other"): _locked_pdf_draft(
             "other.pdf",
             customer_id=ids["other_customer"],
             customer_name="N028 Other Customer",
             product_code="N028-OTHER",
         ),
-        b"other-name": other_name_draft,
+        _pdf_stub("other-name"): other_name_draft,
     }
     monkeypatch.setattr(
         orders_api,
@@ -401,23 +411,23 @@ def test_pdf_preview_customer_scope_fails_closed_before_product_matching(
         _login(client, "n028-sales", "SalesPass123!")
         own = client.post(
             "/api/orders/pdf-preview",
-            files={"file": ("own.pdf", b"own", "application/pdf")},
+            files={"file": ("own.pdf", _pdf_stub("own"), "application/pdf")},
         )
         denied = client.post(
             "/api/orders/pdf-preview",
-            files={"file": ("other.pdf", b"other", "application/pdf")},
+            files={"file": ("other.pdf", _pdf_stub("other"), "application/pdf")},
         )
         denied_name_match = client.post(
             "/api/orders/pdf-preview",
             files={
-                "file": ("other-name.pdf", b"other-name", "application/pdf")
+                "file": ("other-name.pdf", _pdf_stub("other-name"), "application/pdf")
             },
         )
         client.post("/api/auth/logout")
         _login(client, "n028-empty-sales", "EmptySalesPass123!")
         empty_scope = client.post(
             "/api/orders/pdf-preview",
-            files={"file": ("own.pdf", b"own", "application/pdf")},
+            files={"file": ("own.pdf", _pdf_stub("own"), "application/pdf")},
         )
 
     assert own.status_code == 200, own.text
@@ -445,7 +455,7 @@ def test_pdf_preview_customer_scope_fails_closed_before_product_matching(
             _login(client, username, password)
             unrestricted = client.post(
                 "/api/orders/pdf-preview",
-                files={"file": ("other.pdf", b"other", "application/pdf")},
+                files={"file": ("other.pdf", _pdf_stub("other"), "application/pdf")},
             )
             assert unrestricted.status_code == 200, unrestricted.text
             assert unrestricted.json()["matched_customer_id"] == ids["other_customer"]
@@ -478,7 +488,10 @@ def test_pdf_preview_locked_route_without_template_id_resolves_only_in_scope(
         product_code="N028-OTHER",
     )
     other_draft["customer_route"]["template_customer_id"] = None
-    drafts = {b"own-legacy": own_draft, b"other-legacy": other_draft}
+    drafts = {
+        _pdf_stub("own-legacy"): own_draft,
+        _pdf_stub("other-legacy"): other_draft,
+    }
     monkeypatch.setattr(
         orders_api,
         "_parse_order_pdf_preview",
@@ -502,7 +515,7 @@ def test_pdf_preview_locked_route_without_template_id_resolves_only_in_scope(
             files={
                 "file": (
                     "own-legacy-route.pdf",
-                    b"own-legacy",
+                    _pdf_stub("own-legacy"),
                     "application/pdf",
                 )
             },
@@ -512,7 +525,7 @@ def test_pdf_preview_locked_route_without_template_id_resolves_only_in_scope(
             files={
                 "file": (
                     "other-legacy-route.pdf",
-                    b"other-legacy",
+                    _pdf_stub("other-legacy"),
                     "application/pdf",
                 )
             },
@@ -540,13 +553,13 @@ def test_pdf_batch_preview_applies_customer_scope_per_file_without_order_writes(
 
     app, ids, factory = n028_customer_scope_app
     drafts = {
-        b"own-batch": _locked_pdf_draft(
+        _pdf_stub("own-batch"): _locked_pdf_draft(
             "own-batch.pdf",
             customer_id=ids["customer"],
             customer_name="N028 Customer",
             product_code="N028-BASE",
         ),
-        b"other-batch": _locked_pdf_draft(
+        _pdf_stub("other-batch"): _locked_pdf_draft(
             "other-batch.pdf",
             customer_id=ids["other_customer"],
             customer_name="N028 Other Customer",
@@ -570,8 +583,8 @@ def test_pdf_batch_preview_applies_customer_scope_per_file_without_order_writes(
         before_orders = db.scalar(select(func.count()).select_from(Order))
 
     files = [
-        ("files", ("own-batch.pdf", b"own-batch", "application/pdf")),
-        ("files", ("other-batch.pdf", b"other-batch", "application/pdf")),
+        ("files", ("own-batch.pdf", _pdf_stub("own-batch"), "application/pdf")),
+        ("files", ("other-batch.pdf", _pdf_stub("other-batch"), "application/pdf")),
     ]
     with TestClient(app) as client:
         _login(client, "n028-sales", "SalesPass123!")
@@ -627,7 +640,7 @@ def test_pdf_rematch_reuses_customer_scope_gate_and_never_writes_order(
         _login(client, "n028-sales", "SalesPass123!")
         preview = client.post(
             "/api/orders/pdf-preview",
-            files={"file": ("manual.pdf", b"manual", "application/pdf")},
+            files={"file": ("manual.pdf", _pdf_stub("manual"), "application/pdf")},
         )
         assert preview.status_code == 200, preview.text
         draft = preview.json()
@@ -651,7 +664,7 @@ def test_pdf_rematch_reuses_customer_scope_gate_and_never_writes_order(
         _login(client, "n028-empty-sales", "EmptySalesPass123!")
         empty_preview = client.post(
             "/api/orders/pdf-preview",
-            files={"file": ("empty.pdf", b"empty", "application/pdf")},
+            files={"file": ("empty.pdf", _pdf_stub("empty"), "application/pdf")},
         ).json()
         empty_denied = client.post(
             "/api/orders/draft-rematch",
@@ -1840,15 +1853,33 @@ def test_sales_cannot_overwrite_product_drawings_but_admin_can(
         client.post("/api/auth/logout")
 
         _login(client, "n028-admin", "AdminPass123!")
+        uploaded = client.post(
+            "/api/orders/draft-drawing",
+            files={
+                "file": (
+                    "replacement.png",
+                    b"\x89PNG\r\n\x1a\nstub",
+                    "image/png",
+                )
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
         allowed = client.post(
-            "/api/orders", json=_overwrite_order_payload(ids["customer"], ids["product"])
+            "/api/orders",
+            json=_overwrite_order_payload(
+                ids["customer"], ids["product"], uploaded.json()["token"]
+            ),
         )
         assert allowed.status_code == 201
 
     with factory() as db:
+        from app.services.secure_uploads import resolve_stored_reference, stored_file_metadata
+
         drawings = db.scalars(
             select(ProductDrawing).where(ProductDrawing.product_id == ids["product"])
         ).all()
         assert len(drawings) == 1
-        assert drawings[0].image_path.endswith("replacement.png")
+        assert drawings[0].image_path.startswith("private:drawings/")
+        metadata = stored_file_metadata(resolve_stored_reference(drawings[0].image_path))
+        assert metadata["original_filename"] == "replacement.png"
         assert db.scalar(select(func.count()).select_from(ProductDrawing)) == 1

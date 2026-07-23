@@ -24,8 +24,8 @@ def drawing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.models.product import Product
     from app.models.user import User
 
-    upload_dir = tmp_path / "drawings"
-    monkeypatch.setenv("ERP_DRAWING_DIR", str(upload_dir))
+    upload_dir = tmp_path / "private_uploads"
+    monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(upload_dir))
     engine = create_sqlite_engine(tmp_path / "phase14_drawings.sqlite3")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -116,8 +116,9 @@ def test_each_upload_creates_a_new_drawing_version_latest_first(
     assert len(drawings) == 2
     assert drawings[0]["id"] == second.json()["id"]
     assert drawings[1]["id"] == first.json()["id"]
-    assert drawings[0]["image_path"].startswith("/static/uploads/drawings/")
-    assert drawings[0]["thumbnail_path"].startswith("/static/uploads/drawings/")
+    assert drawings[0]["image_path"].startswith("/api/master/products/drawings/")
+    assert drawings[0]["thumbnail_path"].startswith("/api/master/products/drawings/")
+    assert "/static/uploads/" not in str(drawings)
     assert "base64" not in str(drawings).lower()
 
 
@@ -140,10 +141,11 @@ def test_delete_drawing_removes_only_selected_version_and_files(
     assert response.status_code == 204, response.text
     assert [item["id"] for item in detail.json()["drawings"]] == [second["id"]]
     upload_dir = drawing_app.state.upload_dir
-    assert not (upload_dir / Path(first["image_path"]).name).exists()
-    assert not (upload_dir / Path(first["thumbnail_path"]).name).exists()
-    assert (upload_dir / Path(second["image_path"]).name).exists()
-    assert (upload_dir / Path(second["thumbnail_path"]).name).exists()
+    binary_files = [
+        path for path in upload_dir.rglob("*")
+        if path.is_file() and not path.name.endswith(".metadata.json")
+    ]
+    assert len(binary_files) == 2
 
 
 def test_drawing_mutation_permissions_are_restricted(
@@ -186,15 +188,15 @@ def test_pdf_drawing_upload_is_saved_as_viewable_version(
             files={"file": ("customer-drawing.pdf", pdf_content, "application/pdf")},
         )
         detail = client.get("/api/master/products/1")
+        downloaded = client.get(uploaded.json()["image_path"])
 
     assert uploaded.status_code == 201, uploaded.text
     drawing = uploaded.json()
     assert drawing["image_path"].endswith(".pdf")
-    assert drawing["thumbnail_path"] == drawing["image_path"]
+    assert drawing["thumbnail_path"].endswith(".pdf")
     assert detail.json()["drawings"][0]["image_path"].endswith(".pdf")
-    assert (
-        drawing_app.state.upload_dir / Path(drawing["image_path"]).name
-    ).read_bytes() == pdf_content
+    assert downloaded.status_code == 200
+    assert downloaded.content == pdf_content
 
 
 def test_invalid_pdf_drawing_is_rejected(drawing_app: FastAPI) -> None:
@@ -206,7 +208,7 @@ def test_invalid_pdf_drawing_is_rejected(drawing_app: FastAPI) -> None:
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "PDF 图纸文件无法识别"
+    assert response.json()["detail"] == "图纸文件签名无法识别"
 
 
 def test_common_box_process_and_print_type_round_trip_without_drawing(
@@ -226,10 +228,15 @@ def test_common_box_process_and_print_type_round_trip_without_drawing(
         "production_process": "粘贴,打钉",
         "sale_unit_price": "4.1600",
         "remark": "常用箱编辑回显测试",
+        "expected_version": 1,
+        "change_reason": "P0-B 图纸安全回归",
     }
     with TestClient(drawing_app) as client:
         _login(client, "admin")
         updated = client.put("/api/master/products/1", json=payload)
+        if updated.status_code == 409:
+            payload["confirmation_token"] = updated.json()["detail"]["confirmation_token"]
+            updated = client.put("/api/master/products/1", json=payload)
         detail = client.get("/api/master/products/1")
 
     assert updated.status_code == 200, updated.text

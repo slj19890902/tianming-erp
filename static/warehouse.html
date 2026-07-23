@@ -10,6 +10,8 @@
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Arial,"Microsoft YaHei",sans-serif}
     header{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:5}
     h1{font-size:20px;margin:0}.wrap{max-width:1500px;margin:18px auto;padding:0 18px}.tabs,.toolbar,.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    body.embedded>header{display:none}
+    body.embedded .wrap{max-width:none;margin:0 auto;padding:8px 10px 14px}
     .tabs{margin-bottom:12px}.btn{border:1px solid #bdc9db;background:#fff;color:#26354d;border-radius:7px;padding:7px 12px;cursor:pointer;text-decoration:none}
     .btn:hover{border-color:var(--blue)}.btn.primary,.tabs .active{background:var(--blue);border-color:var(--blue);color:#fff}.btn.danger{color:var(--red)}
     .panel{background:#fff;border:1px solid var(--line);border-radius:10px;margin-bottom:14px;padding:14px}.panel h2{font-size:16px;margin:0 0 12px}
@@ -342,6 +344,9 @@
   </main>
   <div id="message" class="message hidden"></div>
   <script>
+    const warehouseEmbeddedMode = new URLSearchParams(window.location.search).get("embedded") === "1";
+    document.body.classList.toggle("embedded", warehouseEmbeddedMode);
+
     // BEGIN IDEMPOTENCY_KEY_HELPER
     var idempotencyKeyFallbackCounter = 0;
     function createIdempotencyKey() {
@@ -422,7 +427,12 @@
         state.user=authResponse.user;
         state.permissions=authResponse.permissions||[];
       }catch(error){
-        if(error.status===401){location.href="/?next=%2Fwarehouse.html";return}
+        if(error.status===401){
+          const loginTarget=warehouseEmbeddedMode?"/?page=warehouse":"/?redirect=%2Fwarehouse.html";
+          if(warehouseEmbeddedMode&&window.top!==window.self)window.top.location.replace(loginTarget);
+          else window.location.replace(loginTarget);
+          return
+        }
         showPageError(`登录状态检查失败：${error.message}`);
         return;
       }

@@ -247,6 +247,24 @@ def test_lan_http_production_keeps_host_origin_and_security_header_gates(
     assert untrusted_host.status_code == 400
 
 
+def test_production_only_allows_same_origin_embedded_warehouse_frame(
+    monkeypatch,
+    tmp_path,
+):
+    app = _production_app(monkeypatch, tmp_path)
+    with TestClient(app, base_url="https://testserver") as client:
+        embedded = client.get("/warehouse.html?embedded=1")
+        standalone = client.get("/warehouse.html")
+        dashboard = client.get("/")
+
+    assert embedded.status_code == 200
+    assert embedded.headers["x-frame-options"] == "SAMEORIGIN"
+    assert embedded.headers["content-security-policy"] == "frame-ancestors 'self'"
+    assert standalone.headers["x-frame-options"] == "DENY"
+    assert "content-security-policy" not in standalone.headers
+    assert dashboard.headers["x-frame-options"] == "DENY"
+
+
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     (

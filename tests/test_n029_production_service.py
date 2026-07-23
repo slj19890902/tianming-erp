@@ -21,6 +21,7 @@ from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import (
@@ -34,6 +35,8 @@ from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
+    InventoryPallet,
+    InventoryPalletItem,
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
@@ -47,6 +50,7 @@ from app.services.production_workflow import (
     completion_batch_request_hash,
     create_or_refresh_production_task,
     production_ready_quantity,
+    refresh_production_task,
 )
 from app.services.semi_finished_inventory import (
     SemiFinishedLotVersion,
@@ -61,7 +65,7 @@ from app.services.warehouse_inventory import (
 )
 
 
-PASSWORD = "N029-Test-Only-Password!"
+PASSWORD = "123456"
 
 
 def _now() -> datetime:
@@ -451,6 +455,43 @@ def production_app(tmp_path: Path):
             source_version="V11",
             sort_order=3,
         )
+        fixed3 = WarehouseLocation(
+            location_code="E1-R01",
+            location_name="E1-R01",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=3,
+            area_code="E1",
+            storage_type="rack",
+            is_temporary=False,
+            source_version="V11",
+            sort_order=4,
+        )
+        occupied3 = WarehouseLocation(
+            location_code="E1-R02",
+            location_name="E1-R02",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=3,
+            area_code="E1",
+            storage_type="rack",
+            is_temporary=False,
+            source_version="V11",
+            sort_order=5,
+        )
+        unplaced3 = WarehouseLocation(
+            location_code="SF-TEMP-N029",
+            location_name="未放置测试位",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=3,
+            area_code="SF",
+            storage_type="temporary_aisle",
+            placement_status="unplaced",
+            is_temporary=True,
+            source_version="V11",
+            sort_order=6,
+        )
         regular = WarehouseLocation(
             location_code="FG-REGULAR",
             location_name="普通成品位",
@@ -464,9 +505,44 @@ def production_app(tmp_path: Path):
             is_active=True,
         )
         db.add_all(
-            [product_a, product_b, product_a3, temp1, temp2, temp3, regular, semi_location]
+            [
+                product_a,
+                product_b,
+                product_a3,
+                temp1,
+                temp2,
+                temp3,
+                fixed3,
+                occupied3,
+                unplaced3,
+                regular,
+                semi_location,
+            ]
         )
         db.flush()
+        occupied_pallet = InventoryPallet(
+            pallet_code="PLT-N029-OCCUPIED",
+            location_id=occupied3.id,
+            status="active",
+            is_current=True,
+            version=1,
+        )
+        db.add(occupied_pallet)
+        db.flush()
+        db.add(
+            InventoryPalletItem(
+                pallet_id=occupied_pallet.id,
+                customer_id=customer_a.id,
+                product_id=product_a.id,
+                inventory_code=product_a.product_code,
+                customer_name_snapshot=customer_a.name,
+                product_name=product_a.product_name,
+                item_type="finished",
+                quantity=Decimal("1"),
+                unit="boxes",
+                match_status="matched",
+            )
+        )
 
         cases: dict[str, tuple[Order, OrderItem, ProductionTask]] = {}
         for key, customer, product, quantity, basis in (
@@ -594,6 +670,9 @@ def production_app(tmp_path: Path):
             "temp1": temp1.id,
             "temp2": temp2.id,
             "temp3": temp3.id,
+            "fixed3": fixed3.id,
+            "occupied3": occupied3.id,
+            "unplaced3": unplaced3.id,
         }
 
     app = FastAPI()
@@ -1174,6 +1253,14 @@ def test_permissions_customer_scope_locations_and_snapshot_fields(production_app
             disposition="stock",
             location_id=ids["regular"],
         )
+        unplaced_location = _complete(
+            client,
+            ids,
+            "atomic-b",
+            idempotency_key="unplaced-location",
+            disposition="stock",
+            location_id=ids["unplaced3"],
+        )
         locations = client.get("/api/production/temporary-locations")
     assert visible.status_code == 200
     rows = visible.json()["items"]
@@ -1187,12 +1274,62 @@ def test_permissions_customer_scope_locations_and_snapshot_fields(production_app
     assert direct_row["production_notes"] == "先压线后模切"
     assert denied.status_code == no_warehouse.status_code == cross.status_code == 403
     assert invalid_location.status_code == 409
+    assert unplaced_location.status_code == 409
+    assert "尚未完成空间放置" in unplaced_location.json()["detail"]
     assert locations.status_code == 200
     assert {row["location_code"] for row in locations.json()["items"]} == {
         "F12-P01",
         "F12-P02",
         "F34-P01",
+        "E1-R01",
+        "E1-R02",
     }
+    fixed = next(
+        row for row in locations.json()["items"] if row["location_code"] == "E1-R01"
+    )
+    occupied = next(
+        row for row in locations.json()["items"] if row["location_code"] == "E1-R02"
+    )
+    assert fixed["area_code"] == occupied["area_code"] == "E1"
+    assert (fixed["location_kind"], fixed["is_empty"]) == ("fixed", True)
+    assert (occupied["location_kind"], occupied["is_empty"]) == ("fixed", False)
+
+
+def test_fixed_floor_three_location_accepts_stock_and_occupied_location_rejects(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        accepted = _complete(
+            client,
+            ids,
+            "idem",
+            idempotency_key="fixed-floor-three-stock",
+            disposition="stock",
+            location_id=ids["fixed3"],
+        )
+        assert accepted.status_code == 200, accepted.text
+        completion = accepted.json()["items"][0]
+        assert completion["warehouse_location_code"] == "E1-R01"
+
+    with factory() as db:
+        stored = db.get(ProductionCompletion, completion["id"])
+        lot = db.get(InventoryLot, stored.inventory_lot_id)
+        assert lot.warehouse_location_id == ids["fixed3"]
+
+    with TestClient(app) as client:
+        _login(client)
+        rejected = _complete(
+            client,
+            ids,
+            "atomic-a",
+            idempotency_key="occupied-floor-three-stock",
+            disposition="stock",
+            location_id=ids["occupied3"],
+        )
+        assert rejected.status_code == 409
+        assert "占用" in rejected.json()["detail"]
 
 
 def test_direct_transfer_preserves_completion_and_production_reservation_cannot_release(
@@ -1454,3 +1591,352 @@ def test_cannot_add_semi_reservation_after_completion(production_app) -> None:
             )
         assert error.value.status_code == 409
         assert lot.quantity_available == 3
+
+
+def _add_all_to_production_receipt(
+    db: Session,
+    *,
+    order: Order,
+    item: OrderItem,
+    received_quantity: int,
+    key: str,
+) -> IncomingReceiptItem:
+    receipt = IncomingReceipt(
+        receipt_number=f"IR-{key}",
+        status="posted",
+        received_at=_now(),
+        idempotency_key=f"ir-{key}",
+    )
+    db.add(receipt)
+    db.flush()
+    row = IncomingReceiptItem(
+        receipt_id=receipt.id,
+        order_id=order.id,
+        order_item_id=item.id,
+        planned_quantity=int(item.quantity),
+        received_quantity=received_quantity,
+        cumulative_received_quantity=received_quantity,
+        variance_quantity=received_quantity - int(item.quantity),
+        variance_type=(
+            "matched"
+            if received_quantity == int(item.quantity)
+            else "over"
+            if received_quantity > int(item.quantity)
+            else "short"
+        ),
+        resolution_status="resolved",
+        resolution_action=(
+            "all_to_production"
+            if received_quantity > int(item.quantity)
+            else "accept_short"
+            if received_quantity < int(item.quantity)
+            else None
+        ),
+        status="posted",
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_overreceipt_203_produces_203_and_keeps_three_customer_surplus(
+    production_app,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a"])
+        order, item, task = _add_case(
+            db,
+            key="over-203",
+            customer=customer,
+            product=product,
+            quantity=200,
+            material_status="received",
+        )
+        item.special_process = "一开一"
+        item.requisition_status = "已入库"
+        _add_all_to_production_receipt(
+            db,
+            order=order,
+            item=item,
+            received_quantity=203,
+            key="over-203",
+        )
+        refreshed = refresh_production_task(db, item.id)
+        assert refreshed is not None
+        assert refreshed.material_received_quantity == 203
+        assert refreshed.material_input_quantity == 203
+        assert refreshed.planned_quantity == 203
+        completion_version = refreshed.version
+
+        result = complete_production_batch(
+            db,
+            idempotency_key="complete-over-203",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                    expected_version=completion_version,
+                    disposition="stock",
+                    material_input_quantity=203,
+                    actual_output_quantity=203,
+                    defective_quantity=0,
+                    location_id=ids["temp3"],
+                )
+            ],
+            operator_id=None,
+        )
+        completion = result.completions[0]
+        assert completion.actual_output_quantity == 203
+        assert completion.order_reserved_quantity == 200
+        assert completion.stock_quantity == 203
+        assert completion.surplus_finished_quantity == 3
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None
+        assert lot.quantity_reserved == 200
+        assert lot.quantity_available == 3
+        assert lot.finished_detail.owner_customer_id == customer.id
+        assert production_ready_quantity(db, item) == 203
+        db.commit()
+
+        replay = complete_production_batch(
+            db,
+            idempotency_key="complete-over-203",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                        expected_version=completion_version,
+                    disposition="stock",
+                    material_input_quantity=203,
+                    actual_output_quantity=203,
+                    defective_quantity=0,
+                    location_id=ids["temp3"],
+                )
+            ],
+            operator_id=None,
+        )
+        assert replay.replayed is True
+        assert (
+            db.scalar(
+                select(func.count(ProductionCompletion.id)).where(
+                    ProductionCompletion.task_id == task.id
+                )
+            )
+            == 1
+        )
+
+
+def test_direct_order_coverage_requires_surplus_location_and_preserves_three(
+    production_app,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a"])
+        order, item, task = _add_case(
+            db,
+            key="direct-over-203",
+            customer=customer,
+            product=product,
+            quantity=200,
+            material_status="received",
+        )
+        item.special_process = "一开一"
+        _add_all_to_production_receipt(
+            db,
+            order=order,
+            item=item,
+            received_quantity=203,
+            key="direct-over-203",
+        )
+        refreshed = refresh_production_task(db, item.id)
+        assert refreshed is not None
+        db.commit()
+        command = CompletionCommand(
+            task_id=task.id,
+            expected_version=refreshed.version,
+            disposition="direct",
+            material_input_quantity=203,
+            actual_output_quantity=203,
+            defective_quantity=0,
+            direct_delivery_quantity=200,
+        )
+        with pytest.raises(
+            ProductionWorkflowError,
+            match="成品库位",
+        ):
+            complete_production_batch(
+                db,
+                idempotency_key="direct-over-203-no-location",
+                commands=[command],
+                operator_id=None,
+            )
+        db.rollback()
+
+        result = complete_production_batch(
+            db,
+            idempotency_key="direct-over-203-with-location",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                    expected_version=refreshed.version,
+                    disposition="direct",
+                    material_input_quantity=203,
+                    actual_output_quantity=203,
+                    defective_quantity=0,
+                    direct_delivery_quantity=200,
+                    location_id=ids["fixed3"],
+                )
+            ],
+            operator_id=None,
+        )
+        completion = result.completions[0]
+        assert completion.initial_disposition == "split"
+        assert completion.direct_delivery_quantity == 200
+        assert completion.stock_quantity == 3
+        assert completion.surplus_finished_quantity == 3
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot.quantity_available == 3
+        assert lot.quantity_reserved == 0
+        assert lot.finished_detail.owner_customer_id == customer.id
+
+
+def test_one_cut_two_uses_output_factor_and_records_loss(production_app) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a"])
+        order, item, task = _add_case(
+            db,
+            key="cut-two-203",
+            customer=customer,
+            product=product,
+            quantity=200,
+            material_status="received",
+        )
+        item.special_process = "一开二"
+        _add_all_to_production_receipt(
+            db,
+            order=order,
+            item=item,
+            received_quantity=203,
+            key="cut-two-203",
+        )
+        refreshed = refresh_production_task(db, item.id)
+        assert refreshed is not None
+        assert refreshed.output_factor == 2
+        assert refreshed.planned_quantity == 406
+        result = complete_production_batch(
+            db,
+            idempotency_key="complete-cut-two-203",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                    expected_version=refreshed.version,
+                    disposition="stock",
+                    material_input_quantity=203,
+                    actual_output_quantity=400,
+                    defective_quantity=6,
+                    location_id=ids["temp3"],
+                )
+            ],
+            operator_id=None,
+        )
+        completion = result.completions[0]
+        assert completion.planned_output_quantity == 406
+        assert completion.actual_output_quantity == 400
+        assert completion.defective_quantity == 6
+
+
+def test_posted_200_can_add_audited_supplemental_three_without_duplication(
+    production_app,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a"])
+        order, item, task = _add_case(
+            db,
+            key="supplement-3",
+            customer=customer,
+            product=product,
+            quantity=200,
+            material_status="received",
+        )
+        item.special_process = "一开一"
+        _add_all_to_production_receipt(
+            db,
+            order=order,
+            item=item,
+            received_quantity=203,
+            key="supplement-3",
+        )
+        task.status = "completed"
+        task.planned_quantity = 200
+        task.material_received_quantity = 200
+        task.material_input_quantity = 200
+        task.output_factor = 1
+        task.version = 2
+        order.status = "pending_delivery"
+        batch = ProductionCompletionBatch(
+            idempotency_key="legacy-complete-200",
+            request_hash="b" * 64,
+            item_count=1,
+            completed_at=_now(),
+        )
+        db.add(batch)
+        db.flush()
+        original = ProductionCompletion(
+            batch_id=batch.id,
+            task_id=task.id,
+            order_item_id=item.id,
+            expected_version=1,
+            quantity=200,
+            completion_type="primary",
+            material_input_quantity=200,
+            planned_output_quantity=200,
+            actual_output_quantity=200,
+            defective_quantity=0,
+            order_reserved_quantity=200,
+            direct_delivery_quantity=200,
+            stock_quantity=0,
+            surplus_finished_quantity=0,
+            initial_disposition="direct",
+            completed_at=_now(),
+        )
+        db.add(original)
+        db.flush()
+
+        result = complete_production_batch(
+            db,
+            idempotency_key="supplement-complete-3",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                    expected_version=2,
+                    disposition="stock",
+                    completion_type="supplemental",
+                    material_input_quantity=3,
+                    actual_output_quantity=3,
+                    defective_quantity=0,
+                    location_id=ids["temp3"],
+                    remarks="实收203，原确认200，受控补录余量3",
+                )
+            ],
+            operator_id=None,
+        )
+        supplemental = result.completions[0]
+        assert supplemental.completion_type == "supplemental"
+        assert supplemental.actual_output_quantity == 3
+        assert supplemental.order_reserved_quantity == 0
+        assert supplemental.surplus_finished_quantity == 3
+        assert production_ready_quantity(db, item) == 203
+        assert (
+            db.scalar(
+                select(func.sum(ProductionCompletion.actual_output_quantity)).where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            == 203
+        )

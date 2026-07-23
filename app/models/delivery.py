@@ -115,6 +115,19 @@ class DeliveryItem(Base):
         nullable=False,
     )
     delivered_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    ordered_quantity_snapshot: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    order_remaining_snapshot: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    over_delivery_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    over_delivery_confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    over_delivery_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

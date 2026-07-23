@@ -52,6 +52,11 @@ class CompletionBatchItem(BaseModel):
     task_id: int = Field(gt=0)
     expected_version: int = Field(gt=0)
     disposition: Literal["direct", "stock"]
+    completion_type: Literal["primary", "supplemental"] = "primary"
+    material_input_quantity: int | None = Field(default=None, gt=0)
+    actual_output_quantity: int | None = Field(default=None, gt=0)
+    defective_quantity: int | None = Field(default=None, ge=0)
+    direct_delivery_quantity: int | None = Field(default=None, ge=0)
     location_id: int | None = Field(default=None, gt=0)
     pallet_id: int | None = Field(default=None, gt=0)
     pallet_code: str | None = Field(default=None, max_length=100)
@@ -66,12 +71,11 @@ class CompletionBatchItem(BaseModel):
     @model_validator(mode="after")
     def validate_disposition_target(self):
         if self.disposition == "stock" and self.location_id is None:
-            raise ValueError("库存完工必须选择三楼临放位")
-        if self.disposition == "direct" and any(
-            value is not None
-            for value in (self.location_id, self.pallet_id, self.pallet_code)
+            raise ValueError("库存完工必须选择三楼成品库位")
+        if self.disposition == "direct" and self.location_id is None and any(
+            value is not None for value in (self.pallet_id, self.pallet_code)
         ):
-            raise ValueError("直接送货完工不能填写库存货位或栈板")
+            raise ValueError("未选择库存库位时不能填写栈板")
         return self
 
 
@@ -208,6 +212,13 @@ def post_completion_batch(
             user, "warehouse.execute"
         ):
             raise HTTPException(status_code=403, detail="库存完工需要仓库执行权限")
+        if any(item.location_id is not None for item in payload.items) and not has_permission(
+            user, "warehouse.execute"
+        ):
+            raise HTTPException(status_code=403, detail="余货入库需要仓库执行权限")
+        if any(item.completion_type == "supplemental" for item in payload.items):
+            if user.role != "admin":
+                raise HTTPException(status_code=403, detail="补充生产确认仅限管理员")
         result = complete_production_batch(
             db,
             idempotency_key=payload.idempotency_key,
@@ -216,6 +227,11 @@ def post_completion_batch(
                     task_id=item.task_id,
                     expected_version=item.expected_version,
                     disposition=item.disposition,
+                    completion_type=item.completion_type,
+                    material_input_quantity=item.material_input_quantity,
+                    actual_output_quantity=item.actual_output_quantity,
+                    defective_quantity=item.defective_quantity,
+                    direct_delivery_quantity=item.direct_delivery_quantity,
                     location_id=item.location_id,
                     pallet_id=item.pallet_id,
                     pallet_code=item.pallet_code,
@@ -228,6 +244,43 @@ def post_completion_batch(
         # Replays are still scoped by the actual persisted completion facts.
         for customer_id in batch_customer_ids(db, result.completions):
             require_customer_access(customer_id, current_user=user, db=db)
+        if not result.replayed:
+            for completion in result.completions:
+                db.add(
+                    OperationLog(
+                        user_id=user.id,
+                        action=(
+                            "SUPPLEMENT_PRODUCTION_COMPLETION"
+                            if completion.completion_type == "supplemental"
+                            else "COMPLETE_PRODUCTION"
+                        ),
+                        resource="ProductionCompletion",
+                        details=json.dumps(
+                            {
+                                "batch_id": result.batch.id,
+                                "task_id": completion.task_id,
+                                "completion_type": completion.completion_type,
+                                "material_input_quantity": completion.material_input_quantity,
+                                "planned_output_quantity": completion.planned_output_quantity,
+                                "actual_output_quantity": completion.actual_output_quantity,
+                                "defective_quantity": completion.defective_quantity,
+                                "order_reserved_quantity": completion.order_reserved_quantity,
+                                "stock_quantity": completion.stock_quantity,
+                                "surplus_finished_quantity": completion.surplus_finished_quantity,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        username=user.username,
+                        role=user.role,
+                        entity_type="production_completion",
+                        entity_id=completion.id,
+                        description=(
+                            "管理员补充生产确认"
+                            if completion.completion_type == "supplemental"
+                            else "确认生产完工"
+                        ),
+                    )
+                )
         completion_ids = [row.id for row in result.completions]
         db.commit()
         items = list_production_completions(

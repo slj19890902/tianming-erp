@@ -6,13 +6,14 @@ import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import (
@@ -54,6 +55,7 @@ from app.services.warehouse_inventory import _balances, _movement
 
 
 Disposition = Literal["direct", "stock"]
+CompletionType = Literal["primary", "supplemental"]
 
 WAITING_MATERIAL = "waiting_material"
 PENDING = "pending"
@@ -83,6 +85,11 @@ class CompletionCommand:
     task_id: int
     expected_version: int
     disposition: Disposition
+    completion_type: CompletionType = "primary"
+    material_input_quantity: int | None = None
+    actual_output_quantity: int | None = None
+    defective_quantity: int | None = None
+    direct_delivery_quantity: int | None = None
     location_id: int | None = None
     pallet_id: int | None = None
     pallet_code: str | None = None
@@ -140,6 +147,49 @@ def _canonical_hash(payload: dict) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+CUTTING_OUTPUT_FACTORS = {
+    "一开一": 1,
+    "一开二": 2,
+    "一开三": 3,
+    "一开四": 4,
+    "一开五": 5,
+}
+
+
+def cutting_output_factor(value: str | None) -> int:
+    """Return the immutable order-line sheet-to-product output factor."""
+    return CUTTING_OUTPUT_FACTORS.get((value or "").strip(), 1)
+
+
+def _material_quantity_facts(db: Session, item: OrderItem) -> tuple[int, int]:
+    """Return (received, allowed production input) from posted receipt facts.
+
+    Over-receipt contributes beyond the purchase plan only when the latest
+    resolved decision explicitly says all_to_production.  Surplus transferred
+    to semi-finished inventory is deliberately excluded.
+    """
+    rows = db.scalars(
+        select(IncomingReceiptItem)
+        .where(
+            IncomingReceiptItem.order_item_id == item.id,
+            IncomingReceiptItem.status == "posted",
+        )
+        .order_by(IncomingReceiptItem.id)
+    ).all()
+    if not rows:
+        return 0, 0
+    received = sum(int(row.received_quantity or 0) for row in rows)
+    latest = rows[-1]
+    planned = max(int(latest.planned_quantity or item.quantity or 0), 0)
+    if latest.resolution_action == "all_to_production":
+        material_input = received
+    elif latest.resolution_action == "transfer_to_semi_inventory":
+        material_input = min(received, planned)
+    else:
+        material_input = received if received <= planned else planned
+    return received, max(material_input, 0)
 
 
 def completion_batch_request_hash(
@@ -308,6 +358,10 @@ def _refresh_composite_production_tasks(
                 status=WAITING_MATERIAL,
                 planned_quantity=0,
                 finished_coverage_snapshot=0,
+                ordered_quantity_snapshot=int(item.quantity or 0),
+                material_received_quantity=0,
+                material_input_quantity=0,
+                output_factor=1,
                 readiness_basis=None,
                 ready_at=None,
                 version=1,
@@ -388,6 +442,10 @@ def refresh_production_task(
             status=WAITING_MATERIAL,
             planned_quantity=0,
             finished_coverage_snapshot=0,
+            ordered_quantity_snapshot=int(item.quantity or 0),
+            material_received_quantity=0,
+            material_input_quantity=0,
+            output_factor=cutting_output_factor(item.special_process),
             readiness_basis=None,
             ready_at=None,
             version=1,
@@ -404,6 +462,8 @@ def refresh_production_task(
     finished_coverage = min(
         max(active_finished_reserved_qty(db, item.id), 0), order_quantity
     )
+    received_quantity, material_input_quantity = _material_quantity_facts(db, item)
+    output_factor = cutting_output_factor(item.special_process)
     now = utc_now_naive()
     if finished_coverage >= order_quantity:
         next_status = NOT_REQUIRED
@@ -411,8 +471,20 @@ def refresh_production_task(
         readiness_basis = "finished_inventory"
     elif item.material_status == "received":
         next_status = PENDING
-        planned_quantity = order_quantity - finished_coverage
-        readiness_basis = "material_received"
+        if material_input_quantity > 0:
+            planned_quantity = max(
+                material_input_quantity * output_factor - finished_coverage,
+                0,
+            )
+            readiness_basis = "incoming_receipt"
+        else:
+            planned_quantity = order_quantity - finished_coverage
+            material_input_quantity = max(
+                ceil(planned_quantity / output_factor),
+                0,
+            )
+            received_quantity = material_input_quantity
+            readiness_basis = "material_received"
     elif _semi_inventory_covers(db, item.id):
         next_status = PENDING
         planned_quantity = order_quantity - finished_coverage
@@ -427,6 +499,10 @@ def refresh_production_task(
         or int(task.planned_quantity or 0) != planned_quantity
         or int(task.finished_coverage_snapshot or 0) != finished_coverage
         or task.readiness_basis != readiness_basis
+        or int(task.ordered_quantity_snapshot or 0) != order_quantity
+        or int(task.material_received_quantity or 0) != received_quantity
+        or int(task.material_input_quantity or 0) != material_input_quantity
+        or int(task.output_factor or 1) != output_factor
     )
     if not state_changed:
         return task
@@ -436,6 +512,10 @@ def refresh_production_task(
     task.status = next_status
     task.planned_quantity = planned_quantity
     task.finished_coverage_snapshot = finished_coverage
+    task.ordered_quantity_snapshot = order_quantity
+    task.material_received_quantity = received_quantity
+    task.material_input_quantity = material_input_quantity
+    task.output_factor = output_factor
     task.readiness_basis = readiness_basis
     task.ready_at = task.ready_at if was_ready and is_ready else (now if is_ready else None)
     task.version = int(task.version or 0) + 1
@@ -535,24 +615,31 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
             return int(kit_availability(db, item.id)["available_sets"])
         except CompositeBomWorkflowError as error:
             raise ProductionWorkflowError(str(error), 409) from error
-    finished_coverage = max(active_finished_reserved_qty(db, item.id), 0)
-    direct_quantity = int(
+    completion_quantity = int(
         db.scalar(
-            select(func.coalesce(func.sum(ProductionCompletion.quantity), 0))
-            .outerjoin(
-                ProductionStockTransfer,
-                ProductionStockTransfer.completion_id == ProductionCompletion.id,
+            select(
+                func.coalesce(
+                    func.sum(ProductionCompletion.actual_output_quantity),
+                    0,
+                )
             )
             .where(
                 ProductionCompletion.order_item_id == item.id,
-                ProductionCompletion.initial_disposition == "direct",
                 ProductionCompletion.status == "posted",
-                ProductionStockTransfer.id.is_(None),
             )
         )
         or 0
     )
-    return min(int(item.quantity or 0), finished_coverage + direct_quantity)
+    if completion_quantity > 0:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == item.id,
+                ProductionTask.sales_order_item_bom_component_id.is_(None),
+            )
+        )
+        prior_inventory = int(task.finished_coverage_snapshot or 0) if task else 0
+        return max(prior_inventory + completion_quantity, 0)
+    return max(active_finished_reserved_qty(db, item.id), 0)
 
 
 def _current_pallet(db: Session, location_id: int) -> InventoryPallet | None:
@@ -564,26 +651,30 @@ def _current_pallet(db: Session, location_id: int) -> InventoryPallet | None:
     )
 
 
-def _temporary_location(
+def _production_stock_location(
     db: Session,
     location_id: int | None,
     *,
     pallet_id: int | None,
 ) -> WarehouseLocation:
     if location_id is None:
-        raise ProductionWorkflowError("库存完工必须选择三楼临放位", 400)
+        raise ProductionWorkflowError("库存完工必须选择三楼成品库位", 400)
     location = db.get(WarehouseLocation, location_id)
     if location is None:
-        raise ProductionWorkflowError("三楼临放位不存在", 404)
+        raise ProductionWorkflowError("三楼成品库位不存在", 404)
     if (
-        location.location_code not in TEMPORARY_LOCATION_CODES
-        or location.source_version != "V11"
+        location.source_version != "V11"
         or location.warehouse_floor != 3
-        or not location.is_temporary
+        or location.warehouse_type not in {"finished", "shared"}
         or not location.is_active
     ):
         raise ProductionWorkflowError(
-            "生产完工库存仅允许进入三楼临放位 F12-P01..P08、F34-P01..P03",
+            "生产完工库存仅允许进入已启用的三楼成品或共用库位",
+            409,
+        )
+    if getattr(location, "placement_status", None) == "unplaced":
+        raise ProductionWorkflowError(
+            "该三楼成品库位尚未完成空间放置，不能办理生产入库",
             409,
         )
     pallet = _current_pallet(db, location.id)
@@ -594,9 +685,9 @@ def _temporary_location(
             .limit(1)
         )
         if pallet_id != pallet.id or item_exists is not None:
-            raise ProductionWorkflowError("所选三楼临放位已占用，请选择空位", 409)
+            raise ProductionWorkflowError("所选三楼库位已占用，请选择空位", 409)
     elif pallet_id is not None:
-        raise ProductionWorkflowError("指定栈板不在所选三楼临放位", 409)
+        raise ProductionWorkflowError("指定栈板不在所选三楼库位", 409)
     return location
 
 
@@ -604,11 +695,14 @@ def list_temporary_locations(db: Session) -> list[dict]:
     locations = db.scalars(
         select(WarehouseLocation)
         .where(
-            WarehouseLocation.location_code.in_(TEMPORARY_LOCATION_CODES),
             WarehouseLocation.source_version == "V11",
             WarehouseLocation.warehouse_floor == 3,
-            WarehouseLocation.is_temporary.is_(True),
+            WarehouseLocation.warehouse_type.in_(("finished", "shared")),
             WarehouseLocation.is_active.is_(True),
+            or_(
+                WarehouseLocation.placement_status.is_(None),
+                WarehouseLocation.placement_status != "unplaced",
+            ),
         )
         .order_by(WarehouseLocation.sort_order, WarehouseLocation.location_code)
     ).all()
@@ -628,11 +722,22 @@ def list_temporary_locations(db: Session) -> list[dict]:
         result.append(
             {
                 "id": location.id,
+                "area_code": location.area_code,
                 "location_code": location.location_code,
                 "location_name": location.location_name,
                 "pallet_id": pallet.id if pallet is not None else None,
                 "pallet_code": pallet.pallet_code if pallet is not None else None,
                 "is_empty": not occupied,
+                "is_temporary": bool(location.is_temporary),
+                "storage_type": location.storage_type,
+                "location_kind": (
+                    "temporary" if location.is_temporary else "fixed"
+                ),
+                "occupancy_label": (
+                    "空闲"
+                    if not occupied
+                    else "已占用"
+                ),
             }
         )
     return result
@@ -865,7 +970,7 @@ def _stock_completion_lot(
     operator_id: int | None,
     idempotency_prefix: str,
 ) -> InventoryLot:
-    location = _temporary_location(
+    location = _production_stock_location(
         db,
         command.location_id,
         pallet_id=command.pallet_id,
@@ -876,12 +981,18 @@ def _stock_completion_lot(
         else None
     )
     product_id = snapshot.component_product_id if snapshot is not None else item.product_id
+    is_transfer = isinstance(command, StockTransferCommand)
+    stock_quantity = (
+        int(completion.quantity)
+        if is_transfer
+        else int(completion.stock_quantity)
+    )
     lot = manual_finished_in(
         db,
         customer_id=order.customer_id,
         product_id=product_id,
         location_id=location.id,
-        quantity=int(completion.quantity),
+        quantity=stock_quantity,
         stock_date=beijing_today(),
         source_type="production_surplus",
         source_ref_type="production_completion",
@@ -895,15 +1006,21 @@ def _stock_completion_lot(
         movement_reason="生产完工入库",
     )
     if snapshot is None:
-        reserve_completed_finished_inventory(
-            db,
-            order_item_id=item.id,
-            inventory_lot_id=lot.id,
-            quantity=int(completion.quantity),
-            expected_version=int(lot.version),
-            operator_id=operator_id,
-            idempotency_key=_stable_key(idempotency_prefix, "finished-reserve"),
+        reserve_quantity = max(
+            int(completion.order_reserved_quantity)
+            - (0 if is_transfer else int(completion.direct_delivery_quantity)),
+            0,
         )
+        if reserve_quantity > 0:
+            reserve_completed_finished_inventory(
+                db,
+                order_item_id=item.id,
+                inventory_lot_id=lot.id,
+                quantity=reserve_quantity,
+                expected_version=int(lot.version),
+                operator_id=operator_id,
+                idempotency_key=_stable_key(idempotency_prefix, "finished-reserve"),
+            )
     else:
         _reserve_component_completion_lot(
             db,
@@ -931,13 +1048,23 @@ def _validate_commands(commands: Sequence[CompletionCommand]) -> None:
             raise ProductionWorkflowError("生产任务版本必须大于0")
         if command.disposition not in {"direct", "stock"}:
             raise ProductionWorkflowError("完工去向必须明确选择 direct 或 stock")
-        if command.disposition == "direct" and any(
+        if command.completion_type not in {"primary", "supplemental"}:
+            raise ProductionWorkflowError("生产确认类型无效")
+        if command.material_input_quantity is not None and command.material_input_quantity <= 0:
+            raise ProductionWorkflowError("本次实际投入必须大于0")
+        if command.actual_output_quantity is not None and command.actual_output_quantity <= 0:
+            raise ProductionWorkflowError("本次实际合格产量必须大于0")
+        if command.defective_quantity is not None and command.defective_quantity < 0:
+            raise ProductionWorkflowError("次品或损耗不能小于0")
+        if command.direct_delivery_quantity is not None and command.direct_delivery_quantity < 0:
+            raise ProductionWorkflowError("直接待送数量不能小于0")
+        if command.disposition == "direct" and command.location_id is None and any(
             value is not None
-            for value in (command.location_id, command.pallet_id, command.pallet_code)
+            for value in (command.pallet_id, command.pallet_code)
         ):
             raise ProductionWorkflowError("直接送货完工不能填写库存货位或栈板")
         if command.disposition == "stock" and command.location_id is None:
-            raise ProductionWorkflowError("库存完工必须选择三楼临放位")
+            raise ProductionWorkflowError("库存完工必须选择三楼成品库位")
 
 
 def _replay_completion_batch(
@@ -1012,43 +1139,163 @@ def complete_production_batch(
     if len(rows) != len(task_ids):
         raise ProductionWorkflowError("生产任务或关联订单已被删除，不能确认完工", 409)
     by_task = {task.id: (task, item, order) for task, item, order in rows}
-    customer_ids = {order.customer_id for _, _, order in rows}
-    if len(customer_ids) != 1:
+    if len({order.customer_id for _, _, order in rows}) != 1:
         raise ProductionWorkflowError("一个完工批次只能包含同一客户的生产任务", 409)
 
+    prepared: dict[int, dict[str, int | str]] = {}
     for command in commands:
         task, item, order = by_task[command.task_id]
         is_component_task = task.sales_order_item_bom_component_id is not None
-        if order.status not in PRODUCIBLE_ORDER_STATUSES:
+        allowed_statuses = (
+            PRODUCIBLE_ORDER_STATUSES
+            if command.completion_type == "primary"
+            else MUTABLE_ORDER_STATUSES
+        )
+        expected_task_status = (
+            PENDING if command.completion_type == "primary" else COMPLETED
+        )
+        if order.status not in allowed_statuses:
             raise ProductionWorkflowError(
                 "订单当前状态不允许继续生产完工，请刷新后重试", 409
             )
         if item.is_force_closed:
-            raise ProductionWorkflowError("订单明细已强制关闭，不能继续生产完工", 409)
-        if task.status != PENDING:
-            raise ProductionWorkflowError("仅待完工生产任务可以确认完工", 409)
+            raise ProductionWorkflowError("订单明细已强制关闭，不能继续生产确认", 409)
+        if task.status != expected_task_status:
+            raise ProductionWorkflowError(
+                "主生产确认仅允许待完工任务；补充确认仅允许已完工任务",
+                409,
+            )
         if int(task.version) != command.expected_version:
             raise ProductionWorkflowError("生产任务版本已变化，请刷新后重试", 409)
-        if int(task.planned_quantity or 0) <= 0:
-            raise ProductionWorkflowError("生产任务冻结计划数量无效", 409)
-        if int(item.delivered_quantity or 0) > 0:
-            raise ProductionWorkflowError("订单明细已送货，不能再确认生产完工", 409)
-        existing_completion = db.scalar(
-            select(ProductionCompletion.id)
-            .where(
-                ProductionCompletion.task_id == task.id,
-                ProductionCompletion.status == "posted",
+        if command.completion_type == "primary" and int(item.delivered_quantity or 0) > 0:
+            raise ProductionWorkflowError("订单明细已送货，不能再执行主生产确认", 409)
+        if command.completion_type == "primary":
+            existing_primary = db.scalar(
+                select(ProductionCompletion.id)
+                .where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                    ProductionCompletion.completion_type == "primary",
+                )
+                .limit(1)
             )
-            .limit(1)
+            if existing_primary is not None:
+                raise ProductionWorkflowError("该生产任务已存在主完工事实", 409)
+
+        received_now, allowed_input_now = _material_quantity_facts(db, item)
+        factor = cutting_output_factor(item.special_process)
+        if is_component_task:
+            factor = 1
+            received_now = int(task.planned_quantity or 0)
+            allowed_input_now = int(task.planned_quantity or 0)
+        if allowed_input_now <= 0:
+            allowed_input_now = int(task.material_input_quantity or 0)
+        if allowed_input_now <= 0:
+            allowed_input_now = ceil(
+                max(int(task.planned_quantity or 0), 0) / max(factor, 1)
+            )
+            received_now = max(received_now, allowed_input_now)
+        prior_input = int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ProductionCompletion.material_input_quantity),
+                        0,
+                    )
+                ).where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            or 0
         )
-        if existing_completion is not None:
-            raise ProductionWorkflowError("该生产组件已存在完工事实，不能重复完工", 409)
-        if not is_component_task and has_production_completion_facts(db, [item.id]):
-            raise ProductionWorkflowError("该订单明细已经存在生产完工事实", 409)
+        available_input = max(allowed_input_now - prior_input, 0)
+        material_input = int(
+            command.material_input_quantity
+            if command.material_input_quantity is not None
+            else available_input
+        )
+        if material_input <= 0 or material_input > available_input:
+            raise ProductionWorkflowError(
+                f"本次实际投入超过可投入余额 {available_input}",
+                409,
+            )
+        planned_output = material_input * factor
+        actual_output = int(
+            command.actual_output_quantity
+            if command.actual_output_quantity is not None
+            else planned_output
+        )
+        if actual_output <= 0 or actual_output > planned_output:
+            raise ProductionWorkflowError(
+                f"实际合格产量不能超过理论产量 {planned_output}",
+                409,
+            )
+        defective_quantity = int(
+            command.defective_quantity
+            if command.defective_quantity is not None
+            else planned_output - actual_output
+        )
+        if actual_output + defective_quantity != planned_output:
+            raise ProductionWorkflowError(
+                "实际合格产量与次品/损耗之和必须等于理论产量",
+                409,
+            )
+        prior_order_coverage = int(task.finished_coverage_snapshot or 0) + int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ProductionCompletion.order_reserved_quantity),
+                        0,
+                    )
+                ).where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            or 0
+        )
+        order_coverage = min(
+            actual_output,
+            max(int(item.quantity or 0) - prior_order_coverage, 0),
+        )
         if command.disposition == "stock":
-            _temporary_location(
+            direct_quantity = 0
+            stock_quantity = actual_output
+            stored_disposition = "stock"
+        else:
+            direct_quantity = int(
+                command.direct_delivery_quantity
+                if command.direct_delivery_quantity is not None
+                else order_coverage
+            )
+            if direct_quantity > order_coverage:
+                raise ProductionWorkflowError(
+                    f"直接待送数量最多只能覆盖订单需求 {order_coverage}",
+                    409,
+                )
+            stock_quantity = actual_output - direct_quantity
+            stored_disposition = "direct" if stock_quantity == 0 else "split"
+        if stock_quantity > 0:
+            _production_stock_location(
                 db, command.location_id, pallet_id=command.pallet_id
             )
+        elif command.location_id is not None:
+            raise ProductionWorkflowError("本次没有入库成品，不能选择库存库位")
+        prepared[task.id] = {
+            "received": received_now,
+            "allowed_input": allowed_input_now,
+            "factor": factor,
+            "input": material_input,
+            "planned": planned_output,
+            "actual": actual_output,
+            "defective": defective_quantity,
+            "order_coverage": order_coverage,
+            "direct": direct_quantity,
+            "stock": stock_quantity,
+            "stored_disposition": stored_disposition,
+            "expected_status": expected_task_status,
+        }
 
     now = utc_now_naive()
     batch = ProductionCompletionBatch(
@@ -1059,9 +1306,6 @@ def complete_production_batch(
         completed_at=now,
     )
     try:
-        # A savepoint keeps a concurrent idempotency-key winner from poisoning
-        # the outer API transaction.  PostgreSQL can then see the committed
-        # winner on the retry query; SQLite may instead serialize writers.
         with db.begin_nested():
             db.add(batch)
             db.flush()
@@ -1076,19 +1320,31 @@ def complete_production_batch(
         return _replay_completion_batch(
             db, batch=concurrent_batch, request_hash=request_hash
         )
+
     completions: list[ProductionCompletion] = []
     affected_order_ids: set[int] = set()
     for command in sorted(commands, key=lambda row: row.task_id):
         task, item, order = by_task[command.task_id]
+        facts = prepared[task.id]
+        actual_output = int(facts["actual"])
         completion = ProductionCompletion(
             batch_id=batch.id,
             task_id=task.id,
             order_item_id=item.id,
             expected_version=command.expected_version,
-            quantity=int(task.planned_quantity),
-            initial_disposition=command.disposition,
+            quantity=actual_output,
+            completion_type=command.completion_type,
+            material_input_quantity=int(facts["input"]),
+            planned_output_quantity=int(facts["planned"]),
+            actual_output_quantity=actual_output,
+            defective_quantity=int(facts["defective"]),
+            order_reserved_quantity=int(facts["order_coverage"]),
+            direct_delivery_quantity=int(facts["direct"]),
+            stock_quantity=int(facts["stock"]),
+            surplus_finished_quantity=actual_output - int(facts["order_coverage"]),
+            initial_disposition=str(facts["stored_disposition"]),
             warehouse_location_id=(
-                command.location_id if command.disposition == "stock" else None
+                command.location_id if int(facts["stock"]) > 0 else None
             ),
             inventory_lot_id=None,
             remarks=_normalized_text(command.remarks),
@@ -1097,7 +1353,7 @@ def complete_production_batch(
         )
         db.add(completion)
         db.flush()
-        if command.disposition == "stock":
+        if int(facts["stock"]) > 0:
             lot = _stock_completion_lot(
                 db,
                 completion=completion,
@@ -1114,7 +1370,7 @@ def complete_production_batch(
             completion=completion,
             task=task,
             item=item,
-            planned_quantity=int(task.planned_quantity),
+            planned_quantity=actual_output,
             operator_id=operator_id,
         )
         result = db.execute(
@@ -1122,9 +1378,20 @@ def complete_production_batch(
             .where(
                 ProductionTask.id == task.id,
                 ProductionTask.version == command.expected_version,
-                ProductionTask.status == PENDING,
+                ProductionTask.status == str(facts["expected_status"]),
             )
-            .values(status=COMPLETED, version=ProductionTask.version + 1)
+            .values(
+                status=COMPLETED,
+                version=ProductionTask.version + 1,
+                ordered_quantity_snapshot=int(item.quantity or 0),
+                material_received_quantity=int(facts["received"]),
+                material_input_quantity=int(facts["allowed_input"]),
+                output_factor=int(facts["factor"]),
+                planned_quantity=max(
+                    int(task.planned_quantity or 0),
+                    int(facts["allowed_input"]) * int(facts["factor"]),
+                ),
+            )
         )
         if result.rowcount != 1:
             raise ProductionWorkflowError("生产任务版本已变化，请刷新后重试", 409)
@@ -1233,7 +1500,7 @@ def transfer_direct_completion_to_stock(
     )
     if existing_transfer is not None:
         raise ProductionWorkflowError("该完工记录已转入库存，不能重复操作", 409)
-    _temporary_location(db, command.location_id, pallet_id=command.pallet_id)
+    _production_stock_location(db, command.location_id, pallet_id=command.pallet_id)
     lot = _stock_completion_lot(
         db,
         completion=completion,
@@ -1324,15 +1591,19 @@ def _reverse_completion_finished_lot(
         or lot.status != "active"
     ):
         raise ProductionWorkflowError("关联批次已不是有效的生产完工入库，不能回退", 409)
-    if any(
-        int(value or 0) > 0
-        for value in (
-            lot.quantity_available,
-            lot.quantity_consumed,
-            lot.quantity_damaged,
-            lot.quantity_scrapped,
+    stock_quantity = int(completion.stock_quantity or completion.quantity or 0)
+    if (
+        any(
+            int(value or 0) > 0
+            for value in (
+                lot.quantity_consumed,
+                lot.quantity_damaged,
+                lot.quantity_scrapped,
+            )
         )
-    ) or int(lot.quantity_reserved or 0) != int(completion.quantity):
+        or int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
+        != stock_quantity
+    ):
         raise ProductionWorkflowError(
             "成品库存已被使用、调整、报损或数量发生变化，不能回退生产确认", 409
         )
@@ -1349,13 +1620,14 @@ def _reverse_completion_finished_lot(
             InventoryReservation.reservation_type == "finished_order",
         )
     ).all()
-    if len(reservations) != 1:
+    if len(reservations) > 1:
         raise ProductionWorkflowError("生产完工成品预占记录异常，不能自动回退", 409)
-    reservation = reservations[0]
-    if (
+    reservation = reservations[0] if reservations else None
+    if reservation is not None and (
         int(reservation.consumed_stock_quantity or 0) != 0
         or int(reservation.released_stock_quantity or 0) != 0
-        or int(reservation.reserved_stock_quantity or 0) != int(completion.quantity)
+        or int(reservation.reserved_stock_quantity or 0)
+        != int(lot.quantity_reserved or 0)
     ):
         raise ProductionWorkflowError("生产完工成品预占已发生后续变化，不能自动回退", 409)
     pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
@@ -1369,21 +1641,22 @@ def _reverse_completion_finished_lot(
     ) is not None:
         raise ProductionWorkflowError("该成品入库后已经移过库位，不能自动回退", 409)
 
-    release_finished_reservation(
-        db,
-        reservation_id=reservation.id,
-        operator_id=operator_id,
-        release_reason=f"撤销生产完工入库：{reason}",
-        idempotency_key=_stable_key(
-            "production-completion-reversal", completion.id, "release-finished"
-        ),
-        allow_downstream=True,
-        allow_production_reversal=True,
-    )
+    if reservation is not None:
+        release_finished_reservation(
+            db,
+            reservation_id=reservation.id,
+            operator_id=operator_id,
+            release_reason=f"撤销生产完工入库：{reason}",
+            idempotency_key=_stable_key(
+                "production-completion-reversal", completion.id, "release-finished"
+            ),
+            allow_downstream=True,
+            allow_production_reversal=True,
+        )
     db.expire(lot)
     lot = db.get(InventoryLot, lot_id)
     assert lot is not None
-    if int(lot.quantity_available or 0) != int(completion.quantity) or int(lot.quantity_reserved or 0) != 0:
+    if int(lot.quantity_available or 0) != stock_quantity or int(lot.quantity_reserved or 0) != 0:
         raise ProductionWorkflowError("释放成品预占后的库存数量异常，已终止回退", 409)
     before = _balances(lot)
     now = utc_now_naive()
@@ -1392,7 +1665,7 @@ def _reverse_completion_finished_lot(
         .where(
             InventoryLot.id == lot.id,
             InventoryLot.version == lot.version,
-            InventoryLot.quantity_available == int(completion.quantity),
+            InventoryLot.quantity_available == stock_quantity,
             InventoryLot.quantity_reserved == 0,
         )
         .values(
@@ -1412,7 +1685,7 @@ def _reverse_completion_finished_lot(
         db,
         lot=lot,
         movement_type="adjust",
-        quantity=int(completion.quantity),
+        quantity=stock_quantity,
         before=before,
         operator_id=operator_id,
         reason=f"撤销生产完工入库：{reason}",
@@ -1474,6 +1747,16 @@ def reverse_production_completion(
         raise ProductionWorkflowError("订单已经发货，请先撤销发货后再回退生产确认", 409)
     if task.status != COMPLETED:
         raise ProductionWorkflowError("生产任务当前不是已完工状态，不能撤销", 409)
+    if completion.completion_type == "primary" and db.scalar(
+        select(ProductionCompletion.id)
+        .where(
+            ProductionCompletion.task_id == task.id,
+            ProductionCompletion.completion_type == "supplemental",
+            ProductionCompletion.status == "posted",
+        )
+        .limit(1)
+    ) is not None:
+        raise ProductionWorkflowError("请先撤销补充生产确认，再撤销主生产确认", 409)
     direct_allocation = db.scalar(
         select(BomComponentDirectDeliveryAllocation.id)
         .where(
@@ -1514,7 +1797,16 @@ def reverse_production_completion(
     completion.reversed_by = operator_id
     completion.reversed_at = now
     completion.reversal_reason = normalized_reason
-    task.status = PENDING
+    remaining_posted = db.scalar(
+        select(ProductionCompletion.id)
+        .where(
+            ProductionCompletion.task_id == task.id,
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.id != completion.id,
+        )
+        .limit(1)
+    )
+    task.status = COMPLETED if remaining_posted is not None else PENDING
     task.version = int(task.version) + 1
     db.flush()
     refresh_order_production_status(db, order.id)
@@ -1630,14 +1922,50 @@ def list_production_tasks(
     status: str | None = None,
 ) -> list[dict]:
     query = _task_query(db, allowed_customer_ids).where(
-        Order.status.in_(PRODUCIBLE_ORDER_STATUSES),
+        Order.status.in_(MUTABLE_ORDER_STATUSES),
         OrderItem.is_force_closed.is_(False),
     )
     if status:
         query = query.where(ProductionTask.status == status)
     rows = db.execute(query.order_by(Order.delivery_date, Order.id, OrderItem.id)).all()
-    return [
-        {
+    result: list[dict] = []
+    for task, item, order, customer, product in rows:
+        received_now, allowed_input_now = _material_quantity_facts(db, item)
+        factor = cutting_output_factor(item.special_process)
+        posted_input = int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ProductionCompletion.material_input_quantity),
+                        0,
+                    )
+                ).where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            or 0
+        )
+        posted_output = int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ProductionCompletion.actual_output_quantity),
+                        0,
+                    )
+                ).where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            or 0
+        )
+        material_input = max(
+            allowed_input_now,
+            int(task.material_input_quantity or 0),
+        )
+        available_input = max(material_input - posted_input, 0)
+        result.append({
             "id": task.id,
             "order_item_id": item.id,
             "order_id": order.id,
@@ -1656,14 +1984,34 @@ def list_production_tasks(
             "material_status": item.material_status,
             "status": task.status,
             "planned_quantity": int(task.planned_quantity),
+            "ordered_quantity": int(item.quantity),
+            "material_received_quantity": max(
+                received_now,
+                int(task.material_received_quantity or 0),
+            ),
+            "material_input_quantity": material_input,
+            "available_material_input_quantity": available_input,
+            "output_factor": factor,
+            "planned_output_quantity": material_input * factor,
+            "actual_output_quantity": posted_output,
+            "order_reserved_quantity": min(
+                posted_output + int(task.finished_coverage_snapshot or 0),
+                int(item.quantity or 0),
+            ),
+            "surplus_finished_quantity": max(
+                posted_output
+                + int(task.finished_coverage_snapshot or 0)
+                - int(item.quantity or 0),
+                0,
+            ),
+            "can_supplement": task.status == COMPLETED and available_input > 0,
             "finished_coverage_snapshot": int(task.finished_coverage_snapshot),
             "readiness_basis": task.readiness_basis,
             "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
             "version": int(task.version),
             "production_ready_quantity": production_ready_quantity(db, item),
-        }
-        for task, item, order, customer, product in rows
-    ]
+        })
+    return result
 
 
 def _completion_rows(
@@ -1718,6 +2066,26 @@ def list_production_completions(
     )
     result: list[dict] = []
     for completion, task, item, order, customer, product, user, transfer in rows:
+        received_now, allowed_input_now = _material_quantity_facts(db, item)
+        posted_input = int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ProductionCompletion.material_input_quantity),
+                        0,
+                    )
+                ).where(
+                    ProductionCompletion.task_id == task.id,
+                    ProductionCompletion.status == "posted",
+                )
+            )
+            or 0
+        )
+        available_input = max(
+            max(allowed_input_now, int(task.material_input_quantity or 0))
+            - posted_input,
+            0,
+        )
         effective_location_id = (
             transfer.warehouse_location_id
             if transfer is not None
@@ -1736,6 +2104,7 @@ def list_production_completions(
                 "id": completion.id,
                 "batch_id": completion.batch_id,
                 "task_id": task.id,
+                "task_version": int(task.version),
                 "order_item_id": item.id,
                 "order_id": order.id,
                 "order_number": order.order_number,
@@ -1749,6 +2118,28 @@ def list_production_completions(
                     parent_product=product,
                 ),
                 "quantity": int(completion.quantity),
+                "completion_type": completion.completion_type,
+                "material_input_quantity": int(completion.material_input_quantity),
+                "planned_output_quantity": int(completion.planned_output_quantity),
+                "actual_output_quantity": int(completion.actual_output_quantity),
+                "defective_quantity": int(completion.defective_quantity),
+                "order_reserved_quantity": int(completion.order_reserved_quantity),
+                "direct_delivery_quantity": int(completion.direct_delivery_quantity),
+                "stock_quantity": int(completion.stock_quantity),
+                "surplus_finished_quantity": int(completion.surplus_finished_quantity),
+                "available_material_input_quantity": available_input,
+                "current_material_received_quantity": max(
+                    received_now,
+                    int(task.material_received_quantity or 0),
+                ),
+                "output_factor": cutting_output_factor(item.special_process),
+                "can_supplement": (
+                    completion.status == "posted"
+                    and task.status == COMPLETED
+                    and available_input > 0
+                    and order.status in MUTABLE_ORDER_STATUSES
+                    and not item.is_force_closed
+                ),
                 "status": completion.status,
                 "initial_disposition": completion.initial_disposition,
                 "warehouse_location_id": effective_location_id,

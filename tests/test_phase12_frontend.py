@@ -117,9 +117,14 @@ def test_n029_production_page_deep_link_and_manual_destination_are_present() -> 
     assert 'key: "production", label: "生产确认"' in INDEX
     assert 'production: "orders.view"' in INDEX
     assert '<option value="">请选择完工去向</option>' in INDEX
-    assert '<option value="direct">直接待送货</option>' in INDEX
-    assert '<option value="stock" :disabled="!canWarehouseExecute">入临时成品库</option>' in INDEX
+    assert '<option value="direct">订单内直接待送</option>' in INDEX
+    assert '<option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option>' in INDEX
     assert "productionAvailableLocations" in INDEX
+    assert 'v-model="row.location_area_code"' in INDEX
+    assert 'v-model="row.transfer_area_code"' in INDEX
+    assert "productionLocationsForArea" in INDEX
+    assert "先选区域" in INDEX
+    assert "再选库位" in INDEX
     assert ':checked="!!productionSelected[row.id]"' in INDEX
     assert 'activePage === \'production\'' in INDEX
 
@@ -164,11 +169,12 @@ def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll
     assert 'min-width:1160px' not in page
     for merged_heading in (
         "订单 / 客户",
-        "存货编码 / 产品 / 规格",
-        "订单 / 抵扣 / 应生产",
-        "工艺 / 模具位置",
+        "存货编码 / 产品",
+        "订单 / 收料 / 计划",
+        "实际投入 / 合格 / 损耗",
+        "覆盖 / 余货",
         "数量 / 操作人",
-        "去向 / 库位",
+        "完工去向 / 库位",
     ):
         assert merged_heading in page
 
@@ -183,7 +189,7 @@ def test_n029_batch_completion_prevents_cross_customer_and_duplicate_locations()
     assert "new Set(rows.map(row => Number(row.customer_id))).size > 1" in logic
     assert "productionLocationUsedByOther(locationId, currentRow)" in logic
     assert "new Set(stockLocationIds).size !== stockLocationIds.length" in logic
-    assert "同一批入临时成品库的明细不能选择同一临放位" in logic
+    assert "同一批入库明细不能选择同一空库位" in logic
     assert ':disabled="productionLocationUsedByOther(location.id,row)"' in INDEX
 
 
@@ -366,10 +372,7 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert 'axios.get("/api/incoming/surplus-locations")' in INDEX
 
 
-def test_delivery_variance_ui_warns_and_requires_explicit_resolution_without_reason() -> None:
-    assert "超送原因（必填）" not in INDEX
-    assert "确认继续保存超送单吗" not in INDEX
-    assert "请核对数量" in INDEX
+def test_delivery_variance_ui_separates_return_difference_and_authorized_over_delivery() -> None:
     assert "差异备注（可选）" in INDEX
     assert "保留剩余数量，继续待送" in INDEX
     assert 'value="accept_short"' in INDEX
@@ -380,6 +383,11 @@ def test_delivery_variance_ui_warns_and_requires_explicit_resolution_without_rea
     assert "this.pages.deliveries = 1;" in INDEX
     assert "短收结单必须填写原因" not in INDEX
     assert "短收结单必须填写原因" not in INCOMING
+    assert "订单待送 / 可用成品 / 可超送" in INDEX
+    assert "二次确认超量送货" in INDEX
+    assert 'this.hasPermission("deliveries.over_delivery")' in INDEX
+    assert "当前账号没有超量送货权限" in INDEX
+    assert "请填写超量送货原因" in INDEX
 
 
 def test_system_version_panel_groups_major_releases_and_hides_legacy_tools() -> None:

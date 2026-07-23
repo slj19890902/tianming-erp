@@ -42,8 +42,11 @@ def test_start_launcher_uses_project_venv_and_read_only_revision_gate() -> None:
         "from app.core.config import load_settings",
         "ERP_HEALTH_URL",
         "ERP_BROWSER_URL",
-        "Production requires ERP_HEALTH_URL",
-        "Production requires ERP_BROWSER_URL",
+        "ERP_PRODUCTION_TRANSPORT",
+        'ProductionTransport -eq "https_proxy"',
+        'ProductionTransport -eq "lan_http"',
+        "https_proxy requires ERP_HEALTH_URL",
+        "lan_http requires ERP_HEALTH_URL and ERP_BROWSER_URL",
         '$LocalHealthUrl = "http://127.0.0.1:$ErpPort/api/health"',
         "Test-LocalErpRunning",
         "Confirm-ProductionExternalHealth",
@@ -120,7 +123,8 @@ def test_legacy_background_launcher_cannot_bypass_hardened_runtime_config() -> N
     assert "$process -and -not $process.HasExited" in hardened
     assert "from app.core.config import load_settings" in updater
     assert "-LocalPort $ErpPort" in updater
-    assert "正式发布要求 HTTPS ERP_HEALTH_URL 与 ERP_BROWSER_URL" in updater
+    assert "https_proxy 正式发布要求 HTTPS ERP_HEALTH_URL 与 ERP_BROWSER_URL" in updater
+    assert "lan_http 正式发布要求 HTTP ERP_HEALTH_URL 与 ERP_BROWSER_URL" in updater
 
 
 def test_startup_readiness_is_loopback_first_and_external_check_is_advisory() -> None:

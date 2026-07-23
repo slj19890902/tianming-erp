@@ -9,6 +9,7 @@ $BrowserUrl = $null
 $ErpPort = $null
 $BindHost = $null
 $RuntimeEnvironment = $null
+$ProductionTransport = $null
 $DatabasePath = $null
 $LogDir = Join-Path $ProjectRoot "logs"
 $LogFile = Join-Path $LogDir "erp_startup.log"
@@ -49,13 +50,18 @@ function Confirm-ProductionExternalHealth {
     # This check is deliberately advisory and runs only after loopback readiness.
     # A reverse-proxy/certificate failure must not kill a healthy local ERP process.
     if (Test-ExternalErpHealth) {
-        Write-Log "External production HTTPS health check succeeded."
+        Write-Log ("Configured production {0} health check succeeded." -f $ProductionTransport)
         return
     }
+    $guidance = if ($ProductionTransport -eq "https_proxy") {
+        "Check the reverse proxy and certificate"
+    } else {
+        "Check the private-network address and Windows Firewall LAN scope"
+    }
     $message = (
-        "ERP is ready on loopback, but external HTTPS health failed: {0}. " +
-        "Check the reverse proxy and certificate; the local ERP process remains running."
-    ) -f $ExternalHealthUrl
+        "ERP is ready on loopback, but configured production health failed: {0}. " +
+        "{1}; the local ERP process remains running."
+    ) -f $ExternalHealthUrl, $guidance
     Write-Log $message
     Write-Warning $message
 }
@@ -113,16 +119,17 @@ try {
     }
 
     $runtimeConfig = @(
-        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.health_url); print(s.browser_url); print(s.database_path)" 2>&1
+        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(s.database_path)" 2>&1
     )
-    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 7) {
+    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 8) {
         $runtimeConfig | ForEach-Object { Write-Log $_ }
         throw "ERP runtime configuration is invalid."
     }
-    $BindHost = $runtimeConfig[-7].ToString().Trim()
-    $ErpPort = [int]$runtimeConfig[-6].ToString().Trim()
-    $Workers = [int]$runtimeConfig[-5].ToString().Trim()
-    $RuntimeEnvironment = $runtimeConfig[-4].ToString().Trim()
+    $BindHost = $runtimeConfig[-8].ToString().Trim()
+    $ErpPort = [int]$runtimeConfig[-7].ToString().Trim()
+    $Workers = [int]$runtimeConfig[-6].ToString().Trim()
+    $RuntimeEnvironment = $runtimeConfig[-5].ToString().Trim()
+    $ProductionTransport = $runtimeConfig[-4].ToString().Trim()
     $ExternalHealthUrl = $runtimeConfig[-3].ToString().Trim()
     $BrowserUrl = $runtimeConfig[-2].ToString().Trim()
     $DatabasePath = [System.IO.Path]::GetFullPath($runtimeConfig[-1].ToString().Trim())
@@ -146,16 +153,22 @@ try {
     }
     $LocalHealthUrl = "http://127.0.0.1:$ErpPort/api/health"
     if ($RuntimeEnvironment -eq "production") {
-        # Production ERP_HEALTH_URL comes from load_settings and the project .env.
-        if ($ExternalHealthUrl -notlike "https://*") {
-            throw "Production requires ERP_HEALTH_URL to use the HTTPS reverse-proxy health endpoint."
-        }
-        # Production ERP_BROWSER_URL comes from load_settings and the project .env.
-        if ($BrowserUrl -notlike "https://*") {
-            throw "Production requires ERP_BROWSER_URL to use the HTTPS reverse-proxy ERP endpoint."
+        if ($ProductionTransport -eq "https_proxy") {
+            if ($ExternalHealthUrl -notlike "https://*") {
+                throw "https_proxy requires ERP_HEALTH_URL to use HTTPS."
+            }
+            if ($BrowserUrl -notlike "https://*") {
+                throw "https_proxy requires ERP_BROWSER_URL to use HTTPS."
+            }
+        } elseif ($ProductionTransport -eq "lan_http") {
+            if ($ExternalHealthUrl -notlike "http://*" -or $BrowserUrl -notlike "http://*") {
+                throw "lan_http requires ERP_HEALTH_URL and ERP_BROWSER_URL to use HTTP."
+            }
+        } else {
+            throw "Unknown ERP_PRODUCTION_TRANSPORT: $ProductionTransport"
         }
     }
-    Write-Log ("Runtime bind: {0}:{1}" -f $BindHost, $ErpPort)
+    Write-Log ("Runtime transport/bind: {0} {1}:{2}" -f $ProductionTransport, $BindHost, $ErpPort)
 
     $releaseGate = Join-Path $ProjectRoot "scripts\admin\release_erp.py"
     if (-not (Test-Path -LiteralPath $releaseGate -PathType Leaf)) {

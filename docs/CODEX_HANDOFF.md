@@ -1553,3 +1553,12 @@ legacy_ruida_* 原始层
 - `D:\纸箱厂erp软件搭建\data\carton_erp.sqlite3` 实测 revision 为 `t68n0r1s7u50`，不是此前确认的 `cf62v8x9z51`；`integrity_check=ok`、外键异常 0，但缺少后续迁移才创建的 `incoming_receipts`。若直接部署 P0-A，普通启动会按设计拒绝 `current != code head`；若直接 Apply，则会跨越大量历史 revision，已超出本轮“无正式迁移”的既定验收前提。
 - 当前 8000 监听仍为 PID 38552，命令行 `--app-dir D:\tm-worktrees\erp-factory-latest-uat-20260722`；该工作树为 `c5cffa2` 且 `docs/CODEX_HANDOFF.md` 有未提交修改，没有 `.env`，默认工作树数据库文件也不存在，因此进程实际继承的数据库路径无法仅从命令行证明。端口 80/443 均无监听，未发现可承接 production HTTPS 的本机代理。
 - 因正式代码、数据库 revision、进程归属和网络配置四项门禁同时不满足，本轮在合并前安全停止：PR #35 继续保持 Draft，未合并、未部署、未停止 8000、未创建正式备份、未写正式数据库。下一步必须先重新确认唯一正式运行实例和权威数据库；若权威库确为 `t68`，需另开“t68 → cf62 隔离副本全链迁移与正式发布”闭环，完成备份、哈希、往返/失败恢复和人工批准；同时确定生产 HTTPS/反向代理方案后，才能重新申请合并与正式发布。
+
+## 78. 2026-07-23 工厂只读复核与 P0-A 局域网生产模式
+
+- 用户已在工厂主机 `PC-20250926DZYH` 只读确认：正式目录 `D:\纸箱厂erp软件搭建` 为干净的 `factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`；实际 8000 服务命令行的 `--app-dir` 指向该正式目录；正式库为 `data\carton_erp.sqlite3`，revision=`cf62v8x9z51`、`quick_check=ok`、外键异常 0，`/api/health` 返回 200。此前家庭电脑对另一目录/副本得到的 `t68` 结果不再作为工厂正式事实。
+- 工厂网络为 `192.168.3.80/24`，服务监听 `0.0.0.0:8000`；核验时没有活动客户端连接，也未发现 80/443 监听或 HTTPS 代理证据。项目 `.venv` 存在，关键运行依赖版本可导入且 `pip check` 无损坏；会话密钥文件长度 64，未显示密钥内容。
+- `static/uploads` 共 21 个历史文件（PDF 9、WebP 6、JPG 4、PNG 2），扩展名与文件签名全部一致，无签名不匹配文件；没有活动上传扩展名，也没有超过 25 MB 的文件。以上核验均未修改代码、配置、Git、服务或数据库。
+- P0-A 新增显式 `ERP_PRODUCTION_TRANSPORT`：默认 `https_proxy` 继续要求 loopback、HTTPS、受信 loopback 代理、Secure Cookie、HTTPS 跳转与 HSTS；仅显式 `lan_http` 才允许工厂私网 HTTP，并强制私网 Origin/URL、明确端口、可信 Host、禁止代理信任、单 worker 和至少 32 字符密钥。局域网模式不启用跳转/HSTS且 Cookie 不带 Secure，但仍启用精确 CORS、带 Cookie 写请求的 Origin/CSRF、HttpOnly、SameSite=Lax、Host 门禁和其余安全响应头。
+- Windows 启动器和两阶段发布脚本均读取同一传输模式并按模式 fail-closed；普通启动仍只读检查 revision，未恢复任何自动迁移。工厂 `lan_http` 必须额外确认 Windows 防火墙把 TCP 8000 限定到 Private 配置文件和 `192.168.3.0/24`，且不存在更宽的旧入站规则；发现公网/Any 规则时停止发布。
+- 当前配置、认证、系统、部署、数据库路径、发布安全及 P0-A 相邻扩大回归为 `111 passed`；随后补充未知传输模式和 Host 子域通配符 fail-closed 用例，传输安全专项为 `30 passed`。覆盖 HTTPS 默认不降级、LAN HTTP 私网/Host/Origin/CSRF/安全头、LAN Cookie 登录、启动/发布脚本和备份发布门禁。Python 编译、4 个 PowerShell 脚本语法、工厂实际 LAN 参数的纯配置加载和 `git diff --check` 通过。测试使用 P0-B 隔离工作树已有 venv；没有向工厂或家庭正式 venv 安装测试包。正式 `.env`、正式服务和正式数据库仍未修改，PR #35 尚未合并，本轮也没有新增 Alembic revision。

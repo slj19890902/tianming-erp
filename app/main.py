@@ -72,9 +72,14 @@ def apply_production_security(application: FastAPI, current) -> None:
 
 
 class HSTSMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, *, include_hsts: bool = True) -> None:
+        super().__init__(app)
+        self.include_hsts = include_hsts
+
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        response.headers["Strict-Transport-Security"] = "max-age=63072000"
+        if self.include_hsts:
+            response.headers["Strict-Transport-Security"] = "max-age=63072000"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["X-Frame-Options"] = "DENY"
@@ -171,15 +176,16 @@ def apply_transport_security(application: FastAPI, current) -> None:
     """Install production-only transport controls around the API boundary."""
     if not current.is_production:
         return
-    # Starlette wraps the last-added middleware outermost.  HTTPS redirect
-    # therefore has to be registered before TrustedHost so an untrusted HTTP
-    # Host is rejected instead of becoming the target of an open redirect.
+    # Starlette wraps the last-added middleware outermost. HTTPS redirect is
+    # registered before TrustedHost so an untrusted HTTP Host is rejected
+    # instead of becoming the target of an open redirect.
     application.add_middleware(
         CookieOriginCSRFMiddleware,
         allowed_origins=current.allowed_origins,
         session_cookie_name=current.session_cookie_name,
     )
-    application.add_middleware(HTTPSRedirectMiddleware)
+    if current.uses_https_proxy:
+        application.add_middleware(HTTPSRedirectMiddleware)
     application.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=[
@@ -189,7 +195,10 @@ def apply_transport_security(application: FastAPI, current) -> None:
             "[::1]",
         ],
     )
-    application.add_middleware(HSTSMiddleware)
+    application.add_middleware(
+        HSTSMiddleware,
+        include_hsts=current.uses_https_proxy,
+    )
     if current.trusted_proxy_ips:
         application.add_middleware(
             ProxyHeadersMiddleware,

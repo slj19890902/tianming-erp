@@ -11,12 +11,37 @@ from fastapi.testclient import TestClient
 
 
 def _set_production_urls(monkeypatch, origin: str = "https://erp.example.com") -> None:
+    monkeypatch.delenv("ERP_PRODUCTION_TRANSPORT", raising=False)
     monkeypatch.setenv("ERP_HEALTH_URL", f"{origin}/api/health")
     monkeypatch.setenv("ERP_BROWSER_URL", f"{origin}/")
     if not os.environ.get("ERP_TRUSTED_HOSTS"):
         monkeypatch.setenv("ERP_TRUSTED_HOSTS", origin.split("//", 1)[1])
     if not os.environ.get("ERP_TRUSTED_PROXY_IPS"):
         monkeypatch.setenv("ERP_TRUSTED_PROXY_IPS", "127.0.0.1")
+
+
+def _set_lan_http_production(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ERP_ENVIRONMENT", "production")
+    monkeypatch.setenv("ERP_PRODUCTION_TRANSPORT", "lan_http")
+    monkeypatch.setenv(
+        "ERP_SECRET_KEY",
+        "n031-lan-http-secret-that-is-longer-than-32-characters",
+    )
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(tmp_path / "missing.sqlite3"))
+    monkeypatch.setenv("ERP_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("ERP_PORT", "8000")
+    monkeypatch.setenv("ERP_ALLOWED_ORIGINS", "http://192.168.3.80:8000")
+    monkeypatch.setenv(
+        "ERP_TRUSTED_HOSTS",
+        "192.168.3.80,PC-20250926DZYH,127.0.0.1,localhost",
+    )
+    monkeypatch.delenv("ERP_TRUSTED_PROXY_IPS", raising=False)
+    monkeypatch.setenv(
+        "ERP_HEALTH_URL",
+        "http://192.168.3.80:8000/api/health",
+    )
+    monkeypatch.setenv("ERP_BROWSER_URL", "http://192.168.3.80:8000/")
+    monkeypatch.delenv("ERP_SESSION_COOKIE_SECURE", raising=False)
 
 
 def _production_app(monkeypatch, tmp_path):
@@ -160,6 +185,102 @@ def test_production_rejects_non_loopback_trusted_proxy(monkeypatch):
     _set_production_urls(monkeypatch)
 
     with pytest.raises(ValueError, match="loopback"):
+        load_settings()
+
+
+def test_lan_http_production_is_explicit_private_and_does_not_trust_proxy(
+    monkeypatch,
+    tmp_path,
+):
+    from app.core.config import load_settings
+
+    _set_lan_http_production(monkeypatch, tmp_path)
+    current = load_settings()
+
+    assert current.production_transport == "lan_http"
+    assert current.uses_https_proxy is False
+    assert current.bind_host == "0.0.0.0"
+    assert current.allowed_origins == ("http://192.168.3.80:8000",)
+    assert current.trusted_proxy_ips == ()
+    assert current.session_cookie_secure is False
+
+
+def test_lan_http_production_keeps_host_origin_and_security_header_gates(
+    monkeypatch,
+    tmp_path,
+):
+    _set_lan_http_production(monkeypatch, tmp_path)
+    from app.main import create_app
+
+    app = create_app()
+    middleware_names = {item.cls.__name__ for item in app.user_middleware}
+    assert "HTTPSRedirectMiddleware" not in middleware_names
+    assert "ProxyHeadersMiddleware" not in middleware_names
+    assert {
+        "CookieOriginCSRFMiddleware",
+        "TrustedHostMiddleware",
+        "HSTSMiddleware",
+    } <= middleware_names
+
+    with TestClient(app, base_url="http://192.168.3.80:8000") as client:
+        allowed = client.get(
+            "/api/health",
+            headers={"Origin": "http://192.168.3.80:8000"},
+        )
+        client.cookies.set("erp_session", "invalid-session-token")
+        blocked_write = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "http://192.168.3.81:8000"},
+        )
+    with TestClient(app, base_url="http://192.168.3.81:8000") as client:
+        untrusted_host = client.get("/api/health")
+
+    assert allowed.status_code == 503
+    assert "location" not in allowed.headers
+    assert "strict-transport-security" not in allowed.headers
+    assert allowed.headers["x-content-type-options"] == "nosniff"
+    assert allowed.headers["x-frame-options"] == "DENY"
+    assert allowed.headers["access-control-allow-origin"] == (
+        "http://192.168.3.80:8000"
+    )
+    assert blocked_write.status_code == 403
+    assert untrusted_host.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "match"),
+    (
+        (
+            "ERP_PRODUCTION_TRANSPORT",
+            "public_http",
+            "ERP_PRODUCTION_TRANSPORT",
+        ),
+        ("ERP_ALLOWED_ORIGINS", "http://8.8.8.8:8000", "私网"),
+        ("ERP_TRUSTED_HOSTS", "*.factory.local", "explicit hosts"),
+        ("ERP_TRUSTED_PROXY_IPS", "127.0.0.1", "禁止"),
+        ("ERP_BIND_HOST", "8.8.8.8", "私网"),
+        ("ERP_BROWSER_URL", "http://192.168.3.80:8001/", "ERP_PORT"),
+        (
+            "ERP_HEALTH_URL",
+            "http://192.168.3.81:8000/api/health",
+            "ERP_ALLOWED_ORIGINS",
+        ),
+        ("ERP_SESSION_COOKIE_SECURE", "true", "必须关闭"),
+    ),
+)
+def test_lan_http_production_rejects_unsafe_or_inconsistent_config(
+    monkeypatch,
+    tmp_path,
+    name,
+    value,
+    match,
+):
+    from app.core.config import load_settings
+
+    _set_lan_http_production(monkeypatch, tmp_path)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=match):
         load_settings()
 
 
@@ -330,6 +451,7 @@ def test_development_keeps_lan_http_runtime_defaults(monkeypatch):
 
     monkeypatch.setenv("ERP_ENVIRONMENT", "development")
     monkeypatch.setenv("ERP_ALLOWED_ORIGINS", "http://192.168.10.20:8000")
+    monkeypatch.setenv("ERP_PORT", "8000")
     for name in (
         "ERP_BIND_HOST",
         "ERP_HEALTH_URL",
@@ -400,6 +522,7 @@ def test_root_main_exports_the_same_hardened_application(monkeypatch, tmp_path):
     environment = {
         **os.environ,
         "ERP_ENVIRONMENT": "production",
+        "ERP_PRODUCTION_TRANSPORT": "https_proxy",
         "ERP_SECRET_KEY": "n031-root-entrypoint-secret-that-is-longer-than-32-characters",
         "ERP_DATABASE_PATH": str(tmp_path / "missing.sqlite3"),
         "ERP_TRUSTED_HOSTS": "testserver",

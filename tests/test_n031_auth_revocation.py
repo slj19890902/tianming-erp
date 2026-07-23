@@ -160,6 +160,58 @@ def test_production_login_cookie_is_secure(
     assert logout.status_code == 200
 
 
+def test_lan_http_production_login_cookie_works_without_secure_attribute(
+    auth_revocation_context,
+    monkeypatch,
+) -> None:
+    from app.api import auth as auth_api
+    from app.core.config import load_settings
+    from app.main import CookieOriginCSRFMiddleware
+
+    monkeypatch.setenv("ERP_ENVIRONMENT", "production")
+    monkeypatch.setenv("ERP_PRODUCTION_TRANSPORT", "lan_http")
+    monkeypatch.setenv(
+        "ERP_SECRET_KEY",
+        "n031-lan-cookie-test-secret-longer-than-32-characters",
+    )
+    monkeypatch.setenv("ERP_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("ERP_PORT", "8000")
+    monkeypatch.setenv("ERP_ALLOWED_ORIGINS", "http://192.168.3.80:8000")
+    monkeypatch.setenv("ERP_TRUSTED_HOSTS", "192.168.3.80,127.0.0.1,localhost")
+    monkeypatch.delenv("ERP_TRUSTED_PROXY_IPS", raising=False)
+    monkeypatch.setenv(
+        "ERP_HEALTH_URL",
+        "http://192.168.3.80:8000/api/health",
+    )
+    monkeypatch.setenv("ERP_BROWSER_URL", "http://192.168.3.80:8000/")
+    monkeypatch.delenv("ERP_SESSION_COOKIE_SECURE", raising=False)
+    current = load_settings()
+    monkeypatch.setattr(auth_api, "load_settings", lambda: current)
+
+    app, _ = auth_revocation_context
+    app.add_middleware(
+        CookieOriginCSRFMiddleware,
+        allowed_origins=current.allowed_origins,
+        session_cookie_name=current.session_cookie_name,
+    )
+    with TestClient(app, base_url="http://192.168.3.80:8000") as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "AdminPass123!"},
+        )
+        logout = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "http://192.168.3.80:8000"},
+        )
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"]
+    assert "Secure" not in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert logout.status_code == 200
+
+
 def test_security_relevant_user_updates_revoke_target_sessions(auth_revocation_context) -> None:
     app, session_factory = auth_revocation_context
     with TestClient(app) as admin_client, TestClient(app) as target_client:

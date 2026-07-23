@@ -227,15 +227,16 @@ function Initialize-ReleaseRuntime {
     New-Item -ItemType Directory -Path $logDir, $backupDir, $rehearsalDir, $reportDir -Force | Out-Null
 
     $runtimeConfig = @(
-        & $script:python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.port); print(s.workers); print(s.environment); print(s.health_url); print(s.browser_url); print(s.bind_host); print(s.database_path)" 2>&1
+        & $script:python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(s.bind_host); print(s.database_path)" 2>&1
     )
-    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 7) {
+    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 8) {
         $runtimeConfig | ForEach-Object { Write-Log "config: $_" "ERROR" }
         throw "ERP production runtime configuration is invalid."
     }
-    $script:ErpPort = [int]$runtimeConfig[-7].ToString().Trim()
-    $workers = [int]$runtimeConfig[-6].ToString().Trim()
-    $environment = $runtimeConfig[-5].ToString().Trim()
+    $script:ErpPort = [int]$runtimeConfig[-8].ToString().Trim()
+    $workers = [int]$runtimeConfig[-7].ToString().Trim()
+    $environment = $runtimeConfig[-6].ToString().Trim()
+    $productionTransport = $runtimeConfig[-5].ToString().Trim()
     $healthUrl = $runtimeConfig[-4].ToString().Trim()
     $browserUrl = $runtimeConfig[-3].ToString().Trim()
     $bindHost = $runtimeConfig[-2].ToString().Trim()
@@ -245,11 +246,19 @@ function Initialize-ReleaseRuntime {
         throw "正式发布要求 ERP_ENVIRONMENT=production；当前为 $environment。"
     }
     if ($workers -ne 1) { throw "正式发布要求 ERP_WORKERS=1。" }
-    if ($healthUrl -notlike "https://*" -or $browserUrl -notlike "https://*") {
-        throw "正式发布要求 HTTPS ERP_HEALTH_URL 与 ERP_BROWSER_URL。"
-    }
-    if ($bindHost -notin @("127.0.0.1", "::1")) {
-        throw "正式发布后端只允许 loopback 监听。"
+    if ($productionTransport -eq "https_proxy") {
+        if ($healthUrl -notlike "https://*" -or $browserUrl -notlike "https://*") {
+            throw "https_proxy 正式发布要求 HTTPS ERP_HEALTH_URL 与 ERP_BROWSER_URL。"
+        }
+        if ($bindHost -notin @("127.0.0.1", "::1")) {
+            throw "https_proxy 正式发布后端只允许 loopback 监听。"
+        }
+    } elseif ($productionTransport -eq "lan_http") {
+        if ($healthUrl -notlike "http://*" -or $browserUrl -notlike "http://*") {
+            throw "lan_http 正式发布要求 HTTP ERP_HEALTH_URL 与 ERP_BROWSER_URL。"
+        }
+    } else {
+        throw "不支持的 ERP_PRODUCTION_TRANSPORT：$productionTransport"
     }
     if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals(
         $databasePath,

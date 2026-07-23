@@ -9,19 +9,39 @@
 - 家庭 UAT 只允许独立 SQLite 副本、`18000-19999` 独立端口、loopback 和 `ERP_ENVIRONMENT=test`。
 - 本轮没有新增 Alembic revision，也不包含 N081。
 
-## 2. 当前工厂部署前置阻断
+## 2. 正式传输模式
 
-正式启动器现在强制要求：
+正式环境必须显式选择或接受默认模式：
 
-- `ERP_ENVIRONMENT=production`；
-- 数据库必须为当前项目的 `data\carton_erp.sqlite3`；
-- 后端只监听 `127.0.0.1` 或 `::1`；
-- `ERP_HEALTH_URL`、`ERP_BROWSER_URL` 和允许来源使用已批准的 HTTPS 地址；
-- 显式可信 Host、loopback 代理地址、单 worker 和合格会话密钥。
+- `https_proxy`：默认且推荐。后端只监听 loopback，外部通过受信 loopback 反向代理使用 HTTPS；Cookie 使用 `Secure`，启用 HTTPS 跳转和 HSTS。
+- `lan_http`：仅供已核实的工厂受控私网直连。允许 `0.0.0.0` 或私网 IP 监听，但来源、服务 URL 和端口必须是显式私网值，禁止配置受信代理；仍启用可信 Host、精确 CORS、会话 Cookie 的 `HttpOnly + SameSite=Lax`、带 Cookie 写请求的 Origin/CSRF 门禁及其他安全响应头。
 
-当前工厂仍是 `development + 0.0.0.0:8000 + LAN HTTP`，且没有已确认的 HTTPS 反向代理。因此，本 P0-A 分支只能先做代码审查和隔离 UAT；在网络/证书/反向代理方案单独批准并配置前，不得直接替换工厂启动脚本或重启正式服务。
+`lan_http` 的通信和 Cookie 不加密，只能用于没有路由器端口映射、没有公网暴露、客户端受控且 Windows 防火墙把 TCP 8000 限定在工厂私网的场景。向日葵只用于控制工厂电脑，不应把 ERP 端口暴露给互联网；以后需要跨网络直接访问 ERP 时，必须切换 VPN/HTTPS 方案。
 
-## 3. 普通正式启动
+2026-07-23 工厂只读核验确认：主机 `PC-20250926DZYH`，私网地址 `192.168.3.80/24`，ERP 当前监听 `0.0.0.0:8000`，没有 80/443 代理证据。因此本次正式候选采用显式 `lan_http`，不再把“尚无 HTTPS 代理”本身视为阻断；发布前仍必须只读核对防火墙入站范围，并按本手册完成备份、演练、授权和 UAT。
+
+## 3. 工厂正式配置与普通启动
+
+工厂当前网络对应的 `.env` 非敏感配置为：
+
+```ini
+ERP_ENVIRONMENT=production
+ERP_PRODUCTION_TRANSPORT=lan_http
+ERP_DATABASE_PATH=data/carton_erp.sqlite3
+ERP_BIND_HOST=0.0.0.0
+ERP_PORT=8000
+ERP_WORKERS=1
+ERP_ALLOWED_ORIGINS=http://192.168.3.80:8000
+ERP_TRUSTED_HOSTS=192.168.3.80,PC-20250926DZYH,127.0.0.1,localhost
+ERP_TRUSTED_PROXY_IPS=
+ERP_HEALTH_URL=http://192.168.3.80:8000/api/health
+ERP_BROWSER_URL=http://192.168.3.80:8000/
+ERP_SECRET_KEY_FILE=data/session_secret.key
+```
+
+会话密钥文件必须在切换前已存在且长度至少 32；不得把内容打印到终端或提交 Git。若工厂 IP、网段或端口变化，必须同步更新 Origin、Host、URL 和防火墙范围，不得临时改为通配符。
+
+防火墙门禁：发布前先只读列出所有命中 Python/8000 的入站规则；正式规则只允许 Private 配置文件和 `192.168.3.0/24` 访问 TCP 8000。发现公网、Any 或更宽网段规则时先停止发布，单独确认如何收窄，不能仅新增一条窄规则后保留旧的宽规则。
 
 正式配置完成后仍使用原入口：
 

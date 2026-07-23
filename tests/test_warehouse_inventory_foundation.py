@@ -729,6 +729,35 @@ def test_disabled_or_wrong_type_location_cannot_receive(db: Session) -> None:
         )
 
 
+def test_explicitly_unplaced_location_cannot_receive_inventory(db: Session) -> None:
+    customer, product = seed_product(db)
+    location = seed_location(db, "finished")
+    location.placement_status = "unplaced"
+    db.flush()
+
+    with pytest.raises(WarehouseInventoryError) as error:
+        manual_finished_in(
+            db,
+            customer_id=customer.id,
+            product_id=product.id,
+            location_id=location.id,
+            quantity=1,
+            stock_date=date.today(),
+            source_type="manual",
+            remarks=None,
+            operator_id=None,
+            idempotency_key="n081-unplaced-manual-in",
+        )
+
+    assert error.value.status_code == 409
+    assert "尚未完成空间放置" in str(error.value)
+    assert db.scalar(
+        select(func.count(InventoryLot.id)).where(
+            InventoryLot.warehouse_location_id == location.id
+        )
+    ) == 0
+
+
 @pytest.mark.parametrize(
     ("days", "level"),
     [(100, None), (365, "attention"), (548, "handling"), (730, "cleanup")],

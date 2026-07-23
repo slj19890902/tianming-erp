@@ -4,7 +4,7 @@ import json
 from hashlib import sha256
 from uuid import uuid4
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import beijing_now_naive, utc_naive_to_api, utc_now_naive
@@ -84,6 +84,12 @@ def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
             404,
             "STOCKTAKE_LOCATION_NOT_FOUND",
         )
+    if getattr(location, "placement_status", None) == "unplaced":
+        raise StocktakeError(
+            "该库位尚未完成空间放置，不能发起盘点",
+            409,
+            "STOCKTAKE_LOCATION_UNPLACED",
+        )
     return location
 
 
@@ -113,7 +119,13 @@ def list_locations(db: Session) -> list[dict[str, object]]:
                 InventoryLot.inventory_type == "finished",
             ),
         )
-        .where(WarehouseLocation.is_active.is_(True))
+        .where(
+            WarehouseLocation.is_active.is_(True),
+            or_(
+                WarehouseLocation.placement_status == "placed",
+                WarehouseLocation.placement_status.is_(None),
+            ),
+        )
         .group_by(WarehouseLocation.id)
         .order_by(
             WarehouseLocation.sort_order,
@@ -128,6 +140,7 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             "location_name": location.location_name,
             "warehouse_type": location.warehouse_type,
             "area_code": location.area_code,
+            "placement_status": location.placement_status or "placed",
             "is_temporary": location.is_temporary,
             "active_lot_count": int(active_lot_count),
             "frozen_lot_count": int(frozen_lot_count),

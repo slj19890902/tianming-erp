@@ -260,6 +260,7 @@ def create_layout_slot(
         sort_order=sort_order,
         is_temporary=anchor.is_temporary,
         source_version="V11",
+        placement_status="placed",
     )
     location.floor3_layout = Floor3LocationLayout(
         left_pct=left_pct,

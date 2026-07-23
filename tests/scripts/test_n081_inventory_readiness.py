@@ -31,6 +31,7 @@ def _create_database(path: Path) -> None:
                 area_code TEXT,
                 storage_type TEXT,
                 is_temporary INTEGER NOT NULL,
+                placement_status TEXT NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE floor3_location_layouts (location_id INTEGER PRIMARY KEY);
@@ -81,8 +82,8 @@ def _create_database(path: Path) -> None:
             );
 
             INSERT INTO warehouse_locations VALUES
-                (1, 'E1-L09', '三楼 E1-L09', 'finished', 1, 3, 'E', 'rack', 0, 1),
-                (2, 'G1-L02', '待补资料库位', 'shared', 1, NULL, NULL, NULL, 0, 2);
+                (1, 'E1-L09', '三楼 E1-L09', 'finished', 1, 3, 'E', 'rack', 0, 'placed', 1),
+                (2, 'G1-L02', '待补资料库位', 'shared', 1, NULL, NULL, NULL, 0, 'unplaced', 2);
             INSERT INTO floor3_location_layouts VALUES (1);
             INSERT INTO inventory_lots VALUES
                 (1, 'LOT-F-001', 'finished', 1, 100, 0, 'boxes', 'active', 'stocktake', '2026-07-23'),
@@ -117,11 +118,16 @@ def test_n081_readiness_export_is_read_only_and_reports_gaps(tmp_path: Path) -> 
     assert report["audit"]["alembic"] == ["cg63v8x9z52"]
     assert report["summary"]["table_counts"]["inventory_lots"] == 2
     assert report["summary"]["issue_counts"] == {
+        "active_lot_in_unplaced_location": 1,
         "active_lot_missing_type_detail": 1,
         "active_lot_without_pallet": 1,
         "current_pallet_location_requires_review": 1,
-        "location_master_data_incomplete": 1,
+        "location_unplaced": 1,
         "pallet_snapshot_requires_review": 1,
+    }
+    assert report["summary"]["locations_by_placement"] == {
+        "placed": 1,
+        "unplaced": 1,
     }
     assert all(Path(path).is_file() for path in outputs.values())
     assert "是否写入数据库：`false`" in Path(outputs["markdown"]).read_text(

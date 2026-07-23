@@ -301,6 +301,7 @@
           <div class="field"><label>类型</label><select id="locationType"><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="shared">共用</option></select></div>
           <div class="field"><label>所属楼层</label><select id="locationFloor"><option value="">其他 / 未指定</option><option value="1">一楼</option><option value="2">二楼</option><option value="3">三楼（同步平面图）</option></select></div>
           <div class="field"><label>所属区域</label><input id="locationArea" maxlength="30" placeholder="例如 C1；三楼必须填写"></div>
+          <div class="field"><label>存储方式</label><select id="locationStorageType"><option value="">未放置</option><option value="ground">地面位</option><option value="rack">货架位</option><option value="temporary_aisle">临时位</option></select></div>
           <div class="field"><label>备注</label><input id="locationRemarks"></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存库位</button></div>
         </div>
@@ -594,7 +595,7 @@
       refreshAreaOptions("fgArea","finished","请选择区域");refreshLocationCascade("fgArea","fgLocation","finished","请先选择区域");
       refreshAreaOptions("lotEditArea","finished","请选择区域");refreshLocationCascade("lotEditArea","lotEditLocation","finished","请先选择区域");
       refreshAreaOptions("siArea","semi_finished","请选择区域");refreshLocationCascade("siArea","siLocation","semi_finished","请先选择区域");
-      const semiLocations=active.filter(x=>["semi_finished","shared"].includes(x.warehouse_type));
+      const semiLocations=active.filter(x=>x.placement_status!=="unplaced"&&["semi_finished","shared"].includes(x.warehouse_type));
       $("siLocation").disabled=!semiLocations.length;$("siLocationHint").classList.toggle("hidden",Boolean(semiLocations.length));
       if(includeInactive)renderLocations();
     }
@@ -609,7 +610,7 @@
     }
     function locationsForInventoryType(inventoryType){
       const allowed=inventoryType==="semi_finished"?["semi_finished","shared"]:["finished","shared"];
-      return (state.locations||[]).filter(row=>row.is_active&&allowed.includes(row.warehouse_type)).sort((a,b)=>locationAreaLabel(a).localeCompare(locationAreaLabel(b),"zh-CN",{numeric:true})||String(a.location_code).localeCompare(String(b.location_code),"zh-CN",{numeric:true}));
+      return (state.locations||[]).filter(row=>row.is_active&&row.placement_status!=="unplaced"&&allowed.includes(row.warehouse_type)).sort((a,b)=>locationAreaLabel(a).localeCompare(locationAreaLabel(b),"zh-CN",{numeric:true})||String(a.location_code).localeCompare(String(b.location_code),"zh-CN",{numeric:true}));
     }
     function refreshAreaOptions(selectId,inventoryType,placeholder){
       const select=$(selectId),previous=select.value,seen=new Map();
@@ -900,12 +901,12 @@
     }
     async function toggleMold(id,active){try{await api(`/api/warehouse/molds/${id}/${active?"disable":"enable"}`,{method:"PUT"});await loadMolds()}catch(err){toast(err.message,true)}}
     function renderLocations(){
-      $("locationBody").innerHTML=state.locations.map(x=>`<tr><td>${h(x.location_code)}</td><td>${h(x.location_name)}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${x.source_version==="V11"?'<br><span class="tag">已联动三楼平面图</span>':""}</td><td>${x.is_active?"启用":"停用"}</td><td>${h(x.remarks||"-")}</td><td>${x.source_version==="V11"?`<button class="btn" onclick="locateLedgerFloor3Location(${x.id})">平面图定位</button>`:`<button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button>`}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库位</td></tr>`
+      $("locationBody").innerHTML=state.locations.map(x=>{const placed=x.placement_status!=="unplaced",mapped=placed&&x.source_version==="V11";return `<tr><td>${h(x.location_code)}</td><td>${h(x.location_name)}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${mapped?'<br><span class="tag">已联动三楼平面图</span>':placed?'<br><span class="tag">已放置</span>':'<br><span class="tag warn">未放置，禁止入库</span>'}</td><td>${x.is_active?"启用":"停用"}</td><td>${h(x.remarks||"-")}</td><td>${mapped?`<button class="btn" onclick="locateLedgerFloor3Location(${x.id})">平面图定位</button>`:`<button class="btn" onclick="editLocation(${x.id})">编辑</button><button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"停用":"启用"}</button>`}</td></tr>`}).join("")||`<tr><td colspan="7" class="empty">暂无库位</td></tr>`
     }
     async function locateLedgerFloor3Location(id){await switchLocationView("floor3");await focusFloor3SearchResult(id)}
-    function editLocation(id){const x=state.locations.find(v=>v.id===id);$("locationId").value=x.id;$("locationCode").value=x.location_code;$("locationName").value=x.location_name;$("locationType").value=x.warehouse_type;$("locationFloor").value=x.warehouse_floor||"";$("locationArea").value=x.area_code||"";$("locationRemarks").value=x.remarks||""}
+    function editLocation(id){const x=state.locations.find(v=>v.id===id);$("locationId").value=x.id;$("locationCode").value=x.location_code;$("locationName").value=x.location_name;$("locationType").value=x.warehouse_type;$("locationFloor").value=x.warehouse_floor||"";$("locationArea").value=x.area_code||"";$("locationStorageType").value=x.storage_type||"";$("locationRemarks").value=x.remarks||""}
     async function saveLocation(e){
-      e.preventDefault();const id=$("locationId").value,floor=$("locationFloor").value?Number($("locationFloor").value):null,area=$("locationArea").value.trim().toUpperCase(),payload={location_code:$("locationCode").value.trim().toUpperCase(),location_name:$("locationName").value.trim(),warehouse_type:$("locationType").value,warehouse_floor:floor,area_code:area||null,remarks:$("locationRemarks").value||null};
+      e.preventDefault();const id=$("locationId").value,floor=$("locationFloor").value?Number($("locationFloor").value):null,area=$("locationArea").value.trim().toUpperCase(),storageType=$("locationStorageType").value,payload={location_code:$("locationCode").value.trim().toUpperCase(),location_name:$("locationName").value.trim(),warehouse_type:$("locationType").value,warehouse_floor:floor,area_code:area||null,storage_type:storageType||null,remarks:$("locationRemarks").value||null};
       if(floor===3&&!area){toast("三楼库位必须选择或填写区域，例如 C1",true);return}if(floor===3&&!payload.location_code.startsWith(`${area}-`)){toast(`三楼货位编码必须以 ${area}- 开头`,true);return}
       try{await api(`/api/warehouse/locations${id?"/"+id:""}`,{method:id?"PUT":"POST",body:JSON.stringify(payload)});toast(floor===3?"库位已保存，并与三楼平面图联动":"库位保存成功");e.target.reset();$("locationId").value="";await loadLocations(true);if(floor===3)await refreshFloor3LocationData()}catch(err){toast(err.message,true)}
     }

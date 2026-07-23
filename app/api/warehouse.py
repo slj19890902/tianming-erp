@@ -130,6 +130,7 @@ class LocationPayload(BaseModel):
     warehouse_type: str
     warehouse_floor: int | None = Field(default=None, ge=1, le=99)
     area_code: str | None = Field(default=None, max_length=30)
+    storage_type: str | None = Field(default=None, max_length=30)
     remarks: str | None = None
 
     @field_validator("location_code", "location_name")
@@ -150,6 +151,16 @@ class LocationPayload(BaseModel):
         normalized = (value or "").strip().upper()
         return normalized or None
 
+    @field_validator("storage_type")
+    @classmethod
+    def valid_storage_type(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"ground", "rack", "temporary_aisle"}:
+            raise ValueError("存储方式必须是地面位、货架位或临时位")
+        return normalized
+
     @model_validator(mode="after")
     def validate_floor_area(self):
         if self.warehouse_floor == 3:
@@ -159,6 +170,10 @@ class LocationPayload(BaseModel):
                 raise ValueError("三楼平面图目前只接入成品或共用库位")
             if not self.location_code.upper().startswith(f"{self.area_code}-"):
                 raise ValueError("三楼货位编码必须以区域编码加连字符开头")
+        elif any((self.warehouse_floor, self.area_code, self.storage_type)) and not all(
+            (self.warehouse_floor, self.area_code, self.storage_type)
+        ):
+            raise ValueError("普通库位要启用入库，必须同时填写楼层、区域和存储方式")
         return self
 
 
@@ -700,6 +715,7 @@ def _location_dict(row: WarehouseLocation) -> dict:
         "sort_order": getattr(row, "sort_order", 0),
         "is_temporary": getattr(row, "is_temporary", False),
         "source_version": getattr(row, "source_version", None),
+        "placement_status": getattr(row, "placement_status", None) or "placed",
         "is_active": row.is_active,
         "remarks": row.remarks,
     }
@@ -3494,7 +3510,20 @@ def create_location(
             row.warehouse_type = payload.warehouse_type
             row.remarks = payload.remarks
         else:
-            row = WarehouseLocation(**payload.model_dump())
+            values = payload.model_dump()
+            values["placement_status"] = (
+                "placed"
+                if all(
+                    (
+                        payload.warehouse_floor,
+                        payload.area_code,
+                        payload.storage_type,
+                    )
+                )
+                else "unplaced"
+            )
+            values["is_temporary"] = payload.storage_type == "temporary_aisle"
+            row = WarehouseLocation(**values)
             db.add(row)
         db.commit()
     except Floor3LocationError as error:
@@ -3522,7 +3551,36 @@ def update_location(
             status_code=409,
             detail="已有普通库位不能直接改成三楼平面图货位；请在三楼区域新增物理位后迁移库存。",
         )
-    for key, value in payload.model_dump().items():
+    values = payload.model_dump()
+    values["placement_status"] = (
+        "placed"
+        if all((payload.warehouse_floor, payload.area_code, payload.storage_type))
+        else "unplaced"
+    )
+    values["is_temporary"] = payload.storage_type == "temporary_aisle"
+    if values["placement_status"] == "unplaced":
+        has_lot = db.scalar(
+            select(InventoryLot.id)
+            .where(
+                InventoryLot.warehouse_location_id == row.id,
+                InventoryLot.status.in_(("active", "frozen")),
+            )
+            .limit(1)
+        )
+        has_pallet = db.scalar(
+            select(InventoryPallet.id)
+            .where(
+                InventoryPallet.location_id == row.id,
+                InventoryPallet.is_current.is_(True),
+            )
+            .limit(1)
+        )
+        if has_lot is not None or has_pallet is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该库位仍有库存或当前栈板，不能改为未放置。",
+            )
+    for key, value in values.items():
         setattr(row, key, value)
     try:
         db.commit()

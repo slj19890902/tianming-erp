@@ -2213,6 +2213,7 @@ def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate
                 "warehouse_type": "finished",
                 "warehouse_floor": 3,
                 "area_code": "a1",
+                "storage_type": "ground",
                 "remarks": "从全部库位台账新增",
             },
         )
@@ -2221,6 +2222,7 @@ def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate
         assert floor3_row["source_version"] == "V11"
         assert floor3_row["warehouse_floor"] == 3
         assert floor3_row["area_code"] == "A1"
+        assert floor3_row["placement_status"] == "placed"
 
         mapped = client.get(
             "/api/warehouse/floor3/locations",
@@ -2240,12 +2242,14 @@ def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate
                 "warehouse_type": "finished",
                 "warehouse_floor": 1,
                 "area_code": "C1",
+                "storage_type": "ground",
                 "remarks": "未来一楼区域",
             },
         )
         assert floor1.status_code == 200, floor1.text
         assert floor1.json()["warehouse_floor"] == 1
         assert floor1.json()["source_version"] is None
+        assert floor1.json()["placement_status"] == "placed"
         assert floor1.json()["id"] not in {
             row["id"] for row in mapped.json()["items"]
         }

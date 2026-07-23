@@ -91,7 +91,24 @@ def stocktake_api(tmp_path: Path):
             warehouse_type="finished",
             is_active=True,
         )
-        db.add_all([admin, workshop, restricted, customer, location, other_location])
+        unplaced_location = WarehouseLocation(
+            location_code="N035-UNPLACED",
+            location_name="N035 未放置库位",
+            warehouse_type="finished",
+            placement_status="unplaced",
+            is_active=True,
+        )
+        db.add_all(
+            [
+                admin,
+                workshop,
+                restricted,
+                customer,
+                location,
+                other_location,
+                unplaced_location,
+            ]
+        )
         db.flush()
         product = Product(
             customer_id=customer.id,
@@ -194,6 +211,7 @@ def stocktake_api(tmp_path: Path):
             "restricted": restricted.id,
             "location": location.id,
             "other_location": other_location.id,
+            "unplaced_location": unplaced_location.id,
             "lot1": lots[0].id,
             "lot2": lots[1].id,
             "other_lot": lots[2].id,
@@ -372,6 +390,45 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
             item.specification_snapshot == "500 × 300 × 200"
             for item in row.items
         )
+
+
+def test_unplaced_location_is_hidden_and_cannot_start_stocktake(
+    stocktake_api,
+) -> None:
+    application, _factory, ids = stocktake_api
+    with TestClient(application) as client:
+        _login(client, "n035-workshop")
+        listing = client.get("/api/warehouse/stocktake/locations")
+        assert listing.status_code == 200
+        assert ids["unplaced_location"] not in {
+            row["id"] for row in listing.json()["items"]
+        }
+
+        detail = client.get(
+            f"/api/warehouse/stocktake/locations/{ids['unplaced_location']}"
+        )
+        assert detail.status_code == 409
+        assert detail.json()["detail"]["code"] == "STOCKTAKE_LOCATION_UNPLACED"
+
+        submit = client.post(
+            "/api/warehouse/stocktakes",
+            json={
+                "location_id": ids["unplaced_location"],
+                "items": [
+                    {
+                        "inventory_lot_id": ids["lot1"],
+                        "counted_quantity": 8,
+                        "expected_version": 3,
+                        "expected_available": 10,
+                        "expected_reserved": 2,
+                        "client_line_id": "n081-unplaced-line",
+                    }
+                ],
+                "idempotency_key": "n081-unplaced-stocktake",
+            },
+        )
+        assert submit.status_code == 409
+        assert submit.json()["detail"]["code"] == "STOCKTAKE_LOCATION_UNPLACED"
 
 
 def test_submission_flushes_draft_items_before_transitioning_to_submitted(

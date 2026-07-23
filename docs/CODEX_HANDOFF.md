@@ -1,5 +1,16 @@
 # Codex 项目交接
 
+## 2026-07-23 N081-A1 | 库位空间放置就绪门禁（隔离 UAT 已通过）
+
+- 已按用户验收结论将 `7d8dc5e87a25b7c2632ef76ff4eb052f1dc4e0a6` 快进推送到远端 `factory-current-baseline`；未修改 `origin/main`、未强推。随后从 `origin/factory-current-baseline@7d8dc5e` 建立独立 worktree `D:\tm-worktrees\erp-n081-a-space-readiness-gate-20260723` 和分支 `codex/n081-a-space-readiness-gate-20260723`。
+- 本轮只做 N081-A 的最小空间主数据闭环：为库位增加显式 `placement_status=placed/unplaced`，未放置库位仍保留在台账中，但不能入库存批次、不能承载当前栈板、不能进入盘点库位候选；没有新建第二套库存余额，也没有开始 N081-B1 盘点导入。
+- 新迁移 `ch64v8x9z53` 线性接续 `cg63v8x9z52`。迁移把既有完整空间位标记为 `placed`，把 `C1-R12/C1-R13` 补入三楼 C1 固定地面位并扩展右侧布局为 13 格；`SF-TEMP` 保持显式 `unplaced`。数据库触发器防止正式库存、当前栈板落入未放置/停用库位，并阻止仍有引用的库位被改为未放置。C1-R12/R13 一旦承载库存、栈板或人工布局，降级将 fail-closed。
+- 库位台账新增“存储方式”，并显示“已放置”或“未放置，禁止入库”；成品/半成品入库选择器过滤未放置库位。N035 盘点后端同样过滤未放置库位并返回专用 409。N081 只读报告现在区分 `location_unplaced` 与主数据损坏，停用历史行不再计为待整改活动库位。
+- 隔离迁移探针使用 `D:\tm-uat\n081_floor3_placement_20260723_125337\carton_erp_uat.sqlite3` 的再次复制件；复制前后 SHA-256 均为 `8B475C78A793BA5C5C130CDE8D19BF22922A4B40B70BB521398C12DC733836AC`。升级后 `398 placed / 2 unplaced`、`quick_check=ok`、外键异常 0、C1 右侧布局 13 格。
+- 可人工验收的再次复制件位于 `D:\tm-uat\n081_space_readiness_20260723_145244\carton_erp_uat.sqlite3`，已从 `cg63v8x9z52` 升级到 `ch64v8x9z53`；本机 UAT 服务为 `http://127.0.0.1:18084/warehouse.html`，账号 `codex_uat`，密码 `123456`。浏览器已确认 C1-R12/R13 均出现在 C1 平面图和入仓候选，SF-TEMP/3D00001 在台账显示“未放置，禁止入库”且不出现在入仓候选；Console 无 error/warn。
+- 自动验证覆盖迁移升级/安全降级/降级阻断、数据库触发器、入库服务、盘点 API、库位 API、只读报告和前端 JavaScript，共 `81 passed`；Python 编译、Alembic 单 head 和 `git diff --check` 均通过。警告仅为既有 `datetime.utcnow()` 弃用提示。
+- 用户已确认 N081-A1 人工验收通过，同意进入独立提交与推送阶段。本轮未连接或写入工厂正式数据库；性能优化必须另建分支，不得混入本提交。
+
 ## 2026-07-23 N081 试盘 | 三楼固定货位归位与空闲位绑定 UI（家庭隔离 UAT 已通过）
 
 - 独立 worktree：`D:\tm-worktrees\erp-n081-floor3-placement-bind-ui-20260723`；分支：`codex/n081-floor3-placement-bind-ui-20260723`；基线：`b7281f4e1108b368ea66310841d2ab16b5823076`。本轮没有新增 Alembic migration，也没有连接、替换或写入工厂正式数据库。

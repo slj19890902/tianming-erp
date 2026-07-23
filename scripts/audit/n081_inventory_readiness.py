@@ -31,6 +31,7 @@ REQUIRED_COLUMNS = {
         "area_code",
         "storage_type",
         "is_temporary",
+        "placement_status",
     },
     "inventory_lots": {
         "id",
@@ -107,6 +108,7 @@ LOCATION_COLUMNS = (
     "area_code",
     "storage_type",
     "is_temporary",
+    "placement_status",
     "has_floor3_layout",
     "current_pallet_id",
     "current_pallet_code",
@@ -237,6 +239,7 @@ def _location_rows(
             l.area_code,
             l.storage_type,
             l.is_temporary,
+            l.placement_status,
             {layout_select} AS has_floor3_layout,
             p.id AS current_pallet_id,
             p.pallet_code AS current_pallet_code,
@@ -251,7 +254,7 @@ def _location_rows(
         GROUP BY
             l.id, l.location_code, l.location_name, l.warehouse_type,
             l.is_active, l.warehouse_floor, l.area_code, l.storage_type,
-            l.is_temporary, has_floor3_layout, p.id, p.pallet_code
+            l.is_temporary, l.placement_status, has_floor3_layout, p.id, p.pallet_code
         ORDER BY l.sort_order, l.location_code, l.id
         """
     ).fetchall()
@@ -263,6 +266,20 @@ def _issues(
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     for row in locations:
+        if not row["is_active"]:
+            continue
+        if row["placement_status"] == "unplaced":
+            issues.append(
+                _issue(
+                    "location_unplaced",
+                    entity_type="location",
+                    entity_id=int(row["location_id"]),
+                    location_id=row["location_id"],
+                    location_code=row["location_code"],
+                    details="库位已明确标记为未放置，不能入库或发起盘点",
+                )
+            )
+            continue
         missing = [
             label
             for label, value in (
@@ -283,6 +300,20 @@ def _issues(
                     details=f"缺少：{'、'.join(missing)}",
                 )
             )
+        elif (
+            int(row["warehouse_floor"] or 0) == 3
+            and not bool(row["has_floor3_layout"])
+        ):
+            issues.append(
+                _issue(
+                    "location_master_data_incomplete",
+                    entity_type="location",
+                    entity_id=int(row["location_id"]),
+                    location_id=row["location_id"],
+                    location_code=row["location_code"],
+                    details="三楼库位缺少平面图放置记录",
+                )
+            )
 
     for row in connection.execute(
         """
@@ -299,6 +330,7 @@ def _issues(
             finished.inventory_lot_id AS finished_detail_id,
             semi.inventory_lot_id AS semi_detail_id,
             loc.is_active AS location_active
+            , loc.placement_status AS location_placement_status
         FROM inventory_lots lot
         LEFT JOIN warehouse_locations loc ON loc.id=lot.warehouse_location_id
         LEFT JOIN inventory_pallet_items item ON item.inventory_lot_id=lot.id
@@ -334,6 +366,16 @@ def _issues(
                     entity_type="lot",
                     entity_id=int(row["lot_id"]),
                     details="正式批次缺少对应成品/半成品明细",
+                    **common,
+                )
+            )
+        if row["location_placement_status"] != "placed":
+            issues.append(
+                _issue(
+                    "active_lot_in_unplaced_location",
+                    entity_type="lot",
+                    entity_id=int(row["lot_id"]),
+                    details="正式库存位于未放置库位，必须先停止并修正空间主数据",
                     **common,
                 )
             )
@@ -474,6 +516,11 @@ def audit_database(database: str | Path) -> dict[str, Any]:
                 connection,
                 "SELECT warehouse_floor, COUNT(*) FROM warehouse_locations "
                 "GROUP BY warehouse_floor ORDER BY warehouse_floor",
+            ),
+            "locations_by_placement": _group_counts(
+                connection,
+                "SELECT placement_status, COUNT(*) FROM warehouse_locations "
+                "GROUP BY placement_status ORDER BY placement_status",
             ),
             "lots_by_type": _group_counts(
                 connection,

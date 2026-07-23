@@ -111,6 +111,11 @@ def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLo
             )
     if not location.is_active:
         raise WarehouseInventoryError("该库位已停用，不能入库")
+    if getattr(location, "placement_status", None) == "unplaced":
+        raise WarehouseInventoryError(
+            "该库位尚未完成空间放置，不能入库；请先补齐楼层、区域和存储方式",
+            409,
+        )
     if location.warehouse_type not in allowed:
         raise WarehouseInventoryError("所选库位类型与库存类型不匹配")
     return location

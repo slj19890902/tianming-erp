@@ -42,6 +42,10 @@ class WarehouseLocation(Base):
             "storage_type IS NULL OR storage_type IN ('ground','rack','temporary_aisle')",
             name="ck_warehouse_locations_storage_type",
         ),
+        CheckConstraint(
+            "placement_status IS NULL OR placement_status IN ('unplaced','placed')",
+            name="ck_warehouse_locations_placement_status",
+        ),
         UniqueConstraint("location_code", name="uq_warehouse_locations_code"),
         Index("ix_warehouse_locations_type_active", "warehouse_type", "is_active"),
     )
@@ -64,6 +68,9 @@ class WarehouseLocation(Base):
         Boolean, default=False, server_default=false(), nullable=False
     )
     source_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Alembic owns the formal non-null/default gate. Keeping ORM-only test
+    # schemas nullable preserves legacy fixtures that predate spatial placement.
+    placement_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )

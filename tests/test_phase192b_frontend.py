@@ -56,7 +56,7 @@ class TestMaterialDropdownSupplierLayerOnly:
 
 class TestProductFormFieldOrder:
     def test_field_order_supplier_layer_flute_code(self):
-        i_supplier = HTML.index('<div class="product-form-row product-material-row">')
+        i_supplier = HTML.index('<div class="product-material-controls">')
         block = HTML[i_supplier : i_supplier + 4000]
         p_supplier = block.index(">材质供应商<")
         p_layer = block.index(">层数<")

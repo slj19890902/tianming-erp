@@ -210,8 +210,16 @@ def test_customer_list_hides_inactive_and_delete_blocks_open_order(phase12_app):
             "/api/master/customers",
             params={"include_inactive": True},
         )
-        blocked = client.delete("/api/master/customers/1")
-        removed = client.delete("/api/master/customers/2")
+        blocked = client.request(
+            "DELETE",
+            "/api/master/customers/1",
+            json={"expected_version": 1, "change_reason": "验证未结订单删除保护"},
+        )
+        removed = client.request(
+            "DELETE",
+            "/api/master/customers/2",
+            json={"expected_version": 1, "change_reason": "清理已停用测试客户"},
+        )
 
     assert visible.json()["total"] == 1
     assert all_rows.json()["total"] == 2
@@ -232,7 +240,11 @@ def test_admin_can_reenable_inactive_customer(phase12_app):
         _login(client)
         enabled = client.put(
             "/api/master/customers/2/status",
-            json={"is_active": True},
+            json={
+                "is_active": True,
+                "expected_version": 1,
+                "change_reason": "恢复误停用测试客户",
+            },
         )
         visible = client.get("/api/master/customers")
 

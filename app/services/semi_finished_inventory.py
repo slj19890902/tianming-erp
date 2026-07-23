@@ -1027,13 +1027,14 @@ def inventory_fully_covers_order_item(db: Session, order_item_id: int) -> bool:
 def _finished_reservations_for_delivery(
     db: Session,
     order_item_id: int,
+    reservation_type: str = "finished_order",
 ) -> list[InventoryReservation]:
     return db.scalars(
         select(InventoryReservation)
         .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
         .where(
             InventoryReservation.order_item_id == order_item_id,
-            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.reservation_type == reservation_type,
             InventoryReservation.status != "cancelled",
             InventoryReservation.reserved_stock_quantity
             > InventoryReservation.consumed_stock_quantity
@@ -1084,11 +1085,11 @@ def consume_delivery_item_inventory(
     item = db.get(OrderItem, delivery_item.order_item_id)
     if item is None:
         raise WarehouseInventoryError("送货明细关联订单不存在", 409)
-    target_delivered = min(
-        max(int(delivered_quantity_after_dispatch), 0), int(item.quantity or 0)
-    )
+    target_delivered = max(int(delivered_quantity_after_dispatch), 0)
+    ordered_quantity = max(int(item.quantity or 0), 0)
+    target_order_delivery = min(target_delivered, ordered_quantity)
     finished_coverage = active_finished_reserved_qty(db, item.id)
-    target_finished = min(target_delivered, finished_coverage)
+    target_finished = min(target_order_delivery, finished_coverage)
     current_finished = int(
         db.scalar(
             select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
@@ -1128,6 +1129,62 @@ def consume_delivery_item_inventory(
     if remaining_finished > 0:
         raise WarehouseInventoryError("成品库存预占余额不足，无法完成发货", 409)
 
+    target_surplus = max(target_delivered - ordered_quantity, 0)
+    current_surplus = int(
+        db.scalar(
+            select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
+            .where(
+                InventoryReservation.order_item_id == item.id,
+                InventoryReservation.reservation_type == "finished_surplus_delivery",
+                InventoryReservation.status != "cancelled",
+            )
+        )
+        or 0
+    )
+    remaining_surplus = max(target_surplus - current_surplus, 0)
+    if remaining_surplus > 0:
+        from app.services.warehouse_inventory import (
+            reserve_finished_surplus_for_delivery,
+        )
+
+        reserve_finished_surplus_for_delivery(
+            db,
+            order_item_id=item.id,
+            quantity=remaining_surplus,
+            operator_id=operator_id,
+            operation_key=operation_key,
+        )
+    for reservation in _finished_reservations_for_delivery(
+        db,
+        item.id,
+        "finished_surplus_delivery",
+    ):
+        if remaining_surplus <= 0:
+            break
+        available = (
+            int(reservation.reserved_stock_quantity)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0)
+        )
+        quantity = min(available, remaining_surplus)
+        if quantity <= 0:
+            continue
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if lot is None:
+            raise WarehouseInventoryError("客户专用余货批次不存在", 409)
+        consume_finished_reservation(
+            db,
+            reservation_id=reservation.id,
+            stock_quantity=quantity,
+            expected_version=lot.version,
+            operator_id=operator_id,
+            idempotency_key=f"{operation_key}-o-{reservation.id}",
+            delivery_item_id=delivery_item.id,
+        )
+        remaining_surplus -= quantity
+    if remaining_surplus > 0:
+        raise WarehouseInventoryError("客户专用余货不足，无法完成超量送货", 409)
+
     # N029 consumes semi-finished reservations when production is completed.
     # Delivery must still consume finished reservations, but must not consume
     # the same semi-finished reservations a second time.
@@ -1136,7 +1193,7 @@ def consume_delivery_item_inventory(
     if has_production_completion_facts(db, [item.id]):
         return
 
-    semi_boxes = max(target_delivered - finished_coverage, 0)
+    semi_boxes = max(target_order_delivery - finished_coverage, 0)
     requirements = db.scalars(
         select(OrderItemSemiRequirement)
         .where(OrderItemSemiRequirement.order_item_id == item.id)
@@ -1248,11 +1305,11 @@ def reverse_delivery_item_inventory(
     item = db.get(OrderItem, delivery_item.order_item_id)
     if item is None:
         raise WarehouseInventoryError("送货明细关联订单不存在", 409)
-    target_delivered = min(
-        max(int(delivered_quantity_after_cancel), 0), int(item.quantity or 0)
-    )
+    target_delivered = max(int(delivered_quantity_after_cancel), 0)
+    ordered_quantity = max(int(item.quantity or 0), 0)
+    target_order_delivery = min(target_delivered, ordered_quantity)
     finished_coverage = active_finished_reserved_qty(db, item.id)
-    target_finished = min(target_delivered, finished_coverage)
+    target_finished = min(target_order_delivery, finished_coverage)
     current_finished = int(
         db.scalar(
             select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
@@ -1297,6 +1354,51 @@ def reverse_delivery_item_inventory(
     if excess_finished > 0:
         raise WarehouseInventoryError("成品送货消耗记录不足，无法取消发货", 409)
 
+    target_surplus = max(target_delivered - ordered_quantity, 0)
+    current_surplus = int(
+        db.scalar(
+            select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
+            .where(
+                InventoryReservation.order_item_id == item.id,
+                InventoryReservation.reservation_type == "finished_surplus_delivery",
+                InventoryReservation.status != "cancelled",
+            )
+        )
+        or 0
+    )
+    excess_surplus = max(current_surplus - target_surplus, 0)
+    for allocation in _active_delivery_allocations(
+        db,
+        order_item_id=item.id,
+        reservation_type="finished_surplus_delivery",
+        current_delivery_item_id=delivery_item.id,
+    ):
+        if excess_surplus <= 0:
+            break
+        active_stock = (
+            int(allocation.consumed_stock_quantity)
+            - int(allocation.reversed_stock_quantity or 0)
+        )
+        quantity = min(active_stock, excess_surplus)
+        if quantity <= 0:
+            continue
+        reservation = db.get(InventoryReservation, allocation.reservation_id)
+        lot = db.get(InventoryLot, reservation.inventory_lot_id) if reservation else None
+        if reservation is None or lot is None:
+            raise WarehouseInventoryError("余货送货库存分配关联异常", 409)
+        reverse_finished_consumption(
+            db,
+            reservation_id=reservation.id,
+            stock_quantity=quantity,
+            expected_version=lot.version,
+            operator_id=operator_id,
+            idempotency_key=f"{operation_key}-o-{allocation.id}",
+            allocation_id=allocation.id,
+        )
+        excess_surplus -= quantity
+    if excess_surplus > 0:
+        raise WarehouseInventoryError("余货送货消耗记录不足，无法取消发货", 409)
+
     # Production-time semi-finished consumption has no delivery allocation and
     # is a completion fact, so cancelling a delivery must not reverse it.
     from app.services.production_workflow import has_production_completion_facts
@@ -1304,7 +1406,7 @@ def reverse_delivery_item_inventory(
     if has_production_completion_facts(db, [item.id]):
         return
 
-    semi_boxes = max(target_delivered - finished_coverage, 0)
+    semi_boxes = max(target_order_delivery - finished_coverage, 0)
     requirements = db.scalars(
         select(OrderItemSemiRequirement)
         .where(OrderItemSemiRequirement.order_item_id == item.id)

@@ -432,6 +432,9 @@ def _statement_detail_response(
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
             OrderItem.snapshot_material.label("material"),
+            DeliveryItem.ordered_quantity_snapshot,
+            DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
+            DeliveryItem.over_delivery_quantity,
             StatementItem.actual_received_quantity,
             StatementItem.unit_price_snapshot,
             StatementItem.unit_cost_snapshot,
@@ -525,6 +528,9 @@ def export_statement_excel(
             OrderItem.snapshot_product_name,
             OrderItem.snapshot_spec,
             OrderItem.snapshot_material,
+            DeliveryItem.ordered_quantity_snapshot,
+            DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
+            DeliveryItem.over_delivery_quantity,
             StatementItem.actual_received_quantity,
             StatementItem.unit_price_snapshot,
             StatementItem.receivable_amount,
@@ -565,7 +571,7 @@ def export_statement_excel(
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     company_name = company.company_name if company and company.company_name else ""
 
-    col_count = 15
+    col_count = 18
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "月结对账单"
@@ -600,13 +606,16 @@ def export_statement_excel(
         "产品名称",    # 6
         "规格型号",    # 7
         "材质",        # 8
-        "实际签收数量", # 9
-        "单价",        # 10
-        "金额",        # 11
-        "备注",        # 12
-        "开票状态",    # 13
-        "对账状态",    # 14
-        "结清状态",    # 15
+        "订单数量",    # 9
+        "实际送货数量", # 10
+        "超订单数量",  # 11
+        "实际签收数量", # 12
+        "单价",        # 13
+        "金额",        # 14
+        "备注",        # 15
+        "开票状态",    # 16
+        "对账状态",    # 17
+        "结清状态",    # 18
     ]
     sheet.append([])
     sheet.append(headers)
@@ -625,6 +634,9 @@ def export_statement_excel(
                 line.snapshot_product_name,
                 line.snapshot_spec,
                 line.snapshot_material,
+                line.ordered_quantity_snapshot,
+                line.actual_delivery_quantity,
+                line.over_delivery_quantity,
                 line.actual_received_quantity,
                 float(line.unit_price_snapshot),
                 float(line.receivable_amount),
@@ -635,11 +647,14 @@ def export_statement_excel(
             ]
         )
     total_row = sheet.max_row + 2
-    sheet.cell(total_row, 10, "合计")
-    sheet.cell(total_row, 11, float(statement.total_receivable))
-    sheet.cell(total_row, 10).font = Font(bold=True)
-    sheet.cell(total_row, 11).font = Font(bold=True)
-    widths = [22, 18, 16, 13, 20, 28, 20, 14, 12, 12, 14, 24, 10, 10, 10]
+    sheet.cell(total_row, 13, "合计")
+    sheet.cell(total_row, 14, float(statement.total_receivable))
+    sheet.cell(total_row, 13).font = Font(bold=True)
+    sheet.cell(total_row, 14).font = Font(bold=True)
+    widths = [
+        22, 18, 16, 13, 20, 28, 20, 14, 12,
+        14, 12, 14, 12, 14, 24, 10, 10, 10,
+    ]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index)].width = width
     sheet.freeze_panes = "A6"
@@ -1176,6 +1191,9 @@ def _pending_statement_query(
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
             OrderItem.snapshot_spec.label("specification"),
+            DeliveryItem.ordered_quantity_snapshot,
+            DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
+            DeliveryItem.over_delivery_quantity,
             ReturnReceiptItem.actual_received_quantity,
             OrderItem.unit_price,
             (

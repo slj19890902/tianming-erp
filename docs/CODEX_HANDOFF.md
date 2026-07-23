@@ -1,5 +1,18 @@
 # Codex 项目交接
 
+## 2026-07-23 P0 | 来料超收、生产余货与超量送货完整闭环（家庭隔离 UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-production-overreceipt-surplus-delivery-20260723`；分支：`codex/production-overreceipt-surplus-delivery-20260723`；基线：`origin/factory-current-baseline@7d8dc5e87a25b7c2632ef76ff4eb052f1dc4e0a6`。本轮没有连接、迁移、替换或写入工厂正式数据库，也没有修改 `origin/main`。
+- 根因是旧生产、送货和库存口径都以订单数量为上限：来料超收并选择“全部投入生产”后，生产任务、完工、可送数量和库存消费仍被订单数量截断，超出的实物没有稳定的库存、送货与财务事实。
+- 新迁移 `ci65v8x9z54` 线性接在 `cg63v8x9z52` 后且为唯一 head。生产任务与完工记录现在分别冻结订单数、实收投入数、计划产出、实际产出、损耗、订单覆盖和客户余货；主完工幂等，已有主完工后的补录仅管理员可执行并保留独立事实。
+- 来料 203、订单 200、全部投入生产时，一开一计划产出 203；完工入库 203 后只自动预占订单需要的 200，余下 3 作为同客户、同产品的正式成品库存保留。固定货位与三楼临放位均可用于超出订单的实物入库；占用货位拒绝写入。
+- 送货候选同时显示订单待送、实际可送成品和可超送数量。送 200 后订单完成、余货 3 保留；送 203 必须具备 `deliveries.over_delivery`、二次确认并填写原因，送货明细冻结订单数、实际送货数和超量数。其他客户不可使用客户专用余货。
+- 回单、对账、导出和发票沿用实际送货/客户实收数量，并展示订单数量与超量数量；没有直接修改历史已过账生产或送货事实的入口，正式样本数据修复仍须另行授权和独立方案。
+- 隔离 UAT 源副本：`D:\tm-uat\production_overreceipt_surplus_20260723\source_verified\carton_erp_factory_copy_verified.sqlite3`，SHA-256 为 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC`。只在再次复制的 working 和 migration rehearsal 数据库迁移及写入；迁移往返 `cf62 -> cg63 -> ci65 -> cg63 -> ci65` 后为 `ci65v8x9z54`、`integrity_check=ok`、外键异常 0。
+- 页面 UAT 使用明俊德订单 `UAT-MJD-200-203-A`：订单 200、实收 203、全部投入生产；页面完工入库 A1-L05 后显示订单覆盖 200、客户余货 3。送货页面显示“订单待送 200 / 可用成品 203 / 可超送 3”，已通过页面生成并发出 200 件测试送货单 `TM-20260723-002`；最终订单已送 200、库存批次已消费 200、A1-L05 余货 3，库存流水完整。
+- UAT 样本脚本 `scripts/uat/seed_p0_overreceipt_surplus.py` 强制隔离路径、revision、完整性和外键门禁，账号 `uat_p0_admin`、密码 `123456`。首次页面核对发现样本客户漏填客户编号导致客户列表 500；脚本已补充固定 UAT 客户编号并在幂等重放时自动修复旧样本，重新核对后明俊德客户和待送明细均正常出现。
+- 自动验证：生产、库存、送货、财务和相关前端 `92 passed`；内联 JavaScript 语法 `3 passed`；Python 编译与 `git diff --check` 通过。隔离 working 数据库最终 `ci65v8x9z54`、`integrity_check=ok`、外键异常 0；源副本 SHA-256 复核保持不变。
+
 ## 2026-07-23 N081 试盘 | 三楼固定货位归位与空闲位绑定 UI（家庭隔离 UAT 已通过）
 
 - 独立 worktree：`D:\tm-worktrees\erp-n081-floor3-placement-bind-ui-20260723`；分支：`codex/n081-floor3-placement-bind-ui-20260723`；基线：`b7281f4e1108b368ea66310841d2ab16b5823076`。本轮没有新增 Alembic migration，也没有连接、替换或写入工厂正式数据库。

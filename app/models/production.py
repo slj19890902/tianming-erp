@@ -73,6 +73,18 @@ class ProductionTask(Base):
     finished_coverage_snapshot: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    ordered_quantity_snapshot: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    material_received_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    material_input_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    output_factor: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     readiness_basis: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     version: Mapped[int] = mapped_column(
@@ -118,11 +130,11 @@ class ProductionCompletion(Base):
     __tablename__ = "production_completions"
     __table_args__ = (
         Index(
-            "uq_production_completions_task_active",
+            "uq_production_completions_task_primary_active",
             "task_id",
             unique=True,
-            sqlite_where=text("status = 'posted'"),
-            postgresql_where=text("status = 'posted'"),
+            sqlite_where=text("status = 'posted' AND completion_type = 'primary'"),
+            postgresql_where=text("status = 'posted' AND completion_type = 'primary'"),
         ),
         UniqueConstraint(
             "inventory_lot_id", name="uq_production_completions_inventory_lot"
@@ -139,14 +151,34 @@ class ProductionCompletion(Base):
             name="ck_production_completions_status",
         ),
         CheckConstraint(
-            "initial_disposition IN ('direct','stock')",
+            "initial_disposition IN ('direct','stock','split')",
             name="ck_production_completions_initial_disposition",
         ),
         CheckConstraint(
             "((initial_disposition = 'direct' AND warehouse_location_id IS NULL "
-            "AND inventory_lot_id IS NULL) OR (initial_disposition = 'stock' "
-            "AND warehouse_location_id IS NOT NULL))",
+            "AND inventory_lot_id IS NULL AND stock_quantity = 0) "
+            "OR (initial_disposition = 'stock' AND warehouse_location_id IS NOT NULL "
+            "AND direct_delivery_quantity = 0) "
+            "OR (initial_disposition = 'split' AND warehouse_location_id IS NOT NULL "
+            "AND direct_delivery_quantity > 0 AND stock_quantity > 0))",
             name="ck_production_completions_disposition_targets",
+        ),
+        CheckConstraint(
+            "completion_type IN ('primary','supplemental')",
+            name="ck_production_completions_type",
+        ),
+        CheckConstraint(
+            "material_input_quantity > 0 AND planned_output_quantity > 0 "
+            "AND actual_output_quantity > 0 AND defective_quantity >= 0",
+            name="ck_production_completions_output_quantities",
+        ),
+        CheckConstraint(
+            "quantity = actual_output_quantity "
+            "AND direct_delivery_quantity + stock_quantity = actual_output_quantity "
+            "AND order_reserved_quantity >= 0 "
+            "AND order_reserved_quantity <= actual_output_quantity "
+            "AND surplus_finished_quantity = actual_output_quantity - order_reserved_quantity",
+            name="ck_production_completions_quantity_conservation",
         ),
     )
 
@@ -163,6 +195,56 @@ class ProductionCompletion(Base):
     )
     expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    completion_type: Mapped[str] = mapped_column(
+        String(20), default="primary", server_default="primary", nullable=False
+    )
+    material_input_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: int(context.get_current_parameters().get("quantity") or 0),
+        nullable=False,
+    )
+    planned_output_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: int(context.get_current_parameters().get("quantity") or 0),
+        nullable=False,
+    )
+    actual_output_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: int(context.get_current_parameters().get("quantity") or 0),
+        nullable=False,
+    )
+    defective_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    order_reserved_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: int(context.get_current_parameters().get("quantity") or 0),
+        server_default="0",
+        nullable=False,
+    )
+    direct_delivery_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: (
+            int(context.get_current_parameters().get("quantity") or 0)
+            if context.get_current_parameters().get("initial_disposition") == "direct"
+            else 0
+        ),
+        server_default="0",
+        nullable=False,
+    )
+    stock_quantity: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: (
+            int(context.get_current_parameters().get("quantity") or 0)
+            if context.get_current_parameters().get("initial_disposition") == "stock"
+            else 0
+        ),
+        server_default="0",
+        nullable=False,
+    )
+    surplus_finished_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     initial_disposition: Mapped[str] = mapped_column(String(20), nullable=False)
     warehouse_location_id: Mapped[int | None] = mapped_column(
         ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=True

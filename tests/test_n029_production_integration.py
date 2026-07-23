@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -51,7 +52,7 @@ def n029_delivery_app(tmp_path: Path):
     with factory() as db:
         user = User(
             username="n029-admin",
-            password_hash=hash_password("RolePass123!"),
+            password_hash=hash_password("123456"),
             role="admin",
             real_name="N029管理员",
             display_name="N029管理员",
@@ -305,7 +306,7 @@ def n029_delivery_app(tmp_path: Path):
 def _login(client: TestClient) -> None:
     response = client.post(
         "/api/auth/login",
-        json={"username": "n029-admin", "password": "RolePass123!"},
+        json={"username": "n029-admin", "password": "123456"},
     )
     assert response.status_code == 200, response.text
 
@@ -344,11 +345,9 @@ def test_legacy_delivery_eligibility_and_unfinished_task_gate(n029_delivery_app)
     assert ids["task_pending"] not in dashboard_ids
 
 
-def test_completed_task_allows_n005_over_delivery_warning_and_dispatch(
+def test_completed_task_rejects_over_delivery_without_physical_inventory(
     n029_delivery_app,
 ) -> None:
-    from app.models.order import OrderItem
-
     app, factory, ids = n029_delivery_app
     with TestClient(app) as client:
         _login(client)
@@ -364,13 +363,342 @@ def test_completed_task_allows_n005_over_delivery_warning_and_dispatch(
                 ],
             },
         )
-        assert created.status_code == 201, created.text
-        assert created.json()["warnings"][0]["code"] == "OVER_DELIVERY"
-        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
+        assert created.status_code == 409, created.text
+        assert "100" in created.json()["detail"]
 
-    assert dispatched.status_code == 200, dispatched.text
+
+def _prepare_103_finished_stock(factory, ids) -> int:
+    from app.models.customer import Customer
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        InventoryReservation,
+    )
+
     with factory() as db:
-        assert db.get(OrderItem, ids["task_completed"]).delivered_quantity == 102
+        item = db.get(OrderItem, ids["task_completed"])
+        order = db.get(Order, item.order_id)
+        product = db.get(Product, item.product_id)
+        customer = db.get(Customer, order.customer_id)
+        completion = db.get(
+            ProductionCompletion,
+            ids["completion_task_completed"],
+        )
+        completion.quantity = 103
+        completion.material_input_quantity = 103
+        completion.planned_output_quantity = 103
+        completion.actual_output_quantity = 103
+        completion.defective_quantity = 0
+        completion.order_reserved_quantity = 100
+        completion.direct_delivery_quantity = 0
+        completion.stock_quantity = 103
+        completion.surplus_finished_quantity = 3
+        completion.initial_disposition = "stock"
+        completion.warehouse_location_id = ids["temporary_location"]
+        lot = InventoryLot(
+            lot_number="N029-OVER-103",
+            inventory_type="finished",
+            warehouse_location_id=ids["temporary_location"],
+            quantity_available=3,
+            quantity_reserved=100,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="boxes",
+            status="active",
+            source_type="production_surplus",
+            source_ref_type="production_completion",
+            source_ref_id=completion.id,
+            stock_date=date.today(),
+            last_movement_at=datetime.utcnow(),
+            version=2,
+        )
+        db.add(lot)
+        db.flush()
+        db.add(
+            FinishedGoodsInventoryDetail(
+                inventory_lot_id=lot.id,
+                owner_customer_id=customer.id,
+                owner_customer_name_snapshot=customer.name,
+                is_general=False,
+                product_id=product.id,
+                inventory_code_snapshot=product.product_code,
+                product_name_snapshot=product.product_name,
+            )
+        )
+        db.add(
+            InventoryReservation(
+                reservation_number="N029-OVER-ORDER-100",
+                inventory_lot_id=lot.id,
+                reservation_type="finished_order",
+                order_id=order.id,
+                order_item_id=item.id,
+                reserved_stock_quantity=100,
+                credited_requirement_quantity=100,
+                yield_factor=1,
+                status="active",
+                idempotency_key="N029-OVER-ORDER-100",
+            )
+        )
+        completion.inventory_lot_id = lot.id
+        db.commit()
+        return lot.id
+
+
+def test_delivery_100_finishes_order_and_keeps_three_customer_surplus(
+    n029_delivery_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import InventoryLot
+
+    app, factory, ids = n029_delivery_app
+    lot_id = _prepare_103_finished_stock(factory, ids)
+    with TestClient(app) as client:
+        _login(client)
+        pending = client.get("/api/deliveries/pending_items")
+        row = next(
+            item
+            for item in pending.json()["items"]
+            if item["order_item_id"] == ids["task_completed"]
+        )
+        assert row["order_remaining_quantity"] == 100
+        assert row["deliverable_quantity"] == 103
+        assert row["over_delivery_quantity"] == 3
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 100,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+
+    with factory() as db:
+        item = db.get(OrderItem, ids["task_completed"])
+        lot = db.get(InventoryLot, lot_id)
+        assert item.quantity == 100
+        assert item.delivered_quantity == 100
+        assert lot.quantity_consumed == 100
+        assert lot.quantity_available == 3
+        assert lot.quantity_reserved == 0
+
+
+def test_authorized_over_delivery_103_consumes_stock_and_records_three(
+    n029_delivery_app,
+) -> None:
+    from app.models.delivery import DeliveryItem
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import InventoryLot, InventoryReservation
+
+    app, factory, ids = n029_delivery_app
+    lot_id = _prepare_103_finished_stock(factory, ids)
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "客户同意接收本批全部合格品",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["items"][0]["over_delivery_quantity"] == 3
+        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+
+    with factory() as db:
+        item = db.get(OrderItem, ids["task_completed"])
+        lot = db.get(InventoryLot, lot_id)
+        line = db.scalar(
+            select(DeliveryItem).where(
+                DeliveryItem.order_item_id == ids["task_completed"]
+            )
+        )
+        surplus_reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id == ids["task_completed"],
+                InventoryReservation.reservation_type
+                == "finished_surplus_delivery",
+            )
+        )
+        assert item.quantity == 100
+        assert item.delivered_quantity == 103
+        assert line.ordered_quantity_snapshot == 100
+        assert line.over_delivery_quantity == 3
+        assert lot.quantity_consumed == 103
+        assert lot.quantity_available == 0
+        assert lot.quantity_reserved == 0
+        assert surplus_reservation.consumed_stock_quantity == 3
+
+
+def test_over_delivery_flows_through_receipt_statement_export_and_invoice(
+    n029_delivery_app,
+) -> None:
+    from openpyxl import load_workbook
+
+    from app.models.customer import Customer
+
+    app, factory, ids = n029_delivery_app
+    _prepare_103_finished_stock(factory, ids)
+    with factory() as db:
+        customer = db.get(Customer, ids["customer"])
+        customer.statement_cycle_start_day = 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "客户确认接收全部103个合格品",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+        delivery_item_id = created.json()["items"][0]["id"]
+        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 103,
+                    }
+                ],
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": ids["customer"],
+                "statement_month": date.today().strftime("%Y-%m"),
+                "delivery_ids": [delivery_id],
+            },
+        )
+        assert statement.status_code == 201, statement.text
+        statement_id = statement.json()["id"]
+
+        detail = client.get(f"/api/finance/statements/{statement_id}")
+        assert detail.status_code == 200, detail.text
+        line = detail.json()["items"][0]
+        assert line["ordered_quantity_snapshot"] == 100
+        assert line["actual_delivery_quantity"] == 103
+        assert line["over_delivery_quantity"] == 3
+        assert line["actual_received_quantity"] == 103
+
+        exported = client.get(f"/api/finance/statements/{statement_id}/export")
+        assert exported.status_code == 200, exported.text
+        workbook = load_workbook(BytesIO(exported.content), read_only=True)
+        sheet = workbook.active
+        headers = [cell.value for cell in sheet[5]]
+        values = [cell.value for cell in sheet[6]]
+        assert headers[8:12] == [
+            "订单数量",
+            "实际送货数量",
+            "超订单数量",
+            "实际签收数量",
+        ]
+        assert values[8:12] == [100, 103, 3, 103]
+
+        invoice = client.post(
+            "/api/finance/invoices",
+            json={
+                "statement_id": statement_id,
+                "invoice_number": "N029-OVER-103-INVOICE",
+                "invoice_date": date.today().isoformat(),
+                "invoice_amount": "103.00",
+            },
+        )
+        assert invoice.status_code == 201, invoice.text
+        assert invoice.json()["statement_id"] == statement_id
+        assert Decimal(str(invoice.json()["invoice_amount"])) == Decimal("103.00")
+
+
+def test_user_without_over_delivery_permission_is_rejected(
+    n029_delivery_app,
+) -> None:
+    from app.core.security import hash_password
+    from app.models.access_control import UserPermissionOverride
+    from app.models.user import User
+
+    app, factory, ids = n029_delivery_app
+    _prepare_103_finished_stock(factory, ids)
+    with factory() as db:
+        admin = db.get(User, ids["user"])
+        user = User(
+            username="n029-delivery-no-over",
+            password_hash=hash_password("123456"),
+            role="sales",
+            real_name="送货测试员",
+            must_change_password=False,
+            customer_access_mode="all",
+        )
+        db.add(user)
+        db.flush()
+        db.add(
+            UserPermissionOverride(
+                user_id=user.id,
+                permission_code="deliveries.execute",
+                is_allowed=True,
+                granted_by=admin.id,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "n029-delivery-no-over", "password": "123456"},
+        )
+        assert login.status_code == 200, login.text
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["task_completed"],
+                        "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "测试无权限超量送货",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 403, created.text
+        assert "超量送货权限" in created.json()["detail"]
 
 
 def test_dispatch_locks_order_before_order_item(n029_delivery_app) -> None:

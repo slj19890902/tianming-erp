@@ -15,6 +15,7 @@ from app.api.deps import (
     PermissionChecker,
     customer_scope_ids,
     get_db,
+    has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
 )
@@ -134,10 +135,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     if task is not None:
         if task.status not in {"completed", "not_required"}:
             return 0
-        max_deliverable = min(
-            int(order_item.quantity or 0),
-            max(production_ready_quantity(db, order_item), 0),
-        )
+        max_deliverable = max(production_ready_quantity(db, order_item), 0)
         return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
 
     max_deliverable = int(order_item.quantity or 0)
@@ -148,6 +146,21 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     elif order_item.material_status != "received" and not inventory_covered:
         return 0
     return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
+
+
+def _delivery_quantity_facts(db: Session, order_item: OrderItem) -> dict[str, int]:
+    ordered = max(int(order_item.quantity or 0), 0)
+    delivered = max(int(order_item.delivered_quantity or 0), 0)
+    order_remaining = max(ordered - delivered, 0)
+    deliverable = _delivery_remaining_quantity(db, order_item)
+    return {
+        "ordered_quantity": ordered,
+        "delivered_quantity": delivered,
+        "order_remaining_quantity": order_remaining,
+        "deliverable_quantity": deliverable,
+        "over_delivery_quantity": max(deliverable - order_remaining, 0),
+        "surplus_finished_quantity": max(deliverable - order_remaining, 0),
+    }
 
 
 def _has_production_task(db: Session, order_item_id: int) -> bool:
@@ -238,6 +251,8 @@ def _normalized_delivery_address(address: str | None) -> str:
 class DeliveryLineCreate(BaseModel):
     order_item_id: int
     delivered_quantity: int
+    over_delivery_confirmed: bool = False
+    over_delivery_reason: str | None = None
     remarks: str | None = None
 
 
@@ -525,7 +540,6 @@ def _pending_query(
                     ),
                 ),
             ),
-            OrderItem.delivered_quantity < OrderItem.quantity,
             OrderItem.is_force_closed.is_(False),
         )
     )
@@ -1034,6 +1048,11 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
             DeliveryItem.id,
             DeliveryItem.order_item_id,
             DeliveryItem.delivered_quantity,
+            DeliveryItem.ordered_quantity_snapshot,
+            DeliveryItem.order_remaining_snapshot,
+            DeliveryItem.over_delivery_quantity,
+            DeliveryItem.over_delivery_confirmed_by,
+            DeliveryItem.over_delivery_reason,
             DeliveryItem.remarks,
             Order.id.label("order_id"),
             Order.order_number,
@@ -1089,6 +1108,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "items": [
             {
                 **dict(row._mapping),
+                "actual_delivery_quantity": row._mapping["delivered_quantity"],
                 "order_number": display_order_number(
                     orders.get(row._mapping["order_id"]),
                     registry,
@@ -1462,6 +1482,7 @@ def _collect_delivery_lines(
     *,
     customer_id: int,
     lines: list[DeliveryLineCreate],
+    user: User,
 ) -> tuple[list[tuple[OrderItem, DeliveryLineCreate]], int, list[dict]]:
     """校验送货明细并返回 (订单明细, 行) 列表、总数量、超送警告。
 
@@ -1496,7 +1517,9 @@ def _collect_delivery_lines(
             )
         order_item, order = row
         production_managed = _has_production_task(db, order_item.id)
-        remaining = _delivery_remaining_quantity(db, order_item)
+        quantity_facts = _delivery_quantity_facts(db, order_item)
+        remaining = quantity_facts["deliverable_quantity"]
+        order_remaining = quantity_facts["order_remaining_quantity"]
         component_capacity = (
             None
             if production_managed
@@ -1555,14 +1578,42 @@ def _collect_delivery_lines(
                 detail=f"第{index}条订单明细当前不可发货",
             )
         if line.delivered_quantity > remaining:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"第{index}条实际可送成品不足，当前最多可送 {remaining}"
+                ),
+            )
+        over_delivery = max(line.delivered_quantity - order_remaining, 0)
+        if over_delivery > 0:
+            if not has_permission(user, "deliveries.over_delivery"):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"第{index}条超订单送货需要超量送货权限",
+                )
+            if not line.over_delivery_confirmed:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"第{index}条超过订单待送数量 {over_delivery}，"
+                        "请二次确认超量送货"
+                    ),
+                )
+            reason = (line.over_delivery_reason or "").strip()
+            if not reason:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第{index}条超量送货必须填写原因",
+                )
             warnings.append(
                 {
                     "code": "OVER_DELIVERY",
                     "order_item_id": order_item.id,
-                    "remaining_quantity": remaining,
+                    "remaining_quantity": order_remaining,
+                    "deliverable_quantity": remaining,
                     "delivered_quantity": line.delivered_quantity,
-                    "excess_quantity": line.delivered_quantity - remaining,
-                    "message": "实际发货数已超过订单可送数量",
+                    "excess_quantity": over_delivery,
+                    "message": f"已授权超过订单数量 {over_delivery}",
                 }
             )
         built.append((order_item, line))
@@ -1729,6 +1780,7 @@ def pending_delivery_items(
             {
                 **dict(row._mapping),
                 "remaining_quantity": remaining_quantity,
+                **_delivery_quantity_facts(db, order_item),
                 "order_number": display,
                 "display_order_number": display,
                 **_delivery_kit_metadata(db, order_item),
@@ -1817,6 +1869,7 @@ def search_pending_delivery_items(
             {
                 **dict(row._mapping),
                 "remaining_quantity": remaining_quantity,
+                **_delivery_quantity_facts(db, order_item),
                 "order_number": display,
                 "display_order_number": display,
                 "material_display": (
@@ -1902,13 +1955,29 @@ def create_delivery(
             db,
             customer_id=payload.customer_id,
             lines=payload.items,
+            user=user,
         )
         for order_item, line in built:
+            order_remaining = max(
+                int(order_item.quantity or 0)
+                - int(order_item.delivered_quantity or 0),
+                0,
+            )
+            over_delivery = max(line.delivered_quantity - order_remaining, 0)
             db.add(
                 DeliveryItem(
                     delivery_id=delivery.id,
                     order_item_id=order_item.id,
                     delivered_quantity=line.delivered_quantity,
+                    ordered_quantity_snapshot=int(order_item.quantity or 0),
+                    order_remaining_snapshot=order_remaining,
+                    over_delivery_quantity=over_delivery,
+                    over_delivery_confirmed_by=(
+                        user.id if over_delivery > 0 else None
+                    ),
+                    over_delivery_reason=(
+                        (line.over_delivery_reason or "").strip() or None
+                    ),
                     remarks=(line.remarks or "").strip() or None,
                 )
             )
@@ -2062,6 +2131,45 @@ def dispatch_delivery(
                         f"当前可送数量为 {remaining}"
                     ),
                 )
+            if line.delivered_quantity > remaining:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"订单明细{line.order_item_id}实际可送成品不足，"
+                        f"当前最多可送 {remaining}"
+                    ),
+                )
+            order_remaining_before = max(
+                int(order_item.quantity or 0)
+                - int(order_item.delivered_quantity or 0),
+                0,
+            )
+            over_delivery = max(
+                int(line.delivered_quantity) - order_remaining_before,
+                0,
+            )
+            if over_delivery > 0:
+                if not has_permission(user, "deliveries.over_delivery"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="当前账号没有超量送货权限",
+                    )
+                if line.over_delivery_confirmed_by is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"订单明细{line.order_item_id}将超订单送货 "
+                            f"{over_delivery}，请编辑送货单并二次确认"
+                        ),
+                    )
+                if not (line.over_delivery_reason or "").strip():
+                    raise HTTPException(
+                        status_code=409,
+                        detail="超量送货缺少原因，不能发货",
+                    )
+            line.ordered_quantity_snapshot = int(order_item.quantity or 0)
+            line.order_remaining_snapshot = order_remaining_before
+            line.over_delivery_quantity = over_delivery
             component_capacity = (
                 None
                 if production_managed
@@ -2140,6 +2248,22 @@ def dispatch_delivery(
             details={
                 "dispatched_at": dispatched_at,
                 "item_count": len(lines),
+                "over_delivery_quantity": sum(
+                    int(line.over_delivery_quantity or 0) for line in lines
+                ),
+                "over_delivery_items": [
+                    {
+                        "delivery_item_id": line.id,
+                        "order_item_id": line.order_item_id,
+                        "ordered_quantity_snapshot": line.ordered_quantity_snapshot,
+                        "actual_delivery_quantity": line.delivered_quantity,
+                        "over_delivery_quantity": line.over_delivery_quantity,
+                        "confirmed_by": line.over_delivery_confirmed_by,
+                        "reason": line.over_delivery_reason,
+                    }
+                    for line in lines
+                    if int(line.over_delivery_quantity or 0) > 0
+                ],
             },
             description="确认送货单发货",
         )
@@ -2202,17 +2326,33 @@ def update_delivery(
             db,
             customer_id=delivery.customer_id,
             lines=payload.items,
+            user=user,
         )
         db.execute(
             delete(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
         )
         db.flush()
         for order_item, line in built:
+            order_remaining = max(
+                int(order_item.quantity or 0)
+                - int(order_item.delivered_quantity or 0),
+                0,
+            )
+            over_delivery = max(line.delivered_quantity - order_remaining, 0)
             db.add(
                 DeliveryItem(
                     delivery_id=delivery.id,
                     order_item_id=order_item.id,
                     delivered_quantity=line.delivered_quantity,
+                    ordered_quantity_snapshot=int(order_item.quantity or 0),
+                    order_remaining_snapshot=order_remaining,
+                    over_delivery_quantity=over_delivery,
+                    over_delivery_confirmed_by=(
+                        user.id if over_delivery > 0 else None
+                    ),
+                    over_delivery_reason=(
+                        (line.over_delivery_reason or "").strip() or None
+                    ),
                     remarks=(line.remarks or "").strip() or None,
                 )
             )
@@ -2607,6 +2747,8 @@ def get_delivery_print_data(
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
             DeliveryItem.delivered_quantity.label("quantity"),
+            DeliveryItem.ordered_quantity_snapshot,
+            DeliveryItem.over_delivery_quantity,
             DeliveryItem.remarks,
         )
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
@@ -2647,7 +2789,22 @@ def get_delivery_print_data(
                 "product_name": row.product_name,
                 "unit": "PCS",
                 "quantity": row.quantity,
-                "remarks": row.remarks,
+                "ordered_quantity": row.ordered_quantity_snapshot,
+                "over_delivery_quantity": row.over_delivery_quantity,
+                "remarks": "；".join(
+                    part
+                    for part in (
+                        row.remarks,
+                        (
+                            f"订单{row.ordered_quantity_snapshot}/实送{row.quantity}/"
+                            f"超送{row.over_delivery_quantity}"
+                            if int(row.over_delivery_quantity or 0) > 0
+                            else None
+                        ),
+                    )
+                    if part
+                )
+                or None,
             }
             for row in rows
         ],

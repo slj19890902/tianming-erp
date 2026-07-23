@@ -8,7 +8,7 @@ import re
 import unicodedata
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
@@ -17,6 +17,7 @@ from app.models.delivery import DeliveryItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.production import ProductionCompletion
 from app.models.requisition import RequisitionItem
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
@@ -653,7 +654,8 @@ def reserve_completed_finished_inventory(
     if (
         completion is None
         or completion.order_item_id != item.id
-        or int(completion.quantity or 0) != quantity
+        or int(completion.stock_quantity or completion.quantity or 0)
+        != int(lot.quantity_available or 0)
     ):
         raise WarehouseInventoryError("完工库存与生产完工事实不一致", 409)
     if detail.product_id != item.product_id:
@@ -662,8 +664,8 @@ def reserve_completed_finished_inventory(
         raise WarehouseInventoryError("完工库存客户与订单客户不一致", 409)
     if lot.version != expected_version:
         raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
-    if int(lot.quantity_available or 0) != quantity:
-        raise WarehouseInventoryError("完工库存数量与冻结生产数量不一致", 409)
+    if int(lot.quantity_available or 0) < quantity:
+        raise WarehouseInventoryError("完工库存不足以建立订单预占", 409)
     before = _balances(lot)
     now = utc_now_naive()
     result = db.execute(
@@ -673,7 +675,7 @@ def reserve_completed_finished_inventory(
             InventoryLot.version == expected_version,
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
-            InventoryLot.quantity_available == quantity,
+            InventoryLot.quantity_available >= quantity,
         )
         .values(
             quantity_available=InventoryLot.quantity_available - quantity,
@@ -719,6 +721,149 @@ def reserve_completed_finished_inventory(
     )
     db.flush()
     return reservation
+
+
+def reserve_finished_surplus_for_delivery(
+    db: Session,
+    *,
+    order_item_id: int,
+    quantity: int,
+    operator_id: int | None,
+    operation_key: str,
+) -> list[InventoryReservation]:
+    """Atomically reserve customer-owned surplus solely for over-delivery.
+
+    These reservations never credit the order requirement and therefore are
+    excluded from normal order coverage.  They exist only to make the
+    additional physical stock consumption auditable and reversible.
+    """
+    if quantity <= 0:
+        return []
+    prefix = f"{operation_key}-surplus-"
+    repeated = db.scalars(
+        select(InventoryReservation)
+        .where(
+            InventoryReservation.idempotency_key.like(f"{prefix}%"),
+            InventoryReservation.reservation_type == "finished_surplus_delivery",
+            InventoryReservation.order_item_id == order_item_id,
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    if repeated:
+        if sum(int(row.reserved_stock_quantity) for row in repeated) != quantity:
+            raise WarehouseInventoryError("超量送货库存幂等内容不一致", 409)
+        return list(repeated)
+    row = db.execute(
+        select(OrderItem, Order)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.id == order_item_id)
+    ).one_or_none()
+    if row is None:
+        raise WarehouseInventoryError("订单明细不存在", 404)
+    item, order = row
+    lots = db.scalars(
+        select(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.quantity_available > 0,
+            InventoryLot.source_type == "production_surplus",
+            FinishedGoodsInventoryDetail.product_id == item.product_id,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
+        )
+        .order_by(
+            case(
+                (
+                    (InventoryLot.source_ref_type == "production_completion")
+                    & (
+                        InventoryLot.source_ref_id.in_(
+                            select(ProductionCompletion.id).where(
+                                ProductionCompletion.order_item_id == item.id,
+                                ProductionCompletion.status == "posted",
+                            )
+                        )
+                    ),
+                    0,
+                ),
+                else_=1,
+            ),
+            InventoryLot.stock_date,
+            InventoryLot.id,
+        )
+    ).all()
+    remaining = quantity
+    reservations: list[InventoryReservation] = []
+    now = utc_now_naive()
+    for lot in lots:
+        if remaining <= 0:
+            break
+        take = min(int(lot.quantity_available or 0), remaining)
+        if take <= 0:
+            continue
+        before = _balances(lot)
+        expected_version = int(lot.version)
+        updated = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version,
+                InventoryLot.quantity_available >= take,
+            )
+            .values(
+                quantity_available=InventoryLot.quantity_available - take,
+                quantity_reserved=InventoryLot.quantity_reserved + take,
+                version=InventoryLot.version + 1,
+                last_movement_at=now,
+            )
+        )
+        if updated.rowcount != 1:
+            raise WarehouseInventoryError("余货库存已变化，请刷新后重试", 409)
+        reservation = InventoryReservation(
+            reservation_number=_number("ODS"),
+            inventory_lot_id=lot.id,
+            reservation_type="finished_surplus_delivery",
+            order_id=order.id,
+            order_item_id=item.id,
+            reserved_stock_quantity=take,
+            credited_requirement_quantity=take,
+            yield_factor=1,
+            status="active",
+            warning_codes="[]",
+            reserved_by=operator_id,
+            reserved_at=now,
+            idempotency_key=f"{prefix}{lot.id}",
+        )
+        db.add(reservation)
+        db.flush()
+        db.expire(lot)
+        refreshed = db.get(InventoryLot, lot.id)
+        assert refreshed is not None
+        _movement(
+            db,
+            lot=refreshed,
+            movement_type="reserve",
+            quantity=take,
+            before=before,
+            operator_id=operator_id,
+            reason="授权超量送货预占客户专用余货",
+            idempotency_key=f"{prefix}{lot.id}",
+            reservation_id=reservation.id,
+            related_order_id=order.id,
+            related_order_item_id=item.id,
+        )
+        reservations.append(reservation)
+        remaining -= take
+    if remaining > 0:
+        raise WarehouseInventoryError(
+            f"客户专用成品余货不足，超量送货还缺 {remaining}",
+            409,
+        )
+    return reservations
 
 
 def _finished_reservation_status(reservation: InventoryReservation) -> str:
@@ -790,7 +935,10 @@ def consume_finished_reservation(
         reservation = db.get(InventoryReservation, reservation_id)
         if reservation is None:
             raise WarehouseInventoryError("库存预占记录不存在", 404)
-        if reservation.reservation_type != "finished_order":
+        if reservation.reservation_type not in {
+            "finished_order",
+            "finished_surplus_delivery",
+        }:
             raise WarehouseInventoryError("该记录不是成品订单预占")
         remaining = (
             int(reservation.reserved_stock_quantity)
@@ -899,7 +1047,10 @@ def reverse_finished_consumption(
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         allocation = db.get(DeliveryInventoryAllocation, allocation_id)
-        if reservation is None or reservation.reservation_type != "finished_order":
+        if reservation is None or reservation.reservation_type not in {
+            "finished_order",
+            "finished_surplus_delivery",
+        }:
             raise WarehouseInventoryError("成品库存预占记录不存在", 404)
         if allocation is None or allocation.reservation_id != reservation.id:
             raise WarehouseInventoryError("送货成品库存分配记录不存在", 404)

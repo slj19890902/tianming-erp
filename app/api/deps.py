@@ -48,6 +48,7 @@ PERMISSION_CATALOG = frozenset(
         "warehouse.stocktake.review",
         "deliveries.view",
         "deliveries.execute",
+        "deliveries.over_delivery",
         "deliveries.pick",
         "finance.view",
         "finance.execute",
@@ -87,6 +88,7 @@ BOSS_DEFAULT_PERMISSIONS = frozenset(
     for permission in ALL_PERMISSIONS
     if not permission.startswith(("system.", "pdf_training."))
     and permission != "users.manage"
+    and permission != "deliveries.over_delivery"
     and permission not in ADMIN_ONLY_PERMISSIONS
 )
 ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {

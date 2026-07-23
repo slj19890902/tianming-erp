@@ -737,7 +737,8 @@ class InventoryReservation(Base):
     __tablename__ = "inventory_reservations"
     __table_args__ = (
         CheckConstraint(
-            "reservation_type IN ('finished_order','semi_requisition','semi_order')",
+            "reservation_type IN "
+            "('finished_order','finished_surplus_delivery','semi_requisition','semi_order')",
             name="ck_inventory_reservations_type",
         ),
         CheckConstraint(

@@ -1,5 +1,13 @@
 # Codex 项目交接
 
+## 2026-07-23 N081-0 | 盘点准备只读导出与首次盘点模板
+
+- 在最新正式远端基线 `origin/factory-current-baseline@030c10150735de1aff9c429200858ee4f4a1bab4` 建立独立 worktree `D:\tm-worktrees\erp-n081-phase0-readiness-export-20260723` 和分支 `codex/n081-phase0-readiness-export-20260723`，并纳入既有 N081 路线重排文档。
+- 新增 `scripts/audit/n081_inventory_readiness.py`：必须显式指定 SQLite 和报告目录，使用 `mode=ro + PRAGMA query_only=ON`，没有 apply/import/delete 模式；输出库位、正式批次、栈板、快照和未定位问题的 JSON/CSV/Markdown，并核对 Alembic、quick_check、外键、扫描前后大小及 SHA-256。
+- 新增空模板 `docs/warehouse_reports/templates/N081_INITIAL_STOCKTAKE_TEMPLATE.csv` 和脱敏样例 `N081_INITIAL_STOCKTAKE_SAMPLE_MASKED.csv`；模板只冻结字段口径，不具备正式导入或库存确认能力。
+- 家庭隔离副本演练为 `cg63v8x9z52`、`quick_check=ok`、外键异常 0，扫描前后大小及 SHA-256 一致，数据库未写入；定向测试 `2 passed`，Python 编译和 `git diff --check` 通过。实施记录：`docs/warehouse_reports/N081_PHASE0_READINESS_EXPORT_IMPLEMENTATION_20260723.md`。
+- 当前主机是家庭电脑 `PC-20230130ZRXT`，不是工厂主机 `PC-20250926DZYH`。工厂正式基线虽已远端合并到 `030c101`，但尚未在工厂执行备份、`cf62v8x9z51 -> cg63v8x9z52` 迁移、重启和复核；工厂 N081-0 只读导出也尚未执行。本阶段未连接、迁移或写入工厂正式数据库。
+
 ## 2026-07-22 P0-B | 上传路径、私有图纸与统一文件校验（家庭本地完成，待人工 UAT）
 
 - 独立 worktree：`D:\tm-worktrees\erp-p0b-upload-security-20260722`；分支：`codex/release-p0b-upload-security`；基线：`c5cffa2123973b3f30b74be7f6dc198d1f070210`。本轮没有连接、迁移或写入工厂正式数据库，也没有新增 Alembic migration。

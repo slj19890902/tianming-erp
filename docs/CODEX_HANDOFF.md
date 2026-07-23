@@ -1,5 +1,15 @@
 # Codex 项目交接
 
+## 2026-07-23 N081-A1 + 页面流畅度 P1 工厂正式发布完成
+
+- 用户明确确认 N081-A1 与页面流畅度 P1 均已完成人工验收，并授权一起发布。远端 `factory-current-baseline` 使用旧 SHA `7d8dc5e87a25b7c2632ef76ff4eb052f1dc4e0a6` 租约快进到候选 `a3001568c56b941a3c0c0935f2fa51ddc6c44f85`；`origin/main@9be70622683535f476a353860cf1f2cb32b399b0` 未修改。
+- 工厂主机为 `PC-20250926DZYH`，正式目录为 `D:\纸箱厂erp软件搭建`。发布前服务使用该目录、`0.0.0.0:8000`、单 worker，健康接口为 200；正式代码从 `7d8dc5e` 严格 `--ff-only` 到 `a300156`，没有普通 merge、reset、强推或文件覆盖。
+- 两阶段发布报告为 `docs/migration_reports/release_runtime_20260723_160149.json`。SQLite Backup API 备份为 `data/backups/carton_erp_before_release_20260723_160151.sqlite3`，大小 `219,447,296` 字节，SHA-256 `88EBC249768863442F6F0D37277C229F3EAE17C105B371CC4B0218B652839A61`，revision=`cg63v8x9z52`、`integrity_check=ok`、外键异常 0。停服后的正式源库 SHA-256 为 `1668BB535B4059CDCC262444124937F6104023EA322C1567449FDBFD4B97D379`；Backup API 重写 SQLite 页布局，因此源库与备份字节哈希不同。
+- 隔离演练副本为 `data/release_rehearsals/carton_erp_release_rehearsal_20260723_160151.sqlite3`，已成功从 `cg63v8x9z52` 精确迁移到 `ch64v8x9z53`，`integrity_check=ok`、外键异常 0。源、备份、演练的 15 张核心业务表计数完全一致后才执行正式 Apply。
+- 正式库已从 `cg63v8x9z52` 迁移到 `ch64v8x9z53`；迁移后 `integrity_check=ok`、外键异常 0，400 个库位中 `398 placed / 2 unplaced`。正式迁移后的 15 张核心业务表计数与迁移前完全一致，没有新增、删除或修改订单、报料、来料、送货、财务、用户或操作日志业务行。
+- 发布后 ERP 已恢复为正式目录、`0.0.0.0:8000`、单 worker；`/api/health` 返回 200 `{"ok":true}` 并带 `Server-Timing`。首页及全部本地 Vue/Axios/pinyin/time-utils 静态资源均返回 200，首页无外部 CDN 依赖。浏览器在现有管理员会话中确认首页正常、订单模块成功切换并显示数据，Console 无 error/warn。
+- 本地安全分支 `factory-local-handoff-20260722`、`factory-local-baseline-before-update-20260722` 与 `stash@{0}` 均继续保留，未 pop、drop 或清理。
+
 ## 2026-07-23 页面流畅度专项 P1 | 依赖本地化、按需取数与短时缓存（隔离 UAT 待人工验收）
 
 - N081-A1 已形成独立提交 `0ab7d10` 并推送 `origin/codex/n081-a-space-readiness-gate-20260723`。页面流畅度专项另建 worktree `D:\tm-worktrees\erp-frontend-performance-p1-20260723` 和分支 `codex/frontend-performance-p1-20260723`，基线为 `0ab7d10`，没有混入 N081 新业务规则。

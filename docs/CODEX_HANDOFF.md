@@ -1526,3 +1526,13 @@ legacy_ruida_* 原始层
 - 独立 worktree 为 `D:\tm-worktrees\erp-pdf-flute-correction-fix-20260722`，分支为 `codex/pdf-flute-correction-fix-20260722`，基线为正式提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`。最小修复让常用箱层数/楞型优先，材质和 PDF 仅作为缺省回退，并新增 `BC14C/A -> 常用箱 5/AB` 回归断言。
 - 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
 - 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。
+
+## 75. 2026-07-23 库存正式转换与常用箱默认开料方式紧急修复
+
+- 独立 worktree：`D:\tm-worktrees\erp-urgent-inventory-cutting-20260723`；分支：`codex/urgent-inventory-cutting-default-20260723`；唯一基线：`origin/factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210`。没有修改 `origin/main` 或工厂正式目录。
+- 工厂副本原件、只读核验副本和迁移前备份的 SHA-256 均逐字符等于 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC`；只有工作副本 `D:\tm-uat\urgent_inventory_cutting_20260723\working\carton_erp_urgent_inventory_cutting_uat.sqlite3` 被迁移和写入 UAT 数据。
+- 22000022 在 E1-L09 的 300 张记录是已匹配但未绑定 `inventory_lot_id` 的 `semi_finished/sheets` 现场快照。订单库存候选只读取正式 `InventoryLot`，因此初始不可抵扣；修复没有增加快照直扣后门，而是让页面经权限、版本、幂等和两次确认调用既有正式入库流程，生成客户专用成品批次并保留库位、栈板、流水和操作日志。
+- 常用箱新增独立字段 `products.default_cutting_mode`，合法值为一开一至一开五，默认一开一；新迁移 `cg63v8x9z52` 线性接在 `cf62v8x9z51` 后且为唯一 head。新订单把默认值冻结到明细 `special_process`；修改常用箱不回写旧订单。当前报料草稿允许人工改开料方式并立即重算采购张数，不复用 `pieces_per_box`。
+- 定向及相邻自动测试：订单组合 `67 passed`；报料、主数据版本和前端组合 `45 passed`；三楼库存组合 `79 passed, 3 failed`。3 个失败均为 `c5cffa2` 基线中未修改位置的旧前端文本/排序断言，与本轮改动无关；本轮新增的库存转换、客户隔离、幂等、默认开料和采购张数用例均通过。Python 编译、两份内联 JavaScript 语法、`git diff --check` 均通过。
+- 隔离页面 UAT 已复现快照初始不可抵扣；转换后创建正式批次并可供同客户订单发现和预占，其他客户候选为空且强行预占被拒绝，重复转换返回幂等结果。常用箱一开二保存重读成功，新订单 100 个冻结一开二并带出 50 张，报料页手改一开一立即变为 100 张；随后把常用箱改为一开三，旧订单仍保持一开二。
+- 工作副本最终为 `cg63v8x9z52`、`integrity_check=ok`、外键异常 0；UAT 服务已停止。工厂正式数据库未连接、未迁移、未写入。将来正式发布需要先备份并验证、执行线性迁移、再重启服务，且必须另行授权。

@@ -219,6 +219,7 @@ class Floor3PalletPromoteFinishedPayload(BaseModel):
     expected_version: int = Field(gt=0)
     stock_date: date
     idempotency_key: str = Field(min_length=1, max_length=120)
+    confirmed: Literal[True]
 
     @field_validator("idempotency_key")
     @classmethod
@@ -2766,6 +2767,22 @@ def promote_floor3_snapshot_to_finished(
 ) -> dict:
     current = _floor3_get_pallet(db, pallet_id)
     _require_floor3_pallet_customer_access(db, current, user)
+    source_item = next((item for item in current.items if item.id == item_id), None)
+    source_details = (
+        {
+            "customer_id": source_item.customer_id,
+            "product_id": source_item.product_id,
+            "inventory_code": source_item.inventory_code,
+            "product_name": source_item.product_name,
+            "quantity": str(source_item.quantity),
+            "item_type": source_item.item_type,
+            "unit": source_item.unit,
+            "location_id": current.location_id,
+            "pallet_code": current.pallet_code,
+        }
+        if source_item is not None
+        else {}
+    )
     try:
         row, lot, replayed = convert_snapshot_to_finished_lot(
             db,
@@ -2789,6 +2806,7 @@ def promote_floor3_snapshot_to_finished(
                     "inventory_lot_id": lot.id,
                     "stock_date": payload.stock_date,
                     "idempotency_key": payload.idempotency_key,
+                    "source_snapshot": source_details,
                 },
             )
         db.commit()

@@ -2401,6 +2401,11 @@
                     <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
+                <div class="field"><label>默认开料方式（每张报料纸产出）</label>
+                  <select class="select" v-model="productForm.default_cutting_mode">
+                    <option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option>
+                  </select>
+                </div>
               </div>
 
               <div class="product-form-row product-size-report-row">
@@ -3589,7 +3594,7 @@
                         <td>{{ line.production_required_qty || line.quantity || 0 }}</td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" /></td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" /></td>
-                        <td><select class="select merge-cutter-select" v-model="line.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td>
+                        <td><select class="select merge-cutter-select" v-model="line.cutting_mode" @change="recalculateSupplierDraftLine(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td>
                         <td><strong>{{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }}</strong><div class="muted">仅来自真实库存预占</div></td>
                         <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.requisition_qty" /></td>
                         <td><input class="input merge-remark-input" v-model.trim="line.remark" /></td>
@@ -4287,7 +4292,7 @@
         remark: "", is_active: true,
         flute_type: null, layer_count: null, surface_paper_type: null,
         _material_supplier: "全部供应商",
-        splice_mode: "single", pieces_per_box: 1, flap_mm: 30,
+        splice_mode: "single", pieces_per_box: 1, default_cutting_mode: "一开一", flap_mm: 30,
         report_length_mm: null, report_width_mm: null,
         crease_type: null, crease_left_mm: null, crease_middle_mm: null, crease_right_mm: null,
         report_notes: null,
@@ -8560,6 +8565,9 @@
             form.pieces_per_box = this.usesProductSplice(form.box_style)
               ? Number(form.pieces_per_box || (form.splice_mode === "double" ? 2 : 1))
               : 1;
+            form.default_cutting_mode = ["一开一","一开二","一开三","一开四","一开五"].includes(form.default_cutting_mode)
+              ? form.default_cutting_mode
+              : "一开一";
             form.flap_mm = this.usesProductTongue(form.box_style)
               ? (this.normalizeMmInteger(form.flap_mm) || 30)
               : null;
@@ -8602,7 +8610,8 @@
               print_content: f.print_content, production_processes: f._production_processes,
               sale_unit_price: f.sale_unit_price, die_cut_path: f.die_cut_path, mold_tool_id: f.mold_tool_id, remark: f.remark,
               layer_count: f.layer_count, flute_type: f.flute_type,
-              splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box, flap_mm: f.flap_mm,
+              splice_mode: f.splice_mode, pieces_per_box: f.pieces_per_box,
+              default_cutting_mode: f.default_cutting_mode, flap_mm: f.flap_mm,
               report_length_mm: f.report_length_mm, report_width_mm: f.report_width_mm,
               crease_type: f.crease_type, crease_left_mm: f.crease_left_mm,
               crease_middle_mm: f.crease_middle_mm, crease_right_mm: f.crease_right_mm,
@@ -10774,6 +10783,15 @@
             if (!preserveManualQty || line.requisition_qty === null || line.requisition_qty === undefined || line.requisition_qty === "") {
               line.requisition_qty = Math.ceil(line.required_piece_qty / line.cutting_factor);
             }
+          },
+          recalculateSupplierDraftLine(line) {
+            line.cutting_mode = this.normalizeCuttingMode(line.cutting_mode);
+            const remainingPieceQty = Math.max(Number(
+              line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.production_required_qty ?? line.quantity ?? 0
+            ), 0);
+            line.requisition_qty = Math.ceil(
+              remainingPieceQty / this.cuttingModeFactor(line.cutting_mode)
+            );
           },
           mergeGroupPayload(row) {
             return {

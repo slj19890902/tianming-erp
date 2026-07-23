@@ -17,6 +17,8 @@ def order_api_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
+    from app.api.products import router as products_router
+    from app.api.requisition import router as requisition_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
@@ -88,6 +90,8 @@ def order_api_app(tmp_path: Path):
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(orders_router, prefix="/api/orders")
+    app.include_router(products_router, prefix="/api/master/products")
+    app.include_router(requisition_router, prefix="/api/requisition")
 
     def override_get_db() -> Generator[Session, None, None]:
         with session_factory() as session:
@@ -145,6 +149,81 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
         assert session.scalar(select(func.count()).select_from(OrderItem)) == 2
+
+
+def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
+    order_api_app,
+) -> None:
+    from app.api.requisition import _purchase_qty
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        created_product = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "CUT-002",
+                "customer_material_code": "CUT-002",
+                "product_name": "一开二测试外箱",
+                "box_category": "normal",
+                "default_cutting_mode": "一开二",
+            },
+        )
+        assert created_product.status_code == 201, created_product.text
+        product = created_product.json()
+        reread = client.get(f"/api/master/products/{product['id']}")
+        assert reread.status_code == 200, reread.text
+        assert reread.json()["default_cutting_mode"] == "一开二"
+
+        order_payload = {
+            "customer_id": 1,
+            "customer_po": "PO-CUTTING-002",
+            "order_date": "2026-07-23",
+            "delivery_date": "2026-07-30",
+            "items": [
+                {"product_id": product["id"], "quantity": 100, "unit_price": "1.00"}
+            ],
+        }
+        created_order = client.post("/api/orders", json=order_payload)
+        assert created_order.status_code == 201, created_order.text
+        order_item = created_order.json()["items"][0]
+        assert order_item["special_process"] == "一开二"
+
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        pending_item = next(
+            row for row in pending.json()["items"] if row["item_id"] == order_item["id"]
+        )
+        assert pending_item["cutting_mode"] == "一开二"
+        assert pending_item["requisition_qty"] == 50
+
+        updated_product = client.put(
+            f"/api/master/products/{product['id']}",
+            json={
+                "customer_id": 1,
+                "product_code": "CUT-002",
+                "customer_material_code": "CUT-002",
+                "product_name": "一开二测试外箱",
+                "box_category": "normal",
+                "default_cutting_mode": "一开三",
+                "expected_version": product["version"],
+                "change_reason": "验证常用箱修改只影响后续订单",
+            },
+        )
+        assert updated_product.status_code == 200, updated_product.text
+        assert updated_product.json()["default_cutting_mode"] == "一开三"
+
+    with session_factory() as session:
+        stored_item = session.get(OrderItem, order_item["id"])
+        stored_product = session.get(Product, product["id"])
+        assert stored_item is not None and stored_item.special_process == "一开二"
+        assert stored_product is not None and stored_product.default_cutting_mode == "一开三"
+
+    assert _purchase_qty(100, 0, "一开二") == 50
+    assert _purchase_qty(100, 0, "一开一") == 100
 
 
 def test_create_order_accepts_editable_product_snapshot(order_api_app) -> None:

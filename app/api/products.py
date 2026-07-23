@@ -264,6 +264,7 @@ class ProductPayload(BaseModel):
     base_report_notes: str | None = None
     splice_mode: str | None = "single"
     pieces_per_box: int | None = None
+    default_cutting_mode: Literal["一开一", "一开二", "一开三", "一开四", "一开五"] = "一开一"
     flap_mm: int | None = 30
 
     @model_validator(mode="after")

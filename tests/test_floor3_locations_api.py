@@ -1926,24 +1926,68 @@ def test_floor3_add_finished_inventory_is_idempotent_and_uses_expected_version(
 def test_floor3_promote_snapshot_to_finished_deletes_snapshot_and_is_replayable(
     floor3_app,
 ) -> None:
+    from app.models.order import Order, OrderItem
+
     app, ids, factory = floor3_app
+    with factory() as db:
+        other_order = Order(
+            order_number="TM20260723001",
+            customer_id=ids["other"],
+            customer_po="PO-OTHER-CUSTOMER",
+            order_date=date(2026, 7, 23),
+            total_amount=Decimal("10"),
+            created_by=ids["admin"],
+        )
+        db.add(other_order)
+        db.flush()
+        other_item = OrderItem(
+            order_id=other_order.id,
+            product_id=ids["products"][0],
+            item_order_number="TM20260723001-001",
+            quantity=10,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("10"),
+            snapshot_product_name="跨客户错误尝试",
+            snapshot_product_code="PROMOTE-ME",
+        )
+        db.add(other_item)
+        db.commit()
+        other_item_id = other_item.id
+
     with TestClient(app) as client:
         _login(client, "floor3-admin")
+        source_item = {
+            **_matched_item(ids["tianhua"], ids["products"][0], "PROMOTE-ME"),
+            "item_type": "semi_finished",
+            "unit": "sheets",
+            "quantity": 300,
+        }
         created = client.post(
             "/api/warehouse/pallets",
             json={
                 "location_id": ids["locations"][0],
-                "items": [_matched_item(ids["tianhua"], ids["products"][0], "PROMOTE-ME")],
+                "items": [source_item],
             },
         )
         assert created.status_code == 201, created.text
         pallet = created.json()["pallet"]
         item_id = pallet["items"][0]["id"]
+
+        before = client.get("/api/warehouse/finished/candidates", params={"order_item_id": 1})
+        assert before.status_code == 200, before.text
+        assert before.json()["items"] == []
+
         payload = {
             "expected_version": pallet["version"],
             "stock_date": "2026-07-16",
             "idempotency_key": "floor3-promote-1",
+            "confirmed": True,
         }
+        not_confirmed = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/items/{item_id}/promote-finished",
+            json={**payload, "confirmed": False},
+        )
+        assert not_confirmed.status_code == 422
         promoted = client.post(
             f"/api/warehouse/pallets/{pallet['id']}/items/{item_id}/promote-finished",
             json=payload,
@@ -1952,6 +1996,43 @@ def test_floor3_promote_snapshot_to_finished_deletes_snapshot_and_is_replayable(
         assert promoted.json()["lot"]["stock_date"] == "2026-07-16"
         assert len(promoted.json()["pallet"]["items"]) == 1
         assert promoted.json()["pallet"]["items"][0]["official_inventory"] is True
+        lot = promoted.json()["lot"]
+        after = client.get("/api/warehouse/finished/candidates", params={"order_item_id": 1})
+        assert after.status_code == 200, after.text
+        assert [row["lot_id"] for row in after.json()["items"]] == [lot["id"]]
+
+        other_candidates = client.get(
+            "/api/warehouse/finished/candidates",
+            params={"order_item_id": other_item_id},
+        )
+        assert other_candidates.status_code == 200, other_candidates.text
+        assert other_candidates.json()["items"] == []
+        rejected_other = client.post(
+            "/api/warehouse/finished/reservations",
+            json={
+                "order_item_id": other_item_id,
+                "inventory_lot_id": lot["id"],
+                "quantity": 1,
+                "expected_version": lot["version"],
+                "idempotency_key": "floor3-promote-other-customer",
+                "warning_acknowledged_codes": [],
+            },
+        )
+        assert rejected_other.status_code == 400
+        assert "客户专用库存不能用于其他客户订单" in rejected_other.text
+
+        reserved = client.post(
+            "/api/warehouse/finished/reservations",
+            json={
+                "order_item_id": 1,
+                "inventory_lot_id": lot["id"],
+                "quantity": 10,
+                "expected_version": lot["version"],
+                "idempotency_key": "floor3-promote-reserve-own-customer",
+                "warning_acknowledged_codes": [],
+            },
+        )
+        assert reserved.status_code == 200, reserved.text
         replay = client.post(
             f"/api/warehouse/pallets/{pallet['id']}/items/{item_id}/promote-finished",
             json=payload,
@@ -1961,10 +2042,20 @@ def test_floor3_promote_snapshot_to_finished_deletes_snapshot_and_is_replayable(
 
         with factory() as db:
             from app.models.audit import OperationLog
-            from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
+            from app.models.warehouse_inventory import (
+                InventoryLot,
+                InventoryMovement,
+                InventoryPalletItem,
+                InventoryReservation,
+            )
 
             assert db.scalar(select(func.count(InventoryLot.id))) == 1
             assert db.scalar(select(func.count(InventoryPalletItem.id))) == 1
+            official_item = db.scalar(select(InventoryPalletItem))
+            assert official_item is not None
+            assert official_item.pallet_id == pallet["id"]
+            assert db.scalar(select(func.count(InventoryMovement.id))) == 2
+            assert db.scalar(select(func.count(InventoryReservation.id))) == 1
             assert db.scalar(
                 select(func.count(OperationLog.id)).where(
                     OperationLog.description == "现场快照转正式成品库存"

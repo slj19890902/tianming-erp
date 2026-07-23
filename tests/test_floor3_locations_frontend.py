@@ -926,16 +926,22 @@ def test_floor3_finished_binding_and_legacy_promotion_use_explicit_contract() ->
     assert "hasFinishedInventory&&hasSnapshot" in save
     assert "正式成品行与现场快照行不能混合" in save
     assert "item?.official_inventory===false" in WAREHOUSE_HTML
-    assert "一键同步成品仓" in WAREHOUSE_HTML
+    assert "转为正式成品库存" in WAREHOUSE_HTML
+    assert '["finished","semi_finished"].includes(item?.item_type)' in WAREHOUSE_HTML
     assert "/api/warehouse/pallets/${palletId}/items/${itemId}/promote-finished" in WAREHOUSE_HTML
     promotion = WAREHOUSE_HTML.split("async function promoteFloor3FinishedItem", 1)[1].split(
         "async function moveFloor3Pallet", 1
     )[0]
     assert "expected_version:Number(expectedVersion)" in promotion
-    assert "stock_date:today()" in promotion
+    assert "stock_date:stockDate" in promotion
+    assert "confirmed:true" in promotion
     assert "promotionKeys[itemId]" in promotion
     assert "idempotency_key:idempotencyKey" in promotion
     assert "promotionPending" in promotion
+    assert promotion.count("confirm(") == 2
+    for label in ("客户：", "存货编码：", "产品：", "数量：", "当前库位：", "入库日期："):
+        assert label in promotion
+    assert "不会直接用盘点快照抵扣" in promotion
 
 
 def test_floor3_structured_ground_and_temporary_cells_support_pallet_drag() -> None:

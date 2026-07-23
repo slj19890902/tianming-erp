@@ -3453,6 +3453,7 @@ def create_order(
                 snapshot_splice_mode=product.splice_mode or "single",
                 snapshot_pieces_per_box=product.pieces_per_box or (2 if (product.splice_mode or "").lower() == "double" else 1),
                 snapshot_flap_mm=product.flap_mm or 30,
+                special_process=product.default_cutting_mode or "一开一",
                 requisition_status="未报料",
             )
             # v0.19.2-B: 临时图纸路径 — 新建订单前上传的图纸绑定到明细

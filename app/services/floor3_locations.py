@@ -862,13 +862,14 @@ def convert_snapshot_to_finished_lot(
     if item.inventory_lot_id is not None:
         raise Floor3LocationError("该内容已经是正式成品库存", status_code=409)
     if (
-        item.item_type != "finished"
+        item.item_type not in {"finished", "semi_finished"}
         or item.match_status != "matched"
         or item.customer_id is None
         or item.product_id is None
     ):
         raise Floor3LocationError(
-            "只能将客户、产品完整且已匹配的成品快照转为正式库存", status_code=422
+            "只能将客户、产品完整且已匹配的成品或半成品快照转为正式成品库存",
+            status_code=422,
         )
     quantity = Decimal(str(item.quantity))
     if quantity <= 0 or quantity != quantity.to_integral_value():
@@ -884,7 +885,10 @@ def convert_snapshot_to_finished_lot(
         quantity=int(quantity),
         stock_date=stock_date,
         source_type="manual",
-        remarks="现场快照转正式成品库存",
+        remarks=(
+            "现场快照转正式成品库存；"
+            f"原快照类型：{item.item_type}；原单位：{item.unit}"
+        ),
         operator_id=operator_id,
         idempotency_key=idempotency_key,
         pallet_id=pallet.id,

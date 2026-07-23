@@ -1574,3 +1574,11 @@ legacy_ruida_* 原始层
 - P0-A 新增显式 `ERP_PRODUCTION_TRANSPORT`：默认 `https_proxy` 继续要求 loopback、HTTPS、受信 loopback 代理、Secure Cookie、HTTPS 跳转与 HSTS；仅显式 `lan_http` 才允许工厂私网 HTTP，并强制私网 Origin/URL、明确端口、可信 Host、禁止代理信任、单 worker 和至少 32 字符密钥。局域网模式不启用跳转/HSTS且 Cookie 不带 Secure，但仍启用精确 CORS、带 Cookie 写请求的 Origin/CSRF、HttpOnly、SameSite=Lax、Host 门禁和其余安全响应头。
 - Windows 启动器和两阶段发布脚本均读取同一传输模式并按模式 fail-closed；普通启动仍只读检查 revision，未恢复任何自动迁移。工厂 `lan_http` 必须额外确认 Windows 防火墙把 TCP 8000 限定到 Private 配置文件和 `192.168.3.0/24`，且不存在更宽的旧入站规则；发现公网/Any 规则时停止发布。
 - 当前配置、认证、系统、部署、数据库路径、发布安全及 P0-A 相邻扩大回归为 `111 passed`；随后补充未知传输模式和 Host 子域通配符 fail-closed 用例，传输安全专项为 `30 passed`。覆盖 HTTPS 默认不降级、LAN HTTP 私网/Host/Origin/CSRF/安全头、LAN Cookie 登录、启动/发布脚本和备份发布门禁。Python 编译、4 个 PowerShell 脚本语法、工厂实际 LAN 参数的纯配置加载和 `git diff --check` 通过。测试使用 P0-B 隔离工作树已有 venv；没有向工厂或家庭正式 venv 安装测试包。正式 `.env`、正式服务和正式数据库仍未修改，PR #35 尚未合并，本轮也没有新增 Alembic revision。
+
+## 79. 2026-07-23 P0-A + P0-B 工厂发布集成候选
+
+- 独立候选工作树为 `D:\tm-worktrees\erp-p0ab-factory-candidate-20260723`，分支为 `codex/release-p0ab-factory-candidate-20260723`。它以已推送的 P0-A `2addb5bb4fee5632507346a07431943f9ac2f9e9` 为起点，线性集成 P0-B 原提交 `804a90cbb0e4cc12a87392ed4878cb3f37bcf8fe`（候选中的等价提交为 `5315e14`）；P0-B 独立分支也已推送备审。没有更新 `origin/factory-current-baseline` 或 `origin/main`。
+- 自动集成同时保留 P0-A 的 `https_proxy/lan_http` 生产传输、Host/Origin/CSRF/启动发布门禁，以及 P0-B 的 `/static/uploads` 强制 404、私有图纸鉴权 API、统一文件签名/大小/超时校验和一次性草稿 token。相对 `c5cffa2` 没有 Alembic 文件变化。
+- 联合后端、上传、图纸权限、客户范围、PDF、天华、认证、传输、启动、发布与数据库路径回归为 `163 passed, 1 skipped`；前端、权限显示和内联 JavaScript 扩大回归为 `185 passed`。最初出现的 2 个 Phase 12 客户测试和 3 个旧前端断言均在未修改的 `c5cffa2` 复现；候选仅把测试请求补齐现有 `expected_version/change_reason`，并同步当前销售/车间菜单及常用箱材质区 DOM，修正后全部通过，业务代码未为旧断言降级。
+- 工厂历史公开上传目录 21 个文件的扩展名/签名只读核验已全部一致，无活动类型、无大于 25MB 文件；未移动或删除历史文件。正式发布仍需先只读确认 Windows 防火墙没有公网/Any 宽规则，并将 TCP 8000 限定到 Private 配置文件和 `192.168.3.0/24`。
+- 本轮没有停止工厂 8000 服务，没有修改工厂正式 `.env`，没有安装正式依赖，没有创建或写入正式备份/数据库。发布时 P0-B 需要把正式 venv 依赖核验到 `python-multipart==0.0.27`、`pypdf==6.7.3`、`PyJWT==2.13.0`；该依赖更新必须与代码、备份、配置切换和人工 UAT 放在同一受控维护窗口。

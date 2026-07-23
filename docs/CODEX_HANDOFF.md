@@ -1,5 +1,16 @@
 # Codex 项目交接
 
+## 2026-07-23 页面流畅度专项 P1 | 依赖本地化、按需取数与短时缓存（隔离 UAT 待人工验收）
+
+- N081-A1 已形成独立提交 `0ab7d10` 并推送 `origin/codex/n081-a-space-readiness-gate-20260723`。页面流畅度专项另建 worktree `D:\tm-worktrees\erp-frontend-performance-p1-20260723` 和分支 `codex/frontend-performance-p1-20260723`，基线为 `0ab7d10`，没有混入 N081 新业务规则。
+- 首页 Vue `3.5.40`、Axios `1.18.1`、pinyin-pro `3.26.0` 已改为仓库内固定版本静态资源，记录来源、许可证和 SHA-256，并对 `/static/vendor/` 返回一年 immutable 缓存；首页不再产生公网 CDN 请求。
+- 登录后的全模块 `loadBase()` 已删除，改为只加载当前模块数据；已访问页面使用 30 秒短时缓存，顶部“刷新”强制重新取数。客户、常用箱、订单搜索使用 300ms 防抖，列表请求用 `AbortController` 取消旧请求，首次客户列表仍限制 25 条。
+- 新增性能观测中间件：响应包含 `Server-Timing`；超过阈值的 `/api/` 只记录方法、路径、状态和耗时，不记录查询值、请求体或响应体。默认阈值 500ms，可由 `ERP_SLOW_REQUEST_MS` 调整。
+- 隔离 UAT 再次复制件为 `D:\tm-uat\frontend_performance_p1_20260723_153042\carton_erp_uat.sqlite3`，创建时 SHA-256 `8226E12DC27495C9182E20BC210BD24CE56AF8D08666BD983F9DD5D89D7C1613`、revision `ch64v8x9z53`、`integrity_check=ok`、外键异常 0；没有执行迁移。服务地址 `http://127.0.0.1:18085/`，账号 `codex_uat`，密码 `123456`。
+- 浏览器禁用缓存冷刷新实测 `121.6ms`（工具侧完整导航 `133ms`），首屏公网请求 0；登录状态下首页只请求身份、概览和 KPI。30 秒内返回客户模块绘制约 `19ms` 且不重复请求；手动刷新会重新取数，搜索等待 300ms 后只发 1 次请求；Console 无 error/warn。
+- 自动验证：专项与 Phase 12 `57 passed`；扩大前端组合 `344 passed, 18 skipped, 1 deselected`；5 个旧失败均在未修改基线 `0ab7d10` 原样复现。Python 编译、内联 JavaScript 语法、vendor 运行契约和 `git diff --check` 通过。详细报告：`docs/performance_reports/FRONTEND_PERFORMANCE_P1_20260723.md`。
+- `static/index.html` 的约 950KB 物理拆包尚未纳入本最小闭环；当前局域网指标已经达标，待 P1 人工验收后再在独立阶段逐模块拆分。工厂正式数据库和正式目录未被本轮连接、迁移、替换或写入。
+
 ## 2026-07-23 N081-A1 | 库位空间放置就绪门禁（隔离 UAT 已通过）
 
 - 已按用户验收结论将 `7d8dc5e87a25b7c2632ef76ff4eb052f1dc4e0a6` 快进推送到远端 `factory-current-baseline`；未修改 `origin/main`、未强推。随后从 `origin/factory-current-baseline@7d8dc5e` 建立独立 worktree `D:\tm-worktrees\erp-n081-a-space-readiness-gate-20260723` 和分支 `codex/n081-a-space-readiness-gate-20260723`。

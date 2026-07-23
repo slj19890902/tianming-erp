@@ -44,6 +44,10 @@ from app.api.tianhua_pre_delivery import (
     router as tianhua_pre_delivery_router,
 )
 from app.core.config import load_settings
+from app.middleware.performance import (
+    PerformanceObservabilityMiddleware,
+    slow_request_threshold_ms,
+)
 from app.middleware.private_uploads import PrivateUploadGuardMiddleware
 
 
@@ -509,6 +513,7 @@ def create_app() -> FastAPI:
         CookieOriginCSRFMiddleware,
         ProxyHeadersMiddleware,
         PrivateUploadGuardMiddleware,
+        PerformanceObservabilityMiddleware,
     }
     application.user_middleware = [
         middleware
@@ -527,6 +532,10 @@ def create_app() -> FastAPI:
     )
     apply_production_security(application, current)
     apply_transport_security(application, current)
+    application.add_middleware(
+        PerformanceObservabilityMiddleware,
+        slow_request_ms=slow_request_threshold_ms(),
+    )
     application.add_middleware(PrivateUploadGuardMiddleware)
     return application
 

@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>天明包装ERP</title>
     <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.26.0/dist/index.js"></script>
+    <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
+    <script src="/static/vendor/axios-1.18.1.min.js"></script>
+    <script src="/static/vendor/pinyin-pro-3.26.0.js"></script>
     <script src="/static/assets/time-utils.js"></script>
     <style>
       :root {
@@ -1077,7 +1077,7 @@
               <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group"><button v-if="canCreateCustomers" class="btn primary" @click="openCustomer()">新增客户</button></div>
-                <div class="toolbar-group"><label><input type="checkbox" v-model="filters.showInactive" @change="pages.customers=1;loadCustomers()" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @keyup.enter="pages.customers=1; loadCustomers()" /><button class="btn" @click="pages.customers=1; loadCustomers()">查询</button></div>
+                <div class="toolbar-group"><label><input type="checkbox" v-model="filters.showInactive" @change="pages.customers=1;loadCustomers()" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="pages.customers=1; loadCustomers()" /><button class="btn" @click="pages.customers=1; loadCustomers()">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
                 <table><thead><tr><th>客户编号</th><th>客户缩写</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
@@ -1151,13 +1151,13 @@
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
-                  <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @keyup.enter="pages.products=1; loadProducts()" />
+                  <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @input="queuePageSearch('products')" @keyup.enter="pages.products=1; loadProducts()" />
                   <button class="btn" @click="showProductMoreFilters=!showProductMoreFilters">{{ showProductMoreFilters ? "收起筛选" : "更多筛选" }}</button>
                   <template v-if="showProductMoreFilters">
                     <label><input type="checkbox" v-model="filters.showInactiveProducts" @change="pages.products=1; loadProducts()" /> 显示已停用纸箱</label>
-                    <input class="input" style="min-width:180px" placeholder="产品名称" v-model.trim="filters.productName" @keyup.enter="pages.products=1; loadProducts()" />
-                    <input class="input" style="min-width:180px" placeholder="规格 / 尺寸" v-model.trim="filters.productSpec" @keyup.enter="pages.products=1; loadProducts()" />
-                    <input class="input" style="min-width:180px" placeholder="材质" v-model.trim="filters.productMaterial" @keyup.enter="pages.products=1; loadProducts()" />
+                    <input class="input" style="min-width:180px" placeholder="产品名称" v-model.trim="filters.productName" @input="queuePageSearch('products')" @keyup.enter="pages.products=1; loadProducts()" />
+                    <input class="input" style="min-width:180px" placeholder="规格 / 尺寸" v-model.trim="filters.productSpec" @input="queuePageSearch('products')" @keyup.enter="pages.products=1; loadProducts()" />
+                    <input class="input" style="min-width:180px" placeholder="材质" v-model.trim="filters.productMaterial" @input="queuePageSearch('products')" @keyup.enter="pages.products=1; loadProducts()" />
                   </template>
                   <button class="btn" @click="pages.products=1; loadProducts()">查询</button>
                   <button class="btn" @click="resetProductFilters">清空筛选</button>
@@ -1501,6 +1501,7 @@
                     <input class="input" style="flex:1;min-width:220px;max-width:440px"
                            v-model.trim="filters.orderKeyword"
                            placeholder="搜索客户 / 客户单号 / 产品 / 规格 / 存货编码 / 系统单号 / 明细单号"
+                           @input="queuePageSearch('orders')"
                            @keyup.enter="pages.orders=1; loadOrders()" />
                     <div class="order-status-tabs">
                       <button v-for="tab in orderStatusTabs" :key="tab.value"
@@ -1649,7 +1650,7 @@
                     <option value="customer_name">按客户名称分组</option>
                     <option value="order_date">按日期分组</option>
                   </select>
-                  <input class="input" style="width:260px" v-model.trim="filters.orderKeyword" placeholder="搜索订单号、TM编号、客户单号、客户名称" @keyup.enter="pages.orders=1; loadOrders()" />
+                  <input class="input" style="width:260px" v-model.trim="filters.orderKeyword" placeholder="搜索订单号、TM编号、客户单号、客户名称" @input="queuePageSearch('orders')" @keyup.enter="pages.orders=1; loadOrders()" />
                   <search-select v-model="filters.orderCustomer" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" :allow-empty="true" @change="pages.orders=1; loadOrders()"></search-select>
                   <button class="btn" @click="pages.orders=1; loadOrders()">搜索</button>
                 </div>
@@ -4252,6 +4253,9 @@
       );
 
       const { createApp } = Vue;
+      const PAGE_CACHE_TTL_MS = 30_000;
+      const latestRequestControllers = new Map();
+      const searchDebounceTimers = new Map();
       const today = () => TmTime.beijingToday();
       const plusDays = (days) => TmTime.addCalendarDays(TmTime.beijingToday(), days);
       const month = () => today().slice(0, 7);
@@ -4374,6 +4378,7 @@
         data() {
           return {
             user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0,
+            pageCacheUpdatedAt: {},
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], products: [], materials: [], orders: [],
@@ -5062,6 +5067,7 @@
         async mounted() {
           window.erpAuthRequired = () => {
             this.authGeneration += 1;
+            this.resetPagePerformanceState();
             this.uiModeSaving = false;
             this.activePage = "dashboard";
             this.user = null;
@@ -6416,8 +6422,7 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
-              await this.loadBase();
-              await this.loadPage(this.activePage);
+              await this.loadPage(this.activePage, { force:true });
               if (this.user.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
@@ -6437,13 +6442,14 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
-              await this.loadBase(); await this.loadPage(this.activePage);
+              await this.loadPage(this.activePage, { force:true });
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
             finally { this.loading = false; }
           },
           async logout() {
             this.authGeneration += 1;
+            this.resetPagePerformanceState();
             this.uiModeSaving = false;
             this.activePage = "dashboard";
             this.user = null;
@@ -6453,13 +6459,53 @@
               if (error?.response?.status !== 401) this.showToast(this.errorMessage(error), true);
             }
           },
-          async loadBase() {
-            const tasks = [];
-            if (this.hasPermission("products.view")) tasks.push(this.loadProducts(), this.loadMaterials());
-            if (this.hasPermission("orders.view")) tasks.push(this.loadOrders());
-            if (this.hasPermission("deliveries.view")) tasks.push(this.loadDeliveries());
-            if (this.hasPermission("customers.view")) tasks.push(this.loadCustomers(), this.loadCustomerOptions());
-            await Promise.all(tasks);
+          resetPagePerformanceState() {
+            this.pageCacheUpdatedAt = {};
+            for (const controller of latestRequestControllers.values()) controller.abort();
+            latestRequestControllers.clear();
+            for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
+            searchDebounceTimers.clear();
+          },
+          pageCacheFresh(page) {
+            const updatedAt = Number(this.pageCacheUpdatedAt[page] || 0);
+            return updatedAt > 0 && Date.now() - updatedAt < PAGE_CACHE_TTL_MS;
+          },
+          markPageCache(page) {
+            this.pageCacheUpdatedAt[page] = Date.now();
+          },
+          invalidatePageCache(...pages) {
+            pages.forEach(page => { delete this.pageCacheUpdatedAt[page]; });
+          },
+          beginLatestRequest(key) {
+            latestRequestControllers.get(key)?.abort();
+            const controller = new AbortController();
+            latestRequestControllers.set(key, controller);
+            return controller;
+          },
+          finishLatestRequest(key, controller) {
+            if (latestRequestControllers.get(key) === controller) latestRequestControllers.delete(key);
+          },
+          isCancelledRequest(error) {
+            return error?.code === "ERR_CANCELED" || error?.name === "CanceledError" || error?.name === "AbortError";
+          },
+          queuePageSearch(page) {
+            const key = `search:${page}`;
+            const existing = searchDebounceTimers.get(key);
+            if (existing) clearTimeout(existing);
+            searchDebounceTimers.set(key, setTimeout(async () => {
+              searchDebounceTimers.delete(key);
+              if (this.activePage !== page && !(page === "orders" && this.activePage === "orders_legacy")) return;
+              if (this.pages[page] != null) this.pages[page] = 1;
+              this.invalidatePageCache(page);
+              try {
+                if (page === "customers") await this.loadCustomers();
+                if (page === "products") await this.loadProducts();
+                if (page === "orders") await this.loadOrders();
+                this.markPageCache(page === "orders" && this.activePage === "orders_legacy" ? "orders_legacy" : page);
+              } catch (error) {
+                if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true);
+              }
+            }, 300));
           },
           async go(page) {
             if (!this.pageAllowed(page)) {
@@ -6473,25 +6519,38 @@
             this.activePage = page;
             await this.loadPage(page);
           },
-          async loadPage(page) {
+          async loadPage(page, { force=false } = {}) {
+            if (!force && this.pageCacheFresh(page)) return;
             this.loading = true;
             try {
               if (page === "dashboard") await Promise.all([this.loadOverview(), this.loadKpi()]);
               if (page === "customers") await this.loadCustomers();
-              if (page === "quotations" && this.quotationCustomer) await this.loadQuotationHistory();
-              if (page === "products") await Promise.all([this.loadProducts(), this.loadMaterials(), this.loadMoldTools()]);
-              if (page === "orders") await this.loadOrders();
-              if (page === "requisition") await this.loadRequisition();
+              if (page === "quotations") {
+                await this.loadCustomerOptions(force);
+                if (this.quotationCustomer) await this.loadQuotationHistory();
+              }
+              if (page === "products") await Promise.all([this.loadCustomerOptions(force), this.loadProducts(), this.loadMaterials(), this.loadMoldTools()]);
+              if (page === "orders" || page === "orders_legacy") await Promise.all([this.loadCustomerOptions(force), this.loadOrders()]);
+              if (page === "requisition") {
+                const tasks = [this.loadRequisition()];
+                if (this.hasPermission("customers.view")) tasks.push(this.loadCustomerOptions(force));
+                if (this.hasPermission("products.view")) tasks.push(this.loadMaterials());
+                await Promise.all(tasks);
+              }
               if (page === "incoming") await this.loadIncoming();
               if (page === "production") await this.loadProduction();
-              if (page === "deliveries") await this.loadDeliveries();
+              if (page === "deliveries") await Promise.all([this.loadDeliveries(), this.loadCustomerOptions(force)]);
               if (page === "finance") await this.loadFinance();
               if (page === "system") await this.loadSystem();
               if (page === "permissions") await this.loadPermissionUsers();
+              this.markPageCache(page);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
-          refreshCurrent() { return this.loadPage(this.activePage); },
+          refreshCurrent() {
+            this.invalidatePageCache(this.activePage);
+            return this.loadPage(this.activePage, { force:true });
+          },
           async loadOverview() {
             this.overviewLoading = true;
             this.overviewError = "";
@@ -6513,15 +6572,36 @@
           },
           async loadCustomers() {
             if (!this.hasPermission("customers.view")) return;
-            const { data } = await axios.get("/api/master/customers", { params: {
-              keyword: this.filters.customerKeyword, include_inactive:this.filters.showInactive,
-              page: this.pages.customers, page_size: this.pageSize
-            } });
-            this.customers = data.items; this.customersTotal = data.total;
+            const controller = this.beginLatestRequest("customers:list");
+            try {
+              const { data } = await axios.get("/api/master/customers", {
+                params: {
+                  keyword: this.filters.customerKeyword, include_inactive:this.filters.showInactive,
+                  page: this.pages.customers, page_size: this.pageSize
+                },
+                signal: controller.signal,
+              });
+              this.customers = data.items; this.customersTotal = data.total;
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) throw error;
+            } finally {
+              this.finishLatestRequest("customers:list", controller);
+            }
           },
-          async loadCustomerOptions() {
+          async loadCustomerOptions(force=false) {
             if (!this.hasPermission("customers.view")) return;
-            this.customerOptions = (await axios.get("/api/master/customers", { params:{ page_size:200, include_inactive:true } })).data.items;
+            if (!force && this.customerOptions.length) return;
+            const controller = this.beginLatestRequest("customers:options");
+            try {
+              this.customerOptions = (await axios.get("/api/master/customers", {
+                params:{ page_size:200, include_inactive:true },
+                signal:controller.signal,
+              })).data.items;
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) throw error;
+            } finally {
+              this.finishLatestRequest("customers:options", controller);
+            }
           },
           async loadProducts() {
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
@@ -6539,8 +6619,15 @@
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
-            const { data } = await axios.get("/api/master/products", { params });
-            this.products = data.items; this.productsTotal = data.total;
+            const controller = this.beginLatestRequest("products:list");
+            try {
+              const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
+              this.products = data.items; this.productsTotal = data.total;
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) throw error;
+            } finally {
+              this.finishLatestRequest("products:list", controller);
+            }
           },
           async loadMoldTools() {
             if (this.isWorkshop) return;
@@ -6555,13 +6642,13 @@
           },
           // 分页拉取材质：后端限制 page_size<=200，因此用 page 翻页拉全部，
           // 单次 limit 永不超过 200，避免一次性全量导致 422（Input should be <= 200）。
-          async fetchAllMaterials(baseParams) {
+          async fetchAllMaterials(baseParams, signal) {
             const PAGE_SIZE = 200;  // 后端硬上限，禁止超过
             let page = 1;
             const all = [];
             while (true) {
               const params = { ...baseParams, page, page_size: PAGE_SIZE };
-              const data = (await axios.get("/api/master/materials", { params })).data;
+              const data = (await axios.get("/api/master/materials", { params, signal })).data;
               const items = data.items || [];
               all.push(...items);
               const total = data.total != null ? data.total : all.length;
@@ -6571,16 +6658,23 @@
             return all;
           },
           async loadMaterials() {
+            const controller = this.beginLatestRequest("materials:list");
             const params = { sort: this.materialSort };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
-            this.materials = await this.fetchAllMaterials(params);
-            // 维护全量材质（供所有材质选择器复用）+ 供应商下拉列表
-            if (!this.allMaterials.length || !this.materialSuppliers.length) {
-              const all = await this.fetchAllMaterials({ sort: "common" });
-              this.allMaterials = all;
-              const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))];
-              this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));
+            try {
+              this.materials = await this.fetchAllMaterials(params, controller.signal);
+              // 维护全量材质（供所有材质选择器复用）+ 供应商下拉列表
+              if (!this.allMaterials.length || !this.materialSuppliers.length) {
+                const all = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
+                this.allMaterials = all;
+                const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))];
+                this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));
+              }
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) throw error;
+            } finally {
+              this.finishLatestRequest("materials:list", controller);
             }
           },
           async openMaterialCandidateMaintenance() {
@@ -7022,8 +7116,15 @@
               params.sort_by = this.filters.orderSortBy;
               params.sort_direction = this.filters.orderSortDirection;
             }
-            const { data } = await axios.get("/api/orders", { params });
-            this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+            const controller = this.beginLatestRequest("orders:list");
+            try {
+              const { data } = await axios.get("/api/orders", { params, signal:controller.signal });
+              this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) throw error;
+            } finally {
+              this.finishLatestRequest("orders:list", controller);
+            }
           },
           async loadRequisition() {
             const [pending, items] = await Promise.all([

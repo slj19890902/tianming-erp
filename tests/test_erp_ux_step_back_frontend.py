@@ -23,7 +23,12 @@ def test_production_history_has_admin_reversal_and_inventory_deep_link() -> None
     assert "/api/production/completions/${row.id}/revert" in INDEX
     assert "任务已退回待生产确认" in INDEX
     assert "openProductionInventory" in INDEX
+    assert 'if (!this.pageAllowed("warehouse"))' in INDEX
+    assert "当前账号没有访问仓库库存管理的权限" in INDEX
     assert 'params.set("lot_id"' in INDEX
+    assert 'new URLSearchParams({ embedded:"1", tab:"finished" })' in INDEX
+    assert 'this.ensureWarehouseFrame(`/warehouse.html?${params.toString()}`)' in INDEX
+    assert 'window.location.href = `/warehouse.html?${params.toString()}`' not in INDEX
 
 
 def test_order_group_detail_keeps_active_page_else_if_chain_adjacent() -> None:
@@ -51,4 +56,4 @@ def test_warehouse_uses_area_then_location_and_ledger_map_linkage() -> None:
     assert "selectLocationCascade" in WAREHOUSE
     assert "已联动三楼平面图" in WAREHOUSE
     assert "applyWarehouseDeepLink" in WAREHOUSE
-    assert "每行只需选择客户、存货编码和数量" in WAREHOUSE
+    assert "选择客户、存货编码和数量后加入当前栈板。" in WAREHOUSE

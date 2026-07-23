@@ -83,7 +83,15 @@ class HSTSMiddleware(BaseHTTPMiddleware):
             response.headers["Strict-Transport-Security"] = "max-age=63072000"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["X-Frame-Options"] = "DENY"
+        embedded_warehouse = (
+            request.url.path == "/warehouse.html"
+            and request.query_params.get("embedded") == "1"
+        )
+        if embedded_warehouse:
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+        else:
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
         )

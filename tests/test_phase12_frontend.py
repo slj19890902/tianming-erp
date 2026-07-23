@@ -119,6 +119,11 @@ def test_n029_production_page_deep_link_and_manual_destination_are_present() -> 
     assert '<option value="direct">订单内直接待送</option>' in INDEX
     assert '<option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option>' in INDEX
     assert "productionAvailableLocations" in INDEX
+    assert 'v-model="row.location_area_code"' in INDEX
+    assert 'v-model="row.transfer_area_code"' in INDEX
+    assert "productionLocationsForArea" in INDEX
+    assert "先选区域" in INDEX
+    assert "再选库位" in INDEX
     assert ':checked="!!productionSelected[row.id]"' in INDEX
     assert 'activePage === \'production\'' in INDEX
 
@@ -184,7 +189,7 @@ def test_n029_batch_completion_prevents_cross_customer_and_duplicate_locations()
     assert "productionLocationUsedByOther(locationId, currentRow)" in logic
     assert "new Set(stockLocationIds).size !== stockLocationIds.length" in logic
     assert "同一批入库明细不能选择同一空库位" in logic
-    assert ':disabled="!location.is_empty || productionLocationUsedByOther(location.id,row)"' in INDEX
+    assert ':disabled="productionLocationUsedByOther(location.id,row)"' in INDEX
 
 
 def test_root_address_still_returns_the_dashboard_shell() -> None:

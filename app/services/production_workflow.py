@@ -713,6 +713,7 @@ def list_temporary_locations(db: Session) -> list[dict]:
         result.append(
             {
                 "id": location.id,
+                "area_code": location.area_code,
                 "location_code": location.location_code,
                 "location_name": location.location_name,
                 "pallet_id": pallet.id if pallet is not None else None,

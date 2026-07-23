@@ -1265,6 +1265,7 @@ def test_permissions_customer_scope_locations_and_snapshot_fields(production_app
     occupied = next(
         row for row in locations.json()["items"] if row["location_code"] == "E1-R02"
     )
+    assert fixed["area_code"] == occupied["area_code"] == "E1"
     assert (fixed["location_kind"], fixed["is_empty"]) == ("fixed", True)
     assert (occupied["location_kind"], occupied["is_empty"]) == ("fixed", False)
 

@@ -56,11 +56,14 @@ def test_warehouse_page_route_returns_warehouse_html_not_dashboard() -> None:
     assert response["content_type"].startswith("text/html")
 
 
-def test_homepage_has_role_menu_and_direct_link_to_warehouse_page() -> None:
+def test_homepage_keeps_warehouse_inside_lazy_persistent_erp_shell() -> None:
     assert '{ key: "warehouse", label: "仓库库存管理" }' in INDEX_HTML
-    assert 'href="/warehouse.html">仓库库存管理</a>' in INDEX_HTML
-    assert 'if (page === "warehouse")' in INDEX_HTML
-    assert 'window.location.href = "/warehouse.html";' in INDEX_HTML
+    assert '@click="go(\'warehouse\')">仓库库存管理</button>' in INDEX_HTML
+    assert 'v-if="warehouseFrameUrl" v-show="activePage === \'warehouse\'"' in INDEX_HTML
+    assert 'warehouseFrameUrl: "", warehouseFrameRevision: 0' in INDEX_HTML
+    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1"' in INDEX_HTML
+    assert 'window.location.href = "/warehouse.html";' not in INDEX_HTML
+    assert 'this.warehouseFrameUrl = "";' in INDEX_HTML
     assert '"incoming", "production", "warehouse", "deliveries"' in INDEX_HTML
 
 
@@ -75,7 +78,9 @@ def test_warehouse_page_reads_nested_auth_user_and_uses_n028_permissions() -> No
 
 
 def test_warehouse_page_unauthenticated_and_initialization_failures_are_explicit() -> None:
-    assert 'if(error.status===401){location.href="/?next=%2Fwarehouse.html";return}' in WAREHOUSE_HTML
+    assert 'const loginTarget=warehouseEmbeddedMode?"/?page=warehouse":"/?redirect=%2Fwarehouse.html";' in WAREHOUSE_HTML
+    assert "window.top.location.replace(loginTarget)" in WAREHOUSE_HTML
+    assert "window.location.replace(loginTarget)" in WAREHOUSE_HTML
     assert "登录状态检查失败" in WAREHOUSE_HTML
     assert "仓库页面初始化失败" in WAREHOUSE_HTML
     assert "库位加载失败" in WAREHOUSE_HTML
@@ -92,6 +97,8 @@ def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
     assert WAREHOUSE_HTML.count("<script src=") == 1
     assert "<link rel=" not in WAREHOUSE_HTML
     assert 'href="/"' in WAREHOUSE_HTML
+    assert 'body.embedded>header{display:none}' in WAREHOUSE_HTML
+    assert 'new URLSearchParams(window.location.search).get("embedded") === "1"' in WAREHOUSE_HTML
     for empty_text in ("暂无库存批次", "暂无库位", "暂无库存流水"):
         assert empty_text in WAREHOUSE_HTML
     assert "/api/warehouse/insights" in WAREHOUSE_HTML

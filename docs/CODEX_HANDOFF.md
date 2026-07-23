@@ -1,5 +1,16 @@
 # Codex 项目交接
 
+## 2026-07-23 P0 UAT 验收优化 | 生产库位两级选择与仓库内嵌
+
+- 本轮继续使用 `D:\tm-worktrees\erp-production-overreceipt-surplus-delivery-20260723` 和 `codex/production-overreceipt-surplus-delivery-20260723`，只在 P0 家庭隔离 UAT 副本验证；没有连接、迁移、替换或写入工厂正式数据库，没有新增 Alembic migration。
+- 生产确认原先把所有三楼空库位放在一个长下拉框内，区域很多时难以选择。空库位接口现在返回 `area_code`；待生产入库和完工历史“转入成品库存”都改为先选区域、再只显示该区域的空库位，区域切换会清除旧库位，未选完整时禁止提交。
+- 仓库库存管理原先是独立 `warehouse.html`，主 ERP 通过整页跳转进入，返回 `/` 时 Vue 主应用会重新初始化，所以看起来像另一个网站并丢失首页/模块状态。现在仓库首次进入时才在 ERP 主框架内同源加载，切到来料、生产等模块时保留仓库当前标签、筛选和页面位置；仓库独立标题栏在内嵌模式隐藏，旧书签直接访问 `/warehouse.html` 仍兼容。
+- 生产历史“定位库存”继续携带批次和库位深链，但先检查 `warehouse.view` 权限，不再绕过主菜单门禁。退出登录会卸载仓库页面，避免换账号后保留旧 DOM。
+- 生产安全响应头默认仍为 `X-Frame-Options: DENY`；只有精确的 `/warehouse.html?embedded=1` 改为 `SAMEORIGIN`，并同时返回 `Content-Security-Policy: frame-ancestors 'self'`。因此工厂生产配置可以同源内嵌，外部站点仍不能嵌入 ERP。
+- 浏览器 UAT 已确认：生产历史先显示“先选区域”，选 A1 后库位只剩 `A1-R03/A1-R04`；仓库页保留 ERP 顶栏和左侧菜单，独立“返回 ERP”不可见；切到“仓库来料入库”再返回后仍停留在仓库三楼视图，顶层地址保持 `http://127.0.0.1:18086/`，页面日志为空且服务端没有 500。
+- 隔离副本仍为 `ci65v8x9z54`、`integrity_check=ok`、外键异常 0；源副本 SHA-256 复核仍为 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC`。本轮页面操作没有点击转库存、绑定、移动或其它业务写入按钮。
+- 自动验证：生产、库存、仓库入口、权限、幂等和前端组合回归 `107 passed`；生产响应头及相关页面专项 `20 passed`；Python 编译、内联 JavaScript 语法和 `git diff --check` 均通过。
+
 ## 2026-07-23 P0 | 来料超收、生产余货与超量送货完整闭环（家庭隔离 UAT）
 
 - 独立 worktree：`D:\tm-worktrees\erp-production-overreceipt-surplus-delivery-20260723`；分支：`codex/production-overreceipt-surplus-delivery-20260723`；基线：`origin/factory-current-baseline@7d8dc5e87a25b7c2632ef76ff4eb052f1dc4e0a6`。本轮没有连接、迁移、替换或写入工厂正式数据库，也没有修改 `origin/main`。

@@ -1602,3 +1602,11 @@ legacy_ruida_* 原始层
 - 未在相关规则中看到 SMB 139/445 的文件共享放行；当前快照没有活动入站 TCP 连接，但这不能证明工厂日常无人使用共享。税控现有规则限定 `BSZXInput.exe`，没有覆盖当前监听 TCP 6026 的 `BSZnetSignServer` 证据；极空间监听也没有匹配的入站规则。WPS 则存在 Any Profile/Any Protocol/Any Port/Any Remote 的程序规则，范围较宽，但不属于本次 ERP 发布必须改动的规则。
 - ERP 仍是三条规则：一条 Any Profile/LocalSubnet，两条 Any Profile/RemoteAddress=Any。启用 Private Firewall 前必须先确认共享、共享打印机、税控签名与极空间是否需要被其他局域网主机主动连接；随后以可自动回退的维护窗口启用 Private，并把 ERP 收敛到单一 Private + `192.168.3.0/24` 规则。
 - 本轮继续只读：未更改任何工厂规则、配置文件、进程或数据库，正式发布继续阻断。
+
+## 83. 2026-07-23 P0-A/P0-B 工厂本机受控发布完成
+
+- 工厂正式目录 `D:\纸箱厂erp软件搭建` 已从 `factory-current-baseline@c5cffa2123973b3f30b74be7f6dc198d1f070210` fast-forward 至经验证候选 `00263ec12de63a8fd67f410b58da7d8b7bbc8843`。本次未修改或推送 `origin/main`；候选功能代码来自已验证的远端候选，离线 bundle 仅额外包含本交接文档前序记录。
+- 发布前已在 `D:\tm-release-backups\p0ab-factory-20260723\formal-sqlite-backup\carton_erp_before_p0ab_release.sqlite3` 创建 SQLite Backup API 一致性备份：大小 `219,447,296` 字节、SHA-256 `DF56C603722D7672BD1606970B9DB70D524C8EB9EEAF77F9E5007EC62C6A34A2`、revision=`cf62v8x9z51`、`integrity_check=ok`、外键异常 0。代码基线与原 `.env` 也已备份到同一外部发布备份根目录。
+- 正式 `.env` 仅切换为明确的 `ERP_ENVIRONMENT=production` 与 `ERP_PRODUCTION_TRANSPORT=lan_http`，保留 `0.0.0.0:8000` 局域网入口并限制为明确的 `192.168.3.80:8000` Origin/URL、可信 Host、单 worker 和已有会话密钥文件；未改动防火墙、路由器、HTTPS、反向代理或正式数据库 revision。
+- 隔离 UAT 使用外部 SQLite 副本和 `127.0.0.1:18081` 单 worker，未迁移数据库。登录、订单、报料、来料、送货只读接口均为 200，浏览器 Console 无 error/warn。为隔离测试创建的临时 admin 密码及其审计仅写入 UAT 副本，未写入正式数据库。
+- 正式启动器执行只读 `current == code head`、完整性、外键和核心表门禁后成功启动。最终局域网 `/api/health` 为 200 `{"ok":true}`，登录页为 200，监听 PID 使用正式目录、`0.0.0.0:8000` 与单 worker。停服前备份与上线后正式 SQLite 的文件哈希不同，但逐表行数与逻辑内容哈希完全一致，确认本次没有业务数据写入。

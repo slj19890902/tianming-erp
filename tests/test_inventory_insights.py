@@ -185,6 +185,30 @@ def test_missing_last_movement_time_is_explicitly_not_used_for_age() -> None:
     assert _movement_stagnant_days(None, date(2026, 7, 12)) is None
 
 
+def test_unknown_stock_date_is_separate_from_precise_age_buckets(
+    db: Session,
+) -> None:
+    _product, lot = seed_finished_lot(db)
+    lot.stock_date_accuracy = "unknown"
+    lot.stock_date_original_text = None
+    db.flush()
+
+    result = build_inventory_insights(db, as_of=date(2026, 7, 12))
+    action = result["action_items"][0]
+    unknown_bucket = next(
+        row for row in result["age_buckets"] if row["key"] == "unknown"
+    )
+
+    assert action["age_days"] is None
+    assert action["age_basis"] == "stock_date_unknown"
+    assert "stock_date_unknown" in {
+        row["code"] for row in action["reasons"]
+    }
+    assert unknown_bucket["lots"] == 1
+    assert result["data_quality"]["unknown_stock_date_lots"] == 1
+    assert result["data_quality"]["exact_stock_date_lots"] == 0
+
+
 def test_semi_finished_candidate_relationship_is_read_only(db: Session) -> None:
     as_of = date(2026, 7, 12)
     product, _finished_lot = seed_finished_lot(db)

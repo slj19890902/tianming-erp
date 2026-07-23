@@ -47,6 +47,7 @@ from app.services.composite_bom_workflow import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    inventory_fifo_order_columns,
     manual_finished_in,
     release_finished_reservation,
     reserve_completed_finished_inventory,
@@ -800,7 +801,10 @@ def _consume_completion_semi_reservations(
                 > InventoryReservation.consumed_stock_quantity
                 + InventoryReservation.released_stock_quantity,
             )
-            .order_by(InventoryLot.stock_date, InventoryLot.id, InventoryReservation.id)
+            .order_by(
+                *inventory_fifo_order_columns(),
+                InventoryReservation.id,
+            )
         ).all()
         if not reservations:
             if require_full and requirement.component_type in expected_components:

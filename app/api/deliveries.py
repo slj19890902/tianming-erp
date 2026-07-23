@@ -66,6 +66,7 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    inventory_fifo_order_columns,
 )
 
 
@@ -797,7 +798,10 @@ def _composite_inventory_sources_for_order_item(
                 > InventoryReservation.consumed_stock_quantity
                 + InventoryReservation.released_stock_quantity,
             )
-            .order_by(InventoryLot.stock_date, InventoryLot.id, InventoryReservation.id)
+            .order_by(
+                *inventory_fifo_order_columns(),
+                InventoryReservation.id,
+            )
         ).all()
         for reservation in reservations:
             available = max(
@@ -882,8 +886,7 @@ def _inventory_sources_for_order_item(
                 (InventoryReservation.reservation_type == "finished_order", 0),
                 else_=1,
             ),
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()

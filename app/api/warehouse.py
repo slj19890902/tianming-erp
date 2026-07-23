@@ -344,6 +344,7 @@ class Floor3PalletClearPayload(BaseModel):
 class Floor3PalletRelocationPayload(BaseModel):
     expected_version: int = Field(gt=0)
     needs_relocation: bool
+    placement_confirmed: bool = False
     remarks: str = Field(min_length=1, max_length=500)
 
     @field_validator("remarks")
@@ -2938,6 +2939,7 @@ def set_floor3_pallet_relocation_flag(
             pallet_id=pallet_id,
             expected_version=payload.expected_version,
             needs_relocation=payload.needs_relocation,
+            placement_confirmed=payload.placement_confirmed,
             operator_id=user.id,
         )
         _floor3_log(
@@ -2946,16 +2948,25 @@ def set_floor3_pallet_relocation_flag(
             user=user,
             action="UPDATE",
             pallet=row,
-            description="标记三楼栈板待归位" if payload.needs_relocation else "取消三楼栈板待归位",
+            description=(
+                "标记三楼栈板待归位"
+                if payload.needs_relocation
+                else "现场确认三楼栈板已归位"
+            ),
             details={
                 "needs_relocation": payload.needs_relocation,
+                "placement_confirmed": payload.placement_confirmed,
                 "reason": payload.remarks,
                 "expected_version": payload.expected_version,
             },
         )
         db.commit()
         return {
-            "message": "已更新待归位标记",
+            "message": (
+                "已标记待归位"
+                if payload.needs_relocation
+                else "已确认当前固定货位归位"
+            ),
             "pallet": _floor3_pallet_response(db, row, user),
         }
     except Floor3LocationError as error:

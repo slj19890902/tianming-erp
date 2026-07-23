@@ -1177,6 +1177,7 @@ def test_floor3_temporary_location_marks_pallet_for_relocation(floor3_app) -> No
             json={
                 "expected_version": created.json()["pallet"]["version"],
                 "needs_relocation": False,
+                "placement_confirmed": True,
                 "remarks": "尝试取消",
             },
         )
@@ -1222,6 +1223,59 @@ def test_floor3_operator_can_mark_and_clear_manual_relocation_flag(floor3_app) -
         )
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["pallet"]["needs_relocation"] is False
+
+
+def test_floor3_fixed_cross_type_pallet_requires_explicit_placement_confirmation(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    semi_finished_item = _matched_item(
+        ids["tianhua"], ids["products"][0], "SEMI-E1-001"
+    )
+    semi_finished_item.update(item_type="semi_finished", unit="sheets")
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        created = client.post(
+            "/api/warehouse/pallets",
+            json={
+                "location_id": ids["locations"][0],
+                "items": [semi_finished_item],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pallet = created.json()["pallet"]
+        assert pallet["needs_relocation"] is True
+
+        missing_confirmation = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/relocation-flag",
+            json={
+                "expected_version": pallet["version"],
+                "needs_relocation": False,
+                "remarks": "未做现场确认",
+            },
+        )
+        assert missing_confirmation.status_code == 409
+        assert "现场核对" in missing_confirmation.text
+
+        confirmed = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/relocation-flag",
+            json={
+                "expected_version": pallet["version"],
+                "needs_relocation": False,
+                "placement_confirmed": True,
+                "remarks": "现场确认已归位：A1-L01",
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["message"] == "已确认当前固定货位归位"
+        assert confirmed.json()["pallet"]["needs_relocation"] is False
+
+        detail = client.get(
+            f"/api/warehouse/floor3/locations/{ids['locations'][0]}"
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["current_pallet"]["needs_relocation"] is False
 
 
 def test_floor3_move_requires_confirmation_is_idempotent_and_supports_f12_f34(
@@ -1997,6 +2051,18 @@ def test_floor3_promote_snapshot_to_finished_deletes_snapshot_and_is_replayable(
         assert len(promoted.json()["pallet"]["items"]) == 1
         assert promoted.json()["pallet"]["items"][0]["official_inventory"] is True
         lot = promoted.json()["lot"]
+
+        marked_for_relocation = client.post(
+            f"/api/warehouse/pallets/{pallet['id']}/relocation-flag",
+            json={
+                "expected_version": promoted.json()["pallet"]["version"],
+                "needs_relocation": True,
+                "remarks": "现场货位待复核，但正式库存仍可抵扣和出库",
+            },
+        )
+        assert marked_for_relocation.status_code == 200, marked_for_relocation.text
+        assert marked_for_relocation.json()["pallet"]["needs_relocation"] is True
+
         after = client.get("/api/warehouse/finished/candidates", params={"order_item_id": 1})
         assert after.status_code == 200, after.text
         assert [row["lot_id"] for row in after.json()["items"]] == [lot["id"]]

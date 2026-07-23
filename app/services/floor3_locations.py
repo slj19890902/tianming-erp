@@ -1086,14 +1086,20 @@ def set_pallet_relocation(
     expected_version: int,
     needs_relocation: bool,
     operator_id: int | None,
+    placement_confirmed: bool = False,
 ) -> InventoryPallet:
     row = _pallet(db, pallet_id)
     if not row.is_current or row.location_id is None:
         raise Floor3LocationError("栈板已清空或移出，不能修改归位标记", status_code=409)
     location = _location(db, row.location_id)
-    if not needs_relocation and _needs_relocation(location, row.items):
+    if not needs_relocation and location.is_temporary:
         raise Floor3LocationError(
-            "当前为过道临放或货物类型与货位不一致，不能取消待归位",
+            "当前为过道临放，必须先移动到固定货位后才能确认归位",
+            status_code=409,
+        )
+    if not needs_relocation and _needs_relocation(location, row.items) and not placement_confirmed:
+        raise Floor3LocationError(
+            "货物类型与货位类型不一致，请在现场核对后使用确认已归位",
             status_code=409,
         )
     _claim_pallet_version(db, row, expected_version=expected_version)

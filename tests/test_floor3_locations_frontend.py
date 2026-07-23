@@ -73,6 +73,7 @@ def test_floor3_api_contract_paths_and_payloads_are_wired() -> None:
     assert "confirmed:true" in WAREHOUSE_HTML
     assert "idempotency_key:createIdempotencyKey()" in WAREHOUSE_HTML
     assert "needs_relocation:Boolean(needsRelocation)" in WAREHOUSE_HTML
+    assert "placement_confirmed:true" in WAREHOUSE_HTML
     for path in (
         "/api/warehouse/floor3/layout/areas/${encodeURIComponent(state.floor3.selectedAreaCode)}/slots",
         "/api/warehouse/floor3/layout/areas/${encodeURIComponent(state.floor3.selectedAreaCode)}",
@@ -117,6 +118,9 @@ def test_floor3_cards_mark_aisle_and_cross_type_relocation() -> None:
     assert "需归位" in WAREHOUSE_HTML
     assert "floor3NeedsRelocation" in WAREHOUSE_HTML
     assert "标记待归位" in WAREHOUSE_HTML
+    assert "确认已归位" in WAREHOUSE_HTML
+    assert "function confirmFloor3Placement(palletId)" in WAREHOUSE_HTML
+    assert "过道临放货物必须先移动到固定货位" in WAREHOUSE_HTML
 
 
 def test_floor3_is_mobile_card_layout_and_has_unlimited_rows() -> None:
@@ -889,13 +893,51 @@ def test_floor3_bind_panel_lives_in_detail_rail_and_closes_independently() -> No
     assert '<div id="floor3AreaDetailRail"><div id="floor3DetailPanel"' in WAREHOUSE_HTML
     assert WAREHOUSE_HTML.index('id="floor3AreaDetailRail"') < WAREHOUSE_HTML.index('id="floor3BindPanel"')
     assert 'id="floor3BindClose"' in WAREHOUSE_HTML
-    assert "function closeFloor3BindPanel(){state.floor3.bindPanelOpen=false" in WAREHOUSE_HTML
+    close_bind = WAREHOUSE_HTML.split("function closeFloor3BindPanel(){", 1)[1].split(
+        "function floor3BindRowDefaults", 1
+    )[0]
+    assert "state.floor3.bindPanelOpen=false" in close_bind
+    assert "floor3ReturnBindPanelHome()" in close_bind
     assert "state.floor3.bindPanelOpen=false;" in WAREHOUSE_HTML
-    assert 'onclick="openFloor3BindPanel()">快速绑定货物' in WAREHOUSE_HTML
+    assert 'onclick="openFloor3BindPanel()">绑定货物' in WAREHOUSE_HTML
+    assert "<b>当前位空闲</b>" in WAREHOUSE_HTML
+    assert 'const relocationAction=!pallet||rack?"":' in WAREHOUSE_HTML
     assert ".floor3-area-focus #floor3AreaDetailRail .floor3-detail-grid{display:block}" in WAREHOUSE_HTML
     assert ".floor3-area-focus #floor3AreaDetailRail .btn{max-width:100%;white-space:normal}" in WAREHOUSE_HTML
+    assert ".floor3-area-focus #floor3AreaDetailRail{overflow:visible}" in WAREHOUSE_HTML
+    assert ".floor3-area-focus #floor3BindPanel,.floor3-area-focus #floor3AddItemPanel{max-height:none;overflow:visible}" in WAREHOUSE_HTML
+    assert 'state.floor3.bindPanelOpen=true;$("floor3DetailPanel").classList.add("hidden")' in WAREHOUSE_HTML
     assert ".floor3-area-focus>div:first-child{min-width:0}" in WAREHOUSE_HTML
     assert ".floor3-area-slot-map{position:relative;width:100%;max-width:100%;min-width:0" in WAREHOUSE_HTML
+
+
+def test_floor3_overview_empty_slot_can_open_the_shared_bind_panel() -> None:
+    overview = WAREHOUSE_HTML.split("function floor3OverviewSelectionHtml(row){", 1)[1].split(
+        "function clearFloor3OverviewSelection", 1
+    )[0]
+    opener = WAREHOUSE_HTML.split("function openFloor3OverviewBindPanel(locationId){", 1)[1].split(
+        "function closeFloor3BindPanel", 1
+    )[0]
+    save = WAREHOUSE_HTML.split("async function saveFloor3Pallet(event){", 1)[1].split(
+        "function toggleFloor3AddItemPanel", 1
+    )[0]
+    assert "当前位空闲" in overview
+    assert "openFloor3OverviewBindPanel(${row.id})" in overview
+    assert "绑定货物" in overview
+    assert "floor3LocationOccupied(row)" in opener
+    assert "selection.appendChild(panel)" in opener
+    assert "state.floor3.selectedLocationId=Number(locationId)" in opener
+    assert "floor3ReturnBindPanelHome()" in WAREHOUSE_HTML
+    assert 'const locationId=Number(state.floor3.selectedLocationId),overview=state.floor3.viewMode==="overview"' in save
+    assert "if(overview)state.floor3.mapPopoverLocationId=locationId" in save
+    assert ".floor3-overview-selection #floor3BindPanel{max-height:none" in WAREHOUSE_HTML
+
+
+def test_floor3_current_goods_labels_wrap_without_nested_scrollbars() -> None:
+    for label in ("客户", "存货编码", "订单", "货物类型"):
+        assert f"<small>{label}</small>" in WAREHOUSE_HTML
+    assert "floor3-item-labels" in WAREHOUSE_HTML
+    assert ".floor3-item-label b{display:block;overflow-wrap:anywhere;white-space:normal}" in WAREHOUSE_HTML
 
 
 def test_floor3_units_are_localized_and_right_rail_has_no_quantity_total() -> None:

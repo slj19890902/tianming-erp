@@ -1589,3 +1589,9 @@ legacy_ruida_* 原始层
 - 8000 监听仍为 PID 10248，命令行确认是正式目录 `D:\纸箱厂erp软件搭建`、`app.main:app`、`0.0.0.0:8000`、单 worker。发现三条已启用的本地 Allow 规则：`{7c358cec-bfac-4f88-8887-30bb351389f8}` 允许 Any Profile/LocalSubnet；`{8E8A6B0B-8918-4E86-8207-C651FEFF4F7A}` 与 `{8dab25df-2ad2-42d8-ac31-ca3758c4b1bf}` 均允许 Any Profile/RemoteAddress=Any。后两条范围过宽，第一条也未限定到 Private 与 `192.168.3.0/24`。
 - `EdgeTraversal=Block` 只限制边缘穿越，不等于阻止普通 TCP 入站。不能仅新增窄规则后保留宽规则，也不能在未核对第三方防火墙和其他局域网监听前直接开启 Windows Private Firewall，以免误伤工厂共享或管理服务。
 - 本轮仍为只读预检：没有启用/禁用/删除防火墙规则，没有停止 ERP，没有修改 `.env` 或正式数据库。下一步先核实 Security Center 是否由第三方防火墙接管、Windows Firewall 服务状态及所有非 loopback 监听，再决定精确的防火墙切换和验证闭环。
+
+## 81. 2026-07-23 工厂防火墙产品与监听服务复核
+
+- `root/SecurityCenter2/FirewallProduct` 返回产品数量 0，未发现已向 Windows Security Center 注册的第三方防火墙；Windows Defender Firewall 服务 `mpssvc` 为 `Running/Auto`，但活动以太网为 `Private` 且该配置文件仍关闭。因此目前没有证据表明第三方产品正在替代 Windows Firewall 提供主机入站保护。
+- 非 loopback TCP 监听除 ERP `0.0.0.0:8000` 外，还包括 SMB/RPC（135、139、445 及动态端口）、打印后台、`BSZnetSignServer:6026` 和 `wpscloudsvr`；UDP 监听还包括网络发现、IPsec、`AweSun`、极空间及 WPS 服务。直接开启 Private Firewall 可能中断共享、打印、税控签名、NAS/极空间或当前远程会话，必须先只读映射已有入站规则并设计现场可回退窗口。
+- 本轮没有修改防火墙配置文件或规则，没有停止任何进程，没有修改正式 `.env`、代码或数据库。正式发布继续阻断；不得在仅有向日葵远程通道时直接启用 Private Firewall。

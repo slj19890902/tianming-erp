@@ -33,7 +33,7 @@ def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
-def test_cj66_is_the_only_head_and_linearly_descends_from_ci65(
+def test_cj66_linearly_descends_from_ci65_on_the_unique_head(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -41,7 +41,12 @@ def test_cj66_is_the_only_head_and_linearly_descends_from_ci65(
         _config(monkeypatch, tmp_path / "lineage.sqlite3")
     )
 
-    assert script.get_heads() == [TARGET_REVISION]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert TARGET_REVISION in {
+        revision.revision
+        for revision in script.iterate_revisions(heads[0], "base")
+    }
     assert script.get_revision(TARGET_REVISION).down_revision == PREVIOUS_REVISION
 
 

@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.orm import Session, with_loader_criteria
+from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
 from app.api.deps import (
     PermissionChecker,
@@ -25,11 +25,14 @@ from app.models.finance import (
     StatementItem,
 )
 from app.models.order import Order, OrderItem
+from app.models.product import Product
 from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
+from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
 from app.services.inventory_insights import build_inventory_insights
+from app.services.stock_replenishment import stock_policy_dict
 
 
 router = APIRouter()
@@ -217,6 +220,59 @@ def _todo_sort_key(todo: dict) -> tuple:
     )
 
 
+def _common_box_low_stock_warnings(
+    db: Session,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    query = (
+        select(InventoryStockPolicy)
+        .join(Product, Product.id == InventoryStockPolicy.product_id)
+        .options(
+            selectinload(InventoryStockPolicy.product),
+            selectinload(InventoryStockPolicy.customer),
+            selectinload(InventoryStockPolicy.default_location),
+        )
+        .where(
+            InventoryStockPolicy.active.is_(True),
+            InventoryStockPolicy.target_inventory_type == "finished",
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            Product.customer_id == InventoryStockPolicy.customer_id,
+        )
+        .order_by(InventoryStockPolicy.id)
+    )
+    if visible_customer_ids is not None:
+        query = query.where(Product.customer_id.in_(visible_customer_ids))
+    warnings = []
+    for policy in db.scalars(query).all():
+        item = stock_policy_dict(db, policy)
+        if not item["warning_triggered"]:
+            continue
+        warnings.append(
+            {
+                "policy_id": item["id"],
+                "product_id": item["product_id"],
+                "customer_name": item["customer_name"],
+                "product_code": item["product_code"],
+                "product_name": item["product_name"],
+                "available_quantity": item["available_quantity"],
+                "warning_quantity": item["warning_quantity"],
+                "target_quantity": item["target_quantity"],
+                "suggested_replenishment_quantity": item[
+                    "suggested_replenishment_quantity"
+                ],
+            }
+        )
+    return sorted(
+        warnings,
+        key=lambda item: (
+            -(item["warning_quantity"] - item["available_quantity"]),
+            item["customer_name"] or "",
+            item["product_code"] or "",
+        ),
+    )
+
+
 @router.get("/kpi")
 def dashboard_kpi(
     db: Session = Depends(get_db),
@@ -351,6 +407,7 @@ def dashboard_overview(
     can_view_orders = has_permission(user, "orders.view")
     can_view_requisition = has_permission(user, "requisition.view")
     can_view_incoming = has_permission(user, "incoming.view")
+    can_view_warehouse = has_permission(user, "warehouse.view")
     can_view_deliveries = has_permission(user, "deliveries.view")
     can_view_finance = has_permission(user, "finance.view")
     db = _CustomerScopedSession(db, visible_customer_ids)
@@ -981,10 +1038,18 @@ def dashboard_overview(
                 ),
             }
         )
-    return {
+    result = {
         "cards": cards,
         "todos": todos,
         "remaining_todo_count": remaining_todo_count,
         "summary": summary,
         "month": month,
     }
+    if can_view_requisition and can_view_warehouse:
+        low_stock_warnings = _common_box_low_stock_warnings(
+            raw_db,
+            visible_customer_ids,
+        )
+        if low_stock_warnings:
+            result["low_stock_warnings"] = low_stock_warnings
+    return result

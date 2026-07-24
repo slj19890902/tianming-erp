@@ -2106,3 +2106,13 @@ legacy_ruida_* 原始层
 - 本轮不新增 Alembic revision，继续使用 `cg63v8x9z52`。定向 API、订单冻结和前端显示用例 `7 passed`；Python 编译、内联 JavaScript 语法和 `git diff --check` 通过。扩大运行旧 `test_v0208_common_box_edit.py` 时另有 3 个 `28d9052` 基线既有布局断言失败，均在未修改断言位置查找已不存在的 `product-material-row`。
 - 人工 UAT 地址为 `http://127.0.0.1:18082/`，数据库为 `D:\tm-uat\cutting_mode_visibility_20260723_113848\carton_erp_uat.sqlite3`，由指定 SHA-256 为 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC` 的工厂副本重新复制并升级；revision=`cg63v8x9z52`、`integrity_check=ok`、外键异常 0。临时账号 `codex_uat`，密码 `123456`。
 - 页面自动 UAT 已确认：模切内盒和隔板显示净/毛/其他及右侧“开料方式”，不再显示压线尺寸，标签与选择框无重叠遮挡；A1、A3 不显示开料方式；浏览器 Console 无 warn/error。用户已于 2026-07-23 明确确认人工验收通过并授权推送给工厂 ERP；正式发布仍须由工厂主机按“备份验证 → 线性迁移 → 重启 → 完整性与页面复核”执行。本轮家庭侧正式数据库未连接、未迁移、未写入。
+
+## 86. 2026-07-24 常用箱低库存首页预警（待人工统一验收）
+
+- 独立 worktree：`D:\tm-worktrees\erp-common-box-low-stock-alert-20260724`；分支：`codex/common-box-low-stock-alert-20260724`；基线：`b3dd2c576343c0aa61e62dbd751a45f790a97ec2`。本轮没有修改 `origin/main`、`origin/factory-current-baseline` 或工厂正式目录。
+- 复用既有 `inventory_stock_policies`，不新增字段和 Alembic revision。常用箱列表新增“库存预警”按钮，弹窗只维护“库存下限、建议补到”两个整数，不要求原因或二次确认，也不会自动报料、生成补库单或直接入库。同一常用箱的 Quick API 与旧“保存预警模板”入口统一更新同一条启用策略，并在正式单 worker 进程内串行化成品预警写入，避免两个账号同时保存生成重复策略。
+- 首页仅在账号同时拥有报料查看和仓库查看权限时显示实际触发的预警；每条直接显示客户、存货编码、产品、当前可用、下限和建议补量。客户范围在查询策略前收窄，空范围或无仓库权限账号不返回预警数据。
+- 预警口径统一为正式 active 成品批次的净可用量 `quantity_available`；该值在订单预占时已扣减，不再二次减预占。客户专用库存和同产品通用库存均按真实候选口径计入；普通正式库位及三楼正式 V11 库位均计入，三楼未归位状态不把真实库存抹掉；非三楼旧 V11、frozen/closed 批次排除。只有 `available < warning` 才报警，等于下限不报警。
+- 定向测试 `4 passed`；库存预占、补库、客户权限、首页、老板 UI 及前端语法相关扩大回归 `89 passed`。Python 编译和 `git diff --check` 通过。测试明确断言快速设置只修改两项阈值，不创建 `stock_replenishment_orders`、不改变任何库存批次数量或版本；首页查询未执行 INSERT/UPDATE/DELETE。
+- 隔离 UAT 地址：`http://127.0.0.1:18098/`；数据库：`D:\tm-uat\common_box_low_stock_alert_20260724\factory_replica_cn70_low_stock_uat.sqlite3`，从工厂派生副本再次复制，复制前后 SHA-256 均为 `B03B73F9CF395C1A2D9DA2C1E21E35BF1A89B1552382D71B98BF1E6CF9AB8131`。revision=`cn70v8x9z59`、`integrity_check=ok`、外键异常 0，未执行迁移。
+- 页面 UAT 用 `codex_uat / 123456` 成功登录，在明俊德“外箱60*40*30”设置下限 1、建议补到 10 后，首页立即显示“可用 0 / 下限 1 / 建议补 10”；Console 无 error/warn。该策略和登录审计只写入 UAT 工作副本；UAT 中补库单仍为 0，正式数据库未连接、未迁移、未写入。

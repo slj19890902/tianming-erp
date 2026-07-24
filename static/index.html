@@ -1055,6 +1055,28 @@
                 </div>
               </div>
               <div v-else class="empty" style="margin-top: 8px;">当前没有可显示的总览数据。</div>
+              <div v-if="overview.low_stock_warnings && overview.low_stock_warnings.length" class="dashboard-block">
+                <div class="section-title">常用箱低库存（{{ overview.low_stock_warnings.length }}）</div>
+                <div class="section-body">
+                  <div class="todo-list">
+                    <div v-for="item in overview.low_stock_warnings" :key="item.policy_id" class="todo-item">
+                      <div class="todo-main">
+                        <div class="todo-meta">
+                          <span class="todo-type">库存不足</span>
+                          <div class="todo-title">{{ item.customer_name }}｜{{ item.product_code || "无编码" }}｜{{ item.product_name }}</div>
+                        </div>
+                        <div class="todo-detail">
+                          可用 {{ item.available_quantity }}　下限 {{ item.warning_quantity }}　建议补 {{ item.suggested_replenishment_quantity }}
+                        </div>
+                      </div>
+                      <div class="toolbar-group">
+                        <button v-if="canRequisition" class="btn small" @click="openProductStockPolicy(item)">修改下限</button>
+                        <button class="btn small primary" @click="go('warehouse')">查看库存</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div class="dashboard-block">
                 <div class="section-title">今日日常待办</div>
                 <div class="section-body">
@@ -1218,7 +1240,7 @@
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="row.manual_modified ? 'status green' : 'status orange'">{{ row.manual_modified ? "已修改" : "未修改" }}</span></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
@@ -2745,6 +2767,13 @@
                   </div>
                 </template>
               </fieldset>
+            </div>
+            <div v-else-if="modal.type === 'finishedStockPolicy'" class="form-grid">
+              <div class="field wide"><label>常用箱</label><div class="notice">{{ quickStockPolicyForm.customer_name }}｜{{ quickStockPolicyForm.product_code }}｜{{ quickStockPolicyForm.product_name }}</div></div>
+              <div class="field"><label>当前可用数量</label><input class="input" :value="quickStockPolicyForm.available_quantity" readonly /></div>
+              <div class="field"><label>库存下限</label><input class="input" type="number" min="0" step="1" v-model.number="quickStockPolicyForm.warning_quantity" /></div>
+              <div class="field"><label>建议补到</label><input class="input" type="number" min="1" step="1" v-model.number="quickStockPolicyForm.target_quantity" /></div>
+              <div class="field wide muted">低于下限时首页提醒；这里只设置提醒，不会自动报料或入库。</div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
@@ -4587,6 +4616,7 @@
               "其他",
             ],
             customerForm: blankCustomer(), productForm: blankProduct(),
+            quickStockPolicyForm: { id:null, product_id:null, customer_name:"", product_code:"", product_name:"", available_quantity:0, warning_quantity:0, target_quantity:1 },
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), remark: "", items: [] },
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
@@ -4907,6 +4937,7 @@
             if (this.modal.type === "requisition") return this.canRequisition;
             if (this.modal.type === "supplierRequisitionDraft") return this.canRequisition;
             if (this.modal.type === "stockReplenishment") return this.canRequisition;
+            if (this.modal.type === "finishedStockPolicy") return this.canRequisition;
             if (this.modal.type === "receipt") return this.canFinance;
             if (this.modal.type === "password") return true;
             if (this.modal.type === "resetPassword") return this.user?.role === "admin";
@@ -8821,6 +8852,26 @@
             this.showToast("常用箱已更新，当前订单已刷新，可继续录入");
             return true;
           },
+          async openProductStockPolicy(row) {
+            const productId = Number(row?.product_id || row?.id || 0);
+            if (!productId) return;
+            try {
+              const { data } = await axios.get(`/api/requisition/stock-policies/finished-products/${productId}`);
+              this.quickStockPolicyForm = {
+                id:data.id || null,
+                product_id:productId,
+                customer_name:data.customer_name || row.customer_name || this.selectedProductCustomer?.name || "",
+                product_code:data.product_code || row.product_code || "",
+                product_name:data.product_name || row.product_name || "",
+                available_quantity:Number(data.available_quantity || 0),
+                warning_quantity:Number(data.warning_quantity || 0),
+                target_quantity:Number(data.target_quantity || Math.max(Number(data.available_quantity || 0),1)),
+              };
+              this.modal = { type:"finishedStockPolicy", title:"常用箱库存预警" };
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+            }
+          },
           async openProduct(row=null) {
             if (!this.isWorkshop && !this.moldTools.length) await this.loadMoldTools();
             let detail = row;
@@ -12561,6 +12612,20 @@
                 });
                 await Promise.all([this.loadRequisition(), this.loadProducts()]);
                 successMessage = data.message || "供应商和材质已更新";
+              }
+              if (this.modal.type === "finishedStockPolicy") {
+                const warning = Number(this.quickStockPolicyForm.warning_quantity);
+                const target = Number(this.quickStockPolicyForm.target_quantity);
+                if (!Number.isInteger(warning) || warning < 0) throw new Error("库存下限必须是大于等于0的整数");
+                if (!Number.isInteger(target) || target <= 0) throw new Error("建议补到数量必须是大于0的整数");
+                if (target < warning) throw new Error("建议补到数量不能小于库存下限");
+                await axios.put(
+                  `/api/requisition/stock-policies/finished-products/${this.quickStockPolicyForm.product_id}`,
+                  { warning_quantity:warning, target_quantity:target }
+                );
+                this.invalidatePageCache("dashboard");
+                await this.loadOverview();
+                successMessage = "库存预警已保存";
               }
               if (this.modal.type === "stockReplenishment") {
                 const validation = this.validateStockReplenishmentForm();

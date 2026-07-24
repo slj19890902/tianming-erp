@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -39,28 +39,94 @@ class StockReplenishmentError(ValueError):
         self.status_code = status_code
 
 
+def finished_product_quantity_summary(
+    db: Session,
+    *,
+    product_id: int,
+    customer_id: int,
+) -> dict[str, int]:
+    """Return the net allocatable finished-goods quantity for one product.
+
+    ``quantity_available`` is already reduced when stock is reserved.  The
+    warning calculation must therefore sum it directly instead of subtracting
+    reservations a second time.  Valid third-floor V11 locations are formal
+    inventory even while their placement status still needs attention.
+    """
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(InventoryLot.quantity_available), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            FinishedGoodsInventoryDetail.is_general.is_(True),
+                            InventoryLot.quantity_available,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(func.sum(InventoryLot.quantity_reserved), 0),
+        )
+        .select_from(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            FinishedGoodsInventoryDetail.product_id == product_id,
+            or_(
+                and_(
+                    FinishedGoodsInventoryDetail.is_general.is_(False),
+                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+                ),
+                FinishedGoodsInventoryDetail.is_general.is_(True),
+            ),
+            or_(
+                WarehouseLocation.source_version.is_(None),
+                WarehouseLocation.source_version != "V11",
+                and_(
+                    WarehouseLocation.source_version == "V11",
+                    WarehouseLocation.warehouse_floor == 3,
+                ),
+            ),
+        )
+    ).one()
+    available = int(row[0] or 0)
+    general_available = int(row[1] or 0)
+    reserved = int(row[2] or 0)
+    return {
+        "available_quantity": available,
+        "dedicated_available_quantity": max(available - general_available, 0),
+        "general_available_quantity": general_available,
+        "reserved_quantity": reserved,
+        "physical_unconsumed_quantity": available + reserved,
+    }
+
+
 def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:
     if policy.target_inventory_type == "finished":
         if policy.product_id is None:
             return 0
-        value = db.scalar(
-            select(func.coalesce(func.sum(InventoryLot.quantity_available), 0))
-            .join(
-                FinishedGoodsInventoryDetail,
-                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        customer_id = policy.customer_id
+        if customer_id is None:
+            customer_id = db.scalar(
+                select(Product.customer_id).where(Product.id == policy.product_id)
             )
-            .join(WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id)
-            .where(
-                InventoryLot.inventory_type == "finished",
-                InventoryLot.status == "active",
-                FinishedGoodsInventoryDetail.product_id == policy.product_id,
-                or_(
-                    WarehouseLocation.source_version.is_(None),
-                    WarehouseLocation.source_version != "V11",
-                ),
-            )
-        )
-        return int(value or 0)
+        if customer_id is None:
+            return 0
+        return finished_product_quantity_summary(
+            db,
+            product_id=policy.product_id,
+            customer_id=int(customer_id),
+        )["available_quantity"]
 
     if policy.target_inventory_type != "semi_finished":
         return 0
@@ -103,7 +169,22 @@ def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:
 
 
 def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
-    available = current_policy_quantity(db, policy)
+    finished_summary: dict[str, int] = {}
+    if (
+        policy.target_inventory_type == "finished"
+        and policy.product_id is not None
+        and policy.customer_id is not None
+    ):
+        finished_summary = finished_product_quantity_summary(
+            db,
+            product_id=policy.product_id,
+            customer_id=policy.customer_id,
+        )
+    available = (
+        finished_summary["available_quantity"]
+        if finished_summary
+        else current_policy_quantity(db, policy)
+    )
     target = int(policy.target_quantity or 0)
     warning = int(policy.warning_quantity or 0)
     location = policy.default_location
@@ -128,7 +209,17 @@ def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
         "warning_quantity": warning,
         "target_quantity": target,
         "available_quantity": available,
-        "warning_triggered": bool(policy.active and available <= warning),
+        "dedicated_available_quantity": finished_summary.get(
+            "dedicated_available_quantity"
+        ),
+        "general_available_quantity": finished_summary.get(
+            "general_available_quantity"
+        ),
+        "reserved_quantity": finished_summary.get("reserved_quantity"),
+        "physical_unconsumed_quantity": finished_summary.get(
+            "physical_unconsumed_quantity"
+        ),
+        "warning_triggered": bool(policy.active and available < warning),
         "suggested_replenishment_quantity": max(target - available, 0),
         "default_location": (
             {

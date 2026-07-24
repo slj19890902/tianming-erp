@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
+from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -72,6 +74,7 @@ from app.services.historical_purchase_lookup import (
 )
 from app.services.stock_replenishment import (
     StockReplenishmentError,
+    finished_product_quantity_summary,
     next_replenishment_order_number,
     replenishment_order_dict,
     stock_policy_dict,
@@ -122,6 +125,7 @@ from app.services.customer_material_candidates import (
 router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
+_FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 CUTTING_MODE_FACTORS = {
     "一开一": 1,
     "一开二": 2,
@@ -528,6 +532,11 @@ class StockPolicyPayload(BaseModel):
         if normalized not in {"whole", "cover", "base"}:
             raise ValueError("半成品组件仅允许 whole、cover 或 base")
         return normalized
+
+
+class FinishedStockPolicyQuickPayload(BaseModel):
+    warning_quantity: int = Field(ge=0)
+    target_quantity: int = Field(gt=0)
 
 
 class StockReplenishmentItemPayload(BaseModel):
@@ -5054,6 +5063,22 @@ def _stock_policy_query():
     )
 
 
+def _active_finished_stock_policies(
+    db: Session,
+    *,
+    product_id: int,
+    exclude_policy_id: int | None = None,
+) -> list[InventoryStockPolicy]:
+    query = _stock_policy_query().where(
+        InventoryStockPolicy.target_inventory_type == "finished",
+        InventoryStockPolicy.product_id == product_id,
+        InventoryStockPolicy.active.is_(True),
+    )
+    if exclude_policy_id is not None:
+        query = query.where(InventoryStockPolicy.id != exclude_policy_id)
+    return db.scalars(query.order_by(InventoryStockPolicy.id)).all()
+
+
 def _stock_policy_customer_id(
     db: Session,
     policy: InventoryStockPolicy,
@@ -5115,49 +5140,7 @@ def _stock_policy_summary(
     policy: InventoryStockPolicy,
     user: User,
 ) -> dict:
-    summary = stock_policy_dict(db, policy)
-    if has_unrestricted_customer_access(user, db):
-        return summary
-    customer_id = _stock_policy_customer_id(
-        db, policy, relationships_loaded=True
-    )
-    if customer_id is None:
-        return summary
-    if policy.target_inventory_type == "finished" and policy.product_id is not None:
-        available = int(
-            db.scalar(
-                select(func.coalesce(func.sum(InventoryLot.quantity_available), 0))
-                .join(
-                    FinishedGoodsInventoryDetail,
-                    FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
-                )
-                .join(
-                    WarehouseLocation,
-                    WarehouseLocation.id == InventoryLot.warehouse_location_id,
-                )
-                .where(
-                    InventoryLot.inventory_type == "finished",
-                    InventoryLot.status == "active",
-                    FinishedGoodsInventoryDetail.product_id == policy.product_id,
-                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
-                    FinishedGoodsInventoryDetail.is_general.is_(False),
-                    or_(
-                        WarehouseLocation.source_version.is_(None),
-                        WarehouseLocation.source_version != "V11",
-                    ),
-                )
-            )
-            or 0
-        )
-        summary["available_quantity"] = available
-        summary["warning_triggered"] = bool(
-            policy.active and available <= int(policy.warning_quantity or 0)
-        )
-        summary["suggested_replenishment_quantity"] = max(
-            int(policy.target_quantity or 0) - available,
-            0,
-        )
-    return summary
+    return stock_policy_dict(db, policy)
 
 
 def _stock_replenishment_item_customer_id(
@@ -5263,6 +5246,7 @@ def _apply_stock_policy_payload(
 @router.get("/stock-policies")
 def list_stock_policies(
     q: str | None = None,
+    product_id: int | None = None,
     target_inventory_type: str | None = None,
     warning_only: bool = False,
     include_inactive: bool = False,
@@ -5272,6 +5256,8 @@ def list_stock_policies(
     query = _apply_stock_policy_scope(_stock_policy_query(), _user, db)
     if not include_inactive:
         query = query.where(InventoryStockPolicy.active.is_(True))
+    if product_id is not None:
+        query = query.where(InventoryStockPolicy.product_id == product_id)
     if target_inventory_type:
         query = query.where(
             InventoryStockPolicy.target_inventory_type
@@ -5303,6 +5289,138 @@ def list_stock_policies(
         "items": items,
         "warning_count": sum(1 for item in items if item["warning_triggered"]),
     }
+
+
+def _finished_stock_policy_rows(
+    db: Session,
+    *,
+    product_id: int,
+    user: User,
+) -> tuple[Product, list[InventoryStockPolicy]]:
+    product = db.get(Product, product_id)
+    if (
+        product is None
+        or product.deleted_at is not None
+        or not product.is_active
+    ):
+        raise HTTPException(status_code=404, detail="常用箱不存在或已停用。")
+    require_customer_access(product.customer_id, user, db)
+    rows = _active_finished_stock_policies(db, product_id=product.id)
+    rows = [
+        row
+        for row in rows
+        if _stock_policy_customer_id(db, row, relationships_loaded=True)
+        == product.customer_id
+    ]
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="该常用箱存在多条启用中的库存预警，请先由管理员合并后再修改。",
+        )
+    return product, rows
+
+
+def _finished_stock_policy_quick_summary(
+    db: Session,
+    *,
+    product: Product,
+    policy: InventoryStockPolicy | None,
+) -> dict:
+    quantities = finished_product_quantity_summary(
+        db,
+        product_id=product.id,
+        customer_id=product.customer_id,
+    )
+    warning = int(policy.warning_quantity or 0) if policy else 0
+    target = int(policy.target_quantity or 0) if policy else 0
+    available = quantities["available_quantity"]
+    return {
+        "id": policy.id if policy else None,
+        "product_id": product.id,
+        "customer_id": product.customer_id,
+        "customer_name": product.customer.name if product.customer else None,
+        "product_code": product.product_code,
+        "product_name": product.product_name,
+        "warning_quantity": warning,
+        "target_quantity": target,
+        **quantities,
+        "warning_triggered": bool(policy and available < warning),
+        "suggested_replenishment_quantity": (
+            max(target - available, 0) if policy else 0
+        ),
+    }
+
+
+@router.get("/stock-policies/finished-products/{product_id}")
+def read_finished_stock_policy_quick(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product, rows = _finished_stock_policy_rows(
+        db,
+        product_id=product_id,
+        user=user,
+    )
+    return _finished_stock_policy_quick_summary(
+        db,
+        product=product,
+        policy=rows[0] if rows else None,
+    )
+
+
+@router.put("/stock-policies/finished-products/{product_id}")
+def save_finished_stock_policy_quick(
+    product_id: int,
+    payload: FinishedStockPolicyQuickPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    if payload.target_quantity < payload.warning_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail="建议补到数量不能小于库存下限。",
+        )
+    with _FINISHED_STOCK_POLICY_WRITE_LOCK:
+        product, rows = _finished_stock_policy_rows(
+            db,
+            product_id=product_id,
+            user=user,
+        )
+        policy = rows[0] if rows else InventoryStockPolicy(
+            policy_name=f"{product.product_code or product.product_name} 成品库存预警",
+            target_inventory_type="finished",
+            product_id=product.id,
+            customer_id=product.customer_id,
+            warning_quantity=payload.warning_quantity,
+            target_quantity=payload.target_quantity,
+            active=True,
+            created_by=user.id,
+        )
+        policy.warning_quantity = payload.warning_quantity
+        policy.target_quantity = payload.target_quantity
+        policy.customer_id = product.customer_id
+        policy.updated_by = user.id
+        try:
+            validate_stock_policy(db, policy)
+            if policy.id is None:
+                db.add(policy)
+            db.commit()
+            policy = db.scalar(
+                _stock_policy_query().where(InventoryStockPolicy.id == policy.id)
+            )
+            assert policy is not None
+            return _finished_stock_policy_quick_summary(
+                db,
+                product=product,
+                policy=policy,
+            )
+        except StockReplenishmentError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
 
 
 @router.get("/stock-replenishment/locations")
@@ -5424,31 +5542,52 @@ def create_stock_policy(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    row = InventoryStockPolicy(
-        policy_name=payload.policy_name,
-        target_inventory_type=payload.target_inventory_type,
-        target_quantity=payload.target_quantity,
-        warning_quantity=payload.warning_quantity,
-        created_by=user.id,
-        updated_by=user.id,
+    guard = (
+        _FINISHED_STOCK_POLICY_WRITE_LOCK
+        if payload.target_inventory_type == "finished"
+        else nullcontext()
     )
-    try:
-        _apply_stock_policy_payload(row, payload, user_id=user.id)
-        validate_stock_policy(db, row)
-        _require_stock_policy_customer_access(db, row, user)
-        db.add(row)
-        db.commit()
-        row = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == row.id))
-        assert row is not None
-        return _stock_policy_summary(db, row, user)
-    except HTTPException:
-        db.rollback()
-        raise
-    except (StockReplenishmentError, WarehouseInventoryError) as error:
-        db.rollback()
-        raise HTTPException(
-            status_code=getattr(error, "status_code", 400), detail=str(error)
-        ) from error
+    with guard:
+        existing_rows = (
+            _active_finished_stock_policies(db, product_id=payload.product_id)
+            if payload.target_inventory_type == "finished"
+            and payload.product_id is not None
+            and payload.active
+            else []
+        )
+        if len(existing_rows) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="该常用箱已存在多条启用中的库存预警，请联系管理员处理。",
+            )
+        row = existing_rows[0] if existing_rows else InventoryStockPolicy(
+            policy_name=payload.policy_name,
+            target_inventory_type=payload.target_inventory_type,
+            target_quantity=payload.target_quantity,
+            warning_quantity=payload.warning_quantity,
+            created_by=user.id,
+            updated_by=user.id,
+        )
+        try:
+            _apply_stock_policy_payload(row, payload, user_id=user.id)
+            validate_stock_policy(db, row)
+            _require_stock_policy_customer_access(db, row, user)
+            if row.id is None:
+                db.add(row)
+            db.commit()
+            row = db.scalar(
+                _stock_policy_query().where(InventoryStockPolicy.id == row.id)
+            )
+            assert row is not None
+            return _stock_policy_summary(db, row, user)
+        except HTTPException:
+            db.rollback()
+            raise
+        except (StockReplenishmentError, WarehouseInventoryError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 400), detail=str(error)
+            ) from error
 
 
 @router.put("/stock-policies/{policy_id}")
@@ -5461,23 +5600,46 @@ def update_stock_policy(
     row = db.get(InventoryStockPolicy, policy_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库存预警策略不存在。")
-    _require_stock_policy_customer_access(db, row, user)
-    try:
-        _apply_stock_policy_payload(row, payload, user_id=user.id)
-        validate_stock_policy(db, row)
+    guard = (
+        _FINISHED_STOCK_POLICY_WRITE_LOCK
+        if row.target_inventory_type == "finished"
+        or payload.target_inventory_type == "finished"
+        else nullcontext()
+    )
+    with guard:
         _require_stock_policy_customer_access(db, row, user)
-        db.commit()
-        row = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == policy_id))
-        assert row is not None
-        return _stock_policy_summary(db, row, user)
-    except HTTPException:
-        db.rollback()
-        raise
-    except (StockReplenishmentError, WarehouseInventoryError) as error:
-        db.rollback()
-        raise HTTPException(
-            status_code=getattr(error, "status_code", 400), detail=str(error)
-        ) from error
+        try:
+            _apply_stock_policy_payload(row, payload, user_id=user.id)
+            validate_stock_policy(db, row)
+            if (
+                row.active
+                and row.target_inventory_type == "finished"
+                and row.product_id is not None
+                and _active_finished_stock_policies(
+                    db,
+                    product_id=row.product_id,
+                    exclude_policy_id=row.id,
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="该常用箱已有启用中的库存预警，请直接修改原预警。",
+                )
+            _require_stock_policy_customer_access(db, row, user)
+            db.commit()
+            row = db.scalar(
+                _stock_policy_query().where(InventoryStockPolicy.id == policy_id)
+            )
+            assert row is not None
+            return _stock_policy_summary(db, row, user)
+        except HTTPException:
+            db.rollback()
+            raise
+        except (StockReplenishmentError, WarehouseInventoryError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 400), detail=str(error)
+            ) from error
 
 
 @router.get("/stock-policies/{policy_id}/replenishment-draft")

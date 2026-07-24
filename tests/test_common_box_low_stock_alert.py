@@ -233,6 +233,7 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
             "no_warehouse": no_warehouse.id,
             "customer_a": customer_a.id,
             "product_a": product_a.id,
+            "product_b": product_b.id,
             "standard_location": standard.id,
             "policy_a": policy_a.id,
         }
@@ -400,6 +401,18 @@ def test_quick_policy_update_only_changes_two_thresholds(tmp_path: Path) -> None
         assert body["available_quantity"] == 70
         assert body["warning_triggered"] is False
 
+        zero_stock = client.put(
+            f"/api/requisition/stock-policies/finished-products/{ids['product_b']}",
+            json={"warning_quantity": 10, "target_quantity": 50},
+        )
+        assert zero_stock.status_code == 200, zero_stock.text
+        zero_stock_body = zero_stock.json()
+        assert zero_stock_body["available_quantity"] == 0
+        assert zero_stock_body["warning_quantity"] == 10
+        assert zero_stock_body["target_quantity"] == 50
+        assert zero_stock_body["warning_triggered"] is True
+        assert zero_stock_body["suggested_replenishment_quantity"] == 50
+
         invalid = client.put(
             f"/api/requisition/stock-policies/finished-products/{ids['product_a']}",
             json={"warning_quantity": 100, "target_quantity": 80},
@@ -428,7 +441,12 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "可用 {{ item.available_quantity }}" in source
     assert "建议补 {{ item.suggested_replenishment_quantity }}" in source
     assert "openProductStockPolicy(item)" in source
-    assert "低于下限时首页提醒；这里只设置提醒，不会自动报料或入库。" in source
+    assert "低于多少预警" in source
+    assert "建议补到多少" in source
+    assert "两个数量都可以高于当前库存" in source
+    assert '@input="syncQuickStockTargetToWarning"' in source
+    assert "this.syncQuickStockTargetToWarning();" in source
+    assert "建议补到数量不能小于库存下限" not in source
     assert (
         "/api/requisition/stock-policies/finished-products/${productId}" in source
     )

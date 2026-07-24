@@ -2771,9 +2771,9 @@
             <div v-else-if="modal.type === 'finishedStockPolicy'" class="form-grid">
               <div class="field wide"><label>常用箱</label><div class="notice">{{ quickStockPolicyForm.customer_name }}｜{{ quickStockPolicyForm.product_code }}｜{{ quickStockPolicyForm.product_name }}</div></div>
               <div class="field"><label>当前可用数量</label><input class="input" :value="quickStockPolicyForm.available_quantity" readonly /></div>
-              <div class="field"><label>库存下限</label><input class="input" type="number" min="0" step="1" v-model.number="quickStockPolicyForm.warning_quantity" /></div>
-              <div class="field"><label>建议补到</label><input class="input" type="number" min="1" step="1" v-model.number="quickStockPolicyForm.target_quantity" /></div>
-              <div class="field wide muted">低于下限时首页提醒；这里只设置提醒，不会自动报料或入库。</div>
+              <div class="field"><label>低于多少预警</label><input class="input" type="number" min="0" step="1" v-model.number="quickStockPolicyForm.warning_quantity" @input="syncQuickStockTargetToWarning" /></div>
+              <div class="field"><label>建议补到多少</label><input class="input" type="number" min="1" step="1" v-model.number="quickStockPolicyForm.target_quantity" /></div>
+              <div class="field wide muted">两个数量都可以高于当前库存；建议补到会自动保持不低于预警数量。这里只设置提醒，不会自动报料或入库。</div>
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
@@ -8872,6 +8872,17 @@
               this.showToast(this.errorMessage(error), true);
             }
           },
+          syncQuickStockTargetToWarning() {
+            const warning = Number(this.quickStockPolicyForm.warning_quantity);
+            const target = Number(this.quickStockPolicyForm.target_quantity);
+            if (
+              Number.isInteger(warning)
+              && warning >= 0
+              && (!Number.isInteger(target) || target < warning)
+            ) {
+              this.quickStockPolicyForm.target_quantity = Math.max(warning, 1);
+            }
+          },
           async openProduct(row=null) {
             if (!this.isWorkshop && !this.moldTools.length) await this.loadMoldTools();
             let detail = row;
@@ -12614,11 +12625,11 @@
                 successMessage = data.message || "供应商和材质已更新";
               }
               if (this.modal.type === "finishedStockPolicy") {
+                this.syncQuickStockTargetToWarning();
                 const warning = Number(this.quickStockPolicyForm.warning_quantity);
                 const target = Number(this.quickStockPolicyForm.target_quantity);
                 if (!Number.isInteger(warning) || warning < 0) throw new Error("库存下限必须是大于等于0的整数");
                 if (!Number.isInteger(target) || target <= 0) throw new Error("建议补到数量必须是大于0的整数");
-                if (target < warning) throw new Error("建议补到数量不能小于库存下限");
                 await axios.put(
                   `/api/requisition/stock-policies/finished-products/${this.quickStockPolicyForm.product_id}`,
                   { warning_quantity:warning, target_quantity:target }

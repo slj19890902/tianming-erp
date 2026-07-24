@@ -1797,3 +1797,30 @@ legacy_ruida_* 原始层
 - 本轮不新增 Alembic revision，继续使用 `cg63v8x9z52`。定向 API、订单冻结和前端显示用例 `7 passed`；Python 编译、内联 JavaScript 语法和 `git diff --check` 通过。扩大运行旧 `test_v0208_common_box_edit.py` 时另有 3 个 `28d9052` 基线既有布局断言失败，均在未修改断言位置查找已不存在的 `product-material-row`。
 - 人工 UAT 地址为 `http://127.0.0.1:18082/`，数据库为 `D:\tm-uat\cutting_mode_visibility_20260723_113848\carton_erp_uat.sqlite3`，由指定 SHA-256 为 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC` 的工厂副本重新复制并升级；revision=`cg63v8x9z52`、`integrity_check=ok`、外键异常 0。临时账号 `codex_uat`，密码 `123456`。
 - 页面自动 UAT 已确认：模切内盒和隔板显示净/毛/其他及右侧“开料方式”，不再显示压线尺寸，标签与选择框无重叠遮挡；A1、A3 不显示开料方式；浏览器 Console 无 warn/error。用户已于 2026-07-23 明确确认人工验收通过并授权推送给工厂 ERP；正式发布仍须由工厂主机按“备份验证 → 线性迁移 → 重启 → 完整性与页面复核”执行。本轮家庭侧正式数据库未连接、未迁移、未写入。
+# 2026-07-24 本地更新治理最小闭环（家庭验收通过）
+
+## 当前恢复入口
+
+- 已在独立工作树 `D:\tm-worktrees\erp-local-governance-20260724`、分支 `codex/local-governance-control-20260724` 上建立治理文件，基线为 `f11d616f419b0bbf9ea47bfa68b41cfd9aedb53e`。
+- 闪退、换电脑或中断后，先读 `docs/CURRENT_TASK.md`，再读 `docs/REQUIREMENT_INBOX.md`；不要从本长文档猜测当前任务。
+- 治理任务 `REQ-20260724-001` 已由用户明确验收通过，并授权提交、推送独立治理分支。
+- 治理完成后的当前唯一任务切换为发布槽位 1：`REQ-20260723-001@f11d616`，状态为 `工厂待发布`，尚未授权工厂执行。
+- 每个业务需求必须有独立 `docs/acceptance/REQ-编号.md`；工厂候选顺序统一记录在 `docs/releases/FACTORY-20260724-PENDING.md`。
+
+## 本轮建立的控制规则
+
+- 同时最多一个 `开发中` 需求；普通新需求只进入收件箱。
+- 开发前先冻结范围和验收标准，安全断点及时更新 `CURRENT_TASK.md`。
+- WIP 提交、家庭 UAT、工厂发布三者分开，任何一个都不能代替另一个。
+- 当前工厂发布槽固定为：`f11d616f → 99b223a6 → f36112e8`，每槽必须独立发布并复核，禁止一次叠加。
+- 工厂实际运行提交和数据库 revision 在发布前仍需由工厂 Codex 重新只读核对。
+
+## 本轮边界与结果
+
+- 仅修改治理规则和文档；未修改 ERP 业务代码。
+- 未访问、写入或迁移任何数据库。
+- 用户授权仅包含提交、推送 `codex/local-governance-control-20260724`；不包含工厂发布。
+- 未发布到工厂。
+- 完整验收步骤见 `docs/acceptance/REQ-20260724-001.md`。
+
+---

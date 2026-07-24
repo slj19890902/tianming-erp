@@ -1,54 +1,52 @@
-# ERP Project State
+# 天明 ERP 当前项目状态
 
-## Current Baseline
+> 更新时间：2026-07-24
+> 本文件只保留当前入口和短状态，不再承载长篇历史记录。
 
-- Stable branch: `factory-current-baseline`
-- Current delivery branch: `feature/v0208-common-box-edit`
-- App version: `v0.20.8`
-- Version name: `常用箱编辑优化版`
+## 一、闪退或换电脑后的阅读顺序
 
-## What v0.20.8 Fixed
+1. `docs/CURRENT_TASK.md`：当前唯一任务、完成位置和下一步。
+2. `docs/REQUIREMENT_INBOX.md`：全部排队需求及其状态。
+3. `docs/releases/FACTORY-20260724-PENDING.md`：家庭候选与工厂正式版之间的发布顺序。
+4. `docs/acceptance/REQ-编号.md`：每项需求独立验收标准和证据。
+5. `docs/CODEX_HANDOFF.md`：仅在需要追查历史证据时阅读。
 
-- 常用箱编辑页按五排重新整理，长宽高、报料和压线集中在第二排。
-- 长、宽、高、报料长宽和压线尺寸按整数毫米显示，单价继续保留小数。
-- A1/0201 普通开槽箱在箱型、长宽高和材质齐全后自动推荐采购报料尺寸：报料长 `2 × (L + W) + 30`，报料宽 `W + H + 5`。
-- 人工选择“压线”后自动推荐“上摇盖 / 高 / 下摇盖”为 `round(W/2) / H / round(W/2)`。
-- 用户手工修改过报料或压线尺寸后，后续字段变化不会强制覆盖；可点击“重新推荐”主动刷新。
-- A3 天地盖、平卡、刀卡、隔板、围套、半开槽箱、全搭盖箱、异形箱和其他已加入箱型列表，暂无可靠公式时提示人工填写。
-- 生产工艺支持多选，印刷内容使用清楚的固定选项。
-- 无印刷时隐藏图纸区域；有印刷时显示上传入口和版本历史。
-- 图纸继续逐版保存，新版本不会覆盖旧版本。
-- 没有新增数据库字段，也没有批量修改历史产品。
+## 二、当前唯一任务
 
-## What v0.20.7 Fixed
+- 需求编号：`REQ-20260723-001`
+- 内容：来料超收、生产余货与超量送货闭环。
+- 状态：`工厂待发布`，尚未授权工厂执行。
+- 候选：`f11d616f419b0bbf9ea47bfa68b41cfd9aedb53e`
+- 数据库目标：`ci65v8x9z54`
+- 当前动作：等待工厂现场只读预检；不得开始新业务开发或叠加后续候选。
 
-- 首页把“待对账”提醒按客户和月份合并了，同一个客户同一个月只显示一条。
-- 首页现在更像一个“今天要先处理什么”的看板，不会把同一客户的月结提醒重复列很多次。
-- 新增了一键启动方式，双击就能自动升级、启动 ERP 并打开网页。
-- 新增了停止、桌面快捷方式和开机自启脚本，普通操作员更容易直接使用。
+治理任务 `REQ-20260724-001` 已于 2026-07-24 家庭 UAT 通过，并获准提交、推送独立治理分支。
 
-## What v0.20.3 Added
+## 三、已核对的候选版本链
 
-- Company info maintenance in system settings
-- Admin-only read/write API for company config
-- Delivery print sender fields sourced from company config
-- Statement export company header alignment
+以下是本地 Git 仓库中已核对的提交关系，不代表已经重新读取工厂电脑的实时状态：
 
-## Verified Behavior
+1. 工厂发布记录提交：`aebf9b23`
+2. 记录中的工厂运行功能提交：`a3001568`
+3. 第一发布槽：`f11d616f`，数据库目标 revision `ci65v8x9z54`
+4. 第二发布槽：`99b223a6`，数据库目标 revision `cm69v8x9z58`
+5. 第三发布槽：`f36112e8`，无新增数据库迁移
 
-- v0.20.8 原始定向测试 `85 passed`；现场修正版测试结果见最新交接记录
-- 常用箱编辑弹窗已改为五排布局
-- 无印刷/有印刷切换会正确隐藏或显示图纸区域
-- 浏览器控制台无错误
-- 正式库只读核对：`integrity_check=ok`、`foreign_key_check=0`
-- Admin can read and save company info
-- Non-admin cannot read company info
-- Blank company name is rejected
-- Delivery print page shows company name, address, and phone from backend data
-- Formal database was not modified by the merge
+祖先关系已核对为：
 
-## Notes
+`a3001568 → f11d616f → 99b223a6 → f36112e8`
 
-- No history migration was performed in this release.
-- No `legacy_*` tables were changed.
-- Existing ERP structure and workflows remain intact.
+工厂发布前，必须由工厂 Codex 重新只读核对实际运行提交、数据库 revision、备份位置和服务状态。
+
+## 四、当前发布控制
+
+- 第一发布槽 `f11d616f` 尚未获得工厂发布授权。
+- 第二、第三发布槽只能在前一槽发布并复核通过后继续。
+- 新需求只能登记到 `REQUIREMENT_INBOX.md`，不能叠加进当前发布候选。
+- 每个发布槽必须独立完成备份、更新、迁移、重启、复核和回滚判定。
+
+## 五、状态声明
+
+- 本治理任务不改变 ERP 运行结果。
+- 治理分支推送不等于工厂业务候选已经发布。
+- 本次授权不包含连接、迁移或写入工厂正式数据库。

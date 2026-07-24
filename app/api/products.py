@@ -281,6 +281,7 @@ class ProductPayload(BaseModel):
     pieces_per_box: int | None = None
     default_cutting_mode: Literal["一开一", "一开二", "一开三", "一开四", "一开五"] = "一开一"
     flap_mm: int | None = 30
+    combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
 
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
@@ -372,6 +373,7 @@ class ProductResponse(ProductPayload):
     purged_at: datetime | None = None
     version: int
     is_composite: bool = False
+    combination_mode: Literal["parent_priced_set", "component_priced"] = "parent_priced_set"
     is_internal_component: bool = False
     drawings: list[ProductDrawingResponse] = Field(default_factory=list)
 

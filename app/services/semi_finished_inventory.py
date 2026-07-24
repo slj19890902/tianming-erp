@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.delivery import DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     InventoryLot,
@@ -28,6 +29,8 @@ from app.services.warehouse_inventory import (
     _movement,
     _number,
     active_finished_reserved_qty,
+    component_effective_required_piece_qty,
+    component_inventory_coverage,
     consume_finished_reservation,
     normalize_material_code,
     replace_semi_finished_lot_allowed_products,
@@ -123,6 +126,7 @@ def save_order_item_semi_requirement(
     stock_yield_per_sheet: int,
     required_piece_quantity: int | None,
     operator_id: int | None,
+    sales_order_item_bom_component_id: int | None = None,
 ) -> OrderItemSemiRequirement:
     row = db.execute(
         select(OrderItem, Order)
@@ -132,7 +136,16 @@ def save_order_item_semi_requirement(
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
-    product = db.get(Product, item.product_id)
+    snapshot = (
+        db.get(SalesOrderItemBomComponent, sales_order_item_bom_component_id)
+        if sales_order_item_bom_component_id is not None
+        else None
+    )
+    if sales_order_item_bom_component_id is not None and (
+        snapshot is None or snapshot.sales_order_item_id != item.id
+    ):
+        raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+    product = db.get(Product, snapshot.component_product_id if snapshot else item.product_id)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("订单产品不存在", 404)
     if product.customer_id != order.customer_id:
@@ -152,12 +165,19 @@ def save_order_item_semi_requirement(
     material_snapshot = material_code.strip()
     normalized_material = normalize_material_code(material_snapshot)
     normalized_flute = _flute(flute_type)
-    existing = db.scalar(
-        select(OrderItemSemiRequirement).where(
-            OrderItemSemiRequirement.order_item_id == item.id,
+    existing_query = select(OrderItemSemiRequirement).where(
+        OrderItemSemiRequirement.order_item_id == item.id,
+    )
+    if snapshot is not None:
+        existing_query = existing_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id == snapshot.id
+        )
+    else:
+        existing_query = existing_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
             OrderItemSemiRequirement.component_type == component,
         )
-    )
+    existing = db.scalar(existing_query)
     values = {
         "customer_id": order.customer_id,
         "board_length_mm": board_length_mm,
@@ -168,6 +188,7 @@ def save_order_item_semi_requirement(
         "pieces_per_box": pieces_per_box,
         "stock_yield_per_sheet": stock_yield_per_sheet,
         "required_piece_quantity": required,
+        "sales_order_item_bom_component_id": snapshot.id if snapshot else None,
     }
     if existing is not None:
         unchanged = all(getattr(existing, name) == value for name, value in values.items())
@@ -293,7 +314,24 @@ def _physical_signature_differences(
 
 def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) -> int:
     item = db.get(OrderItem, requirement.order_item_id)
-    product = db.get(Product, item.product_id) if item is not None else None
+    snapshot = (
+        db.get(
+            SalesOrderItemBomComponent,
+            requirement.sales_order_item_bom_component_id,
+        )
+        if requirement.sales_order_item_bom_component_id is not None
+        else None
+    )
+    if requirement.sales_order_item_bom_component_id is not None and (
+        snapshot is None
+        or item is None
+        or snapshot.sales_order_item_id != item.id
+    ):
+        raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+    product = db.get(
+        Product,
+        snapshot.component_product_id if snapshot is not None else item.product_id,
+    ) if item is not None else None
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("订单产品不存在", 404)
     if product.customer_id != requirement.customer_id:
@@ -1587,12 +1625,28 @@ def reserve_semi_finished_inventory(
             raise WarehouseInventoryError(
                 "该订单明细已有生产完工事实，不能新增半成品预占", 409
             )
-        already_credited = active_semi_requirement_credited_quantity(
-            db, requirement.id
-        )
-        remaining_requirement = max(
-            requirement.required_piece_quantity - already_credited, 0
-        )
+        if requirement.sales_order_item_bom_component_id is not None:
+            snapshot = db.get(
+                SalesOrderItemBomComponent,
+                requirement.sales_order_item_bom_component_id,
+            )
+            if snapshot is None or snapshot.sales_order_item_id != item.id:
+                raise WarehouseInventoryError(
+                    "组件库存预占关联已失效，请刷新订单后重试", 409
+                )
+            coverage = component_inventory_coverage(db, snapshot.id)
+            remaining_requirement = max(
+                component_effective_required_piece_qty(db, snapshot)
+                - coverage["total_piece_quantity"],
+                0,
+            )
+        else:
+            already_credited = active_semi_requirement_credited_quantity(
+                db, requirement.id
+            )
+            remaining_requirement = max(
+                requirement.required_piece_quantity - already_credited, 0
+            )
         target = min(requested_requirement_quantity, remaining_requirement)
         if target <= 0:
             raise WarehouseInventoryError("该半成品需求已全部抵扣", 409)
@@ -1670,6 +1724,9 @@ def reserve_semi_finished_inventory(
                 ),
                 order_item_id=requirement.order_item_id,
                 semi_requirement_id=requirement.id,
+                sales_order_item_bom_component_id=(
+                    requirement.sales_order_item_bom_component_id
+                ),
                 match_rule_id=confirmation.rule.id,
                 reserved_stock_quantity=stock_quantity,
                 credited_requirement_quantity=credited,

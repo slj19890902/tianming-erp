@@ -36,6 +36,7 @@ from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.mold_tool import MoldLocationMovement, MoldTool
 from app.models.product import Product
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.order import Order, OrderItem
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
@@ -80,10 +81,13 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    component_effective_required_piece_qty,
+    component_inventory_coverage,
     edit_semi_finished_lot_customer,
     edit_finished_lot,
     finished_inventory_candidates,
     finished_inventory_candidates_for_product,
+    finished_inventory_candidates_for_bom_component,
     inventory_age_warning,
     manual_finished_in,
     manual_semi_finished_in,
@@ -91,6 +95,7 @@ from app.services.warehouse_inventory import (
     normalize_material_code,
     release_finished_reservation,
     reserve_finished_inventory,
+    reserve_finished_inventory_for_bom_component,
     replace_semi_finished_lot_allowed_products,
     semi_finished_lot_allowed_product_ids,
     void_semi_finished_lot,
@@ -121,6 +126,13 @@ VALID_SOURCE_TYPES = {
     "stocktake",
     "transfer",
     "replenishment",
+}
+COMPONENT_CUTTING_YIELDS = {
+    "一开一": 1,
+    "一开二": 2,
+    "一开三": 3,
+    "一开四": 4,
+    "一开五": 5,
 }
 
 
@@ -545,6 +557,15 @@ class FinishedReservationPayload(BaseModel):
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
 
 
+class BomComponentFinishedReservationPayload(FinishedReservationPayload):
+    bom_snapshot_id: int = Field(gt=0)
+
+
+class BomComponentAutoCoverPayload(BaseModel):
+    order_item_id: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=60)
+
+
 class ReleaseReservationPayload(BaseModel):
     release_reason: str = Field(min_length=1, max_length=500)
     idempotency_key: str = Field(min_length=8, max_length=100)
@@ -599,6 +620,11 @@ class SemiReservationPayload(BaseModel):
     override: bool = False
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
     idempotency_key: str = Field(min_length=1, max_length=80)
+
+
+class BomComponentSemiRequirementPayload(BaseModel):
+    stock_yield_per_sheet: int = Field(default=1, gt=0)
+    component_type: Literal["whole", "cover", "base"] = "whole"
 
 
 class SemiReleasePayload(BaseModel):
@@ -1490,6 +1516,243 @@ def create_finished_reservation(
         _handle(error)
 
 
+@router.get("/finished/bom-components/{bom_snapshot_id}/candidates")
+def finished_bom_component_candidates(
+    bom_snapshot_id: int,
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_view_reservations),
+) -> dict:
+    _require_order_item_customer_access(db, order_item_id, user)
+    try:
+        snapshot = db.get(SalesOrderItemBomComponent, bom_snapshot_id)
+        if snapshot is None or snapshot.sales_order_item_id != order_item_id:
+            raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+        rows = _visible_finished_candidate_lots(
+            finished_inventory_candidates_for_bom_component(
+                db, order_item_id=order_item_id, bom_snapshot_id=bom_snapshot_id
+            ), user, db
+        )
+        return {
+            "order_item_id": order_item_id,
+            "bom_snapshot_id": bom_snapshot_id,
+            "component_product_id": snapshot.component_product_id,
+            "items": [
+                {
+                    "lot_id": lot.id, "lot_number": lot.lot_number,
+                    "version": lot.version, "quantity_available": lot.quantity_available,
+                    "is_general": lot.finished_detail.is_general,
+                    "warning_codes": (["GENERAL_FINISHED_STOCK"] if lot.finished_detail.is_general else []),
+                }
+                for lot in rows
+            ],
+        }
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/finished/bom-components/reservations")
+def create_bom_component_finished_reservation(
+    payload: BomComponentFinishedReservationPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    _require_order_item_customer_access(db, payload.order_item_id, user)
+    _require_lot_customer_access(db, payload.inventory_lot_id, user)
+    try:
+        row = reserve_finished_inventory_for_bom_component(
+            db, operator_id=user.id, **payload.model_dump()
+        )
+        db.commit()
+        return _reservation_dict(row, db)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+
+
+@router.post("/finished/bom-components/{bom_snapshot_id}/auto-cover")
+def auto_cover_bom_component_inventory(
+    bom_snapshot_id: int,
+    payload: BomComponentAutoCoverPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    """One-click safe coverage: dedicated finished first, then exact semi stock.
+
+    General stock and signature overrides remain outside this shortcut because
+    those facts require an explicit warning review. The button itself is the
+    user's single confirmation for exact, customer-owned matches.
+    """
+    _require_order_item_customer_access(db, payload.order_item_id, user)
+    snapshot = db.get(SalesOrderItemBomComponent, bom_snapshot_id)
+    if (
+        snapshot is None
+        or snapshot.sales_order_item_id != payload.order_item_id
+    ):
+        raise HTTPException(status_code=404, detail="本订单组件快照不存在")
+    try:
+        item = db.get(OrderItem, payload.order_item_id)
+        order = db.get(Order, item.order_id) if item is not None else None
+        if item is None or order is None:
+            raise WarehouseInventoryError("订单明细不存在", 404)
+        required = component_effective_required_piece_qty(db, snapshot)
+
+        # Prefer formal finished components. Only the current customer's
+        # dedicated stock is eligible for this no-dialog shortcut.
+        finished_added = 0
+        for lot in finished_inventory_candidates_for_bom_component(
+            db,
+            order_item_id=item.id,
+            bom_snapshot_id=snapshot.id,
+        ):
+            detail = lot.finished_detail
+            if (
+                detail is None
+                or detail.is_general
+                or detail.owner_customer_id != order.customer_id
+            ):
+                continue
+            coverage = component_inventory_coverage(db, snapshot.id)
+            remaining = max(required - coverage["total_piece_quantity"], 0)
+            quantity = min(int(lot.quantity_available or 0), remaining)
+            if quantity <= 0:
+                break
+            reserve_finished_inventory_for_bom_component(
+                db,
+                order_item_id=item.id,
+                bom_snapshot_id=snapshot.id,
+                inventory_lot_id=lot.id,
+                quantity=quantity,
+                expected_version=lot.version,
+                operator_id=user.id,
+                idempotency_key=f"{payload.idempotency_key}:f:{lot.id}",
+                warning_acknowledged_codes=[],
+            )
+            finished_added += quantity
+
+        # Then use only exact, customer-owned semi-finished matches. Existing
+        # matching and CAS services still perform every authorization check.
+        coverage = component_inventory_coverage(db, snapshot.id)
+        remaining = max(required - coverage["total_piece_quantity"], 0)
+        semi_added = 0
+        semi_signature_complete = (
+            int(snapshot.snapshot_component_report_length_mm or 0) > 0
+            and int(snapshot.snapshot_component_report_width_mm or 0) > 0
+            and bool(str(snapshot.snapshot_component_material or "").strip())
+            and bool(str(snapshot.snapshot_component_flute_type or "").strip())
+        )
+        if remaining > 0 and semi_signature_complete:
+            requirement = db.scalar(
+                select(OrderItemSemiRequirement).where(
+                    OrderItemSemiRequirement.sales_order_item_bom_component_id
+                    == snapshot.id
+                )
+            )
+            yield_per_sheet = COMPONENT_CUTTING_YIELDS.get(
+                str(
+                    snapshot.snapshot_component_default_cutting_mode
+                    or "一开一"
+                ),
+                1,
+            )
+            if requirement is None:
+                preview_candidates = semi_finished_candidates_for_product(
+                    db,
+                    product_id=snapshot.component_product_id,
+                    customer_id=order.customer_id,
+                    board_length_mm=int(
+                        snapshot.snapshot_component_report_length_mm
+                    ),
+                    board_width_mm=int(
+                        snapshot.snapshot_component_report_width_mm
+                    ),
+                    material_code=str(snapshot.snapshot_component_material),
+                    flute_type=str(snapshot.snapshot_component_flute_type),
+                    component_type="whole",
+                    pieces_per_box=1,
+                    stock_yield_per_sheet=yield_per_sheet,
+                )
+            else:
+                preview_candidates = semi_finished_inventory_candidates(
+                    db, requirement.id
+                )
+            safe_candidates = [
+                row
+                for row in preview_candidates
+                if (
+                    row.lot.semi_finished_detail is not None
+                    and row.lot.semi_finished_detail.owner_customer_id
+                    == order.customer_id
+                    and not row.signature_differences
+                    and row.source in {"signature", "learned"}
+                )
+            ]
+            # No match means no unexplained empty inventory "draft" is left
+            # behind; the normal requisition remains the only user task.
+            if requirement is None and safe_candidates:
+                requirement = save_order_item_semi_requirement(
+                    db,
+                    order_item_id=item.id,
+                    sales_order_item_bom_component_id=snapshot.id,
+                    component_type="whole",
+                    board_length_mm=int(
+                        snapshot.snapshot_component_report_length_mm
+                    ),
+                    board_width_mm=int(
+                        snapshot.snapshot_component_report_width_mm
+                    ),
+                    material_code=str(snapshot.snapshot_component_material),
+                    flute_type=str(snapshot.snapshot_component_flute_type),
+                    pieces_per_box=1,
+                    stock_yield_per_sheet=yield_per_sheet,
+                    required_piece_quantity=required,
+                    operator_id=user.id,
+                )
+            if requirement is not None and safe_candidates:
+                result = reserve_semi_finished_inventory(
+                    db,
+                    requirement_id=requirement.id,
+                    requested_requirement_quantity=remaining,
+                    lots=[
+                        SemiFinishedLotVersion(
+                            lot_id=row.lot.id,
+                            expected_version=row.lot.version,
+                        )
+                        for row in safe_candidates
+                    ],
+                    operator_id=user.id,
+                    idempotency_key=f"{payload.idempotency_key}:s",
+                    confirmed=True,
+                    override=False,
+                    warning_acknowledged_codes=[],
+                )
+                semi_added = result.allocated_requirement_quantity
+
+        coverage = component_inventory_coverage(db, snapshot.id)
+        remaining = max(required - coverage["total_piece_quantity"], 0)
+        db.commit()
+        if finished_added or semi_added:
+            message = (
+                f"已自动使用成品 {finished_added} 件、半成品 {semi_added} 件；"
+                f"仍需报料 {remaining} 件"
+            )
+        else:
+            message = "没有找到可安全自动匹配的客户专用库存，待报料数量未变"
+        return {
+            "finished_reserved_piece_qty": coverage["finished_piece_quantity"],
+            "semi_finished_reserved_piece_qty": coverage["semi_piece_quantity"],
+            "inventory_covered_piece_qty": coverage["total_piece_quantity"],
+            "remaining_required_piece_qty": remaining,
+            "message": message,
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
 @router.get("/reservations")
 def list_reservations(
     order_item_id: int | None = None,
@@ -1613,6 +1876,51 @@ def upsert_semi_requirement(
             order_item_id=order_item_id,
             operator_id=user.id,
             **payload.model_dump(),
+        )
+        db.commit()
+        return _semi_requirement_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+@router.put("/semi-finished/bom-components/{bom_snapshot_id}/requirements")
+def upsert_bom_component_semi_requirement(
+    bom_snapshot_id: int,
+    payload: BomComponentSemiRequirementPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    """Create a component-scoped semi requirement from frozen BOM facts.
+
+    The generated requirement is deliberately an implementation detail: users
+    choose a component snapshot, never the old whole/cover/base identity.
+    """
+    snapshot = db.get(SalesOrderItemBomComponent, bom_snapshot_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="组件快照不存在")
+    _require_order_item_customer_access(db, snapshot.sales_order_item_id, user)
+    try:
+        coverage = component_inventory_coverage(db, snapshot.id)
+        required = component_effective_required_piece_qty(db, snapshot)
+        if required <= coverage["total_piece_quantity"]:
+            raise WarehouseInventoryError("该组件已由库存全额覆盖", 409)
+        row = save_order_item_semi_requirement(
+            db,
+            order_item_id=snapshot.sales_order_item_id,
+            sales_order_item_bom_component_id=snapshot.id,
+            component_type=payload.component_type,
+            board_length_mm=int(snapshot.snapshot_component_report_length_mm or 0),
+            board_width_mm=int(snapshot.snapshot_component_report_width_mm or 0),
+            material_code=str(snapshot.snapshot_component_material or "").strip(),
+            flute_type=str(snapshot.snapshot_component_flute_type or "").strip(),
+            pieces_per_box=1,
+            stock_yield_per_sheet=payload.stock_yield_per_sheet,
+            required_piece_quantity=required,
+            operator_id=user.id,
         )
         db.commit()
         return _semi_requirement_dict(row)

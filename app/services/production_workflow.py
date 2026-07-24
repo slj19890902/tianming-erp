@@ -758,9 +758,8 @@ def _consume_completion_semi_reservations(
         OrderItemSemiRequirement.order_item_id == item.id
     )
     if task.sales_order_item_bom_component_id is not None:
-        # N039 components never consume a parent-level semi-finished
-        # reservation.  Requisition integration will attach the component FK;
-        # until then, no semi reservation is eligible for this task.
+        # A component may consume only a semi-finished reservation bound to
+        # the same BOM snapshot; parent-level reservations never cover it.
         requirement_query = requirement_query.where(
             OrderItemSemiRequirement.sales_order_item_bom_component_id
             == task.sales_order_item_bom_component_id

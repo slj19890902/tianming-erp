@@ -54,7 +54,6 @@ from app.models.stock_replenishment import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
-    InventoryReservation,
     InventoryLot,
     OrderItemSemiRequirement,
     WarehouseLocation,
@@ -89,6 +88,7 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
+    component_inventory_coverage,
     has_unconsumed_inventory_reservations,
     normalize_material_code,
     release_active_finished_reservations_for_items,
@@ -770,42 +770,6 @@ def _bom_snapshots_for_order_item(
     ).all()
 
 
-def _bom_semi_reserved_piece_qty(
-    db: Session,
-    snapshot_id: int,
-) -> int:
-    """Read snapshot-linked semi-finished coverage without changing legacy services.
-
-    N039 uses the new snapshot foreign key where it exists.  The requirement
-    join keeps an already-reserved line visible while the dedicated execution
-    service is being integrated in a later N039 slice.
-    """
-    rows = db.scalars(
-        select(InventoryReservation)
-        .outerjoin(
-            OrderItemSemiRequirement,
-            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id,
-        )
-        .where(
-            InventoryReservation.reservation_type == "semi_order",
-            InventoryReservation.status != "cancelled",
-            or_(
-                InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
-                OrderItemSemiRequirement.sales_order_item_bom_component_id
-                == snapshot_id,
-            ),
-        )
-    ).all()
-    return sum(
-        max(
-            int(row.credited_requirement_quantity or 0)
-            - int(row.released_requirement_quantity or 0),
-            0,
-        )
-        for row in rows
-    )
-
-
 def _bom_snapshot_requirements(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
@@ -878,9 +842,14 @@ def _bom_snapshot_requirements(
         yield_per_sheet = int(snapshot.mold_max_yield_per_sheet)
     else:
         yield_per_sheet = 1
-    semi_reserved = _bom_semi_reserved_piece_qty(db, snapshot.id)
+    coverage = component_inventory_coverage(db, snapshot.id)
+    finished_reserved = coverage["finished_piece_quantity"]
+    semi_reserved = coverage["semi_piece_quantity"]
     required_piece_quantity = int(demand.required_piece_quantity)
-    remaining = max(required_piece_quantity - semi_reserved, 0)
+    inventory_covered = min(
+        coverage["total_piece_quantity"], required_piece_quantity
+    )
+    remaining = max(required_piece_quantity - inventory_covered, 0)
     net_sheets = (remaining + yield_per_sheet - 1) // yield_per_sheet
     requisition_qty = net_sheets + int(snapshot.spare_sheet_quantity or 0)
     return {
@@ -888,7 +857,9 @@ def _bom_snapshot_requirements(
         "effective_set_quantity": effective_sets,
         "quantity_per_set": quantity_per_set,
         "required_piece_quantity": required_piece_quantity,
+        "finished_component_reserved_piece_qty": finished_reserved,
         "semi_finished_reserved_piece_qty": semi_reserved,
+        "inventory_covered_piece_qty": inventory_covered,
         "remaining_required_piece_qty": remaining,
         "actual_yield_per_sheet": actual_yield_per_sheet,
         "yield_per_sheet": yield_per_sheet,

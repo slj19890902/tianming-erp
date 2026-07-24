@@ -15,7 +15,12 @@ def has_historical_references(db: Session, product_id: int) -> bool:
     order_item_count = db.scalar(
         select(func.count())
         .select_from(OrderItem)
-        .where(OrderItem.product_id == product_id)
+        .where(
+            or_(
+                OrderItem.product_id == product_id,
+                OrderItem.combination_parent_product_id == product_id,
+            )
+        )
     )
     historical_map_count = db.scalar(
         select(func.count())

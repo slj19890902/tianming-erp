@@ -17,6 +17,10 @@ from app.models.delivery import DeliveryItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import (
+    SalesOrderItemBomComponent,
+    SalesOrderItemBomDemandAdjustment,
+)
 from app.models.production import ProductionCompletion
 from app.models.requisition import RequisitionItem
 from app.models.warehouse_inventory import (
@@ -26,6 +30,7 @@ from app.models.warehouse_inventory import (
     InventoryMovement,
     InventoryPallet,
     InventoryReservation,
+    OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
     WarehouseLocation,
@@ -300,6 +305,7 @@ def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
         select(InventoryReservation).where(
             InventoryReservation.order_item_id == order_item_id,
             InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
             InventoryReservation.status != "cancelled",
         )
     ).all()
@@ -322,6 +328,7 @@ def active_finished_reservations_by_item_ids(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id.in_(order_item_ids),
             InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
             InventoryReservation.status != "cancelled",
         )
     ).all()
@@ -335,6 +342,216 @@ def active_finished_reservations_by_item_ids(
             0,
         )
     return result
+
+
+def active_finished_component_reserved_qty(db: Session, snapshot_id: int) -> int:
+    """Return only un-released formal finished stock bound to one BOM snapshot.
+
+    This intentionally excludes ordinary parent-order reservations: a component
+    lot must never make the parent product look like it has already been covered.
+    """
+    rows = db.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status != "cancelled",
+        )
+    ).all()
+    return sum(
+        max(
+            int(row.credited_requirement_quantity or 0)
+            - int(row.released_requirement_quantity or 0),
+            0,
+        )
+        for row in rows
+    )
+
+
+def component_effective_required_piece_qty(
+    db: Session, snapshot: SalesOrderItemBomComponent
+) -> int:
+    """Immutable snapshot quantity plus append-only order-specific adjustments."""
+    delta = db.scalar(
+        select(func.coalesce(func.sum(
+            SalesOrderItemBomDemandAdjustment.delta_required_piece_quantity
+        ), 0)).where(
+            SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+            == snapshot.id
+        )
+    )
+    return max(int(snapshot.required_piece_quantity or 0) + int(delta or 0), 0)
+
+
+def component_inventory_coverage(db: Session, snapshot_id: int) -> dict[str, int]:
+    """One authoritative component coverage view for reserve and requisition.
+
+    Both formal finished stock and semi-finished stock are order-bound facts.
+    Callers must use `total_piece_quantity` as one shared upper bound rather
+    than independently filling the same component demand twice.
+    """
+    finished = active_finished_component_reserved_qty(db, snapshot_id)
+    # `semi_requirement_id` was the only link before the explicit snapshot
+    # field existed. Keep that historical link in the one coverage view so an
+    # older, still-active reservation cannot be counted a second time by a
+    # later finished-goods reservation.
+    semi_rows = db.scalars(
+        select(InventoryReservation)
+        .outerjoin(
+            OrderItemSemiRequirement,
+            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id,
+        )
+        .where(
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+            or_(
+                InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id
+                == snapshot_id,
+            ),
+        )
+    ).all()
+    semi = sum(
+        max(
+            int(row.credited_requirement_quantity or 0)
+            - int(row.released_requirement_quantity or 0),
+            0,
+        )
+        for row in semi_rows
+    )
+    return {
+        "finished_piece_quantity": finished,
+        "semi_piece_quantity": semi,
+        "total_piece_quantity": finished + semi,
+    }
+
+
+def finished_inventory_candidates_for_bom_component(
+    db: Session, *, order_item_id: int, bom_snapshot_id: int
+) -> list[InventoryLot]:
+    """Candidates for an internal component, limited to the owning customer.
+
+    General stock is included solely so the caller can display its explicit
+    warning; it is never silently selected by the reservation service.
+    """
+    snapshot = db.get(SalesOrderItemBomComponent, bom_snapshot_id)
+    item = db.get(OrderItem, order_item_id)
+    if snapshot is None or item is None or snapshot.sales_order_item_id != item.id:
+        raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise WarehouseInventoryError("订单不存在", 404)
+    return db.scalars(
+        select(InventoryLot)
+        .join(FinishedGoodsInventoryDetail,
+              FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id)
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.quantity_available > 0,
+            FinishedGoodsInventoryDetail.product_id == snapshot.component_product_id,
+            or_(
+                FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
+                FinishedGoodsInventoryDetail.is_general.is_(True),
+            ),
+        )
+        .order_by(FinishedGoodsInventoryDetail.is_general, InventoryLot.stock_date, InventoryLot.id)
+    ).all()
+
+
+def reserve_finished_inventory_for_bom_component(
+    db: Session,
+    *,
+    order_item_id: int,
+    bom_snapshot_id: int,
+    inventory_lot_id: int,
+    quantity: int,
+    expected_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    warning_acknowledged_codes: list[str],
+) -> InventoryReservation:
+    """Reserve formal component stock without changing parent-order coverage."""
+    existing = db.scalar(select(InventoryReservation).where(
+        InventoryReservation.idempotency_key == idempotency_key
+    ))
+    if existing is not None:
+        if (
+            existing.order_item_id != order_item_id
+            or existing.inventory_lot_id != inventory_lot_id
+            or existing.sales_order_item_bom_component_id != bom_snapshot_id
+            or int(existing.reserved_stock_quantity or 0) != quantity
+        ):
+            raise WarehouseInventoryError("该请求标识已用于其他组件库存预占", 409)
+        return existing
+    if quantity <= 0:
+        raise WarehouseInventoryError("组件成品库存抵扣数量必须大于0")
+    row = db.execute(select(OrderItem, Order).join(Order, Order.id == OrderItem.order_id)
+                     .where(OrderItem.id == order_item_id)).one_or_none()
+    snapshot = db.get(SalesOrderItemBomComponent, bom_snapshot_id)
+    if row is None or snapshot is None or snapshot.sales_order_item_id != order_item_id:
+        raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+    item, order = row
+    from app.services.production_workflow import has_production_completion_facts, lock_order_rows_for_production_transition, ProductionWorkflowError
+    try:
+        lock_order_rows_for_production_transition(db, [order.id])
+    except ProductionWorkflowError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
+    if item.requisition_status != "未报料" or item.material_status == "received" or item.delivered_quantity > 0:
+        raise WarehouseInventoryError("订单已进入后续流程，不能新增组件成品库存抵扣", 409)
+    if has_production_completion_facts(db, [item.id]):
+        raise WarehouseInventoryError("订单明细已完成生产，不能再新增组件成品库存抵扣", 409)
+    lot = db.get(InventoryLot, inventory_lot_id)
+    if lot is None or lot.finished_detail is None or lot.inventory_type != "finished" or lot.status != "active":
+        raise WarehouseInventoryError("组件成品库存批次当前不可预占", 409)
+    detail = lot.finished_detail
+    if detail.product_id != snapshot.component_product_id:
+        raise WarehouseInventoryError("库存产品与组件不一致", 409)
+    warnings: list[str] = []
+    if detail.is_general:
+        warnings.append("GENERAL_FINISHED_STOCK")
+        if "GENERAL_FINISHED_STOCK" not in warning_acknowledged_codes:
+            raise WarehouseInventoryError("通用组件成品库存必须人工确认后才能使用", 409)
+    elif detail.owner_customer_id != order.customer_id:
+        raise WarehouseInventoryError("客户专用组件库存不能用于其他客户订单", 409)
+    coverage = component_inventory_coverage(db, bom_snapshot_id)
+    remaining = max(
+        component_effective_required_piece_qty(db, snapshot)
+        - int(coverage["total_piece_quantity"]),
+        0,
+    )
+    if quantity > remaining:
+        raise WarehouseInventoryError(f"组件抵扣数量不能超过剩余需求 {remaining}", 409)
+    if lot.version != expected_version or quantity > int(lot.quantity_available or 0):
+        raise WarehouseInventoryError("库存数量或版本已变化，请刷新后重试", 409)
+    before = _balances(lot)
+    now = utc_now_naive()
+    result = db.execute(update(InventoryLot).where(
+        InventoryLot.id == lot.id, InventoryLot.version == expected_version,
+        InventoryLot.quantity_available >= quantity, InventoryLot.inventory_type == "finished",
+        InventoryLot.status == "active",
+    ).values(quantity_available=InventoryLot.quantity_available - quantity,
+             quantity_reserved=InventoryLot.quantity_reserved + quantity,
+             version=InventoryLot.version + 1, last_movement_at=now))
+    if result.rowcount != 1:
+        raise WarehouseInventoryError("库存数量或版本已变化，请刷新后重试", 409)
+    reservation = InventoryReservation(
+        reservation_number=_number("BRS"), inventory_lot_id=lot.id,
+        reservation_type="finished_order", order_id=order.id, order_item_id=item.id,
+        sales_order_item_bom_component_id=snapshot.id,
+        reserved_stock_quantity=quantity, credited_requirement_quantity=quantity,
+        yield_factor=1, status="active", warning_codes=json.dumps(warnings, ensure_ascii=False),
+        warning_acknowledged_by=operator_id if warnings else None,
+        reserved_by=operator_id, reserved_at=now, idempotency_key=idempotency_key,
+    )
+    db.add(reservation); db.flush(); db.expire(lot)
+    refreshed = db.get(InventoryLot, lot.id)
+    assert refreshed is not None
+    _movement(db, lot=refreshed, movement_type="reserve", quantity=quantity, before=before,
+              operator_id=operator_id, reason="组合 BOM 组件成品库存抵扣",
+              idempotency_key=idempotency_key, reservation_id=reservation.id,
+              related_order_id=order.id, related_order_item_id=item.id)
+    db.flush()
+    return reservation
 
 
 def finished_inventory_candidates(db: Session, order_item_id: int) -> list[InventoryLot]:

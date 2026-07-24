@@ -18,6 +18,7 @@ def composite_requisition_app(tmp_path: Path):
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
     from app.api.requisition import router as requisition_router
+    from app.api.warehouse import router as warehouse_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
@@ -145,6 +146,7 @@ def composite_requisition_app(tmp_path: Path):
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(orders_router, prefix="/api/orders")
     app.include_router(requisition_router, prefix="/api/requisition")
+    app.include_router(warehouse_router, prefix="/api/warehouse")
 
     def override_get_db() -> Generator[Session, None, None]:
         with session_factory() as session:
@@ -431,6 +433,213 @@ def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
     with session_factory() as session:
         source = session.scalar(select(RequisitionItemBomSource))
     assert int(source.calculated_purchase_quantity) == 13
+
+
+def test_component_finished_stock_reduces_only_component_requisition(
+    composite_requisition_app,
+) -> None:
+    from app.api.requisition import _bom_snapshot_requirements
+    from app.models.order import OrderItem
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.warehouse_inventory import WarehouseLocation
+    from app.services.warehouse_inventory import (
+        active_finished_reserved_qty,
+        manual_finished_in,
+        reserve_finished_inventory_for_bom_component,
+    )
+
+    _app, session_factory = composite_requisition_app
+    with session_factory() as db:
+        item = db.get(OrderItem, 1)
+        snapshot = db.get(SalesOrderItemBomComponent, 1)
+        assert item is not None and snapshot is not None
+        item.quantity = 3000
+        snapshot.order_set_quantity = 1500
+        snapshot.required_piece_quantity = 3000
+        snapshot.snapshot_component_default_cutting_mode = "一开二"
+        location = WarehouseLocation(
+            location_code="N039-FG-01", location_name="组件成品",
+            warehouse_type="finished",
+        )
+        db.add(location)
+        db.flush()
+        lot = manual_finished_in(
+            db, customer_id=1, product_id=snapshot.component_product_id,
+            location_id=location.id, quantity=300, stock_date=date.today(),
+            source_type="manual", remarks="组件余货", operator_id=1,
+            idempotency_key="n039-component-finished-300",
+        )
+        reservation = reserve_finished_inventory_for_bom_component(
+            db, order_item_id=item.id, bom_snapshot_id=snapshot.id,
+            inventory_lot_id=lot.id, quantity=300, expected_version=lot.version,
+            operator_id=1, idempotency_key="n039-component-reserve-300",
+            warning_acknowledged_codes=[],
+        )
+        assert reservation.sales_order_item_bom_component_id == snapshot.id
+        assert active_finished_reserved_qty(db, item.id) == 0
+        requirements = _bom_snapshot_requirements(db, snapshot)
+        assert requirements["finished_component_reserved_piece_qty"] == 300
+        assert requirements["remaining_required_piece_qty"] == 2700
+        assert requirements["requisition_qty"] == 1350
+        db.commit()
+
+    with TestClient(_app) as client:
+        _login(client)
+        blocked = client.put(
+            "/api/orders/items/1/bom-components/1/demand",
+            json={
+                "required_piece_quantity": 299,
+                "expected_required_piece_quantity": 3000,
+                "idempotency_key": "n039-cannot-reduce-below-finished-coverage",
+            },
+        )
+    assert blocked.status_code == 409, blocked.text
+    assert "已预占" in blocked.json()["detail"]
+
+
+def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
+    composite_requisition_app,
+) -> None:
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        SemiFinishedInventoryDetail,
+        SemiFinishedLotAllowedProduct,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as db:
+        snapshot = db.get(SalesOrderItemBomComponent, 1)
+        assert snapshot is not None
+        snapshot.snapshot_component_default_cutting_mode = "一开二"
+        location = WarehouseLocation(
+            location_code="N039-AUTO-01",
+            location_name="组件自动抵扣",
+            warehouse_type="finished",
+        )
+        semi_location = WarehouseLocation(
+            location_code="N039-AUTO-SEMI-01",
+            location_name="组件半成品自动抵扣",
+            warehouse_type="semi_finished",
+        )
+        db.add_all([location, semi_location])
+        db.flush()
+        manual_finished_in(
+            db,
+            customer_id=1,
+            product_id=snapshot.component_product_id,
+            location_id=location.id,
+            quantity=5,
+            stock_date=date.today(),
+            source_type="manual",
+            remarks="客户专用组件成品",
+            operator_id=1,
+            idempotency_key="n039-auto-finished-five",
+        )
+        semi_lot = InventoryLot(
+            lot_number="N039-AUTO-SEMI-01",
+            inventory_type="semi_finished",
+            warehouse_location_id=semi_location.id,
+            quantity_available=5,
+            quantity_reserved=0,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date.today(),
+            last_movement_at=datetime.now(),
+        )
+        db.add(semi_lot)
+        db.flush()
+        db.add(
+            SemiFinishedInventoryDetail(
+                inventory_lot_id=semi_lot.id,
+                owner_customer_id=1,
+                owner_customer_name_snapshot="N039 测试客户",
+                material_code_snapshot="K616K",
+                normalized_material_code="K616K",
+                layer_count=5,
+                flute_type="AB",
+                board_length_mm=1000,
+                board_width_mm=700,
+                component_type="whole",
+                pieces_per_box=1,
+                stock_yield_per_sheet=2,
+                sheet_type="net_sheet",
+            )
+        )
+        db.add(
+            SemiFinishedLotAllowedProduct(
+                inventory_lot_id=semi_lot.id,
+                product_id=snapshot.component_product_id,
+                confirmed_by=1,
+                confirmed_at=datetime.now(),
+            )
+        )
+        db.commit()
+
+    payload = {
+        "order_item_id": 1,
+        "idempotency_key": "n039-auto-cover-safe-exact",
+    }
+    with TestClient(app) as client:
+        _login(client)
+        covered = client.post(
+            "/api/warehouse/finished/bom-components/1/auto-cover",
+            json=payload,
+        )
+        replay = client.post(
+            "/api/warehouse/finished/bom-components/1/auto-cover",
+            json=payload,
+        )
+        pending = client.get("/api/requisition/pending")
+
+    assert covered.status_code == 200, covered.text
+    assert replay.status_code == 200, replay.text
+    assert covered.json()["finished_reserved_piece_qty"] == 5
+    assert covered.json()["semi_finished_reserved_piece_qty"] == 10
+    assert covered.json()["remaining_required_piece_qty"] == 5
+    assert replay.json()["inventory_covered_piece_qty"] == 15
+    component = pending.json()["items"][0]["component_requirements"][0]
+    assert component["finished_component_reserved_piece_qty"] == 5
+    assert component["semi_finished_reserved_piece_qty"] == 10
+    assert component["remaining_required_piece_qty"] == 5
+    with session_factory() as db:
+        reservations = db.scalars(
+            select(InventoryReservation).where(
+                InventoryReservation.sales_order_item_bom_component_id == 1
+            )
+        ).all()
+    assert len(reservations) == 2
+
+
+def test_component_inventory_auto_cover_leaves_no_empty_requirement_draft(
+    composite_requisition_app,
+) -> None:
+    from app.models.warehouse_inventory import OrderItemSemiRequirement
+
+    app, session_factory = composite_requisition_app
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post(
+            "/api/warehouse/finished/bom-components/1/auto-cover",
+            json={
+                "order_item_id": 1,
+                "idempotency_key": "n039-auto-cover-no-stock",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["inventory_covered_piece_qty"] == 0
+    assert response.json()["remaining_required_piece_qty"] == 20
+    with session_factory() as db:
+        requirement = db.scalar(select(OrderItemSemiRequirement.id))
+    assert requirement is None
 
 
 def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mode(

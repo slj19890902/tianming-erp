@@ -49,6 +49,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionCompletion
 from app.models.product_bom import (
+    ProductBomComponent,
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
     SalesOrderItemBomDemandAdjustment,
@@ -146,6 +147,7 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
+    component_inventory_coverage,
     has_unconsumed_inventory_reservations,
     normalize_material_code,
     release_active_finished_reservations_for_items,
@@ -306,6 +308,16 @@ class OrderItemCreate(BaseModel):
     drawing_save_option: Literal[
         "order_only", "save_to_product", "overwrite_product"
     ] | None = None
+    # 组合销售来源由服务端复核后冻结；前端不能借此把父件伪装成组件或反过来。
+    combination_mode_snapshot: Literal[
+        "parent_priced_set", "component_priced"
+    ] | None = None
+    combination_role: Literal["standalone", "set_parent", "priced_component"] | None = None
+    combination_group_key: str | None = Field(default=None, max_length=80)
+    combination_parent_product_id: int | None = None
+    combination_parent_name_snapshot: str | None = Field(default=None, max_length=250)
+    combination_set_quantity_snapshot: int | None = Field(default=None, ge=1)
+    combination_quantity_per_set_snapshot: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -1181,6 +1193,159 @@ def _order_item_cost_totals(
     }
 
 
+def _product_combination_mode(product: Product) -> str:
+    """Read the explicit mode while keeping old composite rows compatible."""
+    if not product.is_composite:
+        return "standalone"
+    mode = getattr(product, "combination_mode", None)
+    return str(mode) if mode else "parent_priced_set"
+
+
+def _validated_combination_provenance(
+    db: Session,
+    *,
+    customer: Customer,
+    item_payload: OrderItemCreate,
+    product: Product,
+    item_index: int,
+) -> dict[str, object]:
+    """Return only server-verified combination facts for one new order item."""
+    requested_fields = (
+        item_payload.combination_mode_snapshot,
+        item_payload.combination_role,
+        item_payload.combination_group_key,
+        item_payload.combination_parent_product_id,
+        item_payload.combination_parent_name_snapshot,
+        item_payload.combination_set_quantity_snapshot,
+        item_payload.combination_quantity_per_set_snapshot,
+    )
+    product_mode = _product_combination_mode(product)
+
+    if product_mode == "parent_priced_set":
+        if any(value is not None for value in requested_fields):
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{item_index}条明细组合父件来源由系统生成，不能由客户端填写",
+            )
+        return {
+            "combination_mode_snapshot": "parent_priced_set",
+            "combination_role": "set_parent",
+            "combination_group_key": None,
+            "combination_parent_product_id": None,
+            "combination_parent_name_snapshot": None,
+            "combination_set_quantity_snapshot": None,
+            "combination_quantity_per_set_snapshot": None,
+        }
+
+    if product_mode == "component_priced":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"第{item_index}条明细是“组件分别计价”组合父件，不能直接保存为订单明细；"
+                "请先展开并填写各组件的数量和单价"
+            ),
+        )
+
+    is_priced_component = item_payload.combination_role == "priced_component"
+    if not is_priced_component:
+        if any(value is not None for value in requested_fields):
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{item_index}条明细不是有效的组合组件来源",
+            )
+        return {
+            "combination_mode_snapshot": None,
+            "combination_role": "standalone",
+            "combination_group_key": None,
+            "combination_parent_product_id": None,
+            "combination_parent_name_snapshot": None,
+            "combination_set_quantity_snapshot": None,
+            "combination_quantity_per_set_snapshot": None,
+        }
+
+    if (
+        item_payload.combination_mode_snapshot != "component_priced"
+        or not (item_payload.combination_group_key or "").strip()
+        or item_payload.combination_parent_product_id is None
+        or not (item_payload.combination_parent_name_snapshot or "").strip()
+        or item_payload.combination_set_quantity_snapshot is None
+        or item_payload.combination_quantity_per_set_snapshot is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"第{item_index}条分别计价组件缺少组合来源信息",
+        )
+
+    parent = db.get(Product, item_payload.combination_parent_product_id)
+    if (
+        parent is None
+        or parent.deleted_at is not None
+        or not parent.is_active
+        or parent.customer_id != customer.id
+        or _product_combination_mode(parent) != "component_priced"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"第{item_index}条分别计价组件的组合父件无效或不属于当前客户",
+        )
+    if (item_payload.combination_parent_name_snapshot or "").strip() != parent.product_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"第{item_index}条分别计价组件的组合父件名称不一致",
+        )
+    relation = db.scalar(
+        select(ProductBomComponent).where(
+            ProductBomComponent.parent_product_id == parent.id,
+            ProductBomComponent.component_product_id == product.id,
+        )
+    )
+    if relation is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"第{item_index}条产品不是该组合父件的组件",
+        )
+    expected_per_set = int(Decimal(str(relation.quantity_per_set)))
+    if item_payload.combination_quantity_per_set_snapshot != expected_per_set:
+        raise HTTPException(
+            status_code=400,
+            detail=f"第{item_index}条组件每套数量与组合 BOM 不一致",
+        )
+    return {
+        "combination_mode_snapshot": "component_priced",
+        "combination_role": "priced_component",
+        "combination_group_key": item_payload.combination_group_key.strip(),
+        "combination_parent_product_id": parent.id,
+        "combination_parent_name_snapshot": parent.product_name,
+        "combination_set_quantity_snapshot": item_payload.combination_set_quantity_snapshot,
+        "combination_quantity_per_set_snapshot": expected_per_set,
+    }
+
+
+def _validate_combination_group_consistency(
+    provenances: dict[int, dict[str, object]],
+) -> None:
+    """Keep one client group key bound to one immutable parent and set count."""
+    groups: dict[str, tuple[int, str, int]] = {}
+    for item_index, provenance in provenances.items():
+        if provenance.get("combination_role") != "priced_component":
+            continue
+        key = str(provenance["combination_group_key"])
+        signature = (
+            int(provenance["combination_parent_product_id"]),
+            str(provenance["combination_parent_name_snapshot"]),
+            int(provenance["combination_set_quantity_snapshot"]),
+        )
+        existing = groups.setdefault(key, signature)
+        if existing != signature:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"第{item_index}条明细与同一组合分组的父件或套数不一致；"
+                    "请重新选择组合父件后再保存"
+                ),
+            )
+
+
 def _snapshot_spec(product: Product) -> str | None:
     dimensions = (product.length_mm, product.width_mm, product.height_mm)
     if any(value is None for value in dimensions):
@@ -1328,6 +1493,13 @@ def _order_response(
                 "item_sequence": item.item_sequence,
                 "quantity": item.quantity,
                 "ordered_quantity": item.quantity,
+                "combination_mode_snapshot": item.combination_mode_snapshot,
+                "combination_role": item.combination_role,
+                "combination_group_key": item.combination_group_key,
+                "combination_parent_product_id": item.combination_parent_product_id,
+                "combination_parent_name_snapshot": item.combination_parent_name_snapshot,
+                "combination_set_quantity_snapshot": item.combination_set_quantity_snapshot,
+                "combination_quantity_per_set_snapshot": item.combination_quantity_per_set_snapshot,
                 "bom_components": bom_components_by_item_id.get(item.id, []),
                 "delivered_quantity": item.delivered_quantity,
                 "remaining_quantity": max(
@@ -3352,6 +3524,7 @@ def create_order(
             int,
             tuple[int | None, str | None, int | None, Material | None],
         ] = {}
+        combination_provenances: dict[int, dict[str, object]] = {}
         for index, item_payload in enumerate(payload.items, start=1):
             validated_quantities[index] = _validated_order_quantity(
                 item_payload.quantity,
@@ -3484,7 +3657,15 @@ def create_order(
                 selected_material,
             )
             resolved_products[index] = product
+            combination_provenances[index] = _validated_combination_provenance(
+                db,
+                customer=customer,
+                item_payload=item_payload,
+                product=product,
+                item_index=index,
+            )
 
+        _validate_combination_group_consistency(combination_provenances)
         reservation_plan_states = _preflight_reservation_plans(
             db,
             customer_id=customer.id,
@@ -3652,6 +3833,7 @@ def create_order(
                     else "一开一"
                 ),
                 requisition_status="未报料",
+                **combination_provenances[index],
             )
             # P0-B: the client can submit only a short-lived, owner-bound token.
             # A filesystem path is never interpreted from request data.
@@ -3729,7 +3911,7 @@ def create_order(
         db.flush()  # 获取 item.id 以便处理图纸
         for index, created_item in enumerate(created_items, start=1):
             product = resolved_products[index]
-            if is_composite_product(product):
+            if created_item.combination_role == "set_parent":
                 create_order_item_bom_snapshots(
                     db,
                     order_item=created_item,
@@ -3762,7 +3944,7 @@ def create_order(
             operator_id=user.id,
         )
         for index, created_item in enumerate(created_items, start=1):
-            if not is_composite_product(resolved_products[index]):
+            if created_item.combination_role != "set_parent":
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
         db.commit()
@@ -3873,6 +4055,26 @@ def update_order_item_bom_component_demand(
 
     key = payload.idempotency_key.strip()
     try:
+        # Demand changes and component inventory reservations lock the same
+        # order. This prevents a concurrent reduction from undercutting a
+        # just-created finished/semi-finished coverage fact.
+        lock_order_rows_for_production_transition(db, [order.id])
+        if has_production_completion_facts(db, [item.id]) or int(
+            item.delivered_quantity or 0
+        ) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="该订单明细已有生产或送货事实，组件需求不能直接修改；请走受控撤销或新版本流程。",
+            )
+        coverage = component_inventory_coverage(db, snapshot.id)
+        if payload.required_piece_quantity < coverage["total_piece_quantity"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "组件需求不能低于已预占的成品/半成品覆盖数量"
+                    f"（当前已覆盖 {coverage['total_piece_quantity']} 件）。"
+                ),
+            )
         _adjustment, created = append_component_demand_adjustment(
             db,
             order_item_id=item.id,
@@ -3914,6 +4116,9 @@ def update_order_item_bom_component_demand(
     except CompositeBomWorkflowError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="组件需求调整已提交，请刷新查看") from error

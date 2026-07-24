@@ -563,10 +563,20 @@ class OrderItemSemiRequirement(Base):
             "required_piece_quantity > 0",
             name="ck_order_item_semi_requirements_quantity",
         ),
-        UniqueConstraint(
+        Index(
+            "uq_order_item_semi_requirements_regular_component",
             "order_item_id",
             "component_type",
-            name="uq_order_item_semi_requirements_item_component",
+            unique=True,
+            sqlite_where=text("sales_order_item_bom_component_id IS NULL"),
+            postgresql_where=text("sales_order_item_bom_component_id IS NULL"),
+        ),
+        Index(
+            "uq_order_item_semi_requirements_bom_component",
+            "sales_order_item_bom_component_id",
+            unique=True,
+            sqlite_where=text("sales_order_item_bom_component_id IS NOT NULL"),
+            postgresql_where=text("sales_order_item_bom_component_id IS NOT NULL"),
         ),
         Index(
             "ix_order_item_semi_requirements_signature",

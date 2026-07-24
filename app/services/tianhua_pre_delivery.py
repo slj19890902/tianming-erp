@@ -341,12 +341,11 @@ def ensure_draft_delivery(
                 delivery_id=delivery.id,
                 order_item_id=row.order_item_id,
                 delivered_quantity=qty,
-                remarks=f"来源：天华预送货草稿 {draft.draft_number}",
+                remarks=None,
             )
             db.add(delivery_item)
         else:
             delivery_item.delivered_quantity = qty
-            delivery_item.remarks = f"来源：天华预送货草稿 {draft.draft_number}"
         db.flush()
         row.delivery_item_id = delivery_item.id
         wanted_ids.add(delivery_item.id)

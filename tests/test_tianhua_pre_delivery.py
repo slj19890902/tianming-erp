@@ -21,17 +21,19 @@ def test_supplied_screenshot_recognizes_30_rows():
 def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monkeypatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
-    from app.api.tianhua_pre_delivery import router
+    from app.api.deliveries import router as deliveries_router
+    from app.api.tianhua_pre_delivery import mobile_router, router
     from app.core.database import create_sqlite_engine
-    from app.core.security import hash_password
+    from app.core.security import create_tianhua_pick_token, hash_password
     from app.models import Base
     from app.models.customer import Customer
-    from app.models.delivery import Delivery
+    from app.models.delivery import Delivery, DeliveryItem
     from app.models.order import Order,OrderItem
     from app.models.product import Product
-    from app.models.tianhua_pre_delivery import TianhuaPreDeliveryDraft, TianhuaPreDeliveryImportItem
+    from app.models.tianhua_pre_delivery import TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryImportItem
     from app.models.user import User
     from app.services import tianhua_pre_delivery as svc
+    monkeypatch.setenv("ERP_SECRET_KEY","customer-remark-mobile-test-secret")
     engine=create_sqlite_engine(tmp_path/"db.sqlite3");Base.metadata.create_all(engine);factory=sessionmaker(bind=engine,expire_on_commit=False)
     with factory() as db:
         u=User(username="admin",password_hash=hash_password("RolePass123!"),role="admin",real_name="管理员",display_name="管理员",must_change_password=False)
@@ -44,7 +46,7 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
         oi=OrderItem(order_id=o.id,product_id=p.id,quantity=200,delivered_quantity=0,unit_price=Decimal("0"),subtotal=Decimal("0"),material_status="received",snapshot_product_name="测试",snapshot_product_code="21301877")
         db.add(oi);db.commit()
     monkeypatch.setattr(svc,"recognize_tianhua_image",lambda _: [svc.RecognizedRow(1,"21301877 200","21301877",200)])
-    app=FastAPI();app.include_router(auth_router,prefix="/api/auth");app.include_router(router,prefix="/api/deliveries")
+    app=FastAPI();app.include_router(auth_router,prefix="/api/auth");app.include_router(deliveries_router,prefix="/api/deliveries");app.include_router(router,prefix="/api/deliveries");app.include_router(mobile_router,prefix="/api/mobile")
     def override():
         with factory() as db: yield db
     app.dependency_overrides[get_db]=override
@@ -77,9 +79,42 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
                 f"/api/deliveries/tianhua-preimport/{blocked.json()['batch_id']}/create-draft",
                 json={"items":[{"item_id":blocked_item["item_id"],"row_no":1,"selected":True,"final_delivery_qty":200}]},
             ))
-        payload={"items":[{"item_id":item_id,"row_no":1,"selected":True,"final_delivery_qty":200}]}
+        payload={"remark":"来源：天华预送货图片导入","items":[{"item_id":item_id,"row_no":1,"selected":True,"final_delivery_qty":200}]}
         first=client.post(f"/api/deliveries/tianhua-preimport/{up.json()['batch_id']}/create-draft",json=payload)
         second=client.post(f"/api/deliveries/tianhua-preimport/{up.json()['batch_id']}/create-draft",json=payload)
+        with factory() as db:
+            draft=db.scalars(select(TianhuaPreDeliveryDraft)).one()
+            delivery_item=db.scalars(select(DeliveryItem)).one()
+            assert delivery_item.remarks is None
+            assert "来源：天华预送货图片导入" in draft.remark
+            legacy_internal_remark=f"来源：天华预送货草稿 {draft.draft_number}"
+            delivery_item.remarks=legacy_internal_remark
+            delivery_item_id=delivery_item.id
+            delivery_id=delivery_item.delivery_id
+            db.commit()
+        detail=client.get(f"/api/deliveries/{delivery_id}")
+        print_data=client.get(f"/api/deliveries/{delivery_id}/print")
+        with factory() as db:
+            delivery_item=db.get(DeliveryItem,delivery_item_id)
+            assert delivery_item.remarks==legacy_internal_remark
+            delivery_item.remarks="请核对数量后签字"
+            draft_item_id=db.scalars(select(TianhuaPreDeliveryDraftItem)).one().id
+            db.commit()
+        mobile_token,_expires=create_tianhua_pick_token(
+            up.json()["batch_id"],
+            draft.id,
+        )
+        updated=client.put(
+            f"/api/mobile/tianhua-pick/items/{draft_item_id}",
+            json={
+                "token":mobile_token,
+                "mobile_pick_status":"picked",
+                "mobile_picked_qty":200,
+                "mobile_pick_note":"现场确认 200",
+            },
+        )
+        detail_after_update=client.get(f"/api/deliveries/{delivery_id}")
+        print_after_update=client.get(f"/api/deliveries/{delivery_id}/print")
     assert wrong_batch.status_code==400
     assert duplicate_line.status_code==400
     assert [response.status_code for response in blocked_responses]==[400,400]
@@ -87,6 +122,12 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
     assert first.json()["delivery_number"].startswith("TH-")
     assert first.json()["items"][0]["order_id"] == 1
     assert first.json()["items"][0]["order_no"] == "TH-1"
+    assert detail.status_code==200 and detail.json()["items"][0]["remarks"] is None
+    assert print_data.status_code==200 and print_data.json()["items"][0]["remarks"] is None
+    assert updated.status_code==200
+    assert detail_after_update.json()["items"][0]["remarks"]=="请核对数量后签字"
+    assert print_after_update.json()["items"][0]["remarks"]=="请核对数量后签字"
+    assert "现场确认 200" not in print_after_update.text
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(TianhuaPreDeliveryDraft))==1
         assert db.scalar(select(func.count()).select_from(Delivery))==1
@@ -94,3 +135,5 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
         assert delivery.status=="pending"
         assert delivery.total_quantity==200
         assert db.get(OrderItem,1).delivered_quantity==0
+        assert db.get(DeliveryItem,delivery_item_id).remarks=="请核对数量后签字"
+        assert db.get(TianhuaPreDeliveryDraftItem,draft_item_id).mobile_pick_note=="现场确认 200"

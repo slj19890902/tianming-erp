@@ -34,6 +34,10 @@ from app.models.product import Product
 from app.models.product_bom import BomComponentDirectDeliveryAllocation
 from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
+from app.models.tianhua_pre_delivery import (
+    TianhuaPreDeliveryDraft,
+    TianhuaPreDeliveryDraftItem,
+)
 from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
@@ -92,6 +96,48 @@ def _print_product_code(value: str | None) -> str:
     if not text:
         return ""
     return re.split(r"\s*/\s*|\s+", text, maxsplit=1)[0]
+
+
+def _tianhua_internal_remarks_by_delivery_item(
+    db: Session,
+    delivery_item_ids: set[int] | list[int],
+) -> dict[int, set[str]]:
+    ids = {int(value) for value in delivery_item_ids if value}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(
+            TianhuaPreDeliveryDraftItem.delivery_item_id,
+            TianhuaPreDeliveryDraft.draft_number,
+        )
+        .join(
+            TianhuaPreDeliveryDraft,
+            TianhuaPreDeliveryDraft.id
+            == TianhuaPreDeliveryDraftItem.draft_id,
+        )
+        .where(TianhuaPreDeliveryDraftItem.delivery_item_id.in_(ids))
+    ).all()
+    internal_remarks: dict[int, set[str]] = {}
+    for delivery_item_id, draft_number in rows:
+        if delivery_item_id is None:
+            continue
+        internal_remarks.setdefault(int(delivery_item_id), set()).add(
+            f"来源：天华预送货草稿 {draft_number}"
+        )
+    return internal_remarks
+
+
+def _customer_visible_delivery_remark(
+    delivery_item_id: int,
+    remark: str | None,
+    internal_remarks: dict[int, set[str]],
+) -> str | None:
+    value = str(remark or "").strip()
+    if not value:
+        return None
+    if value in internal_remarks.get(int(delivery_item_id), set()):
+        return None
+    return value
 
 
 def _component_kind(name: str | None) -> str:
@@ -1070,6 +1116,16 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         item.delivery_item_id: _pick_item_response(item)
         for item in (pick_task.items if pick_task else [])
     }
+    internal_remarks = _tianhua_internal_remarks_by_delivery_item(
+        db,
+        [
+            row._mapping["id"]
+            for row in items
+            if str(row._mapping["remarks"] or "").strip().startswith(
+                "来源：天华预送货草稿 "
+            )
+        ],
+    )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -1097,6 +1153,11 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "items": [
             {
                 **dict(row._mapping),
+                "remarks": _customer_visible_delivery_remark(
+                    row._mapping["id"],
+                    row._mapping["remarks"],
+                    internal_remarks,
+                ),
                 "actual_delivery_quantity": row._mapping["delivered_quantity"],
                 "order_number": display_order_number(
                     orders.get(row._mapping["order_id"]),
@@ -2740,6 +2801,7 @@ def get_delivery_print_data(
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     rows = db.execute(
         select(
+            DeliveryItem.id.label("delivery_item_id"),
             Order.customer_po,
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
@@ -2754,6 +2816,16 @@ def get_delivery_print_data(
         .where(DeliveryItem.delivery_id == delivery_id)
         .order_by(DeliveryItem.id)
     ).all()
+    internal_remarks = _tianhua_internal_remarks_by_delivery_item(
+        db,
+        [
+            row.delivery_item_id
+            for row in rows
+            if str(row.remarks or "").strip().startswith(
+                "来源：天华预送货草稿 "
+            )
+        ],
+    )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -2788,20 +2860,11 @@ def get_delivery_print_data(
                 "quantity": row.quantity,
                 "ordered_quantity": row.ordered_quantity_snapshot,
                 "over_delivery_quantity": row.over_delivery_quantity,
-                "remarks": "；".join(
-                    part
-                    for part in (
-                        row.remarks,
-                        (
-                            f"订单{row.ordered_quantity_snapshot}/实送{row.quantity}/"
-                            f"超送{row.over_delivery_quantity}"
-                            if int(row.over_delivery_quantity or 0) > 0
-                            else None
-                        ),
-                    )
-                    if part
-                )
-                or None,
+                "remarks": _customer_visible_delivery_remark(
+                    row.delivery_item_id,
+                    row.remarks,
+                    internal_remarks,
+                ),
             }
             for row in rows
         ],

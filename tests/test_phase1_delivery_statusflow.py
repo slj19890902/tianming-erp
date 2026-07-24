@@ -649,6 +649,9 @@ def test_delivery_frontend_preserves_line_remarks() -> None:
     assert "deliveryForm.lines" in index
     assert "searchDeliveryLine(line)" in index
     assert "remarks: line.remarks || null" in index
+    assert "客户备注（会打印）" in index
+    assert 'placeholder="仅填写给客户看的内容"' in index
+    assert "内部说明（不打印）" in index
 
 
 def test_pending_delivery_search_scopes_customer_and_empty_keyword(

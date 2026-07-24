@@ -675,6 +675,36 @@ def test_print_response_contains_no_financial_fields(delivery_api_app) -> None:
     assert response.json()["items"][0]["unit"] == "PCS"
 
 
+def test_over_delivery_facts_are_not_appended_to_customer_remark(
+    delivery_api_app,
+) -> None:
+    from app.models.delivery import DeliveryItem
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        payload = _create_payload()
+        for line in payload["items"]:
+            line["remarks"] = None
+        created = client.post("/api/deliveries", json=payload)
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+        with session_factory() as session:
+            item = session.scalar(
+                select(DeliveryItem).where(
+                    DeliveryItem.delivery_id == delivery_id
+                )
+            )
+            item.over_delivery_quantity = 10
+            item.ordered_quantity_snapshot = 40
+            session.commit()
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+
+    assert printed.status_code == 200, printed.text
+    assert printed.json()["items"][0]["over_delivery_quantity"] == 10
+    assert printed.json()["items"][0]["remarks"] is None
+
+
 def test_new_delivery_uses_customer_prefix_without_changing_historical_dh(
     delivery_api_app,
 ) -> None:
@@ -722,13 +752,52 @@ def test_print_data_uses_product_name_and_customer_remark_only(
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/deliveries", json=payload)
+        detail = client.get(f"/api/deliveries/{created.json()['id']}")
         response = client.get(f"/api/deliveries/{created.json()['id']}/print")
 
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["items"][0]["remarks"] == "客户备注需要完整显示在底部备注说明"
     assert response.status_code == 200, response.text
     item = response.json()["items"][0]
     assert item["product_name"] == long_name
     assert item["remarks"] == "客户备注需要完整显示在底部备注说明"
     assert "production_notes" not in item
+
+
+def test_clearing_customer_remark_hides_it_from_detail_and_print(
+    delivery_api_app,
+) -> None:
+    app, _ = delivery_api_app
+    payload = _create_payload()
+    payload["items"][0]["remarks"] = "请核对数量后签字"
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=payload)
+        delivery_id = created.json()["id"]
+        cleared_payload = {
+            "customer_id": payload["customer_id"],
+            "delivery_date": payload["delivery_date"],
+            "vehicle_number": payload.get("vehicle_number"),
+            "items": [
+                {
+                    "order_item_id": item["order_item_id"],
+                    "delivered_quantity": item["delivered_quantity"],
+                    "remarks": None,
+                }
+                for item in payload["items"]
+            ],
+        }
+        cleared = client.put(
+            f"/api/deliveries/{delivery_id}",
+            json=cleared_payload,
+        )
+        detail = client.get(f"/api/deliveries/{delivery_id}")
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+
+    assert created.status_code == 201, created.text
+    assert cleared.status_code == 200, cleared.text
+    assert all(item["remarks"] is None for item in detail.json()["items"])
+    assert all(item["remarks"] is None for item in printed.json()["items"])
 
 
 def test_mixed_customer_delivery_is_rejected_without_draft(

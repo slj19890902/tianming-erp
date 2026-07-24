@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 import cv2
 import numpy as np
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -22,6 +22,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionTask
 from app.models.tianhua_pre_delivery import TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryImportBatch, TianhuaPreDeliveryImportItem
+from app.services.delivery_numbering import next_delivery_number
 from app.services.production_workflow import production_ready_quantity
 
 STATUS_LABELS = {"ok":"可送货","duplicate_warning":"疑似重复","qty_mismatch":"数量不一致","stock_shortage":"库存不足","not_matched":"未匹配","ocr_failed":"识别失败"}
@@ -248,24 +249,6 @@ def create_batch(db,content,filename,user_id,pre_delivery_date=None):
     db.commit(); db.refresh(batch); return batch
 
 
-def _next_delivery_number(db: Session, delivery_date: date) -> str:
-    sequence = db.execute(
-        text(
-            """
-            INSERT INTO delivery_daily_sequences (sequence_date, last_value)
-            VALUES (:sequence_date, 1)
-            ON CONFLICT(sequence_date)
-            DO UPDATE SET last_value = last_value + 1
-            RETURNING last_value
-            """
-        ),
-        {"sequence_date": delivery_date.isoformat()},
-    ).scalar_one()
-    if sequence > 999:
-        raise ValueError("当日送货单流水号已超过 999")
-    return f"TM-{delivery_date:%Y%m%d}-{sequence:03d}"
-
-
 def _delivery_total(db: Session, delivery_id: int) -> int:
     return int(
         db.scalar(
@@ -304,8 +287,15 @@ def ensure_draft_delivery(
 
     if delivery is None:
         delivery_date = batch.pre_delivery_date or beijing_today()
+        customer = db.get(Customer, batch.customer_id)
+        if customer is None:
+            raise ValueError("送货客户不存在，无法生成送货单号")
         delivery = Delivery(
-            delivery_number=_next_delivery_number(db, delivery_date),
+            delivery_number=next_delivery_number(
+                db,
+                customer=customer,
+                delivery_date=delivery_date,
+            ),
             customer_id=batch.customer_id,
             delivery_date=delivery_date,
             status="pending",

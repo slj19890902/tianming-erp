@@ -37,47 +37,52 @@
     }
     .sheet {
       position: relative;
+      display: flex;
+      flex-direction: column;
       width: var(--paper-width);
-      height: var(--paper-height);
+      height: calc(var(--paper-height) - 0.5mm);
       margin: 0 auto 24px;
-      padding: 5mm 6mm;
+      padding: 4mm 6mm;
       background: #fff;
       box-shadow: 0 2px 14px rgba(0,0,0,.12);
       overflow: hidden;
     }
+    .sheets {
+      width: var(--paper-width);
+      margin: 0 auto;
+    }
     .page-number {
       position: absolute;
-      top: 5mm;
+      top: 4mm;
       right: 6mm;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 700;
     }
     .company {
       margin: 0;
       text-align: center;
       font-family: "SimSun", serif;
-      font-size: 20px;
+      font-size: 21px;
       letter-spacing: 2px;
     }
     .document-title {
       margin: 2px 0 4px;
       text-align: center;
       font-family: "SimSun", serif;
-      font-size: 17px;
+      font-size: 18px;
       letter-spacing: 7px;
     }
     .factory-address {
-      padding-bottom: 4px;
-      border-bottom: 2px solid #111;
+      padding-bottom: 2px;
       text-align: center;
-      font-size: 10px;
+      font-size: 11px;
     }
     .meta {
       display: grid;
       grid-template-columns: 1.35fr 1fr;
       gap: 2px 18px;
-      padding: 4px 0;
-      font-size: 11px;
+      padding: 2px 0 4px;
+      font-size: 12px;
       line-height: 1.35;
     }
     .meta-row {
@@ -87,14 +92,13 @@
     }
     .meta-value {
       min-height: 17px;
-      border-bottom: 1px solid #555;
       overflow-wrap: anywhere;
     }
     table {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      font-size: 11px;
+      font-size: 12px;
     }
     th, td {
       border: 1px solid #111;
@@ -106,51 +110,54 @@
       line-height: 1.25;
     }
     th { font-weight: 700; }
-    .product-code { font-size: 10px; }
+    .product-code { font-size: 11px; }
     .sequence { width: 5%; }
     .product-name { text-align: left; overflow-wrap: anywhere; }
-    .product-name.long-name { font-size: 10px; line-height: 1.18; }
-    .item-remark { font-size: 10px; }
+    .product-name.long-name { font-size: 11px; line-height: 1.18; }
+    .item-remark { font-size: 11px; }
     .total {
-      padding: 4px 2px 3px;
+      padding: 3px 2px 2px;
       text-align: right;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 700;
     }
     .copies {
-      padding: 3px 0;
-      border-top: 1px solid #111;
-      border-bottom: 1px solid #111;
+      padding: 2px 0;
       text-align: center;
-      font-size: 10px;
+      font-size: 11px;
       word-spacing: 8px;
     }
     .remark-notes {
-      margin-top: 4px;
-      padding: 3px 0;
-      border-top: 1px solid #111;
-      font-size: 10px;
+      margin-top: 2px;
+      padding: 2px 0;
+      font-size: 11px;
       line-height: 1.3;
       overflow-wrap: anywhere;
     }
     .remark-note + .remark-note { margin-top: 2px; }
+    .print-footer {
+      margin-top: auto;
+    }
     .signatures {
       display: grid;
       grid-template-columns: 1fr 1.5fr 1fr;
       gap: 14px;
-      padding-top: 7px;
-      font-size: 10px;
+      align-items: end;
+      padding-top: 4px;
+      font-size: 11px;
     }
     .signature-line {
       display: inline-block;
       width: calc(100% - 70px);
       min-width: 50px;
+    }
+    .receiver-signature .signature-line {
       border-bottom: 1px solid #111;
     }
     .opened-at {
-      margin-top: 6px;
+      margin-top: 3px;
       text-align: right;
-      font-size: 9px;
+      font-size: 10px;
     }
     .error {
       margin: 30px auto;
@@ -167,18 +174,34 @@
     }
     @media print {
       body { background: #fff; }
-      html, body { width: var(--paper-width); min-height: var(--paper-height); }
+      html, body {
+        width: var(--paper-width);
+        margin: 0;
+        padding: 0;
+      }
       .no-print { display: none !important; }
+      .sheets {
+        width: var(--paper-width);
+        margin: 0;
+        padding: 0;
+      }
       .sheet {
         width: var(--paper-width);
-        height: var(--paper-height);
+        height: calc(var(--paper-height) - 0.5mm);
         margin: 0;
-        padding: 5mm 6mm;
+        padding: 4mm 6mm;
         box-shadow: none;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .sheet:not(:last-child) {
         break-after: page;
         page-break-after: always;
       }
-      .sheet:last-child { break-after: auto; page-break-after: auto; }
+      .sheet:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
     }
   </style>
 </head>
@@ -230,18 +253,20 @@
       <tbody data-field="itemRows"></tbody>
     </table>
 
-    <div class="total">本页数量：<span data-field="pageQuantity"></span>　送货总量：<span data-field="totalQuantity"></span></div>
-    <section data-field="remarkNotes" class="remark-notes" hidden>
-      <strong>备注说明：</strong>
-      <div data-field="remarkNoteItems"></div>
-    </section>
-    <div class="copies">白联:存档　红联:客户　黄联:回单</div>
-    <section class="signatures">
-      <div>送货人：<span class="signature-line"></span></div>
-      <div>收货单位(签章)：<span class="signature-line"></span></div>
-      <div>经手人：<span class="signature-line"></span></div>
-    </section>
-    <div class="opened-at">开单时间：<span data-field="createdAt"></span></div>
+    <footer class="print-footer">
+      <div class="total">本页数量：<span data-field="pageQuantity"></span>　送货总量：<span data-field="totalQuantity"></span></div>
+      <section data-field="remarkNotes" class="remark-notes" hidden>
+        <strong>备注说明：</strong>
+        <div data-field="remarkNoteItems"></div>
+      </section>
+      <div class="copies">白联:存档　红联:客户　黄联:回单</div>
+      <section class="signatures">
+        <div class="signature-item sender-signature">送货人：</div>
+        <div class="signature-item handler-signature">经手人：</div>
+        <div class="signature-item receiver-signature">收货单位(签章)：<span class="signature-line"></span></div>
+      </section>
+      <div class="opened-at">开单时间：<span data-field="createdAt"></span></div>
+    </footer>
   </main>
   </template>
   <div id="sheets" class="sheets" hidden></div>

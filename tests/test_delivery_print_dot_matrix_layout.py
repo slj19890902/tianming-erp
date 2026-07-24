@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRINT_PAGE = PROJECT_ROOT / "static" / "delivery-print.html"
+
+
+def _source() -> str:
+    return PRINT_PAGE.read_text(encoding="utf-8")
+
+
+def _css_block(source: str, selector: str) -> str:
+    match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\}}", source, re.S)
+    assert match is not None, f"missing CSS selector: {selector}"
+    return match.group("body")
+
+
+def test_header_and_footer_remove_unneeded_dot_matrix_rules() -> None:
+    source = _source()
+
+    for selector in (".factory-address", ".meta-value", ".copies", ".remark-notes"):
+        assert "border-top" not in _css_block(source, selector)
+        assert "border-bottom" not in _css_block(source, selector)
+
+    assert "border-bottom: 1px solid #111" not in _css_block(
+        source, ".signature-line"
+    )
+    assert "border-bottom: 1px solid #111" in _css_block(
+        source, ".receiver-signature .signature-line"
+    )
+
+
+def test_signature_fields_share_one_row_in_requested_order() -> None:
+    source = _source()
+    signatures = re.search(
+        r'<section class="signatures">(?P<body>.*?)</section>',
+        source,
+        re.S,
+    )
+    assert signatures is not None
+    body = signatures.group("body")
+
+    assert body.index("送货人：") < body.index("经手人：") < body.index(
+        "收货单位(签章)："
+    )
+    assert body.count('class="signature-line"') == 1
+    assert "grid-template-columns: 1fr 1.5fr 1fr" in source
+
+
+def test_print_fonts_are_one_step_larger_without_adding_a_blank_page() -> None:
+    source = _source()
+
+    assert "font-size: 21px" in _css_block(source, ".company")
+    assert "font-size: 18px" in _css_block(source, ".document-title")
+    assert "font-size: 12px" in _css_block(source, ".meta")
+    assert "font-size: 13px" in _css_block(source, ".total")
+    assert "font-size: 11px" in _css_block(source, ".signatures")
+
+    assert "height: calc(var(--paper-height) - 0.5mm)" in source
+    assert "page-break-inside: avoid" in source
+    assert ".sheet:not(:last-child)" in source
+    assert ".sheet:last-child" in source
+    assert "display: flex" in _css_block(source, ".sheet")
+    assert "flex-direction: column" in _css_block(source, ".sheet")
+    assert "margin-top: auto" in _css_block(source, ".print-footer")
+    assert (
+        "height: calc(var(--paper-height) - 0.5mm)"
+        in _css_block(source, ".sheet")
+    )
+
+
+def test_delivery_print_inline_javascript_is_syntactically_valid(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required for the print-page contract test"
+
+    scripts = [
+        script
+        for script in re.findall(
+            r"<script(?:\s[^>]*)?>(.*?)</script>",
+            _source(),
+            re.DOTALL,
+        )
+        if script.strip()
+    ]
+    assert len(scripts) == 1
+
+    target = tmp_path / "delivery-print-inline.js"
+    target.write_text(scripts[0], encoding="utf-8")
+    result = subprocess.run(
+        [node, "--check", str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stderr

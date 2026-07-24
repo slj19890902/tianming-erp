@@ -57,4 +57,5 @@ qa-screenshots/
 qa_screenshots/
 migration-reports/
 migration-workfiles/
+/tmp/
 reference_screenshots_contact_sheet.jpg

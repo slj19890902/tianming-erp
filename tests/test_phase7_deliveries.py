@@ -259,7 +259,7 @@ def test_create_combined_delivery_then_partial_dispatch_once(
         repeated = client.put(f"/api/deliveries/{delivery_id}/dispatch")
 
     assert created.status_code == 201, created.text
-    assert created.json()["delivery_number"] == "TM-20260613-001"
+    assert created.json()["delivery_number"] == "SME-20260613-001"
     assert created.json()["total_quantity"] == 70
     assert dispatched.status_code == 200
     assert dispatched.json()["status"] == "dispatched"
@@ -675,7 +675,7 @@ def test_print_response_contains_no_financial_fields(delivery_api_app) -> None:
     assert response.json()["items"][0]["unit"] == "PCS"
 
 
-def test_new_delivery_uses_tm_number_without_changing_historical_dh(
+def test_new_delivery_uses_customer_prefix_without_changing_historical_dh(
     delivery_api_app,
 ) -> None:
     from app.models.delivery import Delivery
@@ -699,7 +699,7 @@ def test_new_delivery_uses_tm_number_without_changing_historical_dh(
         created = client.post("/api/deliveries", json=_create_payload())
 
     assert created.status_code == 201, created.text
-    assert created.json()["delivery_number"] == "TM-20260613-001"
+    assert created.json()["delivery_number"] == "SME-20260613-001"
     with session_factory() as session:
         assert session.get(Delivery, historical_id).delivery_number == "DH-20260612-001"
 
@@ -760,7 +760,7 @@ def test_delivery_list_returns_customer_and_line_details(
 
     assert listed.status_code == 200, listed.text
     row = listed.json()["items"][0]
-    assert row["delivery_number"].startswith("TM-")
+    assert row["delivery_number"].startswith("SME-")
     assert row["customer_name"]
     assert row["items"][0]["order_item_id"] == 1
     assert row["return_receipt_status"] is None

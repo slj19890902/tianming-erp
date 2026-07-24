@@ -23,6 +23,7 @@ from app.models.tianhua_pre_delivery import (
 )
 from app.models.user import User
 from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, ensure_draft_delivery, save_draft
+from app.services.delivery_numbering import DeliveryNumberingError
 from app.services.secure_uploads import IMAGE_POLICY, UploadValidationError, read_validated_upload
 
 router=APIRouter()
@@ -94,6 +95,7 @@ def _save(batch_id,payload,db,user,update):
         draft=save_draft(db,_batch_for_user(db,batch_id,user),[x.model_dump() for x in payload.items],payload.remark,user.id,update)
         return draft_dict(db,draft)
     except RuntimeError as e: db.rollback(); raise HTTPException(409,str(e)) from e
+    except DeliveryNumberingError as e: db.rollback(); raise HTTPException(409,str(e)) from e
     except ValueError as e: db.rollback(); raise HTTPException(400,str(e)) from e
 
 

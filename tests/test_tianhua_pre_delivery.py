@@ -35,7 +35,7 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
     engine=create_sqlite_engine(tmp_path/"db.sqlite3");Base.metadata.create_all(engine);factory=sessionmaker(bind=engine,expire_on_commit=False)
     with factory() as db:
         u=User(username="admin",password_hash=hash_password("RolePass123!"),role="admin",real_name="管理员",display_name="管理员",must_change_password=False)
-        c=Customer(customer_number=5,customer_code="天华",name="苏州天华超净科技股份有限公司",credit_limit=Decimal("0"))
+        c=Customer(customer_number=5,customer_code="TH",name="苏州天华超净科技股份有限公司",credit_limit=Decimal("0"))
         db.add_all([u,c]);db.flush()
         p=Product(customer_id=c.id,product_code="21301877",customer_material_code="21301877",product_name="测试",box_category="normal")
         db.add(p);db.flush()
@@ -84,7 +84,7 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
     assert duplicate_line.status_code==400
     assert [response.status_code for response in blocked_responses]==[400,400]
     assert first.status_code==201 and second.status_code==409
-    assert first.json()["delivery_number"].startswith("TM-")
+    assert first.json()["delivery_number"].startswith("TH-")
     assert first.json()["items"][0]["order_id"] == 1
     assert first.json()["items"][0]["order_no"] == "TH-1"
     with factory() as db:

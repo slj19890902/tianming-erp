@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,10 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.delivery_numbering import (
+    DeliveryNumberingError,
+    next_delivery_number,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
@@ -388,24 +392,6 @@ class ForceCloseRequest(BaseModel):
         if not reason:
             raise ValueError("强制结案原因不能为空")
         return reason
-
-
-def _next_delivery_number(db: Session, delivery_date: date) -> str:
-    sequence = db.execute(
-        text(
-            """
-            INSERT INTO delivery_daily_sequences (sequence_date, last_value)
-            VALUES (:sequence_date, 1)
-            ON CONFLICT(sequence_date)
-            DO UPDATE SET last_value = last_value + 1
-            RETURNING last_value
-            """
-        ),
-        {"sequence_date": delivery_date.isoformat()},
-    ).scalar_one()
-    if sequence > 999:
-        raise HTTPException(status_code=409, detail="当日送货单流水号已超过999")
-    return f"TM-{delivery_date:%Y%m%d}-{sequence:03d}"
 
 
 def _pending_query(
@@ -1936,12 +1922,17 @@ def create_delivery(
     user: User = Depends(can_operate),
 ) -> dict:
     require_customer_access(payload.customer_id, user, db)
-    if db.get(Customer, payload.customer_id) is None:
+    customer = db.get(Customer, payload.customer_id)
+    if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     delivery_date = payload.delivery_date or beijing_today()
     try:
         delivery = Delivery(
-            delivery_number=_next_delivery_number(db, delivery_date),
+            delivery_number=next_delivery_number(
+                db,
+                customer=customer,
+                delivery_date=delivery_date,
+            ),
             customer_id=payload.customer_id,
             delivery_date=delivery_date,
             vehicle_number=(payload.vehicle_number or "").strip() or None,
@@ -1999,6 +1990,9 @@ def create_delivery(
         response = _delivery_response(db, delivery.id)
         response["warnings"] = warnings
         return response
+    except DeliveryNumberingError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except HTTPException:
         db.rollback()
         raise

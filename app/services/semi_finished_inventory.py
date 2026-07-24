@@ -32,6 +32,7 @@ from app.services.warehouse_inventory import (
     component_effective_required_piece_qty,
     component_inventory_coverage,
     consume_finished_reservation,
+    inventory_fifo_order_columns,
     normalize_material_code,
     replace_semi_finished_lot_allowed_products,
     reverse_finished_consumption,
@@ -535,7 +536,7 @@ def browse_semi_finished_inventory_for_product(
             ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
-        .order_by(InventoryLot.stock_date, InventoryLot.id)
+        .order_by(*inventory_fifo_order_columns())
     ).all()
     allowed_lot_ids = _allowed_lot_ids_for_product(db, product.id)
     candidates: list[SemiFinishedCandidate] = []
@@ -613,7 +614,7 @@ def _semi_finished_candidates_for_signature(
             ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
-        .order_by(InventoryLot.stock_date, InventoryLot.id)
+        .order_by(*inventory_fifo_order_columns())
     ).all()
     allowed_lot_ids = _allowed_lot_ids_for_product(db, product_id)
     candidates: list[SemiFinishedCandidate] = []
@@ -714,10 +715,7 @@ def browse_semi_finished_inventory(
             ),
             SemiFinishedInventoryDetail.component_type == requirement.component_type,
         )
-        .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
-        )
+        .order_by(*inventory_fifo_order_columns())
     ).all()
     product_id = _requirement_product_id(db, requirement)
     expected = requirement_signature(requirement)
@@ -1079,8 +1077,7 @@ def _finished_reservations_for_delivery(
             + InventoryReservation.released_stock_quantity,
         )
         .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()
@@ -1102,8 +1099,7 @@ def _semi_reservations_for_delivery(
             + InventoryReservation.released_stock_quantity,
         )
         .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()
@@ -1653,7 +1649,7 @@ def reserve_semi_finished_inventory(
         inventory_lots = db.scalars(
             select(InventoryLot)
             .where(InventoryLot.id.in_(expected_versions))
-            .order_by(InventoryLot.stock_date, InventoryLot.id)
+            .order_by(*inventory_fifo_order_columns())
         ).all()
         if len(inventory_lots) != len(expected_versions):
             raise WarehouseInventoryError("所选半成品库存批次不存在", 404)

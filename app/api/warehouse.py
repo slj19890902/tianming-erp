@@ -434,6 +434,8 @@ class FinishedManualInPayload(BaseModel):
     location_id: int
     quantity: int = Field(gt=0)
     stock_date: date
+    stock_date_accuracy: Literal["exact", "estimated", "unknown"] = "exact"
+    stock_date_original_text: str | None = Field(default=None, max_length=100)
     source_type: str = "manual"
     remarks: str | None = None
     idempotency_key: str | None = Field(default=None, max_length=100)
@@ -454,6 +456,7 @@ class FinishedLotEditPayload(BaseModel):
     quantity_available: int = Field(ge=0)
     location_id: int = Field(gt=0)
     stock_date: date
+    confirm_stock_date_exact: bool = False
     idempotency_key: str = Field(min_length=1, max_length=100)
 
     @field_validator("idempotency_key")
@@ -475,6 +478,8 @@ class SemiFinishedManualInPayload(BaseModel):
     location_id: int
     quantity: int = Field(gt=0)
     stock_date: date
+    stock_date_accuracy: Literal["exact", "estimated", "unknown"] = "exact"
+    stock_date_original_text: str | None = Field(default=None, max_length=100)
     source_type: str = "manual"
     material_code: str = Field(min_length=1, max_length=100)
     layer_count: int
@@ -1243,6 +1248,8 @@ def _lot_dict(row: InventoryLot) -> dict:
         "status": row.status,
         "source_type": row.source_type,
         "stock_date": row.stock_date,
+        "stock_date_accuracy": row.stock_date_accuracy,
+        "stock_date_original_text": row.stock_date_original_text,
         "last_movement_at": utc_naive_to_api(row.last_movement_at),
         "version": row.version,
         "remarks": row.remarks,
@@ -1476,6 +1483,7 @@ def finished_candidates(
                     ),
                     "quantity_available": lot.quantity_available,
                     "stock_date": lot.stock_date,
+                    "stock_date_accuracy": lot.stock_date_accuracy,
                     "last_movement_at": utc_naive_to_api(lot.last_movement_at),
                     "warning_codes": (
                         ["GENERAL_FINISHED_STOCK"]
@@ -3984,8 +3992,11 @@ def list_lots(
         )
     if stale_level:
         days = {"attention": 365, "handling": 548, "cleanup": 730}.get(stale_level)
-        if days:
+        if stale_level == "unknown":
+            query = query.where(InventoryLot.stock_date_accuracy == "unknown")
+        elif days:
             query = query.where(
+                InventoryLot.stock_date_accuracy != "unknown",
                 InventoryLot.stock_date <= beijing_today() - timedelta(days=days)
             )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
@@ -4012,7 +4023,14 @@ _INSIGHT_OPERATIONAL_SUMMARY_FIELDS = frozenset(
         "total_scrapped",
     }
 )
-_INSIGHT_OPERATIONAL_QUALITY_FIELDS = frozenset({"active_location_lots"})
+_INSIGHT_OPERATIONAL_QUALITY_FIELDS = frozenset(
+    {
+        "active_location_lots",
+        "exact_stock_date_lots",
+        "estimated_stock_date_lots",
+        "unknown_stock_date_lots",
+    }
+)
 _INSIGHT_OPERATIONAL_TYPE_FIELDS = frozenset(
     {"lots", "available", "reserved", "damaged", "scrapped"}
 )
@@ -4067,6 +4085,8 @@ _INSIGHT_OPERATIONAL_REASON_CODES = frozenset(
         "age_handling",
         "age_attention",
         "age_slow",
+        "stock_date_unknown",
+        "stock_date_estimated",
         "location_unavailable",
     }
 )

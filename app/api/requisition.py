@@ -90,6 +90,7 @@ from app.services.warehouse_inventory import (
     active_finished_reservations_by_item_ids,
     component_inventory_coverage,
     has_unconsumed_inventory_reservations,
+    inventory_fifo_sort_key,
     normalize_material_code,
     release_active_finished_reservations_for_items,
 )
@@ -6826,7 +6827,7 @@ def reserve_semi_inventory_from_pending(
             for lot in inventory_lots
         ):
             raise HTTPException(status_code=403, detail="无客户库存访问权限")
-        inventory_lots.sort(key=lambda row: (row.stock_date, row.id))
+        inventory_lots.sort(key=inventory_fifo_sort_key)
         first_detail = inventory_lots[0].semi_finished_detail
         if first_detail is None:
             raise HTTPException(status_code=409, detail="所选批次不是半成品库存")

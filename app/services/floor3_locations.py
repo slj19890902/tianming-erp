@@ -497,10 +497,18 @@ def _build_item(
             product_id=int(product_id),
             customer_id=int(customer_id) if customer_id is not None else None,
         )
-        customer_id = customer.id
         inventory_code = product.product_code or product.customer_material_code
         product_name = product.product_name
-        customer_name_snapshot = customer.name
+        if (
+            inventory_lot is not None
+            and inventory_lot.finished_detail is not None
+            and inventory_lot.finished_detail.is_general
+        ):
+            customer_id = None
+            customer_name_snapshot = None
+        else:
+            customer_id = customer.id
+            customer_name_snapshot = customer.name
         match_status = "matched"
     else:
         if match_status != "pending":

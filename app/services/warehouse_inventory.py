@@ -49,6 +49,9 @@ class WarehouseInventoryError(ValueError):
         self.status_code = status_code
 
 
+STOCK_DATE_ACCURACIES = frozenset({"exact", "estimated", "unknown"})
+
+
 SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
     3: frozenset({"A", "B", "E"}),
     5: frozenset({"AB", "BE"}),
@@ -58,7 +61,7 @@ SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
 
 @dataclass(frozen=True)
 class AgeWarning:
-    days: int
+    days: int | None
     level: str | None
     text: str | None
 
@@ -82,15 +85,53 @@ def normalize_material_code(value: str | None) -> str:
     return normalized
 
 
+def normalize_stock_date_metadata(
+    *,
+    stock_date: date,
+    stock_date_accuracy: str = "exact",
+    stock_date_original_text: str | None = None,
+) -> tuple[str, str | None]:
+    accuracy = (stock_date_accuracy or "").strip().lower()
+    if accuracy not in STOCK_DATE_ACCURACIES:
+        raise WarehouseInventoryError(
+            "入库日期可信度必须为 exact、estimated 或 unknown"
+        )
+    original = (stock_date_original_text or "").strip() or None
+    if accuracy == "exact":
+        if original is not None:
+            try:
+                parsed = date.fromisoformat(original)
+            except ValueError as error:
+                raise WarehouseInventoryError(
+                    "精确入库日期原文必须使用 YYYY-MM-DD"
+                ) from error
+            if parsed != stock_date:
+                raise WarehouseInventoryError(
+                    "精确入库日期原文与入库日期不一致"
+                )
+        original = original or stock_date.isoformat()
+    elif accuracy == "unknown":
+        # A non-null marker distinguishes a deliberate post-migration
+        # "unknown" fact from legacy rows backfilled as unknown + NULL.
+        original = original or "未提供"
+    return accuracy, original
+
+
 def inventory_age_warning(lot: InventoryLot, *, today: date | None = None) -> AgeWarning:
+    accuracy = getattr(lot, "stock_date_accuracy", "exact") or "unknown"
+    if accuracy == "unknown":
+        return AgeWarning(None, "unknown", "入库日期不明，不能按精确库龄判断")
     current = today or beijing_today()
     days = max((current - lot.stock_date).days, 0)
+    estimated_prefix = "估算" if accuracy == "estimated" else ""
     if days >= 730:
-        return AgeWarning(days, "cleanup", "库龄超过2年，请盘点并处理")
+        return AgeWarning(days, "cleanup", f"{estimated_prefix}库龄超过2年，请盘点并处理")
     if days >= 548:
-        return AgeWarning(days, "handling", "库龄超过18个月，请安排处理")
+        return AgeWarning(days, "handling", f"{estimated_prefix}库龄超过18个月，请安排处理")
     if days >= 365:
-        return AgeWarning(days, "attention", "库龄超过1年，请重点关注")
+        return AgeWarning(days, "attention", f"{estimated_prefix}库龄超过1年，请重点关注")
+    if accuracy == "estimated":
+        return AgeWarning(days, "estimated", "入库日期为估算值，库龄仅供参考")
     return AgeWarning(days, None, None)
 
 
@@ -146,6 +187,27 @@ def _balances(lot: InventoryLot) -> dict[str, int]:
     }
 
 
+def inventory_fifo_order_columns() -> tuple:
+    """Order trustworthy/estimated dates first and unknown technical dates last."""
+    return (
+        case(
+            (InventoryLot.stock_date_accuracy == "unknown", 1),
+            else_=0,
+        ),
+        InventoryLot.stock_date,
+        InventoryLot.id,
+    )
+
+
+def inventory_fifo_sort_key(lot: InventoryLot) -> tuple:
+    """Mirror the SQL FIFO rule for lots already loaded into Python."""
+    return (
+        1 if (lot.stock_date_accuracy or "unknown") == "unknown" else 0,
+        lot.stock_date,
+        lot.id,
+    )
+
+
 def _movement(
     db: Session,
     *,
@@ -197,7 +259,7 @@ def _movement(
 def manual_finished_in(
     db: Session,
     *,
-    customer_id: int,
+    customer_id: int | None,
     product_id: int,
     location_id: int,
     quantity: int,
@@ -212,6 +274,9 @@ def manual_finished_in(
     pallet_code: str | None = None,
     require_empty_pallet: bool = False,
     movement_reason: str = "手工成品入库",
+    stock_date_accuracy: str = "exact",
+    stock_date_original_text: str | None = None,
+    is_general: bool = False,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -219,14 +284,19 @@ def manual_finished_in(
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
     location = _location(db, location_id, "finished")
-    customer = db.get(Customer, customer_id)
+    customer = db.get(Customer, customer_id) if customer_id is not None else None
     product = db.get(Product, product_id)
-    if customer is None:
+    if not is_general and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("产品不存在", 404)
-    if product.customer_id != customer_id:
+    if not is_general and product.customer_id != customer_id:
         raise WarehouseInventoryError("所选产品不属于该客户")
+    date_accuracy, date_original_text = normalize_stock_date_metadata(
+        stock_date=stock_date,
+        stock_date_accuracy=stock_date_accuracy,
+        stock_date_original_text=stock_date_original_text,
+    )
     now = utc_now_naive()
     material_code = (
         product.material.code if product.material is not None else product.default_material_code
@@ -242,6 +312,8 @@ def manual_finished_in(
         source_ref_type=source_ref_type,
         source_ref_id=source_ref_id,
         stock_date=stock_date,
+        stock_date_accuracy=date_accuracy,
+        stock_date_original_text=date_original_text,
         last_movement_at=now,
         remarks=remarks,
         created_by=operator_id,
@@ -259,9 +331,11 @@ def manual_finished_in(
     db.add(lot)
     db.flush()
     lot.finished_detail = FinishedGoodsInventoryDetail(
-        owner_customer_id=customer.id,
-        owner_customer_name_snapshot=customer.name,
-        is_general=False,
+        owner_customer_id=customer.id if customer is not None and not is_general else None,
+        owner_customer_name_snapshot=(
+            customer.name if customer is not None and not is_general else None
+        ),
+        is_general=is_general,
         product_id=product.id,
         inventory_code_snapshot=product.product_code,
         product_name_snapshot=product.product_name,
@@ -589,8 +663,7 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
         )
         .order_by(
             FinishedGoodsInventoryDetail.is_general,
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
         )
     ).all()
 
@@ -622,10 +695,7 @@ def finished_inventory_candidates_for_product(
             FinishedGoodsInventoryDetail.inventory_code_snapshot
             == product.product_code,
         )
-        .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
-        )
+        .order_by(*inventory_fifo_order_columns())
     ).all()
 
 
@@ -1014,8 +1084,7 @@ def reserve_finished_surplus_for_delivery(
                 ),
                 else_=1,
             ),
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
         )
     ).all()
     remaining = quantity
@@ -1525,6 +1594,9 @@ def manual_semi_finished_in(
     source_ref_type: str | None = None,
     source_ref_id: int | None = None,
     material_id: int | None = None,
+    movement_reason: str = "手工半成品入库",
+    stock_date_accuracy: str = "exact",
+    stock_date_original_text: str | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -1560,6 +1632,11 @@ def manual_semi_finished_in(
     customer = db.get(Customer, customer_id) if customer_id else None
     if customer_id and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)
+    date_accuracy, date_original_text = normalize_stock_date_metadata(
+        stock_date=stock_date,
+        stock_date_accuracy=stock_date_accuracy,
+        stock_date_original_text=stock_date_original_text,
+    )
     now = utc_now_naive()
     lot = InventoryLot(
         lot_number=_number("SI"),
@@ -1572,6 +1649,8 @@ def manual_semi_finished_in(
         source_ref_type=source_ref_type,
         source_ref_id=source_ref_id,
         stock_date=stock_date,
+        stock_date_accuracy=date_accuracy,
+        stock_date_original_text=date_original_text,
         last_movement_at=now,
         remarks=remarks,
         created_by=operator_id,
@@ -1620,7 +1699,7 @@ def manual_semi_finished_in(
         quantity=quantity,
         before={key: 0 for key in _balances(lot)},
         operator_id=operator_id,
-        reason="手工半成品入库",
+        reason=movement_reason,
         remarks=remarks,
         idempotency_key=idempotency_key,
     )
@@ -1914,6 +1993,7 @@ def _finished_lot_edit_request(
     quantity_available: int,
     location_id: int,
     stock_date: date,
+    confirm_stock_date_exact: bool,
 ) -> dict[str, object]:
     return {
         "expected_version": expected_version,
@@ -1923,6 +2003,7 @@ def _finished_lot_edit_request(
         "quantity_available": quantity_available,
         "location_id": location_id,
         "stock_date": stock_date.isoformat(),
+        "confirm_stock_date_exact": confirm_stock_date_exact,
     }
 
 
@@ -2008,6 +2089,7 @@ def edit_finished_lot(
     stock_date: date,
     operator_id: int | None,
     idempotency_key: str,
+    confirm_stock_date_exact: bool = False,
 ) -> InventoryLot:
     """Edit one formal finished-goods lot and its physical projection atomically."""
     idempotency_key = idempotency_key.strip()
@@ -2023,6 +2105,7 @@ def edit_finished_lot(
         quantity_available=quantity_available,
         location_id=location_id,
         stock_date=stock_date,
+        confirm_stock_date_exact=confirm_stock_date_exact,
     )
     existing = _idempotent_finished_lot_edit(
         db,
@@ -2114,6 +2197,21 @@ def edit_finished_lot(
         lot.stock_date.isoformat(),
         stock_date.isoformat(),
     )
+    stock_date_changed = lot.stock_date != stock_date
+    stock_date_confirmed = stock_date_changed or confirm_stock_date_exact
+    if stock_date_confirmed:
+        _edit_change(
+            changes,
+            "stock_date_accuracy",
+            lot.stock_date_accuracy,
+            "exact",
+        )
+        _edit_change(
+            changes,
+            "stock_date_original_text",
+            lot.stock_date_original_text,
+            stock_date.isoformat(),
+        )
 
     before = _balances(lot)
     location_changed = lot.warehouse_location_id != target_location.id
@@ -2137,6 +2235,14 @@ def edit_finished_lot(
             raise WarehouseInventoryError("目标三楼货位已被其它真实栈板占用", 409)
 
     now = utc_now_naive()
+    stock_date_values = (
+        {
+            "stock_date_accuracy": "exact",
+            "stock_date_original_text": stock_date.isoformat(),
+        }
+        if stock_date_confirmed
+        else {}
+    )
     if location_changed and pallet is not None:
         from app.services.floor3_locations import Floor3LocationError, move_pallet
 
@@ -2165,6 +2271,7 @@ def edit_finished_lot(
                 quantity_available=quantity_available,
                 stock_date=stock_date,
                 last_movement_at=now,
+                **stock_date_values,
             )
         )
     else:
@@ -2180,6 +2287,7 @@ def edit_finished_lot(
                 stock_date=stock_date,
                 version=expected_version + 1,
                 last_movement_at=now,
+                **stock_date_values,
             )
         )
     if result.rowcount != 1:

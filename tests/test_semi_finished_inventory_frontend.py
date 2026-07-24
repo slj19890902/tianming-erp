@@ -294,14 +294,15 @@ def test_api_failures_block_but_incomplete_signature_can_be_skipped() -> None:
     assert "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品" in INDEX
     assert "if (reason) state.semi[component].unavailable_reason = reason" in INDEX
     assert "if (part.unavailable_reason && !part.skipped)" in INDEX
+    assert "if (state.semi[component].unavailable_reason) state.semi[component].skipped = true" in INDEX
 
 
 def test_multi_lot_plans_and_zero_allocations_use_allocation_records() -> None:
     assert "state.finished.allocations.map" in INDEX
     assert "state.semi[component].allocations.map" in INDEX
     assert "推荐批次已无可分配库存" in INDEX
-    assert "确认系统推荐" in INDEX
-    assert "实际计划" in INDEX
+    assert "采用安全推荐" in INDEX
+    assert "系统已安排" in INDEX
 
 
 def test_semi_plan_warnings_and_line_removal_reallocation_are_explicit() -> None:
@@ -334,12 +335,22 @@ def test_pdf_direct_save_carries_the_same_reservation_plan() -> None:
     assert "reservation_plan: this.buildReservationPlan(item)" in source
 
 
-def test_new_and_pdf_order_quantity_cells_share_safe_inventory_confirmation() -> None:
-    assert INDEX.count('class="btn small success inventory-recommend-button"') == 2
-    assert INDEX.count('@click="confirmSafeOrderLineInventoryRecommendations(item)"') == 2
-    assert INDEX.count('v-if="hasSafeOrderLineInventoryRecommendation(item)"') == 2
+def test_new_and_pdf_order_quantity_cells_share_automatic_inventory_summary() -> None:
+    assert 'class="btn small success inventory-recommend-button"' not in INDEX
+    assert '@click="confirmSafeOrderLineInventoryRecommendations(item)"' not in INDEX
+    assert INDEX.count("orderLineInventoryAutoSummary(item)") == 2
+    assert INDEX.count("orderLineInventoryNeedsAttention(item)") >= 4
+    assert INDEX.count("查看库存安排") == 2
+    assert "下单${orderQuantity}" in INDEX
+    assert "现有成品${availableFinished}" in INDEX
+    assert "自动预占${reservedFinished}" in INDEX
+    assert "需生产${productionRequired}" in INDEX
     assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
     assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
+    load = INDEX.split("async loadOrderLineInventory(line, customerId) {", 1)[1].split(
+        "async loadOrderLineManualInventory", 1
+    )[0]
+    assert "this.confirmSafeOrderLineInventoryRecommendations?.(line);" in load
     confirm = INDEX.split("confirmOrderLineInventory(line, component", 1)[1].split(
         "skipOrderLineInventory", 1
     )[0]
@@ -399,6 +410,67 @@ if (reallocations !== 1) throw new Error(`expected one reallocation, got ${{real
 line._inventory.semi.whole.manual_override = true;
 methods.confirmOrderLineInventory.call(context,line,"whole",{{lot_id:6,source:"manual",signature_differences:["尺寸"]}},true);
 if (line._inventory.semi.whole.selected_candidates[0].lot_id !== 6 || reallocations !== 2) throw new Error("manual override path was not preserved");
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_loading_inventory_automatically_selects_only_safe_candidates() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for automatic inventory recommendation test"
+    script = next(
+        script
+        for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    )
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const methods = sandbox.definition.methods;
+const dedicated = {{lot_id:11,version:3,quantity_available:8,warning_codes:[],warehouse_location:{{location_code:"E1-L09"}}}};
+const generalSemi = {{lot_id:12,version:1,source:"general_signature",available_stock_quantity:20,warning_codes:["GENERAL_SEMI_FINISHED_STOCK"]}};
+sandbox.axios.get = async url => url.includes("/api/master/products/")
+  ? {{data:{{id:99,box_style:"A1",report_length_mm:100,report_width_mm:200,material_code:"C4C",flute_type:"B",pieces_per_box:1}}}}
+  : {{data:{{items:[dedicated]}}}};
+sandbox.axios.post = async () => ({{data:{{items:[generalSemi]}}}});
+const line = {{product_id:99,quantity:5}};
+let reallocations = 0;
+const context = {{
+  inventoryCustomerForLine:() => 7,
+  newOrderInventoryState:methods.newOrderInventoryState,
+  inventoryComponents:() => ["whole"],
+  inventoryCandidatePayload:methods.inventoryCandidatePayload,
+  inventoryPayloadUnavailableReason:methods.inventoryPayloadUnavailableReason,
+  componentLabel:methods.componentLabel,
+  errorMessage:error => error.message,
+  inventoryStateMatchesLine:() => true,
+  inventoryCandidateWarnings:methods.inventoryCandidateWarnings,
+  semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
+  isSafeSystemInventoryCandidate:methods.isSafeSystemInventoryCandidate,
+  safeSystemInventoryCandidates:methods.safeSystemInventoryCandidates,
+  hasSafeOrderLineInventoryRecommendation:methods.hasSafeOrderLineInventoryRecommendation,
+  confirmSafeOrderLineInventoryRecommendations:methods.confirmSafeOrderLineInventoryRecommendations,
+  invalidatePdfDraftForItem() {{}},
+  reallocateAllDraftInventory() {{ reallocations += 1; }},
+}};
+(async () => {{
+  await methods.loadOrderLineInventory.call(context,line,7);
+  const finishedIds = line._inventory.finished.selected_candidates.map(row => row.lot_id);
+  const semiIds = line._inventory.semi.whole.selected_candidates.map(row => row.lot_id);
+  if (JSON.stringify(finishedIds) !== JSON.stringify([11])) throw new Error(`safe finished inventory was not selected: ${{JSON.stringify(finishedIds)}}`);
+  if (semiIds.length) throw new Error(`general semi-finished inventory must stay manual: ${{JSON.stringify(semiIds)}}`);
+  if (reallocations < 1) throw new Error("automatic selection did not recalculate the plan");
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
     result = subprocess.run(
         [node], input=harness, text=True, encoding="utf-8", capture_output=True,

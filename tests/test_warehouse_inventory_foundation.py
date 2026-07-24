@@ -27,6 +27,7 @@ from app.models.warehouse_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     edit_finished_lot,
+    finished_inventory_candidates_for_product,
     inventory_age_warning,
     manual_finished_in,
     manual_semi_finished_in,
@@ -162,6 +163,8 @@ def test_finished_manual_in_snapshots_product_and_writes_movement(db: Session) -
     db.flush()
     assert lot.quantity_available == 20
     assert lot.unit == "boxes"
+    assert lot.stock_date_accuracy == "exact"
+    assert lot.stock_date_original_text == lot.stock_date.isoformat()
     assert lot.finished_detail.inventory_code_snapshot == "WH-P001"
     assert lot.finished_detail.material_code_snapshot == "A416D"
     assert lot.finished_detail.flute_type_snapshot == "BE"
@@ -190,6 +193,48 @@ def test_manual_in_is_idempotent(db: Session) -> None:
     )
     assert first.id == second.id
     assert db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key == "same-key")).after_available == 20
+
+
+def test_unknown_technical_date_sorts_after_trustworthy_fifo_dates(
+    db: Session,
+) -> None:
+    customer, product = seed_product(db)
+    location = seed_location(db)
+    unknown = manual_finished_in(
+        db,
+        customer_id=customer.id,
+        product_id=product.id,
+        location_id=location.id,
+        quantity=5,
+        stock_date=date(2020, 1, 1),
+        stock_date_accuracy="unknown",
+        stock_date_original_text=None,
+        source_type="stocktake",
+        remarks=None,
+        operator_id=None,
+        idempotency_key="unknown-fifo-lot",
+    )
+    exact = manual_finished_in(
+        db,
+        customer_id=customer.id,
+        product_id=product.id,
+        location_id=location.id,
+        quantity=5,
+        stock_date=date(2026, 7, 1),
+        source_type="manual",
+        remarks=None,
+        operator_id=None,
+        idempotency_key="exact-fifo-lot",
+    )
+
+    rows = finished_inventory_candidates_for_product(
+        db,
+        customer_id=customer.id,
+        product_id=product.id,
+    )
+
+    assert [row.id for row in rows] == [exact.id, unknown.id]
+    assert unknown.stock_date_original_text == "未提供"
 
 
 def test_freeze_blocks_quantity_changes_then_unfreeze_allows_adjustment(db: Session) -> None:
@@ -462,6 +507,8 @@ def test_edit_finished_lot_keeps_identity_balances_while_editing_quantity_locati
     assert getattr(edited, balance_field) == 7
     assert edited.warehouse_location_id == target.id
     assert edited.stock_date == date(2026, 6, 30)
+    assert edited.stock_date_accuracy == "exact"
+    assert edited.stock_date_original_text == "2026-06-30"
     assert edited.last_movement_at > before_last_movement
     assert inventory_age_warning(edited, today=date(2026, 7, 16)).days == 16
     assert edited.version == 2
@@ -481,6 +528,67 @@ def test_edit_finished_lot_keeps_identity_balances_while_editing_quantity_locati
         assert (movement.before_reserved, movement.after_reserved) == (7, 7)
     else:
         assert (movement.before_consumed, movement.after_consumed) == (7, 7)
+
+
+def test_edit_finished_lot_preserves_unknown_accuracy_when_date_is_unchanged(
+    db: Session,
+) -> None:
+    lot = finished_lot(db)
+    lot.stock_date_accuracy = "unknown"
+    lot.stock_date_original_text = None
+    db.flush()
+
+    edited = edit_finished_lot(
+        db,
+        lot_id=lot.id,
+        expected_version=lot.version,
+        is_general=False,
+        customer_id=lot.finished_detail.owner_customer_id,
+        product_id=lot.finished_detail.product_id,
+        quantity_available=19,
+        location_id=lot.warehouse_location_id,
+        stock_date=lot.stock_date,
+        operator_id=None,
+        idempotency_key="edit-preserve-unknown-date",
+    )
+
+    assert edited.stock_date_accuracy == "unknown"
+    assert edited.stock_date_original_text is None
+    assert inventory_age_warning(edited).days is None
+
+
+def test_edit_finished_lot_can_explicitly_confirm_an_unchanged_technical_date(
+    db: Session,
+) -> None:
+    lot = finished_lot(db)
+    lot.stock_date_accuracy = "unknown"
+    lot.stock_date_original_text = None
+    db.flush()
+
+    edited = edit_finished_lot(
+        db,
+        lot_id=lot.id,
+        expected_version=lot.version,
+        is_general=False,
+        customer_id=lot.finished_detail.owner_customer_id,
+        product_id=lot.finished_detail.product_id,
+        quantity_available=lot.quantity_available,
+        location_id=lot.warehouse_location_id,
+        stock_date=lot.stock_date,
+        operator_id=None,
+        idempotency_key="edit-confirm-technical-date",
+        confirm_stock_date_exact=True,
+    )
+
+    assert edited.stock_date_accuracy == "exact"
+    assert edited.stock_date_original_text == edited.stock_date.isoformat()
+    movement = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == "edit-confirm-technical-date"
+        )
+    )
+    assert movement is not None
+    assert "stock_date_accuracy" in movement.remarks
 
 
 def test_edit_finished_lot_moves_bound_floor3_pallet_and_projection(
@@ -667,6 +775,8 @@ def test_semi_finished_records_physical_sheets_without_rotation_or_yield(db: Ses
     )
     assert lot.quantity_available == 2
     assert lot.unit == "sheets"
+    assert lot.stock_date_accuracy == "exact"
+    assert lot.stock_date_original_text == lot.stock_date.isoformat()
     assert lot.semi_finished_detail.board_length_mm == 800
     assert lot.semi_finished_detail.board_width_mm == 600
     assert lot.semi_finished_detail.cutting_note == "宽向一开三，仅记录"
@@ -806,6 +916,9 @@ def test_edit_finished_lot_api_is_admin_only(tmp_path: Path) -> None:
             operator_id=admin.id,
             idempotency_key="edit-api-manual-in",
         )
+        lot.stock_date = date.today() - timedelta(days=1000)
+        lot.stock_date_accuracy = "unknown"
+        lot.stock_date_original_text = None
         db.commit()
         ids = {
             "admin": admin.id,
@@ -826,7 +939,7 @@ def test_edit_finished_lot_api_is_admin_only(tmp_path: Path) -> None:
 
     def override_get_current_user():
         with factory() as db:
-            return db.get(User, current_user_id["value"])
+            yield db.get(User, current_user_id["value"])
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
@@ -843,6 +956,14 @@ def test_edit_finished_lot_api_is_admin_only(tmp_path: Path) -> None:
     }
 
     with TestClient(app) as client:
+        unknown_before = client.get(
+            "/api/warehouse/lots",
+            params={"stale_level": "unknown"},
+        )
+        cleanup_before = client.get(
+            "/api/warehouse/lots",
+            params={"stale_level": "cleanup"},
+        )
         forbidden = client.post(
             f"/api/warehouse/lots/{ids['lot']}/edit-finished",
             json=payload,
@@ -859,9 +980,17 @@ def test_edit_finished_lot_api_is_admin_only(tmp_path: Path) -> None:
         )
 
     assert allowed.status_code == 200, allowed.text
+    assert unknown_before.status_code == 200, unknown_before.text
+    assert ids["lot"] in {row["id"] for row in unknown_before.json()["items"]}
+    assert cleanup_before.status_code == 200, cleanup_before.text
+    assert ids["lot"] not in {
+        row["id"] for row in cleanup_before.json()["items"]
+    }
     assert allowed.json()["quantity_available"] == 9
     assert allowed.json()["version"] == 2
     assert allowed.json()["age_days"] == 731
+    assert allowed.json()["stock_date_accuracy"] == "exact"
+    assert allowed.json()["stock_date_original_text"] == edited_stock_date.isoformat()
     assert cleanup.status_code == 200, cleanup.text
     assert ids["lot"] in {row["id"] for row in cleanup.json()["items"]}
 

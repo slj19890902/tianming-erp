@@ -1,5 +1,38 @@
 # Codex 项目交接
 
+## 2026-07-24 组合报料业务模式工厂正式发布完成
+
+- 工厂正式目录已严格快进到
+  `f7680f1cadb730751d5baa458f9743ed11776ba8`；该候选线性继承
+  `origin/factory-current-baseline@7792f6f246a1ef8428beebebd0d8075e91ee9f4c`。
+- 现场预检发现正式库仍为 `ci65v8x9z54`，不是最初口述的 `co71v8x9z60`；
+  用户随后明确授权完整执行
+  `ci65v8x9z54 → co71v8x9z60 → cp72v8x9z61`。
+- P0-A Prepare 已停止 PID 10744，创建并验证 SQLite Backup API 备份
+  `data/backups/carton_erp_before_release_20260724_194743.sqlite3`；
+  备份 revision=`ci65v8x9z54`、`integrity_check=ok`、外键异常 0。
+- 隔离副本
+  `data/release_rehearsals/carton_erp_release_rehearsal_20260724_194743.sqlite3`
+  已完成完整迁移链演练；最终 revision=`cp72v8x9z61`、
+  `integrity_check=ok`、外键异常 0，15 张核心业务表计数与正式源库完全一致。
+- 正式 Apply 后 revision=`cp72v8x9z61`、`integrity_check=ok`、
+  外键异常 0；核心业务表计数未改变，其中销售订单/明细 `50/229`、
+  报料主表/明细 `43/175`。正式迁移后 SHA-256 为
+  `F95032C8B1820688D274C784A8BB3030B49FC5E71E0BE074AD74443B984C564E`。
+- ERP 已恢复为正式目录、`0.0.0.0:8000`、单 worker；
+  `GET /api/health` 返回 200 `{"ok":true}`，启动日志未发现错误。
+- 报料发布后只读验证确认：未登录 `/api/requisition/pending` 返回 401；
+  正式页面包含“合并报料 → 报料明细草稿 → 确认生成正式采购单”和
+  “自动使用可匹配库存”契约。验证过程没有确认生成、作废、抵扣或入库，
+  报料主表/明细保持 `43/175`。
+- 工厂 `.venv` 未安装 `pytest`，本机只完成 Python `compileall`；
+  内置浏览器没有生产登录会话，Chrome 现有 ERP 标签页只读接管超时，故尚缺
+  登录后真实点击“合并报料先打开草稿且不直接入账”的现场人工证据。
+- 完整报告：
+  `docs/migration_reports/2026-07-24_composite_business_modes_factory_release.md`；
+  运行时 JSON：
+  `docs/migration_reports/release_runtime_20260724_194742.json`。
+
 ## 2026-07-24 组合 BOM 合并报料先审明细、再生成正式采购单
 
 - 本轮继续在独立 worktree

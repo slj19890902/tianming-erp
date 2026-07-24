@@ -88,6 +88,9 @@ from app.models.inventory_onboarding import (  # noqa: E402,F401
     InventoryOnboardingBatch,
     InventoryOnboardingLine,
 )
+from app.models.inventory_onboarding_posting import (  # noqa: E402,F401
+    InventoryOnboardingPosting,
+)
 from app.models.finance import (  # noqa: E402,F401
     Invoice,
     ReturnReceipt,

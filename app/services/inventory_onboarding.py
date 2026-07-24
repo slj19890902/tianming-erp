@@ -1915,6 +1915,35 @@ def _fingerprint_for(
     ).hexdigest()
 
 
+def validate_submitted_onboarding_batch(
+    db: Session,
+    *,
+    batch_id: int,
+) -> tuple[InventoryOnboardingBatch, list[InventoryOnboardingLine]]:
+    """Return an immutable B1 batch only while every frozen fact is current."""
+
+    batch = get_onboarding_batch(db, batch_id)
+    if batch.status != "submitted":
+        raise InventoryOnboardingError(
+            "只有已提交冻结的库存建账批次可以正式入账",
+            409,
+            "INVENTORY_ONBOARDING_NOT_SUBMITTED",
+        )
+    lines = _batch_lines(db, batch.id)
+    if (
+        not batch.dry_run_fingerprint
+        or _fingerprint_for(batch, lines) != batch.dry_run_fingerprint
+        or not _source_file_is_current(batch)
+        or not _evidence_is_current(db, lines)
+    ):
+        raise InventoryOnboardingError(
+            "库存建账批次的源文件、指纹或现场事实已变化，请重新建批",
+            409,
+            "INVENTORY_ONBOARDING_SUBMITTED_EVIDENCE_STALE",
+        )
+    return batch, lines
+
+
 def _source_file_is_current(batch: InventoryOnboardingBatch) -> bool:
     reference = batch.source_file_reference
     if not reference.startswith(PRIVATE_REFERENCE_PREFIX):

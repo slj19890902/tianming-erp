@@ -254,7 +254,7 @@ def _movement(
 def manual_finished_in(
     db: Session,
     *,
-    customer_id: int,
+    customer_id: int | None,
     product_id: int,
     location_id: int,
     quantity: int,
@@ -271,6 +271,7 @@ def manual_finished_in(
     movement_reason: str = "手工成品入库",
     stock_date_accuracy: str = "exact",
     stock_date_original_text: str | None = None,
+    is_general: bool = False,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -278,13 +279,13 @@ def manual_finished_in(
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
     location = _location(db, location_id, "finished")
-    customer = db.get(Customer, customer_id)
+    customer = db.get(Customer, customer_id) if customer_id is not None else None
     product = db.get(Product, product_id)
-    if customer is None:
+    if not is_general and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("产品不存在", 404)
-    if product.customer_id != customer_id:
+    if not is_general and product.customer_id != customer_id:
         raise WarehouseInventoryError("所选产品不属于该客户")
     date_accuracy, date_original_text = normalize_stock_date_metadata(
         stock_date=stock_date,
@@ -325,9 +326,11 @@ def manual_finished_in(
     db.add(lot)
     db.flush()
     lot.finished_detail = FinishedGoodsInventoryDetail(
-        owner_customer_id=customer.id,
-        owner_customer_name_snapshot=customer.name,
-        is_general=False,
+        owner_customer_id=customer.id if customer is not None and not is_general else None,
+        owner_customer_name_snapshot=(
+            customer.name if customer is not None and not is_general else None
+        ),
+        is_general=is_general,
         product_id=product.id,
         inventory_code_snapshot=product.product_code,
         product_name_snapshot=product.product_name,
@@ -1374,6 +1377,7 @@ def manual_semi_finished_in(
     source_ref_type: str | None = None,
     source_ref_id: int | None = None,
     material_id: int | None = None,
+    movement_reason: str = "手工半成品入库",
     stock_date_accuracy: str = "exact",
     stock_date_original_text: str | None = None,
 ) -> InventoryLot:
@@ -1478,7 +1482,7 @@ def manual_semi_finished_in(
         quantity=quantity,
         before={key: 0 for key in _balances(lot)},
         operator_id=operator_id,
-        reason="手工半成品入库",
+        reason=movement_reason,
         remarks=remarks,
         idempotency_key=idempotency_key,
     )

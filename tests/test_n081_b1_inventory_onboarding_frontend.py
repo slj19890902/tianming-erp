@@ -42,7 +42,7 @@ def test_inventory_onboarding_entry_is_strictly_stocktake_view_gated() -> None:
 
 def test_inventory_onboarding_page_is_dense_and_has_no_scroll_table_dependency() -> None:
     for text in (
-        "库存建账草稿",
+        "库存建账",
         "下载 CSV 模板",
         "下载 XLSX 模板",
         "上传并解析",
@@ -50,10 +50,11 @@ def test_inventory_onboarding_page_is_dense_and_has_no_scroll_table_dependency()
         "执行 dry-run",
         "下载错误 CSV",
         "修正本行",
-        "提交冻结 B1 草稿",
+        "提交批次",
+        "正式入账",
     ):
         assert text in WAREHOUSE
-    assert "提交操作仅冻结 B1 草稿供统一复核，不生成正式库存" in ONBOARDING_SECTION
+    assert "已提交批次可由有权限人员一键正式入账" in ONBOARDING_SECTION
     assert "<table" not in ONBOARDING_SECTION
     assert ".onboarding-section-panel{overflow:visible}" in WAREHOUSE
     assert ".onboarding-line-list{display:grid" in WAREHOUSE
@@ -71,6 +72,7 @@ def test_inventory_onboarding_api_contract_is_fully_wired() -> None:
         "/dry-run",
         "/errors.csv",
         "/submit",
+        "/post",
     ):
         assert path in ONBOARDING_SCRIPT
     assert 'const formData=new FormData();formData.append("file",file)' in ONBOARDING_SCRIPT
@@ -204,18 +206,18 @@ def test_excluding_line_requires_a_reason_before_patch() -> None:
     )
 
 
-def test_submit_only_freezes_b1_draft_with_fingerprint_and_idempotency() -> None:
-    assert "我确认仅冻结 B1 草稿，不生成正式库存" in ONBOARDING_SECTION
+def test_submit_freezes_b1_before_separate_one_click_posting() -> None:
+    assert "onboardingFreezeConfirmed" not in ONBOARDING_SECTION
     assert (
         "dry_run_fingerprint:batch.dry_run_fingerprint,"
         "idempotency_key:inventoryOnboardingSubmitKey(batch),confirmed:true"
     ) in ONBOARDING_SCRIPT
     assert "if(!batch.dry_run_fingerprint)" in ONBOARDING_SCRIPT
-    assert "B1 草稿已提交冻结；当前库存未改变" in ONBOARDING_SCRIPT
+    assert "批次已提交，可执行正式入账" in ONBOARDING_SCRIPT
     assert 'batch?.status==="submitted"' in ONBOARDING_SCRIPT
     assert "/apply" not in ONBOARDING_SCRIPT
-    assert "正式入账" not in ONBOARDING_SECTION
-    assert ">正式入账<" not in WAREHOUSE
+    assert 'id="postOnboardingBatch"' in ONBOARDING_SECTION
+    assert "/post" in ONBOARDING_SCRIPT
 
 
 def test_warehouse_inline_javascript_remains_valid(tmp_path: Path) -> None:

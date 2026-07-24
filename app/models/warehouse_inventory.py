@@ -355,6 +355,20 @@ class InventoryLot(Base):
         Index("ix_inventory_lots_location_status", "warehouse_location_id", "status"),
         Index("ix_inventory_lots_stock_date", "stock_date"),
         Index("ix_inventory_lots_last_movement", "last_movement_at"),
+        Index(
+            "uq_inventory_lots_onboarding_line_source",
+            "source_ref_type",
+            "source_ref_id",
+            unique=True,
+            sqlite_where=text(
+                "source_ref_type = 'inventory_onboarding_line' "
+                "AND source_ref_id IS NOT NULL"
+            ),
+            postgresql_where=text(
+                "source_ref_type = 'inventory_onboarding_line' "
+                "AND source_ref_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

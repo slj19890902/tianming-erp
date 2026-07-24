@@ -17,14 +17,21 @@ from fastapi import (
 from openpyxl import Workbook
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.stocktake import require_stocktake_submit, require_stocktake_view
+from app.api.stocktake import (
+    require_stocktake_review,
+    require_stocktake_submit,
+    require_stocktake_view,
+)
 from app.models.inventory_onboarding import InventoryOnboardingBatch
 from app.models.user import User
 from app.services import inventory_onboarding as onboarding_service
+from app.services import (
+    inventory_onboarding_posting as posting_service,
+)
 from app.services.inventory_onboarding_uploads import (
     cleanup_inventory_onboarding_upload,
     store_and_parse_inventory_onboarding_upload,
@@ -153,8 +160,10 @@ def _batch_response(
     batch: InventoryOnboardingBatch,
 ) -> dict[str, object]:
     lines = onboarding_service._batch_lines(db, batch.id)
+    batch_data = onboarding_service.batch_payload(batch)
+    batch_data.update(posting_service.posting_state_payload(db, batch))
     return {
-        "batch": onboarding_service.batch_payload(batch),
+        "batch": batch_data,
         "items": [onboarding_service.line_payload(line) for line in lines],
     }
 
@@ -281,7 +290,10 @@ def get_inventory_onboarding_batches(
 ) -> dict[str, object]:
     return {
         "items": [
-            onboarding_service.batch_payload(batch)
+            {
+                **onboarding_service.batch_payload(batch),
+                **posting_service.posting_state_payload(db, batch),
+            }
             for batch in onboarding_service.list_onboarding_batches(db)
         ]
     }
@@ -440,6 +452,49 @@ def submit_inventory_onboarding_batch(
             detail={
                 "code": "INVENTORY_ONBOARDING_SUBMIT_CONFLICT",
                 "message": "提交发生并发冲突，请刷新后重试",
+            },
+        ) from error
+
+
+@router.post("/inventory-onboarding/batches/{batch_id}/post")
+def post_inventory_onboarding_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_stocktake_review),
+) -> dict[str, object]:
+    try:
+        posting_service.post_submitted_batch(
+            db,
+            batch_id=batch_id,
+            operator=user,
+        )
+        db.commit()
+        return _batch_response(
+            db,
+            onboarding_service.get_onboarding_batch(db, batch_id),
+        )
+    except posting_service.InventoryOnboardingPostingError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": str(error)},
+        ) from error
+    except onboarding_service.InventoryOnboardingError as error:
+        db.rollback()
+        _service_error(error)
+    except (IntegrityError, OperationalError) as error:
+        db.rollback()
+        replay = posting_service.get_posting_for_batch(db, batch_id)
+        if replay is not None:
+            return _batch_response(
+                db,
+                onboarding_service.get_onboarding_batch(db, batch_id),
+            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVENTORY_ONBOARDING_POSTING_CONFLICT",
+                "message": "入账发生并发冲突，请刷新批次后重试",
             },
         ) from error
 

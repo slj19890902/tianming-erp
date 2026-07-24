@@ -1,5 +1,32 @@
 # Codex 项目交接
 
+## 2026-07-24 组合 BOM 合并报料先审明细、再生成正式采购单
+
+- 本轮继续在独立 worktree
+  `D:\tm-worktrees\erp-composite-business-modes-20260724` 和候选分支
+  `codex/composite-business-modes-20260724` 工作；没有更新
+  `origin/factory-current-baseline`、`origin/main` 或工厂正式目录。
+- 根因是组合 BOM 路径绕过了普通报料草稿：点击“合并报料”后直接二次确认、
+  调用正式批次接口并打开打印页。现在统一改为先打开“报料明细草稿”，同时列出
+  父件和已选择组件；页面核对库存抵扣、采购张数、尺寸和开料方式后，只有点击
+  “确认生成正式采购单”才正式入账并进入打印页。
+- 草稿中的采购张数默认等于库存抵扣后的系统最低值，允许按供应商实际要求增加。
+  如需减少，用户先点击组件行“自动使用匹配库存”；系统只使用既有同客户、
+  同组件、同规格库存门禁，更新成品/半成品抵扣和剩余需求后自动重算最低张数。
+  后端再次校验确认数量不得低于当前最低值，不能靠前端改数隐藏缺口。
+- 隔离浏览器 UAT 仍使用
+  `D:\tm-uat\composite-business-modes-20260724\browser-uat.sqlite3` 和
+  `http://127.0.0.1:18095/`。实测点击“合并报料”只打开草稿，显示父件
+  3000 张和内衬组件 1350 张、库存匹配入口及最终确认按钮；没有新建正式采购单，
+  没有打开打印页，Console 无 error/warn。截图：
+  `D:\tm-uat\composite-business-modes-20260724\screenshots\03-composite-requisition-review-draft.png`。
+- 组合计价、订单快照、BOM 报料、前端语法和库存相关回归为
+  `36 passed`；Python 编译、Alembic 唯一 head `cp72v8x9z61`、
+  `git diff --check` 均通过。隔离 UAT 库 revision 为 `cp72v8x9z61`，
+  `quick_check=ok`、外键异常 0；仅保留原有 2 张“已取消”测试报料单。
+- 本轮不新增迁移。家庭侧只读取和操作隔离 UAT；没有连接、复制、迁移或写入
+  工厂正式数据库。将来经人工验收后正式发布需要重启 ERP，但不需要迁移数据库。
+
 ## 2026-07-24 组合产品两种计价模式与组件库存自动抵报料候选
 
 - 上一阶段组合 BOM 报料修复已在家庭人工 UAT 通过后，将提交

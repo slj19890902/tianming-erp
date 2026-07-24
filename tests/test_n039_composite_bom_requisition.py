@@ -164,7 +164,12 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 200, response.text
 
 
-def _component_payload(snapshot_id: int, *, actual_yield_per_sheet=None) -> dict:
+def _component_payload(
+    snapshot_id: int,
+    *,
+    actual_yield_per_sheet=None,
+    requisition_qty: int | None = None,
+) -> dict:
     payload = {
         "order_item_id": 1,
         "bom_snapshot_id": snapshot_id,
@@ -174,16 +179,21 @@ def _component_payload(snapshot_id: int, *, actual_yield_per_sheet=None) -> dict
     }
     if actual_yield_per_sheet is not None:
         payload["actual_yield_per_sheet"] = actual_yield_per_sheet
+    if requisition_qty is not None:
+        payload["requisition_qty"] = requisition_qty
     return payload
 
 
-def _parent_payload() -> dict:
-    return {
+def _parent_payload(*, requisition_qty: int | None = None) -> dict:
+    payload = {
         "order_item_id": 1,
         "cardboard_len": 900,
         "cardboard_width": 600,
         "special_process": "一开一",
     }
+    if requisition_qty is not None:
+        payload["requisition_qty"] = requisition_qty
+    return payload
 
 
 def test_composite_pending_keeps_one_parent_with_two_component_requirements(
@@ -260,6 +270,63 @@ def test_composite_requires_snapshot_and_creates_one_source_per_component(
         row.calculation_rule_version == "bom-demand-cutting-v2"
         for row in sources
     )
+
+
+def test_composite_reviewed_quantity_above_minimum_is_preserved(
+    composite_requisition_app,
+) -> None:
+    from app.models.product_bom import RequisitionItemBomSource
+    from app.models.requisition import RequisitionItem
+
+    app, session_factory = composite_requisition_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "N039 供应商",
+                "items": [
+                    _parent_payload(requisition_qty=12),
+                    _component_payload(1, requisition_qty=25),
+                ],
+            },
+        )
+
+    assert created.status_code == 201, created.text
+    with session_factory() as session:
+        requisition_items = session.scalars(
+            select(RequisitionItem).order_by(RequisitionItem.id)
+        ).all()
+        source = session.scalar(select(RequisitionItemBomSource))
+    assert [row.requisition_qty for row in requisition_items] == [12, 25]
+    assert int(source.calculated_purchase_quantity) == 20
+    assert "系统最低报料：20" in source.direction_note
+    assert "本次确认报料：25" in source.direction_note
+
+
+def test_composite_reviewed_quantity_cannot_hide_uncovered_shortage(
+    composite_requisition_app,
+) -> None:
+    from app.models.requisition import Requisition
+
+    app, session_factory = composite_requisition_app
+    with TestClient(app) as client:
+        _login(client)
+        rejected = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "N039 供应商",
+                "items": [
+                    _parent_payload(requisition_qty=10),
+                    _component_payload(1, requisition_qty=19),
+                ],
+            },
+        )
+
+    assert rejected.status_code == 400, rejected.text
+    assert "系统最低 20 张" in rejected.json()["detail"]
+    with session_factory() as session:
+        assert session.scalar(select(Requisition.id)) is None
 
 
 def test_composite_rejects_non_integer_actual_yield(

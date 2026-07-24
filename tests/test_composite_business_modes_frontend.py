@@ -73,6 +73,37 @@ def test_pending_bom_component_can_auto_cover_matching_inventory_without_extra_f
     assert "confirm(" not in block
 
 
+def test_composite_merge_opens_review_draft_before_formal_purchase() -> None:
+    block = _method_block(
+        "async openCompositeRequisition(rows)",
+        "requisitionBatchLinePayload(line)",
+    )
+    assert 'this.modal = {type:"requisition", title:"报料明细草稿"}' in block
+    assert "this.requisitionForm = { supplier_name:suppliers[0], items:lines }" in block
+    assert "confirm(" not in block
+    assert 'axios.post("/api/requisition/batches"' not in block
+    assert "window.open(" not in block
+    assert "当前只是报料明细草稿" in INDEX
+    assert "确认生成正式采购单" in INDEX
+    assert "系统最低" in INDEX
+    assert "采购张数允许按供应商实际要求增加" in INDEX
+
+
+def test_composite_draft_can_apply_matching_inventory_and_recalculate() -> None:
+    block = _method_block(
+        "async autoCoverCompositeDraftLine(line)",
+        "requisitionBatchLinePayload(line)",
+    )
+    assert "bom_snapshot_id" in INDEX
+    assert "自动使用匹配库存" in INDEX
+    assert "finished_reserved_piece_qty" in block
+    assert "semi_finished_reserved_piece_qty" in block
+    assert "remaining_required_piece_qty" in block
+    assert "this.recalculateCompositeDraftLine(line)" in block
+    assert "idempotency_key:createIdempotencyKey()" in block
+    assert "confirm(" not in block
+
+
 def test_inline_javascript_remains_syntactically_valid(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node is not None

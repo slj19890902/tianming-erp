@@ -4291,6 +4291,27 @@ def list_requisition_items(
     }
 
 
+def _confirmed_composite_requisition_qty(
+    line: RequisitionLinePayload,
+    minimum_quantity: int,
+) -> int:
+    """Honor the reviewed draft quantity without allowing a hidden shortage."""
+    requested = (
+        minimum_quantity
+        if line.requisition_qty is None
+        else int(line.requisition_qty)
+    )
+    if requested < minimum_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"本次采购张数不能少于库存抵扣后的系统最低 "
+                f"{minimum_quantity} 张；如需减少，请先在报料明细中使用匹配库存"
+            ),
+        )
+    return requested
+
+
 @router.post("/batches", status_code=status.HTTP_201_CREATED)
 def create_batch(
     payload: RequisitionBatchCreate,
@@ -4394,13 +4415,20 @@ def create_batch(
                                 status_code=409,
                                 detail="该复合产品父件已由库存全额抵扣，无需报料",
                             )
+                        parent_minimum_qty = int(
+                            parent_requirements["requisition_qty"]
+                        )
+                        parent_confirmed_qty = (
+                            _confirmed_composite_requisition_qty(
+                                line,
+                                parent_minimum_qty,
+                            )
+                        )
                         batch_item = RequisitionItem(
                             requisition_id=batch.id,
                             order_item_id=item.id,
                             inventory_deducted_qty=0,
-                            requisition_qty=int(
-                                parent_requirements["requisition_qty"]
-                            ),
+                            requisition_qty=parent_confirmed_qty,
                             cardboard_len=line.cardboard_len,
                             cardboard_width=line.cardboard_width,
                             pieces_per_box=1,
@@ -4457,6 +4485,15 @@ def create_batch(
                             status_code=409,
                             detail="该复合产品组件已由半成品库存全额抵扣，无需报料",
                         )
+                    component_minimum_qty = int(
+                        requirements["requisition_qty"]
+                    )
+                    component_confirmed_qty = (
+                        _confirmed_composite_requisition_qty(
+                            line,
+                            component_minimum_qty,
+                        )
+                    )
                     cardboard_len = Decimal(
                         snapshot.snapshot_component_report_length_mm
                         or line.cardboard_len
@@ -4477,7 +4514,7 @@ def create_batch(
                         requisition_id=batch.id,
                         order_item_id=item.id,
                         inventory_deducted_qty=0,
-                        requisition_qty=int(requirements["requisition_qty"]),
+                        requisition_qty=component_confirmed_qty,
                         cardboard_len=cardboard_len,
                         cardboard_width=cardboard_width,
                         pieces_per_box=int(requirements["quantity_per_set"]),
@@ -4524,10 +4561,12 @@ def create_batch(
                                 requirements["spare_sheet_quantity"]
                             ),
                             calculated_purchase_quantity=Decimal(
-                                requirements["requisition_qty"]
+                                component_minimum_qty
                             ),
                             direction_note=(
-                                f"剩余需求片数：{requirements['remaining_required_piece_qty']}"
+                                f"剩余需求片数：{requirements['remaining_required_piece_qty']}；"
+                                f"系统最低报料：{component_minimum_qty}；"
+                                f"本次确认报料：{component_confirmed_qty}"
                             ),
                             calculation_rule_version="bom-demand-cutting-v2",
                         )

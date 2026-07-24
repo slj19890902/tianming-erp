@@ -195,6 +195,11 @@ class SalesOrderItemBomComponent(Base):
             "is_die_cut IS FALSE OR snapshot_mold_tool_id IS NOT NULL",
             name="ck_sales_order_item_bom_components_die_cut_mold_required",
         ),
+        CheckConstraint(
+            "snapshot_component_default_cutting_mode IN "
+            "('一开一','一开二','一开三','一开四','一开五')",
+            name="ck_sales_order_item_bom_components_default_cutting_mode",
+        ),
         UniqueConstraint(
             "sales_order_item_id",
             "display_order",
@@ -240,7 +245,7 @@ class SalesOrderItemBomComponent(Base):
     )
     snapshot_schema_version: Mapped[int] = mapped_column(
         Integer,
-        default=2,
+        default=3,
         nullable=False,
     )
     order_set_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -300,6 +305,11 @@ class SalesOrderItemBomComponent(Base):
     snapshot_component_box_style: Mapped[str | None] = mapped_column(
         String(150),
         nullable=True,
+    )
+    snapshot_component_default_cutting_mode: Mapped[str] = mapped_column(
+        String(20),
+        default="一开一",
+        nullable=False,
     )
     snapshot_component_production_process: Mapped[str | None] = mapped_column(
         Text,
@@ -400,8 +410,14 @@ class RequisitionItemBomSource(Base):
             name="ck_requisition_item_bom_sources_required_piece_quantity",
         ),
         CheckConstraint(
-            "required_piece_quantity = order_set_quantity * quantity_per_set",
+            "((demand_basis = 'order_sets' "
+            "AND required_piece_quantity = order_set_quantity * quantity_per_set) "
+            "OR demand_basis = 'order_specific_pieces')",
             name="ck_requisition_item_bom_sources_required_piece_formula",
+        ),
+        CheckConstraint(
+            "demand_basis IN ('order_sets','order_specific_pieces')",
+            name="ck_requisition_item_bom_sources_demand_basis",
         ),
         CheckConstraint(
             "mold_max_yield_per_sheet IS NULL OR mold_max_yield_per_sheet > 0",
@@ -464,6 +480,11 @@ class RequisitionItemBomSource(Base):
     quantity_per_set: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     required_piece_quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 4),
+        nullable=False,
+    )
+    demand_basis: Mapped[str] = mapped_column(
+        String(30),
+        default="order_sets",
         nullable=False,
     )
     mold_max_yield_per_sheet: Mapped[int | None] = mapped_column(

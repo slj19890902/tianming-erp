@@ -49,6 +49,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionCompletion
 from app.models.product_bom import (
+    RequisitionItemBomSource,
     SalesOrderItemBomComponent,
     SalesOrderItemBomDemandAdjustment,
 )
@@ -118,7 +119,9 @@ from app.services.composite_bom import (
 )
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
+    append_component_demand_adjustment,
     append_order_quantity_adjustments,
+    ensure_component_production_tasks,
     is_composite_order_item,
 )
 from app.services.report_crease import crease_width_error, product_crease_width_error
@@ -379,6 +382,12 @@ class OrderItemUpdate(BaseModel):
         default=None,
         max_length=120,
     )
+
+
+class BomComponentDemandUpdate(BaseModel):
+    required_piece_quantity: int = Field(gt=0, strict=True)
+    expected_required_piece_quantity: int = Field(gt=0, strict=True)
+    idempotency_key: str = Field(min_length=1, max_length=120)
 
 
 class OrderCreate(BaseModel):
@@ -3638,7 +3647,8 @@ def create_order(
                 snapshot_flap_mm=product.flap_mm or 30,
                 special_process=(
                     (product.default_cutting_mode or "一开一")
-                    if (product.box_style or "").strip() in {"平卡", "模切内盒", "隔板"}
+                    if (product.box_style or "").strip()
+                    in {"平卡", "模切内盒", "隔板", "刀卡"}
                     else "一开一"
                 ),
                 requisition_status="未报料",
@@ -3811,6 +3821,102 @@ def read_order_item_bom(
         return get_order_item_bom_preview(db, item_id)
     except CompositeBOMError as error:
         raise raise_composite_bom_http(error) from error
+
+
+@router.put("/items/{item_id}/bom-components/{snapshot_id}/demand")
+def update_order_item_bom_component_demand(
+    item_id: int,
+    snapshot_id: int,
+    payload: BomComponentDemandUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_edit),
+) -> dict:
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    order = db.get(Order, item.order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None or snapshot.sales_order_item_id != item.id:
+        raise HTTPException(status_code=404, detail="本订单组件快照不存在")
+
+    reported = db.scalar(
+        select(RequisitionItemBomSource.id)
+        .join(
+            RequisitionItem,
+            RequisitionItem.id == RequisitionItemBomSource.requisition_item_id,
+        )
+        .where(
+            RequisitionItemBomSource.sales_order_item_bom_component_id == snapshot.id,
+            func.lower(RequisitionItem.status).notin_(
+                {
+                    "cancelled",
+                    "canceled",
+                    "voided",
+                    "withdrawn",
+                    "invalid",
+                    "已取消",
+                    "已作废",
+                    "已撤回",
+                }
+            ),
+        )
+        .limit(1)
+    )
+    if reported is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="该组件已经正式报料，历史单据不能自动重算；请先走受控撤销或新版本流程。",
+        )
+
+    key = payload.idempotency_key.strip()
+    try:
+        _adjustment, created = append_component_demand_adjustment(
+            db,
+            order_item_id=item.id,
+            snapshot_id=snapshot.id,
+            required_piece_quantity=payload.required_piece_quantity,
+            expected_required_piece_quantity=payload.expected_required_piece_quantity,
+            actor_id=user.id,
+            idempotency_key=key,
+        )
+        if not created:
+            db.rollback()
+            return get_order_item_bom_preview(db, item.id)
+        ensure_component_production_tasks(db, item.id)
+        db.add(
+            OperationLog(
+                user_id=user.id,
+                action="UPDATE_BOM_COMPONENT_DEMAND",
+                resource="OrderItem",
+                details=json.dumps(
+                    {
+                        "snapshot_id": snapshot.id,
+                        "before_required_piece_quantity": (
+                            payload.expected_required_piece_quantity
+                        ),
+                        "after_required_piece_quantity": payload.required_piece_quantity,
+                        "idempotency_key": key,
+                    },
+                    ensure_ascii=False,
+                ),
+                username=user.username,
+                role=user.role,
+                entity_type="sales_order_item_bom_component",
+                entity_id=snapshot.id,
+                description="修改本订单组件需求件数",
+            )
+        )
+        db.commit()
+        return get_order_item_bom_preview(db, item.id)
+    except CompositeBomWorkflowError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="组件需求调整已提交，请刷新查看") from error
 
 
 @router.put("/items/{item_id}")

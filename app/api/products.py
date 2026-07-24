@@ -110,7 +110,7 @@ def _box_style_uses_tongue(box_style: str | None) -> bool:
 
 def _box_style_uses_default_cutting_mode(box_style: str | None) -> bool:
     value = (box_style or "").strip()
-    return value in {"平卡", "模切内盒", "隔板"}
+    return value in {"平卡", "模切内盒", "隔板", "刀卡"}
 
 
 def _production_process_uses_mold(value: str | None) -> bool:
@@ -300,7 +300,7 @@ class ProductPayload(BaseModel):
             self.box_style = "模切内盒"
         if _box_style_uses_default_cutting_mode(self.box_style):
             if self.crease_type == "压线":
-                raise ValueError("模切内盒和隔板的压线类型仅允许：净、毛、其他")
+                raise ValueError("模切内盒、隔板和刀卡的压线类型仅允许：净、毛、其他")
         else:
             self.default_cutting_mode = "一开一"
         splice_mode = (self.splice_mode or "single").strip().lower()

@@ -305,6 +305,89 @@ def test_default_cutting_mode_is_limited_to_die_cut_inner_box_and_partition(
         assert a1_order.json()["items"][0]["special_process"] == "一开一"
 
 
+def test_knife_card_cutting_mode_is_saved_frozen_and_converted(
+    order_api_app,
+) -> None:
+    from app.models.order import OrderItem
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        created_product = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "KNIFE-CARD-002",
+                "customer_material_code": "KNIFE-CARD-002",
+                "product_name": "刀卡一开二",
+                "box_category": "normal",
+                "box_style": "刀卡",
+                "crease_type": "净料",
+                "report_length_mm": 575,
+                "report_width_mm": 550,
+                "default_cutting_mode": "一开二",
+            },
+        )
+        assert created_product.status_code == 201, created_product.text
+        product = created_product.json()
+        reread = client.get(f"/api/master/products/{product['id']}")
+        assert reread.status_code == 200, reread.text
+        assert reread.json()["default_cutting_mode"] == "一开二"
+
+        created_order = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "PO-KNIFE-CARD-002",
+                "order_date": "2026-07-24",
+                "delivery_date": "2026-07-30",
+                "items": [
+                    {
+                        "product_id": product["id"],
+                        "quantity": 2700,
+                        "unit_price": "1.00",
+                    }
+                ],
+            },
+        )
+        assert created_order.status_code == 201, created_order.text
+        item = created_order.json()["items"][0]
+        assert item["special_process"] == "一开二"
+
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        pending_item = next(
+            row for row in pending.json()["items"] if row["item_id"] == item["id"]
+        )
+        assert pending_item["cutting_mode"] == "一开二"
+        assert pending_item["required_piece_qty"] == 2700
+        assert pending_item["requisition_qty"] == 1350
+
+        updated = client.put(
+            f"/api/master/products/{product['id']}",
+            json={
+                "customer_id": 1,
+                "product_code": "KNIFE-CARD-002",
+                "customer_material_code": "KNIFE-CARD-002",
+                "product_name": "刀卡一开二",
+                "box_category": "normal",
+                "box_style": "刀卡",
+                "crease_type": "净料",
+                "report_length_mm": 575,
+                "report_width_mm": 550,
+                "default_cutting_mode": "一开三",
+                "expected_version": product["version"],
+                "change_reason": "验证刀卡修改只影响后续订单",
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["default_cutting_mode"] == "一开三"
+
+    with session_factory() as session:
+        stored_item = session.get(OrderItem, item["id"])
+    assert stored_item.special_process == "一开二"
+
+
 def test_create_order_accepts_editable_product_snapshot(order_api_app) -> None:
     app, _ = order_api_app
     payload = _payload()

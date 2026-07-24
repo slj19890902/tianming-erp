@@ -139,16 +139,27 @@ def _reservation_status(reservation: InventoryReservation) -> str:
     return "partial" if consumed or released else "active"
 
 
-def _adjustment_total(db: Session, snapshot_id: int) -> int:
-    return int(
-        db.scalar(
-            select(func.coalesce(func.sum(SalesOrderItemBomDemandAdjustment.delta_order_set_quantity), 0)).where(
-                SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
-                == snapshot_id
-            )
+def _adjustment_totals(db: Session, snapshot_id: int) -> tuple[int, int]:
+    row = db.execute(
+        select(
+            func.coalesce(
+                func.sum(
+                    SalesOrderItemBomDemandAdjustment.delta_order_set_quantity
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    SalesOrderItemBomDemandAdjustment.delta_required_piece_quantity
+                ),
+                0,
+            ),
+        ).where(
+            SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+            == snapshot_id
         )
-        or 0
-    )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
 
 
 def is_composite_order_item(db: Session, order_item_id: int) -> bool:
@@ -160,14 +171,24 @@ def effective_component_demands(
     db: Session,
     order_item_id: int,
 ) -> list[ComponentDemand]:
-    """Read immutable snapshots plus append-only set adjustments."""
+    """Read immutable snapshots plus append-only set and piece adjustments."""
     rows = _snapshot_rows(db, order_item_id)
     result: list[ComponentDemand] = []
     for snapshot in rows:
         per_set = _as_positive_integer(snapshot.quantity_per_set, field="每套组件数量")
-        effective_sets = int(snapshot.order_set_quantity) + _adjustment_total(db, snapshot.id)
+        delta_sets, delta_pieces = _adjustment_totals(db, snapshot.id)
+        effective_sets = int(snapshot.order_set_quantity) + delta_sets
         if effective_sets < 0:
             raise CompositeBomWorkflowError("组件调整后的有效套数不能小于0")
+        required_piece_quantity = (
+            _as_positive_integer(
+                snapshot.required_piece_quantity,
+                field="组件需求件数",
+            )
+            + delta_pieces
+        )
+        if required_piece_quantity <= 0:
+            raise CompositeBomWorkflowError("组件调整后的需求件数必须大于0")
         result.append(
             ComponentDemand(
                 snapshot_id=snapshot.id,
@@ -179,7 +200,7 @@ def effective_component_demands(
                 quantity_per_set=per_set,
                 is_required=bool(snapshot.is_required),
                 effective_sets=effective_sets,
-                required_piece_quantity=effective_sets * per_set,
+                required_piece_quantity=required_piece_quantity,
             )
         )
     return result
@@ -241,6 +262,76 @@ def append_order_quantity_adjustments(
         created.append(row)
     db.flush()
     return created
+
+
+def append_component_demand_adjustment(
+    db: Session,
+    *,
+    order_item_id: int,
+    snapshot_id: int,
+    required_piece_quantity: int,
+    expected_required_piece_quantity: int,
+    actor_id: int | None,
+    idempotency_key: str,
+) -> tuple[SalesOrderItemBomDemandAdjustment | None, bool]:
+    """Append one order-only component piece-demand fact with CAS and replay safety."""
+    target = _as_positive_integer(required_piece_quantity, field="订单专用组件需求件数")
+    expected = _as_positive_integer(
+        expected_required_piece_quantity,
+        field="修改前组件需求件数",
+    )
+    key = (idempotency_key or "").strip()
+    if not key:
+        raise CompositeBomWorkflowError("组件需求调整缺少幂等标识")
+
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None or snapshot.sales_order_item_id != order_item_id:
+        raise CompositeBomWorkflowError("组件快照不属于当前订单明细")
+
+    existing = db.scalar(
+        select(SalesOrderItemBomDemandAdjustment).where(
+            SalesOrderItemBomDemandAdjustment.idempotency_key == key
+        )
+    )
+    if existing is not None:
+        if (
+            existing.sales_order_item_bom_component_id != snapshot_id
+            or existing.event_type != "component_demand_adjusted"
+            or int(existing.delta_order_set_quantity or 0) != 0
+            or int(existing.delta_required_piece_quantity or 0) != target - expected
+        ):
+            raise CompositeBomWorkflowError("组件需求调整幂等标识已被其他变更使用")
+        return existing, False
+
+    current = next(
+        (
+            demand.required_piece_quantity
+            for demand in effective_component_demands(db, order_item_id)
+            if demand.snapshot_id == snapshot_id
+        ),
+        None,
+    )
+    if current is None:
+        raise CompositeBomWorkflowError("组件快照不存在")
+    if current != expected:
+        raise CompositeBomWorkflowError(
+            f"组件需求已由其他操作从{expected}改为{current}，请刷新后重试"
+        )
+    if target == current:
+        return None, False
+
+    row = SalesOrderItemBomDemandAdjustment(
+        sales_order_item_bom_component_id=snapshot_id,
+        event_type="component_demand_adjusted",
+        delta_order_set_quantity=0,
+        delta_required_piece_quantity=target - current,
+        reason="本订单组件需求调整",
+        actor_id=actor_id,
+        idempotency_key=key,
+    )
+    db.add(row)
+    db.flush()
+    return row, True
 
 
 def ensure_component_production_tasks(

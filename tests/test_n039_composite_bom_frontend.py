@@ -11,9 +11,9 @@ def test_composite_requisition_keeps_parent_row_and_selects_snapshots() -> None:
     assert "requisitionComponentExpanded" in INDEX
     assert "selectedBomSnapshotIds" in INDEX
     assert "toggleBomSnapshot" in INDEX
-    assert "每套" in INDEX
-    assert "半成品抵扣" in INDEX
-    assert "剩余采购" in INDEX
+    assert "bom_requisition_sources" in INDEX
+    assert "订单专用需求" in INDEX
+    assert "理论报料" in INDEX
 
 
 def test_composite_requisition_submits_snapshot_id_to_batch_api() -> None:
@@ -21,6 +21,13 @@ def test_composite_requisition_submits_snapshot_id_to_batch_api() -> None:
     assert "bom_snapshot_id:line.bom_snapshot_id ? Number(line.bom_snapshot_id) : null" in INDEX
     assert "actual_yield_per_sheet:line.actual_yield_per_sheet ? Number(line.actual_yield_per_sheet) : null" in INDEX
     assert "openCompositeRequisition" in INDEX
+
+
+def test_reported_composite_requisition_has_clear_source_and_void_action() -> None:
+    assert 'return "组合 BOM 报料单"' in INDEX
+    assert "voidReportedCompositeRequisition(row)" in INDEX
+    assert "/api/requisition/batches/${row.id}/void" in INDEX
+    assert "父件和组件已回到待报料" in INDEX
 
 
 def test_normal_and_telescoping_requisition_paths_remain_present() -> None:
@@ -31,7 +38,6 @@ def test_normal_and_telescoping_requisition_paths_remain_present() -> None:
 
 def test_component_production_tasks_show_piece_quantity_and_destinations() -> None:
     assert "row.is_component_task" in INDEX
-    assert "row.component_quantity_per_set" in INDEX
     assert "组件需求" in INDEX
     assert "组件直接齐套" in INDEX
     assert "组件入库存" in INDEX

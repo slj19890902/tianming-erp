@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 def composite_requisition_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
+    from app.api.orders import router as orders_router
     from app.api.requisition import router as requisition_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
@@ -32,7 +33,7 @@ def composite_requisition_app(tmp_path: Path):
     with session_factory() as session:
         admin = User(
             username="admin",
-            password_hash=hash_password("RolePass123!"),
+            password_hash=hash_password("123456"),
             role="admin",
             real_name="admin",
             display_name="admin",
@@ -97,6 +98,10 @@ def composite_requisition_app(tmp_path: Path):
             snapshot_product_name=parent.product_name,
             snapshot_spec="组合成品",
             snapshot_material="K616K",
+            snapshot_supplier_name="N039 供应商",
+            snapshot_report_length_mm=900,
+            snapshot_report_width_mm=600,
+            special_process="一开一",
         )
         session.add(item)
         session.flush()
@@ -128,6 +133,8 @@ def composite_requisition_app(tmp_path: Path):
                     snapshot_component_layer_count=5,
                     snapshot_component_flute_type="AB",
                     snapshot_component_box_category="normal",
+                    snapshot_component_box_style="模切内盒",
+                    snapshot_component_default_cutting_mode="一开一",
                     snapshot_component_report_length_mm=length,
                     snapshot_component_report_width_mm=width,
                 )
@@ -136,6 +143,7 @@ def composite_requisition_app(tmp_path: Path):
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(orders_router, prefix="/api/orders")
     app.include_router(requisition_router, prefix="/api/requisition")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -149,7 +157,7 @@ def composite_requisition_app(tmp_path: Path):
 def _login(client: TestClient) -> None:
     response = client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "RolePass123!"},
+        json={"username": "admin", "password": "123456"},
     )
     assert response.status_code == 200, response.text
 
@@ -165,6 +173,15 @@ def _component_payload(snapshot_id: int, *, actual_yield_per_sheet=None) -> dict
     if actual_yield_per_sheet is not None:
         payload["actual_yield_per_sheet"] = actual_yield_per_sheet
     return payload
+
+
+def _parent_payload() -> dict:
+    return {
+        "order_item_id": 1,
+        "cardboard_len": 900,
+        "cardboard_width": 600,
+        "special_process": "一开一",
+    }
 
 
 def test_composite_pending_keeps_one_parent_with_two_component_requirements(
@@ -198,21 +215,18 @@ def test_composite_requires_snapshot_and_creates_one_source_per_component(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [
-                    {
-                        "order_item_id": 1,
-                        "cardboard_len": 1000,
-                        "cardboard_width": 700,
-                        "special_process": "一开一",
-                    }
-                ],
+                "items": [_parent_payload()],
             },
         )
         created = client.post(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [_component_payload(1), _component_payload(2)],
+                "items": [
+                    _parent_payload(),
+                    _component_payload(1),
+                    _component_payload(2),
+                ],
             },
         )
         duplicate = client.post(
@@ -235,12 +249,15 @@ def test_composite_requires_snapshot_and_creates_one_source_per_component(
                 RequisitionItemBomSource.sales_order_item_bom_component_id
             )
         ).all()
-    assert len(requisition_items) == 2
-    assert [row.requisition_qty for row in requisition_items] == [20, 30]
+    assert len(requisition_items) == 3
+    assert [row.requisition_qty for row in requisition_items] == [10, 20, 30]
     assert [row.sales_order_item_bom_component_id for row in sources] == [1, 2]
     assert [int(row.quantity_per_set) for row in sources] == [2, 3]
     assert [int(row.required_piece_quantity) for row in sources] == [20, 30]
-    assert all(row.calculation_rule_version == "n039-v1" for row in sources)
+    assert all(
+        row.calculation_rule_version == "bom-demand-cutting-v2"
+        for row in sources
+    )
 
 
 def test_composite_rejects_non_integer_actual_yield(
@@ -262,6 +279,81 @@ def test_composite_rejects_non_integer_actual_yield(
     assert invalid.status_code == 422
     with session_factory() as session:
         assert session.scalar(select(RequisitionItem.id)) is None
+
+
+def test_legacy_shaped_component_only_batch_is_identified_and_voidable(
+    composite_requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product_bom import RequisitionItemBomSource
+    from app.models.requisition import Requisition, RequisitionItem
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        batch = Requisition(
+            requisition_number="BL-LEGACY-BOM-001",
+            requisition_date=date(2026, 7, 24),
+            supplier_name="N039 供应商",
+            status="已报料",
+            created_by=1,
+        )
+        session.add(batch)
+        session.flush()
+        component_line = RequisitionItem(
+            requisition_id=batch.id,
+            order_item_id=item.id,
+            inventory_deducted_qty=0,
+            requisition_qty=20,
+            cardboard_len=1000,
+            cardboard_width=700,
+            pieces_per_box=2,
+            required_piece_qty=20,
+            special_process="一开一",
+            product_code_snapshot="COMP-A",
+            product_name_snapshot="组件 A",
+            status="有效",
+        )
+        session.add(component_line)
+        session.flush()
+        session.add(
+            RequisitionItemBomSource(
+                requisition_item_id=component_line.id,
+                sales_order_item_bom_component_id=1,
+                order_set_quantity=10,
+                quantity_per_set=Decimal(2),
+                required_piece_quantity=Decimal(20),
+                demand_basis="order_sets",
+                spare_sheet_quantity=0,
+                calculated_purchase_quantity=Decimal(20),
+                calculation_rule_version="n039-v1",
+            )
+        )
+        item.requisition_status = "已报料"
+        item.requisition_qty = 20
+        session.commit()
+        batch_id = batch.id
+
+    with TestClient(app) as client:
+        _login(client)
+        reported = client.get("/api/requisition/reported-documents")
+        voided = client.put(
+            f"/api/requisition/batches/{batch_id}/void",
+            json={"reason": "兼容旧组合报料批次"},
+        )
+        pending = client.get("/api/requisition/pending")
+
+    row = next(
+        entry for entry in reported.json()["items"] if entry["id"] == batch_id
+    )
+    assert row["source_type"] == "composite_bom_requisition"
+    assert row["can_void"] is True
+    assert voided.status_code == 200, voided.text
+    assert voided.json()["status"] == "已取消"
+    assert [
+        source["source_kind"]
+        for source in pending.json()["items"][0]["bom_requisition_sources"]
+    ] == ["parent", "component", "component"]
 
 
 def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
@@ -326,7 +418,7 @@ def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [_component_payload(1)],
+                "items": [_parent_payload(), _component_payload(1)],
             },
         )
 
@@ -339,3 +431,270 @@ def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
     with session_factory() as session:
         source = session.scalar(select(RequisitionItemBomSource))
     assert int(source.calculated_purchase_quantity) == 13
+
+
+def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mode(
+    composite_requisition_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.product_bom import (
+        RequisitionItemBomSource,
+        SalesOrderItemBomComponent,
+        SalesOrderItemBomDemandAdjustment,
+    )
+    from app.models.requisition import RequisitionItem
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        parent = session.get(Product, item.product_id)
+        component = session.get(SalesOrderItemBomComponent, 1)
+        extra = session.get(SalesOrderItemBomComponent, 2)
+        session.delete(extra)
+        item.quantity = 3000
+        item.snapshot_product_code = "T250-OUTER"
+        item.snapshot_product_name = "T250 外包装盒"
+        item.snapshot_report_length_mm = 470
+        item.snapshot_report_width_mm = 600
+        item.special_process = "一开一"
+        parent.product_code = "T250-OUTER"
+        parent.product_name = "T250 外包装盒"
+        component.order_set_quantity = 3000
+        component.quantity_per_set = Decimal(1)
+        component.required_piece_quantity = Decimal(3000)
+        component.snapshot_component_product_code = "T250-LINER"
+        component.snapshot_component_product_name = "T250 内衬"
+        component.snapshot_component_report_length_mm = 575
+        component.snapshot_component_report_width_mm = 550
+        component.snapshot_component_box_style = "刀卡"
+        component.snapshot_component_default_cutting_mode = "一开二"
+        component.snapshot_schema_version = 3
+        component_product = session.get(Product, component.component_product_id)
+        component_product.product_code = "T250-LINER"
+        component_product.product_name = "T250 内衬"
+        component_product.box_style = "刀卡"
+        component_product.default_cutting_mode = "一开二"
+        other_order = Order(
+            order_number="N039-PO-OTHER",
+            customer_id=1,
+            order_date=date(2026, 7, 24),
+            delivery_date=date(2026, 7, 30),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("3000"),
+        )
+        session.add(other_order)
+        session.flush()
+        other_item = OrderItem(
+            order_id=other_order.id,
+            product_id=parent.id,
+            quantity=3000,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("3000"),
+            material_status="pending",
+            requisition_status="已报料",
+            snapshot_product_code=parent.product_code,
+            snapshot_product_name=parent.product_name,
+        )
+        session.add(other_item)
+        session.flush()
+        other_snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=other_item.id,
+            component_product_id=component_product.id,
+            snapshot_schema_version=3,
+            order_set_quantity=3000,
+            quantity_per_set=Decimal(1),
+            required_piece_quantity=Decimal(3000),
+            display_order=1,
+            internal_component_code="T250-OTHER-S01",
+            is_die_cut=False,
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code="T250-LINER",
+            snapshot_component_product_name="T250 内衬",
+            snapshot_component_box_category="normal",
+            snapshot_component_box_style="刀卡",
+            snapshot_component_default_cutting_mode="一开二",
+        )
+        session.add(other_snapshot)
+        session.commit()
+        other_item_id = other_item.id
+
+    with TestClient(app) as client:
+        _login(client)
+        adjusted = client.put(
+            "/api/orders/items/1/bom-components/1/demand",
+            json={
+                "required_piece_quantity": 2700,
+                "expected_required_piece_quantity": 3000,
+                "idempotency_key": "t250-demand-3000-to-2700",
+            },
+        )
+        replay = client.put(
+            "/api/orders/items/1/bom-components/1/demand",
+            json={
+                "required_piece_quantity": 2700,
+                "expected_required_piece_quantity": 3000,
+                "idempotency_key": "t250-demand-3000-to-2700",
+            },
+        )
+        pending = client.get("/api/requisition/pending")
+
+    assert adjusted.status_code == 200, adjusted.text
+    assert replay.status_code == 200, replay.text
+    assert adjusted.json()["ordered_sets"] == 3000
+    assert adjusted.json()["components"][0]["effective_required_piece_quantity"] == 2700
+    assert pending.status_code == 200, pending.text
+    rows = pending.json()["items"]
+    assert len(rows) == 1
+    sources = rows[0]["bom_requisition_sources"]
+    assert [(row["source_kind"], row["product_name"]) for row in sources] == [
+        ("parent", "T250 外包装盒"),
+        ("component", "T250 内衬"),
+    ]
+    assert sources[0]["required_piece_quantity"] == 3000
+    assert sources[0]["report_length_mm"] == 470
+    assert sources[0]["report_width_mm"] == 600
+    assert sources[0]["cutting_mode"] == "一开一"
+    assert sources[0]["requisition_qty"] == 3000
+    assert sources[1]["required_piece_quantity"] == 2700
+    assert sources[1]["report_length_mm"] == 575
+    assert sources[1]["report_width_mm"] == 550
+    assert sources[1]["cutting_mode"] == "一开二"
+    assert sources[1]["yield_per_sheet"] == 2
+    assert sources[1]["requisition_qty"] == 1350
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "N039 供应商",
+                "items": [
+                    {
+                        **_parent_payload(),
+                        "cardboard_len": 470,
+                        "cardboard_width": 600,
+                    },
+                    {
+                        **_component_payload(1),
+                        "cardboard_len": 575,
+                        "cardboard_width": 550,
+                        "special_process": "一开二",
+                    },
+                ],
+            },
+        )
+        duplicate = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "N039 供应商",
+                "items": [_component_payload(1)],
+            },
+        )
+        blocked_history_change = client.put(
+            "/api/orders/items/1/bom-components/1/demand",
+            json={
+                "required_piece_quantity": 2600,
+                "expected_required_piece_quantity": 2700,
+                "idempotency_key": "t250-demand-after-report",
+            },
+        )
+        reported = client.get("/api/requisition/reported-documents")
+
+    assert created.status_code == 201, created.text
+    assert duplicate.status_code == 409
+    assert blocked_history_change.status_code == 409
+    assert "历史单据不能自动重算" in blocked_history_change.text
+    assert reported.status_code == 200, reported.text
+    reported_row = next(
+        row
+        for row in reported.json()["items"]
+        if row["id"] == created.json()["id"]
+        and row["source_type"] == "composite_bom_requisition"
+    )
+    assert reported_row["incoming_status"] == "待入库"
+    assert reported_row["can_void"] is True
+
+    with TestClient(app) as client:
+        _login(client)
+        voided = client.put(
+            f"/api/requisition/batches/{created.json()['id']}/void",
+            json={"reason": "UAT 组合 BOM 报料修正"},
+        )
+        voided_replay = client.put(
+            f"/api/requisition/batches/{created.json()['id']}/void",
+            json={"reason": "UAT 幂等重试"},
+        )
+        pending_after_void = client.get("/api/requisition/pending")
+        reported_after_void = client.get("/api/requisition/reported-documents")
+        restored_template_demand = client.put(
+            "/api/orders/items/1/bom-components/1/demand",
+            json={
+                "required_piece_quantity": 3000,
+                "expected_required_piece_quantity": 2700,
+                "idempotency_key": "t250-demand-restore-template",
+            },
+        )
+        reduced_again = client.put(
+            "/api/orders/items/1/bom-components/1/demand",
+            json={
+                "required_piece_quantity": 2700,
+                "expected_required_piece_quantity": 3000,
+                "idempotency_key": "t250-demand-reduce-again",
+            },
+        )
+
+    assert voided.status_code == 200, voided.text
+    assert voided.json()["status"] == "已取消"
+    assert voided_replay.status_code == 200, voided_replay.text
+    assert pending_after_void.status_code == 200, pending_after_void.text
+    pending_rows = pending_after_void.json()["items"]
+    assert len(pending_rows) == 1
+    assert [
+        source["source_kind"]
+        for source in pending_rows[0]["bom_requisition_sources"]
+    ] == ["parent", "component"]
+    voided_reported_row = next(
+        row
+        for row in reported_after_void.json()["items"]
+        if row["id"] == created.json()["id"]
+        and row["source_type"] == "composite_bom_requisition"
+    )
+    assert voided_reported_row["incoming_status"] == "已作废"
+    assert voided_reported_row["can_void"] is False
+    assert restored_template_demand.status_code == 200
+    assert (
+        restored_template_demand.json()["components"][0][
+            "effective_required_piece_quantity"
+        ]
+        == 3000
+    )
+    assert reduced_again.status_code == 200
+    assert (
+        reduced_again.json()["components"][0]["effective_required_piece_quantity"]
+        == 2700
+    )
+    with session_factory() as session:
+        from app.services.composite_bom_workflow import effective_component_demands
+
+        items = session.scalars(
+            select(RequisitionItem).order_by(RequisitionItem.id)
+        ).all()
+        source = session.scalar(select(RequisitionItemBomSource))
+        adjustments = session.scalars(
+            select(SalesOrderItemBomDemandAdjustment)
+        ).all()
+        component_product = session.scalar(
+            select(Product).where(Product.product_code == "T250-LINER")
+        )
+        other_demand = effective_component_demands(session, other_item_id)[0]
+    assert [row.requisition_qty for row in items] == [3000, 1350]
+    assert [row.status for row in items] == ["已取消", "已取消"]
+    assert int(source.required_piece_quantity) == 2700
+    assert int(source.calculated_purchase_quantity) == 1350
+    assert len(adjustments) == 3
+    assert component_product.default_cutting_mode == "一开二"
+    assert other_demand.required_piece_quantity == 3000

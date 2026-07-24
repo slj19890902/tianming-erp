@@ -234,6 +234,8 @@ def test_n034_order_snapshot_keeps_parent_sets_and_captures_component_material()
         mold_tool_id=mold.id,
         mold_tool=mold,
         box_category="die_cut",
+        box_style="刀卡",
+        default_cutting_mode="一开二",
         production_process="模切",
         unit="片",
         is_internal_component=True,
@@ -271,6 +273,8 @@ def test_n034_order_snapshot_keeps_parent_sets_and_captures_component_material()
     assert values["snapshot_component_layer_count"] == 5
     assert values["snapshot_component_flute_type"] == "BC"
     assert values["snapshot_component_material"] == "K=A"
+    assert values["snapshot_component_default_cutting_mode"] == "一开二"
+    assert values["snapshot_schema_version"] == 3
     assert values["snapshot_mold_tool_id"] == requested_mold.id
     assert values["snapshot_mold_tool_code"] == requested_mold.mold_code
     assert values["snapshot_mold_tool_name"] == requested_mold.mold_name
@@ -334,21 +338,21 @@ def test_n034_unlinked_snapshot_facts_serialize_independently_and_bulk_once() ->
         ),
     ]
 
-    class ScalarRows:
+    class ExecuteRows:
         def all(self):
-            return rows
+            return [(row, 0, 0) for row in rows]
 
     class OneQuerySession:
         def __init__(self):
-            self.scalar_calls = 0
+            self.execute_calls = 0
 
-        def scalars(self, _statement):
-            self.scalar_calls += 1
-            return ScalarRows()
+        def execute(self, _statement):
+            self.execute_calls += 1
+            return ExecuteRows()
 
     session = OneQuerySession()
     grouped = get_order_item_bom_components_by_item_ids(session, {50, 51})
-    assert session.scalar_calls == 1
+    assert session.execute_calls == 1
     assert grouped[50][0]["product_bom_component_id"] is None
     assert grouped[50][0]["product_code"] == "HIST-CODE"
     assert grouped[50][0]["required_piece_quantity"] == Decimal("24")

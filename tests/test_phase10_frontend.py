@@ -89,7 +89,10 @@ def test_phase10_frontend_enforces_auth_and_workshop_finance_masking() -> None:
         'workshop: ["dashboard", "orders", "incoming", "production", '
         '"warehouse", "deliveries"]'
     ) in source
-    assert 'v-else-if="row.source_type!==\'stock_replenishment\' && (isWorkshop || canAdmin)"' in source
+    assert (
+        'v-else-if="row.source_type!==\'stock_replenishment\' '
+        '&& row.incoming_status!==\'已作废\' && (isWorkshop || canAdmin)"'
+    ) in source
 
 
 def test_initial_session_probe_does_not_report_expired_login() -> None:

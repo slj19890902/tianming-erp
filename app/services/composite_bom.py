@@ -19,7 +19,7 @@ import json
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import OperationLog
@@ -655,7 +655,7 @@ def _snapshot_kwargs(
         (("component_product_id",), component.id),
         (("parent_product_version",), parent.version),
         (("component_product_version", "snapshot_product_version", "product_version"), component.version),
-        (("snapshot_schema_version",), 2),
+        (("snapshot_schema_version",), 3),
         (("quantity_per_set", "component_quantity", "qty_per_set"), relation["quantity_per_set"]),
         (("required_piece_quantity", "required_quantity", "total_component_quantity", "snapshot_quantity"), required_quantity),
         (("display_order", "sort_order", "sequence", "sequence_no", "component_sequence"), relation["display_order"]),
@@ -682,6 +682,17 @@ def _snapshot_kwargs(
         (("snapshot_component_flute_type",), component.flute_type or (component.material.flute_type if component.material is not None else None)),
         (("snapshot_component_box_category",), component.box_category),
         (("snapshot_component_box_style",), component.box_style),
+        (
+            ("snapshot_component_default_cutting_mode",),
+            (
+                component.default_cutting_mode
+                if (component.box_style or "").strip()
+                in {"平卡", "模切内盒", "隔板", "刀卡"}
+                and component.default_cutting_mode
+                in {"一开一", "一开二", "一开三", "一开四", "一开五"}
+                else "一开一"
+            ),
+        ),
         (("snapshot_component_production_process", "snapshot_production_process", "component_process_snapshot"), component.production_process),
         (("snapshot_component_report_length_mm",), component.report_length_mm),
         (("snapshot_component_report_width_mm",), component.report_width_mm),
@@ -826,6 +837,21 @@ def _snapshot_response(row: Any, *, fallback_position: int) -> dict[str, Any]:
         "snapshot_spec": snapshot_spec,
         "snapshot_component_material": snapshot_material,
         "snapshot_material": snapshot_material,
+        "snapshot_component_report_length_mm": _mapped_value(
+            row, "snapshot_component_report_length_mm"
+        ),
+        "snapshot_component_report_width_mm": _mapped_value(
+            row, "snapshot_component_report_width_mm"
+        ),
+        "snapshot_component_box_style": _mapped_value(
+            row, "snapshot_component_box_style"
+        ),
+        "snapshot_component_default_cutting_mode": _mapped_value(
+            row,
+            "snapshot_component_default_cutting_mode",
+            default="一开一",
+        )
+        or "一开一",
         "snapshot_product_version": _mapped_value(
             row, "snapshot_product_version", "component_product_version", "product_version"
         ),
@@ -879,8 +905,42 @@ def get_order_item_bom_components_by_item_ids(
         "component_sequence",
         required=False,
     )
-    statement = select(snapshot_model).where(
-        getattr(snapshot_model, item_field).in_(item_ids)
+    from app.models.product_bom import SalesOrderItemBomDemandAdjustment
+
+    adjustment_totals = (
+        select(
+            SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id.label(
+                "snapshot_id"
+            ),
+            func.coalesce(
+                func.sum(
+                    SalesOrderItemBomDemandAdjustment.delta_order_set_quantity
+                ),
+                0,
+            ).label("delta_sets"),
+            func.coalesce(
+                func.sum(
+                    SalesOrderItemBomDemandAdjustment.delta_required_piece_quantity
+                ),
+                0,
+            ).label("delta_pieces"),
+        )
+        .group_by(
+            SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+        )
+        .subquery()
+    )
+    statement = (
+        select(
+            snapshot_model,
+            func.coalesce(adjustment_totals.c.delta_sets, 0),
+            func.coalesce(adjustment_totals.c.delta_pieces, 0),
+        )
+        .outerjoin(
+            adjustment_totals,
+            adjustment_totals.c.snapshot_id == snapshot_model.id,
+        )
+        .where(getattr(snapshot_model, item_field).in_(item_ids))
     )
     if sort_field is not None:
         statement = statement.order_by(
@@ -893,12 +953,17 @@ def get_order_item_bom_components_by_item_ids(
             getattr(snapshot_model, item_field), snapshot_model.id
         )
     result: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids}
-    for row in db.scalars(statement).all():
+    for row, delta_sets, delta_pieces in db.execute(statement).all():
         item_id = int(_mapped_value(row, "sales_order_item_id", "order_item_id"))
         components = result.setdefault(item_id, [])
-        components.append(
-            _snapshot_response(row, fallback_position=len(components) + 1)
+        component = _snapshot_response(row, fallback_position=len(components) + 1)
+        component["effective_order_set_quantity"] = (
+            int(component["order_set_quantity"]) + int(delta_sets or 0)
         )
+        component["effective_required_piece_quantity"] = (
+            int(component["required_piece_quantity"]) + int(delta_pieces or 0)
+        )
+        components.append(component)
     return result
 
 

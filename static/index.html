@@ -3160,7 +3160,7 @@
                     <!-- 规格 -->
                     <td><input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
                     <!-- 数量 -->
-                    <td><div class="order-quantity-inventory"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div></td>
+                    <td><div class="order-quantity-inventory"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="onOrderDraftQuantityInput(item)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div></td>
                     <!-- 单价 -->
                     <td class="sensitive-price"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
                     <!-- 图纸 -->
@@ -3210,6 +3210,24 @@
                     <td colspan="5" style="padding:2px 6px 6px">
                       <input class="input" style="width:100%" :disabled="!orderForm.customer_id"
                         v-model.trim="item.production_notes" placeholder="生产说明（印刷/打勾/摆放/颜色等）" />
+                    </td>
+                  </tr>
+                  <tr v-if="item._bom_loading || item._bom_error || (item.bom_component_demands || []).length">
+                    <td colspan="7" style="padding:4px 6px 8px">
+                      <div style="border:1px solid #c7d2fe;border-radius:6px;padding:7px;background:#f8faff;font-size:12px">
+                        <div class="toolbar-group" style="justify-content:flex-start"><strong>本订单子件数量</strong><span class="muted">默认随父件成套；客户少要时直接改数量，保存订单即可。</span></div>
+                        <div v-if="item._bom_loading" class="muted" style="margin-top:5px">正在读取子件…</div>
+                        <div v-else-if="item._bom_error" class="danger-text" style="margin-top:5px">{{ item._bom_error }}</div>
+                        <div v-else class="bom-preview-list" style="margin-top:5px">
+                          <div v-for="component in item.bom_component_demands" :key="component.product_bom_component_id" class="bom-preview-item" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                            <span style="min-width:220px">{{ orderBomComponentText(component) }}</span>
+                            <span class="muted">成套默认 {{ component._default_required_piece_quantity || "-" }} 个</span>
+                            <input class="input compact-input" style="width:10ch" type="number" min="1" step="1" v-model.number="component.required_piece_quantity" @input="markOrderBomDemandOverride(item,component)" />
+                            <span v-if="component._manual_override" class="status orange">本单已改</span>
+                            <button v-if="component._manual_override" class="btn small" type="button" @click="resetOrderBomDemand(item,component)">恢复成套</button>
+                          </div>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                   <tr v-if="item.product_id && item._inventory">
@@ -3268,7 +3286,7 @@
                 <div class="field"><label>长(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.length_mm" /></div>
                 <div class="field"><label>宽(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.width_mm" /></div>
                 <div class="field"><label>高(mm)</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.height_mm" /></div>
-                <div class="field"><label>实际数量</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.quantity" /></div>
+                <div class="field"><label>实际数量</label><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.quantity" @input="syncOrderBomDemandsForQuantity(orderItemForm)" /></div>
                 <div class="field"><label>客户单价</label><input class="input" type="number" min="0" step="0.01" v-model.number="orderItemForm.unit_price" /></div>
                 <div class="field"><label>销售金额</label><strong>¥ {{ money(orderItemSaleAmount(orderItemForm)) }}</strong></div>
                 <div class="field"><label>规格型号</label><input class="input" v-model.trim="orderItemForm.specification" /></div>
@@ -3314,6 +3332,20 @@
                 <div class="field"><label>压线尺寸</label><div v-if="orderItemForm.snapshot_crease_type==='压线'" class="crease-segments"><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_left_mm" @input="syncOrderItemReportWidthFromCrease" placeholder="上摇盖" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="1" step="1" v-model.number="orderItemForm.snapshot_crease_middle_mm" @input="syncOrderItemReportWidthFromCrease" placeholder="高" /><span class="crease-segment-plus">+</span><input class="input" type="number" min="0" step="1" v-model.number="orderItemForm.snapshot_crease_right_mm" @input="syncOrderItemReportWidthFromCrease" placeholder="下摇盖" /></div><span v-else class="muted">{{ orderItemForm.snapshot_crease_type || "未设置" }}</span></div>
               </div>
               <div v-if="orderItemCreaseMismatch" class="status orange" style="display:block;white-space:normal;margin-bottom:8px">{{ orderItemCreaseMismatch }}</div>
+              <div v-if="orderItemForm._bom_loading || orderItemForm._bom_error || (orderItemForm.bom_component_demands || []).length" class="panel" style="margin:8px 0;padding:10px">
+                <div class="toolbar-group" style="justify-content:flex-start"><strong>本订单子件数量</strong><span class="muted">默认随父件成套；客户本次少要时直接改，和订单一起保存。</span></div>
+                <div v-if="orderItemForm._bom_loading" class="muted" style="margin-top:6px">正在读取子件…</div>
+                <div v-else-if="orderItemForm._bom_error" class="danger-text" style="margin-top:6px">{{ orderItemForm._bom_error }}</div>
+                <div v-else class="bom-preview-list" style="margin-top:6px">
+                  <div v-for="component in orderItemForm.bom_component_demands" :key="component.snapshot_id" class="bom-preview-item" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span style="min-width:220px">{{ orderBomComponentText(component) }}</span>
+                    <span class="muted">成套默认 {{ component._default_required_piece_quantity }} 个</span>
+                    <input class="input compact-input" style="width:10ch" type="number" min="1" step="1" v-model.number="component.required_piece_quantity" @input="markOrderBomDemandOverride(orderItemForm,component)" />
+                    <span v-if="component._manual_override" class="status orange">本单已改</span>
+                    <button v-if="component._manual_override" class="btn small" type="button" @click="resetOrderBomDemand(orderItemForm,component)">恢复成套</button>
+                  </div>
+                </div>
+              </div>
               <div class="product-form-row order-item-notes-row">
                 <div class="field"><label>生产工艺</label><input class="input" v-model.trim="orderItemForm.production_process" placeholder="粘贴、打钉、模切等" /></div>
                 <div class="field"><label>印刷内容</label><select class="select" v-model="orderItemForm.print_content"><option value="无印刷">无印刷</option><option value="单色印刷">单色印刷</option><option value="双色印刷">双色印刷</option><option value="多色印刷">多色印刷</option></select></div>
@@ -6107,6 +6139,13 @@
               if (Number.isNaN(Number(item.unit_price)) || Number(item.unit_price) < 0) {
                 return `第 ${index + 1} 条单价必须是大于等于 0 的数字`;
               }
+              if (item._bom_loading) return `第${index + 1}条子件仍在读取，请稍候再保存`;
+              if (item._bom_error) return `第${index + 1}条子件读取失败：${item._bom_error}`;
+              for (const component of (item.bom_component_demands || [])) {
+                if (!Number.isInteger(Number(component.required_piece_quantity)) || Number(component.required_piece_quantity) <= 0) {
+                  return `第${index + 1}条子件“${component.product_name || component.internal_code || "未命名"}”数量必须是正整数`;
+                }
+              }
               const inventoryError = this.inventoryDecisionRequired(item);
               if (inventoryError) return `第${index + 1}条${inventoryError}`;
             }
@@ -8643,6 +8682,117 @@
           hasBomComponents(item) {
             return Array.isArray(item?.bom_components) && item.bom_components.length > 0;
           },
+          orderBomComponentText(component) {
+            const code = component?.internal_code || component?.product_code || "-";
+            const name = component?.product_name || component?.name || "内部组件";
+            const perSet = Number(component?.quantity_per_set || 1);
+            return `${code}｜${name}｜每套 ${perSet} 个`;
+          },
+          orderBomDefaultDemand(owner, component) {
+            const quantity = Number(owner?.quantity || 0);
+            const perSet = Number(component?.quantity_per_set || 1);
+            if (!Number.isInteger(quantity) || quantity <= 0 || !Number.isInteger(perSet) || perSet <= 0) return null;
+            return quantity * perSet;
+          },
+          normalizeOrderBomDemand(owner, raw, existing=false) {
+            const normalized = this.normalizeBomComponent(raw);
+            const current = existing
+              ? Number(raw?.effective_required_piece_quantity ?? raw?.required_piece_quantity ?? 0)
+              : this.orderBomDefaultDemand(owner, normalized);
+            const defaultDemand = this.orderBomDefaultDemand(owner, normalized);
+            const loadedManual = existing && Number.isInteger(current) && current > 0 && current !== defaultDemand;
+            return {
+              ...normalized,
+              product_bom_component_id: raw?.product_bom_component_id ?? raw?.id ?? null,
+              snapshot_id: existing ? Number(raw?.id || 0) : null,
+              required_piece_quantity: Number.isInteger(current) && current > 0 ? current : defaultDemand,
+              expected_required_piece_quantity: existing ? current : null,
+              idempotency_key: createIdempotencyKey(),
+              _default_required_piece_quantity: defaultDemand,
+              _loaded_required_piece_quantity: existing ? current : null,
+              _loaded_manual_override: loadedManual,
+              _manual_override: loadedManual,
+              _explicitly_edited: false,
+              _dirty: false,
+            };
+          },
+          async loadOrderDraftBom(item, productId) {
+            item._bom_loading = true;
+            item._bom_error = "";
+            item.bom_component_demands = [];
+            try {
+              const {data} = await axios.get(`/api/master/products/${productId}/bom`);
+              if (data?.is_composite) {
+                item.bom_component_demands = (data.components || []).map(component =>
+                  this.normalizeOrderBomDemand(item, component, false)
+                );
+                if (!item.bom_component_demands.length) item._bom_error = "该组合产品没有有效子件，请先维护常用箱 BOM";
+              }
+            } catch (error) {
+              item._bom_error = this.errorMessage(error);
+            } finally {
+              item._bom_loading = false;
+            }
+          },
+          async loadExistingOrderItemBom(form) {
+            if (!form?.id) return;
+            form._bom_loading = true;
+            form._bom_error = "";
+            form.bom_component_demands = [];
+            try {
+              const {data} = await axios.get(`/api/orders/items/${form.id}/bom`);
+              if (data?.is_composite) {
+                form.bom_component_demands = (data.components || []).map(component =>
+                  this.normalizeOrderBomDemand(form, component, true)
+                );
+              }
+            } catch (error) {
+              form._bom_error = this.errorMessage(error);
+            } finally {
+              form._bom_loading = false;
+            }
+          },
+          syncOrderBomDemandsForQuantity(owner) {
+            for (const component of (owner?.bom_component_demands || [])) {
+              const previousDefault = component._default_required_piece_quantity;
+              const defaultDemand = this.orderBomDefaultDemand(owner, component);
+              component._default_required_piece_quantity = defaultDemand;
+              if (component._manual_override) {
+                if (component.snapshot_id && defaultDemand !== previousDefault) component._dirty = true;
+                continue;
+              }
+              component.required_piece_quantity = defaultDemand;
+              if (component.snapshot_id) {
+                component._dirty = component._explicitly_edited
+                  ? Number(defaultDemand) !== Number(component._loaded_required_piece_quantity)
+                  : Boolean(component._loaded_manual_override);
+              }
+            }
+          },
+          onOrderDraftQuantityInput(item) {
+            this.syncOrderBomDemandsForQuantity(item);
+            this.scheduleOrderLineInventoryRefresh(item, this.orderForm.customer_id);
+          },
+          markOrderBomDemandOverride(owner, component) {
+            const target = Number(component?.required_piece_quantity || 0);
+            const defaultDemand = this.orderBomDefaultDemand(owner, component);
+            component._default_required_piece_quantity = defaultDemand;
+            component._manual_override = Number.isInteger(target) && target > 0 && target !== defaultDemand;
+            component._explicitly_edited = true;
+            if (component.snapshot_id) {
+              component._dirty = target !== Number(component._loaded_required_piece_quantity);
+            }
+          },
+          resetOrderBomDemand(owner, component) {
+            const defaultDemand = this.orderBomDefaultDemand(owner, component);
+            component.required_piece_quantity = defaultDemand;
+            component._default_required_piece_quantity = defaultDemand;
+            component._manual_override = false;
+            component._explicitly_edited = true;
+            if (component.snapshot_id) {
+              component._dirty = Number(defaultDemand) !== Number(component._loaded_required_piece_quantity);
+            }
+          },
           bomPreviewComponentLabel(component) {
             const code = component?.internal_code || component?.component_internal_code || component?.product_code || component?.component_product_id || "-";
             const name = component?.product_name || component?.name || "内部组件";
@@ -10536,17 +10686,21 @@
                   specification: item.specification, sale_unit_price: item.product_default_price,
                   layer_count: item.layer_count, flute_type: item.flute_type
                 } : null,
-                client_line_id: item.client_line_id || createIdempotencyKey(),
-                _inventory: item._inventory || this.newOrderInventoryState(),
-                _inventory_product: item._inventory_product || null,
-              })),
+                 client_line_id: item.client_line_id || createIdempotencyKey(),
+                 _inventory: item._inventory || this.newOrderInventoryState(),
+                 _inventory_product: item._inventory_product || null,
+                 bom_component_demands: [],
+                 _bom_loading: false,
+                 _bom_error: "",
+               })),
             };
             this.orderProductOptions = {};
             this.modal = { type:"order", title:"新建多明细订单（PDF草稿）" };
-            for (let index = 0; index < this.orderForm.items.length; index += 1) {
-              await this.searchOrderProducts(index, this.orderForm.items[index].product_code || "");
-              if (this.orderForm.items[index].product_id && !this.inventoryStateMatchesLine(this.orderForm.items[index], this.orderForm.customer_id)) await this.loadOrderLineInventory(this.orderForm.items[index], this.orderForm.customer_id);
-            }
+             for (let index = 0; index < this.orderForm.items.length; index += 1) {
+               await this.searchOrderProducts(index, this.orderForm.items[index].product_code || "");
+               if (this.orderForm.items[index].product_id) await this.loadOrderDraftBom(this.orderForm.items[index], this.orderForm.items[index].product_id);
+               if (this.orderForm.items[index].product_id && !this.inventoryStateMatchesLine(this.orderForm.items[index], this.orderForm.customer_id)) await this.loadOrderLineInventory(this.orderForm.items[index], this.orderForm.customer_id);
+             }
             this.reallocateAllDraftInventory();
             await this.refreshOrderNumberPreview();
           },
@@ -10762,6 +10916,9 @@
               drawing_save_option: "order_only", // "order_only"|"save_to_product"|"overwrite_product"
               client_line_id: createIdempotencyKey(),
               _inventory: this.newOrderInventoryState(),
+              bom_component_demands: [],
+              _bom_loading: false,
+              _bom_error: "",
             });
             if (this.orderForm.customer_id) this.searchOrderProducts(index, "");
             if (this.modal?.type === "order") this.refreshOrderNumberPreview();
@@ -10805,6 +10962,12 @@
             item._material_weight = data.material_weight || "";
             item._product_drawings = data.drawings || [];
             item._inventory_product = data;
+            if (data.is_composite) await this.loadOrderDraftBom(item, data.id);
+            else {
+              item.bom_component_demands = [];
+              item._bom_loading = false;
+              item._bom_error = "";
+            }
             // 保存原始常用箱字段，用于提交时比对是否需要同步
             item._original_product = { specification: this.spec(data), sale_unit_price: data.sale_unit_price, layer_count: data.layer_count, flute_type: data.flute_type, version:data.version };
             await this.recalculateOrderCost(index);
@@ -10978,9 +11141,15 @@
               _material_supplier: mat?.supplier_name || item.snapshot_supplier_name || product.material_supplier_name || "",
               _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
               _report_crease_touched:false,
+              bom_component_demands: [],
+              _bom_loading:false,
+              _bom_error:"",
             };
             this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(order)} 明细` };
-            await this.loadFinishedInventoryReservations(item.id);
+            await Promise.all([
+              this.loadFinishedInventoryReservations(item.id),
+              this.loadExistingOrderItemBom(this.orderItemForm),
+            ]);
           },
           async loadFinishedInventoryCandidates() {
             try {
@@ -12232,6 +12401,13 @@
                     is_new_product: item.is_new_product || false,
                     temp_drawing_token: item.temp_drawing_token || null,
                     drawing_save_option: item.temp_drawing_token ? (item.drawing_save_option || "order_only") : null,
+                    bom_component_demands: (item.bom_component_demands || [])
+                      .filter(component => component._manual_override)
+                      .map(component => ({
+                        product_bom_component_id:Number(component.product_bom_component_id),
+                        required_piece_quantity:Number(component.required_piece_quantity),
+                        idempotency_key:component.idempotency_key || createIdempotencyKey(),
+                      })),
                   })),
                 };
                 await axios.post("/api/orders", orderPayload);
@@ -12255,6 +12431,23 @@
               if (this.modal.type === "orderItem") {
                 const payload = {...this.orderItemForm}; delete payload.id; delete payload.order_number;
                 delete payload._report_crease_touched;
+                if (this.orderItemForm._bom_loading) throw new Error("子件仍在读取，请稍候再保存");
+                if (this.orderItemForm._bom_error) throw new Error(`子件读取失败：${this.orderItemForm._bom_error}`);
+                for (const component of (this.orderItemForm.bom_component_demands || [])) {
+                  if (!Number.isInteger(Number(component.required_piece_quantity)) || Number(component.required_piece_quantity) <= 0) {
+                    throw new Error(`子件“${component.product_name || component.internal_code || "未命名"}”数量必须是正整数`);
+                  }
+                }
+                payload.bom_component_demands = (this.orderItemForm.bom_component_demands || [])
+                  .filter(component => component._dirty)
+                  .map(component => ({
+                    snapshot_id:Number(component.snapshot_id),
+                    required_piece_quantity:Number(component.required_piece_quantity),
+                    expected_required_piece_quantity:Number(component.expected_required_piece_quantity),
+                    idempotency_key:component.idempotency_key || createIdempotencyKey(),
+                  }));
+                delete payload._bom_loading;
+                delete payload._bom_error;
                 if (!Number.isInteger(Number(payload.quantity)) || Number(payload.quantity) <= 0) throw new Error("实际数量必须是大于0的整数");
                 payload.material = this.orderItemForm._material_display || this.orderItemForm.material || null;
                 payload.material_id = this.orderItemForm.material_id || null;

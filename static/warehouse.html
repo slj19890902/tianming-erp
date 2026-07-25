@@ -577,14 +577,15 @@
       }
     }
     async function applyWarehouseDeepLink(){
-      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),locationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id"));
+      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),locationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id")),keyword=String(params.get("keyword")||"").trim();
       if(requestedTab&&["finished","semi_finished"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
       if(locationId)selectLocationCascade("areaFilter","locationFilter",locationId,state.tab);
+      if(keyword)$("keywordFilter").value=keyword;
       if(lotId){
         const row=(state.lots||[]).find(item=>Number(item.id)===lotId);
         if(row){$("keywordFilter").value=row.lot_number||"";if(row.location?.id)selectLocationCascade("areaFilter","locationFilter",row.location.id,state.tab)}
       }
-      if(locationId||lotId){await loadLots();const target=lotId?(state.lots||[]).find(item=>Number(item.id)===lotId):null;toast(target?`已定位库存批次 ${target.lot_number}`:"已按生产记录定位库存货位");$("lotTable").scrollIntoView({behavior:"smooth",block:"start"})}
+      if(locationId||lotId||keyword){await loadLots();const target=lotId?(state.lots||[]).find(item=>Number(item.id)===lotId):null;toast(target?`已定位库存批次 ${target.lot_number}`:keyword?`已按 ${keyword} 筛选库存位置`:"已按生产记录定位库存货位");$("lotTable").scrollIntoView({behavior:"smooth",block:"start"})}
     }
     function bind(){
       document.querySelectorAll("[data-tab]").forEach(btn=>btn.onclick=()=>switchTab(btn.dataset.tab));
@@ -908,7 +909,8 @@
       $("lotBody").innerHTML=state.lots.map(row=>{
         const d=row.detail,ageLabel=row.age_days==null?"日期不明":row.stock_date_accuracy==="estimated"?`约 ${row.age_days}天`:`${row.age_days}天`,w=row.age_warning_level?`<span class="tag ${row.age_warning_level==="cleanup"?"red":"warn"}" title="${h(row.age_warning_text||"")}">${ageLabel}</span>`:ageLabel;
         const common=`<td><span class="lot-batch" title="${h(row.lot_number)}"><b>${h(row.lot_number)}</b></span><span class="tag lot-status">${h(labels[row.status]||row.status)}</span></td>`;
-        const detail=finished?`<td><span class="lot-customer" title="${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}">${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}</span></td><td>${h(d.inventory_code||"-")}<br>${h(d.product_name||"-")}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td><span class="lot-material">${h(d.material_code||"-")}</span><span class="lot-flute">${h(d.flute_type||"-")}</span></td>`:`<td>${d.supplier_name||"-"}<br>${d.owner_customer_name||"未指定客户"}</td><td>${d.material_code} / ${d.flute_type}</td><td>${d.board_length_mm} × ${d.board_width_mm} mm</td><td>${d.sheet_type}<br><span class="muted">${d.cutting_note||"-"}</span></td>`;
+        const allowedProductCodes=(d.allowed_products||[]).map(item=>item.product_code).filter(Boolean);
+        const detail=finished?`<td><span class="lot-customer" title="${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}">${h(d.is_general?"通用库存":(d.owner_customer_name||"-"))}</span></td><td>${h(d.inventory_code||"-")}<br>${h(d.product_name||"-")}</td><td>${[d.length_mm,d.width_mm,d.height_mm].filter(x=>x!=null).join(" × ")||"-"} mm</td><td><span class="lot-material">${h(d.material_code||"-")}</span><span class="lot-flute">${h(d.flute_type||"-")}</span></td>`:`<td><strong>${h(d.inventory_display_name||"半成品片料")}</strong><br>${h(d.supplier_name||"-")}<br>${h(d.owner_customer_name||"未指定客户")}</td><td>${h(d.material_code||"-")} / ${h(d.flute_type||"-")}</td><td>${h(d.board_length_mm)} × ${h(d.board_width_mm)} mm</td><td>${h(d.sheet_type||"-")}<br><span class="muted">${allowedProductCodes.length?`可供：${h(allowedProductCodes.join("、"))}`:h(d.cutting_note||"-")}</span></td>`;
         const balances=finished?`<td><b>${row.quantity_available}</b> 个</td><td><button class="btn" onclick="showLotReservations(${row.id},'${row.lot_number}')">${row.quantity_reserved} 个</button></td><td>${row.quantity_consumed} 个</td>`:`<td><b>${row.quantity_available}</b> ${labels[row.unit]}</td>`;
         const locationText=`${row.location.location_code}${row.floor3_binding?`<br><span class="tag blue">三楼已绑定</span><br><span class="muted">${h(row.floor3_binding.pallet_code)}</span>`:""}`;
         return `<tr>${common}${detail}<td>${locationText}</td>${balances}<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td></tr>`}).join("");

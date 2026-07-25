@@ -49,6 +49,7 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
     WarehouseLocation,
 )
 from app.services.floor3_locations import (
@@ -1112,6 +1113,9 @@ def _lot_query():
             selectinload(InventoryLot.location),
             selectinload(InventoryLot.finished_detail),
             selectinload(InventoryLot.semi_finished_detail),
+            selectinload(InventoryLot.allowed_products).selectinload(
+                SemiFinishedLotAllowedProduct.product
+            ),
             selectinload(InventoryLot.pallet_item).selectinload(
                 InventoryPalletItem.pallet
             ),
@@ -1213,6 +1217,15 @@ def _lot_dict(row: InventoryLot) -> dict:
         }
     elif row.semi_finished_detail:
         item = row.semi_finished_detail
+        allowed_products = [
+            {
+                "id": binding.product_id,
+                "product_code": binding.product.product_code,
+                "product_name": binding.product.product_name,
+            }
+            for binding in row.allowed_products
+            if binding.product is not None
+        ]
         detail = {
             "supplier_name": item.supplier_name,
             "owner_customer_id": item.owner_customer_id,
@@ -1233,6 +1246,12 @@ def _lot_dict(row: InventoryLot) -> dict:
             "crease_middle_mm": item.crease_middle_mm,
             "crease_right_mm": item.crease_right_mm,
             "cutting_note": item.cutting_note,
+            "inventory_display_name": (
+                "客户专用纸板备料"
+                if item.owner_customer_id is not None
+                else "通用半成品片料"
+            ),
+            "allowed_products": allowed_products,
         }
     return {
         "id": row.id,
@@ -3982,12 +4001,27 @@ def list_lots(
                 SemiFinishedInventoryDetail.cutting_note.like(pattern),
             )
         )
+        allowed_product_lot_ids = (
+            select(SemiFinishedLotAllowedProduct.inventory_lot_id)
+            .join(
+                Product,
+                Product.id == SemiFinishedLotAllowedProduct.product_id,
+            )
+            .where(
+                or_(
+                    Product.product_code.like(pattern),
+                    Product.customer_material_code.like(pattern),
+                    Product.product_name.like(pattern),
+                )
+            )
+        )
         query = query.where(
             or_(
                 InventoryLot.lot_number.like(pattern),
                 InventoryLot.warehouse_location_id.in_(location_ids),
                 InventoryLot.id.in_(finished_lot_ids),
                 InventoryLot.id.in_(semi_lot_ids),
+                InventoryLot.id.in_(allowed_product_lot_ids),
             )
         )
     if stale_level:

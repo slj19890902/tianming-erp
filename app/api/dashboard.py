@@ -32,7 +32,12 @@ from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
 from app.services.inventory_insights import build_inventory_insights
-from app.services.stock_replenishment import stock_policy_dict
+from app.services.stock_replenishment import (
+    product_replenishment_defaults,
+    product_replenishment_signature,
+    stock_policy_dict,
+    theoretical_requisition_quantity,
+)
 
 
 router = APIRouter()
@@ -228,7 +233,9 @@ def _common_box_low_stock_warnings(
         select(InventoryStockPolicy)
         .join(Product, Product.id == InventoryStockPolicy.product_id)
         .options(
-            selectinload(InventoryStockPolicy.product),
+            selectinload(InventoryStockPolicy.product).selectinload(
+                Product.material
+            ),
             selectinload(InventoryStockPolicy.customer),
             selectinload(InventoryStockPolicy.default_location),
         )
@@ -248,10 +255,16 @@ def _common_box_low_stock_warnings(
         item = stock_policy_dict(db, policy)
         if not item["warning_triggered"]:
             continue
+        product = policy.product
+        if product is None:
+            continue
+        defaults = product_replenishment_defaults(product)
+        signature = product_replenishment_signature(product)
         warnings.append(
             {
                 "policy_id": item["id"],
                 "product_id": item["product_id"],
+                "customer_id": item["customer_id"],
                 "customer_name": item["customer_name"],
                 "product_code": item["product_code"],
                 "product_name": item["product_name"],
@@ -261,7 +274,37 @@ def _common_box_low_stock_warnings(
                 "suggested_replenishment_quantity": item[
                     "suggested_replenishment_quantity"
                 ],
+                "material_code": defaults["material_code"],
+                "supplier_name": defaults["material_supplier_name"],
+                "layer_count": defaults["layer_count"],
+                "flute_type": defaults["flute_type"],
+                "report_length_mm": defaults["report_length_mm"],
+                "report_width_mm": defaults["report_width_mm"],
+                "crease_type": defaults["crease_type"],
+                "cutting_mode": defaults["cutting_mode"],
+                "output_per_sheet": defaults["output_per_sheet"],
+                "theoretical_requisition_quantity": (
+                    theoretical_requisition_quantity(
+                        item["suggested_replenishment_quantity"],
+                        defaults["cutting_mode"],
+                    )
+                ),
+                "draft_ready": defaults["draft_ready"],
+                "missing_fields": defaults["missing_fields"],
+                "_replenishment_signature": signature,
             }
+        )
+    signature_counts: dict[tuple, int] = {}
+    for item in warnings:
+        signature = item["_replenishment_signature"]
+        if signature is not None:
+            signature_counts[signature] = signature_counts.get(signature, 0) + 1
+    for item in warnings:
+        signature = item.pop("_replenishment_signature")
+        item["same_spec_warning_count"] = (
+            max(signature_counts.get(signature, 0) - 1, 0)
+            if signature is not None
+            else 0
         )
     return sorted(
         warnings,

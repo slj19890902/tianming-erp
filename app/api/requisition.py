@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from contextlib import nullcontext
@@ -58,6 +59,7 @@ from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
     OrderItemSemiRequirement,
+    SemiFinishedLotAllowedProduct,
     WarehouseLocation,
 )
 from app.services.history_orders import (
@@ -76,9 +78,12 @@ from app.services.stock_replenishment import (
     StockReplenishmentError,
     finished_product_quantity_summary,
     next_replenishment_order_number,
+    product_replenishment_defaults,
+    product_replenishment_signature,
     replenishment_order_dict,
     stock_policy_dict,
     stock_replenishment_order,
+    theoretical_requisition_quantity,
     validate_stock_policy,
 )
 from app.services.flute_mapping import (
@@ -615,6 +620,7 @@ class StockReplenishmentItemPayload(BaseModel):
 
 class StockReplenishmentCreatePayload(BaseModel):
     source_type: str = "manual_history"
+    idempotency_key: str | None = Field(default=None, max_length=80)
     supplier_name: str | None = Field(default=None, max_length=200)
     customer_id: int | None = None
     remark: str | None = None
@@ -628,6 +634,12 @@ class StockReplenishmentCreatePayload(BaseModel):
         if normalized not in {"stock_warning", "customer_request", "manual_history"}:
             raise ValueError("补库来源类型无效")
         return normalized
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
 
 
 class PendingSupplierOrderDraftItem(BaseModel):
@@ -5057,7 +5069,7 @@ def void_composite_requisition_batch(
 
 def _stock_policy_query():
     return select(InventoryStockPolicy).options(
-        selectinload(InventoryStockPolicy.product),
+        selectinload(InventoryStockPolicy.product).selectinload(Product.material),
         selectinload(InventoryStockPolicy.customer),
         selectinload(InventoryStockPolicy.default_location),
     )
@@ -5653,33 +5665,241 @@ def stock_policy_replenishment_draft(
         raise HTTPException(status_code=404, detail="库存预警策略不存在。")
     _require_stock_policy_customer_access(db, policy, _user)
     summary = _stock_policy_summary(db, policy, _user)
+    product = policy.product
+    if product is None and policy.target_inventory_type == "semi_finished":
+        return {
+            "source_type": "stock_warning",
+            "supplier_name": policy.supplier_name,
+            "customer_id": policy.customer_id,
+            "stock_now": False,
+            "draft_ready": True,
+            "missing_fields": [],
+            "items": [
+                {
+                    "stock_policy_id": policy.id,
+                    "target_inventory_type": policy.target_inventory_type,
+                    "product_id": None,
+                    "customer_id": policy.customer_id,
+                    "product_code": None,
+                    "product_name": policy.policy_name,
+                    "material_id": None,
+                    "material_code": policy.material_code_snapshot,
+                    "material_supplier_name": policy.supplier_name,
+                    "layer_count": policy.layer_count,
+                    "flute_type": policy.flute_type,
+                    "report_length_mm": policy.report_length_mm,
+                    "report_width_mm": policy.report_width_mm,
+                    "crease_type": None,
+                    "crease_left_mm": None,
+                    "crease_middle_mm": None,
+                    "crease_right_mm": None,
+                    "sheet_type": policy.sheet_type,
+                    "component_type": policy.component_type,
+                    "pieces_per_box": policy.pieces_per_box,
+                    "stock_yield_per_sheet": policy.stock_yield_per_sheet,
+                    "quantity": summary["suggested_replenishment_quantity"],
+                    "location_id": policy.default_location_id,
+                    "remark": policy.remark,
+                    "cutting_mode": "一开一",
+                    "output_per_sheet": 1,
+                    "theoretical_requisition_quantity": summary[
+                        "suggested_replenishment_quantity"
+                    ],
+                    "draft_ready": True,
+                    "missing_fields": [],
+                }
+            ],
+            "compatible_products": [],
+            "policy_summary": summary,
+        }
+    if product is None or product.deleted_at is not None or not product.is_active:
+        raise HTTPException(status_code=409, detail="库存预警关联的常用箱不可用。")
+    defaults = product_replenishment_defaults(product)
+
+    def draft_item(
+        draft_policy: InventoryStockPolicy,
+        draft_summary: dict,
+        draft_product: Product,
+    ) -> dict:
+        product_defaults = product_replenishment_defaults(draft_product)
+        finished_quantity = int(
+            draft_summary["suggested_replenishment_quantity"] or 0
+        )
+        crease_type = product_defaults["crease_type"]
+        sheet_type = (
+            "creased_sheet"
+            if crease_type == "压线"
+            else "net_sheet"
+            if crease_type == "净料"
+            else "raw_board"
+        )
+        theoretical_quantity = theoretical_requisition_quantity(
+            finished_quantity,
+            product_defaults["cutting_mode"],
+        )
+        return {
+            "stock_policy_id": draft_policy.id,
+            "target_inventory_type": "semi_finished",
+            "product_id": draft_product.id,
+            "customer_id": draft_product.customer_id,
+            "product_code": draft_product.product_code,
+            "product_name": draft_product.product_name,
+            "material_id": product_defaults["material_id"],
+            "material_code": (
+                draft_policy.material_code_snapshot
+                or product_defaults["material_code"]
+            ),
+            "material_supplier_name": (
+                product_defaults["material_supplier_name"]
+                or draft_policy.supplier_name
+            ),
+            "layer_count": (
+                draft_policy.layer_count or product_defaults["layer_count"]
+            ),
+            "flute_type": (
+                draft_policy.flute_type or product_defaults["flute_type"]
+            ),
+            "report_length_mm": (
+                draft_policy.report_length_mm
+                or product_defaults["report_length_mm"]
+            ),
+            "report_width_mm": (
+                draft_policy.report_width_mm
+                or product_defaults["report_width_mm"]
+            ),
+            "crease_type": crease_type,
+            "crease_left_mm": product_defaults["crease_left_mm"],
+            "crease_middle_mm": product_defaults["crease_middle_mm"],
+            "crease_right_mm": product_defaults["crease_right_mm"],
+            "sheet_type": sheet_type,
+            "component_type": draft_policy.component_type,
+            "pieces_per_box": product_defaults["pieces_per_box"],
+            "stock_yield_per_sheet": product_defaults["output_per_sheet"],
+            "quantity": theoretical_quantity,
+            "suggested_finished_quantity": finished_quantity,
+            "location_id": None,
+            "remark": draft_policy.remark,
+            "cutting_mode": product_defaults["cutting_mode"],
+            "output_per_sheet": product_defaults["output_per_sheet"],
+            "theoretical_requisition_quantity": theoretical_quantity,
+            "draft_ready": product_defaults["draft_ready"],
+            "missing_fields": product_defaults["missing_fields"],
+        }
+
+    primary_item = draft_item(policy, summary, product)
+    signature = product_replenishment_signature(product)
+    compatible_board_products = [
+        {
+            "product_id": product.id,
+            "product_code": product.product_code,
+            "product_name": product.product_name,
+        }
+    ]
+    compatible_products: list[dict] = []
+    if signature is not None:
+        candidates = db.scalars(
+            select(Product)
+            .options(
+                selectinload(Product.material),
+                selectinload(Product.customer),
+            )
+            .where(
+                Product.customer_id == product.customer_id,
+                Product.id != product.id,
+                Product.is_active.is_(True),
+                Product.deleted_at.is_(None),
+            )
+            .order_by(Product.product_code)
+        ).all()
+        for candidate in candidates:
+            if product_replenishment_signature(candidate) != signature:
+                continue
+            compatible_board_products.append(
+                {
+                    "product_id": candidate.id,
+                    "product_code": candidate.product_code,
+                    "product_name": candidate.product_name,
+                }
+            )
+            candidate_policies = _active_finished_stock_policies(
+                db,
+                product_id=candidate.id,
+            )
+            if len(candidate_policies) != 1:
+                continue
+            candidate_policy = candidate_policies[0]
+            if _stock_policy_customer_id(
+                db,
+                candidate_policy,
+                relationships_loaded=True,
+            ) != candidate.customer_id:
+                continue
+            candidate_summary = _stock_policy_summary(
+                db,
+                candidate_policy,
+                _user,
+            )
+            compatible_products.append(
+                {
+                    "policy_id": candidate_policy.id,
+                    "product_id": candidate.id,
+                    "product_code": candidate.product_code,
+                    "product_name": candidate.product_name,
+                    "available_quantity": candidate_summary[
+                        "available_quantity"
+                    ],
+                    "warning_quantity": candidate_summary["warning_quantity"],
+                    "target_quantity": candidate_summary["target_quantity"],
+                    "warning_triggered": candidate_summary[
+                        "warning_triggered"
+                    ],
+                    "suggested_replenishment_quantity": candidate_summary[
+                        "suggested_replenishment_quantity"
+                    ],
+                    "draft_item": draft_item(
+                        candidate_policy,
+                        candidate_summary,
+                        candidate,
+                    ),
+                }
+            )
+    compatible_products.sort(
+        key=lambda item: (
+            not item["warning_triggered"],
+            item["product_code"] or "",
+        )
+    )
+    compatible_board_products.sort(
+        key=lambda item: item["product_code"] or ""
+    )
+    compatible_board_product_ids = [
+        item["product_id"] for item in compatible_board_products
+    ]
+    compatible_board_product_codes = [
+        item["product_code"] for item in compatible_board_products
+    ]
+    for draft in [
+        primary_item,
+        *[
+            item["draft_item"]
+            for item in compatible_products
+            if item.get("draft_item")
+        ],
+    ]:
+        draft["compatible_product_ids"] = compatible_board_product_ids
+        draft["compatible_product_codes"] = compatible_board_product_codes
     return {
         "source_type": "stock_warning",
-        "supplier_name": policy.supplier_name,
+        "supplier_name": (
+            defaults["material_supplier_name"] or policy.supplier_name
+        ),
         "customer_id": policy.customer_id,
         "stock_now": False,
-        "items": [
-            {
-                "stock_policy_id": policy.id,
-                "target_inventory_type": policy.target_inventory_type,
-                "product_id": policy.product_id,
-                "customer_id": policy.customer_id,
-                "product_code": summary["product_code"],
-                "product_name": summary["product_name"] or policy.policy_name,
-                "material_code": policy.material_code_snapshot,
-                "layer_count": policy.layer_count,
-                "flute_type": policy.flute_type,
-                "report_length_mm": policy.report_length_mm,
-                "report_width_mm": policy.report_width_mm,
-                "sheet_type": policy.sheet_type,
-                "component_type": policy.component_type,
-                "pieces_per_box": policy.pieces_per_box,
-                "stock_yield_per_sheet": policy.stock_yield_per_sheet,
-                "quantity": summary["suggested_replenishment_quantity"],
-                "location_id": policy.default_location_id,
-                "remark": policy.remark,
-            }
-        ],
+        "draft_ready": primary_item["draft_ready"],
+        "missing_fields": primary_item["missing_fields"],
+        "items": [primary_item],
+        "compatible_products": compatible_products,
+        "compatible_board_products": compatible_board_products,
         "policy_summary": summary,
     }
 
@@ -5692,6 +5912,8 @@ def _replenishment_order_query():
         ),
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.inventory_lot
+        ).selectinload(InventoryLot.allowed_products).selectinload(
+            SemiFinishedLotAllowedProduct.product
         ),
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.customer
@@ -5715,12 +5937,21 @@ def _coalesce(value, fallback):
 def _build_replenishment_item(
     db: Session,
     payload: StockReplenishmentItemPayload,
+    *,
+    source_type: str,
 ) -> StockReplenishmentOrderItem:
     policy = db.get(InventoryStockPolicy, payload.stock_policy_id) if payload.stock_policy_id else None
     if payload.stock_policy_id and policy is None:
         raise StockReplenishmentError("库存预警策略不存在。", 404)
     if policy and policy.target_inventory_type != payload.target_inventory_type:
-        raise StockReplenishmentError("补库明细类型与库存预警策略不一致。")
+        warning_finished_to_customer_board = (
+            source_type == "stock_warning"
+            and policy.target_inventory_type == "finished"
+            and payload.target_inventory_type == "semi_finished"
+            and policy.product_id is not None
+        )
+        if not warning_finished_to_customer_board:
+            raise StockReplenishmentError("补库明细类型与库存预警策略不一致。")
 
     product_id = _coalesce(payload.product_id, policy.product_id if policy else None)
     product = db.get(Product, product_id) if product_id else None
@@ -5836,7 +6067,130 @@ def create_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
-        items = [_build_replenishment_item(db, item) for item in payload.items]
+        if payload.source_type == "stock_warning" and payload.stock_now:
+            raise StockReplenishmentError(
+                "库存预警只能先生成报料草稿，不能保存后直接写入库存。"
+            )
+        stock_warning_order_number: str | None = None
+        if payload.source_type == "stock_warning":
+            if payload.idempotency_key is None:
+                raise StockReplenishmentError(
+                    "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
+                )
+            key_digest = hashlib.sha256(
+                payload.idempotency_key.encode("utf-8")
+            ).hexdigest()[:20].upper()
+            stock_warning_order_number = (
+                f"CBW-{beijing_today():%Y%m%d}-{key_digest}"
+            )
+            existing_order = db.scalar(
+                _replenishment_order_query().where(
+                    StockReplenishmentOrder.order_number
+                    == stock_warning_order_number
+                )
+            )
+            if existing_order is not None:
+                _require_stock_replenishment_order_access(
+                    db,
+                    existing_order,
+                    user,
+                    relationships_loaded=True,
+                )
+                return replenishment_order_dict(existing_order)
+        items = [
+            _build_replenishment_item(
+                db,
+                item,
+                source_type=payload.source_type,
+            )
+            for item in payload.items
+        ]
+        if payload.source_type == "stock_warning":
+            for item in items:
+                if (
+                    item.product_id is not None
+                    and item.target_inventory_type != "semi_finished"
+                ):
+                    raise StockReplenishmentError(
+                        "常用箱库存预警报料只能生成客户专用纸板备料，"
+                        "不能直接生成成品库存。"
+                    )
+                if not all(
+                    value not in (None, "")
+                    for value in (
+                        item.product_id,
+                        item.material_code_snapshot,
+                        item.layer_count,
+                        item.flute_type,
+                        item.report_length_mm,
+                        item.report_width_mm,
+                    )
+                ):
+                    raise StockReplenishmentError(
+                        f"“{item.product_name_snapshot}”的常用箱资料不完整，"
+                        "请先补全材质、层数、楞型和报料长宽。"
+                    )
+                if item.product_id is not None:
+                    product = db.scalar(
+                        select(Product)
+                        .options(selectinload(Product.material))
+                        .where(Product.id == item.product_id)
+                    )
+                    if product is None:
+                        raise StockReplenishmentError(
+                            "库存预警关联的常用箱不存在。"
+                        )
+                    defaults = product_replenishment_defaults(product)
+                    if not defaults["draft_ready"]:
+                        raise StockReplenishmentError(
+                            f"“{item.product_name_snapshot}”的常用箱资料不完整，"
+                            "请先补全后重新生成草稿。"
+                        )
+                    expected = {
+                        "customer_id": product.customer_id,
+                        "material_id": defaults["material_id"],
+                        "material_code": normalize_material_code(
+                            defaults["material_code"]
+                        ),
+                        "layer_count": defaults["layer_count"],
+                        "flute_type": defaults["flute_type"],
+                        "report_length_mm": defaults["report_length_mm"],
+                        "report_width_mm": defaults["report_width_mm"],
+                        "crease_type": defaults["crease_type"],
+                        "crease_left_mm": defaults["crease_left_mm"],
+                        "crease_middle_mm": defaults["crease_middle_mm"],
+                        "crease_right_mm": defaults["crease_right_mm"],
+                        "sheet_type": (
+                            "creased_sheet"
+                            if defaults["crease_type"] == "压线"
+                            else "net_sheet"
+                            if defaults["crease_type"] == "净料"
+                            else "raw_board"
+                        ),
+                        "pieces_per_box": defaults["pieces_per_box"],
+                        "stock_yield_per_sheet": defaults["output_per_sheet"],
+                    }
+                    actual = {
+                        "customer_id": item.customer_id,
+                        "material_id": item.material_id,
+                        "material_code": item.normalized_material_code,
+                        "layer_count": item.layer_count,
+                        "flute_type": item.flute_type,
+                        "report_length_mm": item.report_length_mm,
+                        "report_width_mm": item.report_width_mm,
+                        "crease_type": item.crease_type,
+                        "crease_left_mm": item.crease_left_mm,
+                        "crease_middle_mm": item.crease_middle_mm,
+                        "crease_right_mm": item.crease_right_mm,
+                        "sheet_type": item.sheet_type,
+                        "pieces_per_box": item.pieces_per_box,
+                        "stock_yield_per_sheet": item.stock_yield_per_sheet,
+                    }
+                    if actual != expected:
+                        raise StockReplenishmentError(
+                            f"“{item.product_name_snapshot}”的纸板备料参数"
+                            "必须与常用箱主数据一致，请刷新后重新生成草稿。"
+                        )
         material_suppliers = {
             material.supplier_name.strip()
             for item in items
@@ -5851,7 +6205,10 @@ def create_stock_replenishment_order(
             )
         derived_supplier = next(iter(material_suppliers), None)
         order = StockReplenishmentOrder(
-            order_number=next_replenishment_order_number(),
+            order_number=(
+                stock_warning_order_number
+                or next_replenishment_order_number()
+            ),
             supplier_name=derived_supplier
             or (payload.supplier_name or "").strip()
             or None,

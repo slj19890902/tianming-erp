@@ -112,8 +112,10 @@ from app.services.semi_finished_inventory import (
     release_active_semi_reservations_for_items,
     requirement_signature,
     reserve_semi_finished_inventory,
+    safe_physical_board_facts_match,
     save_order_item_semi_requirement,
     semi_finished_candidates_for_product,
+    semi_finished_inventory_candidates,
 )
 from app.services.composite_bom_execution import (
     CompositeBOMExecutionError,
@@ -130,6 +132,7 @@ from app.services.customer_material_candidates import (
 router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
+can_reserve = PermissionChecker("warehouse.reserve")
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 CUTTING_MODE_FACTORS = {
     "一开一": 1,
@@ -485,6 +488,10 @@ class PendingSemiInventoryReservationPayload(BaseModel):
         if normalized not in {"whole", "cover", "base"}:
             raise ValueError("半成品组件仅允许 whole、cover 或 base")
         return normalized
+
+
+class PendingCustomerBoardPreparationAutoCoverPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=60)
 
 
 class StockPolicyPayload(BaseModel):
@@ -1256,7 +1263,11 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                 OrderItemSemiRequirement.component_type == component,
             )
         )
-        stock_yield = int(requirement.stock_yield_per_sheet or 1) if requirement else 1
+        stock_yield = (
+            int(requirement.stock_yield_per_sheet or 1)
+            if requirement
+            else _cutting_factor(entry.get("cutting_mode") or item.special_process)
+        )
         requirements = _current_requisition_requirements(
             db,
             item,
@@ -1331,6 +1342,133 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                     _semi_candidate_dict_for_requisition(row)
                     for row in review_candidates
                 ],
+            }
+        )
+    return options
+
+
+def _safe_customer_board_preparation_options(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> list[dict]:
+    """Find only exact customer-owned board-preparation lots safe for one-click use."""
+
+    expected_supplier = (
+        item.snapshot_supplier_name
+        or (product.material.supplier_name if product.material is not None else None)
+        or ""
+    ).strip()
+    expected_layer_count = int(item.layer_count or product.layer_count or 0)
+
+    def is_exact_physical_match(
+        candidate: SemiFinishedCandidate,
+        *,
+        component: str,
+    ) -> bool:
+        detail = candidate.lot.semi_finished_detail
+        if detail is None:
+            return False
+        crease_type, crease_left, crease_middle, crease_right = _component_crease(
+            item, component
+        )
+        return safe_physical_board_facts_match(
+            detail,
+            supplier_name=expected_supplier,
+            layer_count=expected_layer_count,
+            crease_type=crease_type,
+            crease_left_mm=crease_left,
+            crease_middle_mm=crease_middle,
+            crease_right_mm=crease_right,
+        )
+
+    options: list[dict] = []
+    for spec in _semi_component_specs_for_requisition(item, product):
+        component = str(spec["component_type"])
+        length = spec.get("board_length_mm")
+        width = spec.get("board_width_mm")
+        material_code = (item.snapshot_material or "").strip()
+        flute_type = (item.flute_type or "").strip().upper()
+        if not (length and width and material_code and flute_type):
+            continue
+        requirement = db.scalar(
+            select(OrderItemSemiRequirement).where(
+                OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
+                OrderItemSemiRequirement.component_type == component,
+            )
+        )
+        stock_yield = (
+            int(requirement.stock_yield_per_sheet or 1)
+            if requirement is not None
+            else _cutting_factor(item.special_process)
+        )
+        current = _current_requisition_requirements(
+            db,
+            item,
+            pieces_per_box=int(spec["pieces_per_box"]),
+            component_type=component,
+        )
+        remaining = int(current["remaining_required_piece_qty"])
+        if remaining <= 0:
+            continue
+        candidates = (
+            semi_finished_inventory_candidates(db, requirement.id)
+            if requirement is not None
+            else semi_finished_candidates_for_product(
+                db,
+                product_id=product.id,
+                customer_id=order.customer_id,
+                board_length_mm=int(length),
+                board_width_mm=int(width),
+                material_code=material_code,
+                flute_type=flute_type,
+                component_type=component,
+                pieces_per_box=int(spec["pieces_per_box"]),
+                stock_yield_per_sheet=stock_yield,
+            )
+        )
+        safe_candidates = [
+            row
+            for row in candidates
+            if (
+                row.lot.semi_finished_detail is not None
+                and row.lot.semi_finished_detail.owner_customer_id
+                == order.customer_id
+                and not row.signature_differences
+                and row.source in {"signature", "learned"}
+                and is_exact_physical_match(row, component=component)
+            )
+        ]
+        available_piece_quantity = min(
+            remaining,
+            sum(
+                int(row.deductible_requirement_quantity or 0)
+                for row in safe_candidates
+            ),
+        )
+        if available_piece_quantity <= 0:
+            continue
+        options.append(
+            {
+                "component_type": component,
+                "board_length_mm": int(length),
+                "board_width_mm": int(width),
+                "material_code": material_code,
+                "flute_type": flute_type,
+                "pieces_per_box": int(spec["pieces_per_box"]),
+                "stock_yield_per_sheet": stock_yield,
+                "required_piece_quantity": int(current["required_piece_qty"]),
+                "remaining_piece_quantity": remaining,
+                "available_piece_quantity": available_piece_quantity,
+                "available_sheet_quantity": (
+                    available_piece_quantity + stock_yield - 1
+                )
+                // stock_yield,
+                "requirement": requirement,
+                "candidates": safe_candidates,
             }
         )
     return options
@@ -3152,6 +3290,12 @@ def pending_requisitions(
         )
         if suggested_len is None or suggested_width is None:
             suggested_len, suggested_width = _suggested_dimensions(product)
+        customer_board_preparation = _safe_customer_board_preparation_options(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
         items.append(
             {
                 "item_id": item.id,
@@ -3201,6 +3345,17 @@ def pending_requisitions(
                 "required_piece_qty": required_piece_qty,
                 "semi_finished_reserved_piece_qty": semi_finished_reserved_piece_qty,
                 "remaining_required_piece_qty": remaining_required_piece_qty,
+                "customer_board_preparation_available_piece_qty": sum(
+                    int(row["available_piece_quantity"])
+                    for row in customer_board_preparation
+                ),
+                "customer_board_preparation_available_sheet_qty": sum(
+                    int(row["available_sheet_quantity"])
+                    for row in customer_board_preparation
+                ),
+                "can_auto_use_customer_board_preparation": bool(
+                    customer_board_preparation
+                ),
                 "component_requirements": requirements.get(
                     "component_requirements", []
                 ),
@@ -5723,7 +5878,11 @@ def stock_policy_replenishment_draft(
     ) -> dict:
         product_defaults = product_replenishment_defaults(draft_product)
         finished_quantity = int(
-            draft_summary["suggested_replenishment_quantity"] or 0
+            draft_summary.get(
+                "suggested_new_requisition_finished_quantity",
+                draft_summary["suggested_replenishment_quantity"],
+            )
+            or 0
         )
         crease_type = product_defaults["crease_type"]
         sheet_type = (
@@ -5782,6 +5941,20 @@ def stock_policy_replenishment_draft(
             "cutting_mode": product_defaults["cutting_mode"],
             "output_per_sheet": product_defaults["output_per_sheet"],
             "theoretical_requisition_quantity": theoretical_quantity,
+            "customer_board_preparation_available_sheet_quantity": int(
+                draft_summary.get(
+                    "customer_board_preparation_available_sheet_quantity",
+                    0,
+                )
+                or 0
+            ),
+            "incoming_board_preparation_sheet_quantity": int(
+                draft_summary.get(
+                    "incoming_board_preparation_sheet_quantity",
+                    0,
+                )
+                or 0
+            ),
             "draft_ready": product_defaults["draft_ready"],
             "missing_fields": product_defaults["missing_fields"],
         }
@@ -5855,6 +6028,19 @@ def stock_policy_replenishment_draft(
                     ],
                     "suggested_replenishment_quantity": candidate_summary[
                         "suggested_replenishment_quantity"
+                    ],
+                    "suggested_new_requisition_finished_quantity": (
+                        candidate_summary[
+                            "suggested_new_requisition_finished_quantity"
+                        ]
+                    ),
+                    "suggested_new_requisition_sheet_quantity": (
+                        candidate_summary[
+                            "suggested_new_requisition_sheet_quantity"
+                        ]
+                    ),
+                    "replenishment_state": candidate_summary[
+                        "replenishment_state"
                     ],
                     "draft_item": draft_item(
                         candidate_policy,
@@ -7454,6 +7640,136 @@ def reserve_semi_inventory_from_pending(
                 updated["remaining_required_piece_qty"]
             ),
             "requisition_qty": int(updated["requisition_qty"]),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+    except HTTPException:
+        db.rollback()
+        raise
+
+
+@router.post("/pending/{item_id}/auto-use-customer-board-preparation")
+def auto_use_customer_board_preparation(
+    item_id: int,
+    payload: PendingCustomerBoardPreparationAutoCoverPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    """One-click reserve exact customer board preparation and leave only the purchase gap."""
+
+    try:
+        item, order, _customer, product = _ensure_pending_order_item_for_supplier_order(
+            db, item_id
+        )
+        _require_order_item_customer_access(db, item, user)
+        if _bom_pending_component_requirements(db, item):
+            raise HTTPException(
+                status_code=409,
+                detail="组合产品请在展开的父件与组件明细中分别使用匹配库存",
+            )
+        options = _safe_customer_board_preparation_options(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+        allocated_piece_quantity = 0
+        allocated_sheet_quantity = 0
+        lot_ids: list[int] = []
+        for option in options:
+            requirement = option["requirement"]
+            if requirement is None:
+                requirement = save_order_item_semi_requirement(
+                    db,
+                    order_item_id=item.id,
+                    component_type=str(option["component_type"]),
+                    board_length_mm=int(option["board_length_mm"]),
+                    board_width_mm=int(option["board_width_mm"]),
+                    material_code=str(option["material_code"]),
+                    flute_type=str(option["flute_type"]),
+                    pieces_per_box=int(option["pieces_per_box"]),
+                    stock_yield_per_sheet=int(option["stock_yield_per_sheet"]),
+                    required_piece_quantity=int(
+                        option["required_piece_quantity"]
+                    ),
+                    operator_id=user.id,
+                )
+            candidates: list[SemiFinishedCandidate] = option["candidates"]
+            result = reserve_semi_finished_inventory(
+                db,
+                requirement_id=requirement.id,
+                requested_requirement_quantity=int(
+                    option["available_piece_quantity"]
+                ),
+                lots=[
+                    SemiFinishedLotVersion(
+                        lot_id=row.lot.id,
+                        expected_version=row.lot.version,
+                    )
+                    for row in candidates
+                ],
+                operator_id=user.id,
+                idempotency_key=(
+                    f"{payload.idempotency_key}:"
+                    f"{option['component_type']}"
+                ),
+                confirmed=True,
+                override=False,
+                warning_acknowledged_codes=[],
+            )
+            allocated_piece_quantity += int(
+                result.allocated_requirement_quantity
+            )
+            allocated_sheet_quantity += sum(
+                int(row.reserved_stock_quantity or 0)
+                for row in result.reservations
+            )
+            lot_ids.extend(int(row.inventory_lot_id) for row in result.reservations)
+
+        updated = _current_requisition_summary(db, item)
+        if allocated_piece_quantity > 0:
+            _audit(
+                db,
+                user=user,
+                action="AUTO_USE_CUSTOMER_BOARD_PREPARATION",
+                entity_id=item.id,
+                details={
+                    "order_item_id": item.id,
+                    "inventory_lot_ids": sorted(set(lot_ids)),
+                    "allocated_sheet_quantity": allocated_sheet_quantity,
+                    "allocated_piece_quantity": allocated_piece_quantity,
+                    "remaining_piece_quantity": int(
+                        updated["remaining_required_piece_qty"]
+                    ),
+                    "requisition_qty": int(updated["requisition_qty"]),
+                },
+                description="一键使用客户专用纸板备料并按差额报料",
+            )
+        db.commit()
+        if allocated_piece_quantity > 0:
+            message = (
+                f"已预占客户专用纸板备料 {allocated_sheet_quantity} 张，"
+                f"可生产 {allocated_piece_quantity} 个；"
+                f"本次只需再报 {int(updated['requisition_qty'])} 张"
+            )
+        else:
+            message = "没有找到可安全自动匹配的客户专用纸板备料，报料数量未变"
+        return {
+            "order_item_id": item.id,
+            "allocated_sheet_quantity": allocated_sheet_quantity,
+            "allocated_piece_quantity": allocated_piece_quantity,
+            "semi_finished_reserved_piece_qty": int(
+                updated["semi_finished_reserved_piece_qty"]
+            ),
+            "remaining_requirement_quantity": int(
+                updated["remaining_required_piece_qty"]
+            ),
+            "requisition_qty": int(updated["requisition_qty"]),
+            "message": message,
         }
     except WarehouseInventoryError as error:
         db.rollback()

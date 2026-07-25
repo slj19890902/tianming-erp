@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from math import floor
+from math import ceil, floor
 from typing import Iterable
 
 from sqlalchemy import func, select
@@ -345,6 +345,14 @@ def ensure_component_production_tasks(
     demands = effective_component_demands(db, order_item_id)
     tasks: list[ProductionTask] = []
     for demand in demands:
+        snapshot = db.get(SalesOrderItemBomComponent, demand.snapshot_id)
+        if snapshot is None:
+            raise CompositeBomWorkflowError("订单组件快照不存在")
+        from app.services.production_workflow import cutting_output_factor
+
+        output_factor = cutting_output_factor(
+            snapshot.snapshot_component_default_cutting_mode
+        )
         task = db.scalar(
             select(ProductionTask).where(
                 ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
@@ -357,6 +365,9 @@ def ensure_component_production_tasks(
                 status="waiting_material",
                 planned_quantity=0,
                 finished_coverage_snapshot=0,
+                material_received_quantity=0,
+                material_input_quantity=0,
+                output_factor=output_factor,
                 readiness_basis=None,
                 version=1,
             )
@@ -367,8 +378,16 @@ def ensure_component_production_tasks(
             tasks.append(task)
             continue
         ready = item.material_status == "received"
-        task.planned_quantity = demand.required_piece_quantity if ready else 0
-        task.finished_coverage_snapshot = component_available_quantity(db, demand.snapshot_id)
+        coverage = component_available_quantity(db, demand.snapshot_id)
+        planned_quantity = max(demand.required_piece_quantity - coverage, 0)
+        input_quantity = (
+            ceil(planned_quantity / max(output_factor, 1)) if ready else 0
+        )
+        task.planned_quantity = planned_quantity if ready else 0
+        task.finished_coverage_snapshot = coverage
+        task.material_received_quantity = input_quantity
+        task.material_input_quantity = input_quantity
+        task.output_factor = output_factor
         task.status = "pending" if ready and demand.required_piece_quantity else "waiting_material"
         task.readiness_basis = "component_material_received" if ready else None
         task.version = max(int(task.version or 0), 1) + 1

@@ -326,6 +326,29 @@ def _component_task_rows(
     )
 
 
+def _component_semi_inventory_fully_covers(
+    db: Session,
+    *,
+    snapshot_id: int,
+    required_piece_quantity: int,
+) -> bool:
+    from app.services.semi_finished_inventory import (
+        active_semi_requirement_credited_quantity,
+    )
+
+    requirement = db.scalar(
+        select(OrderItemSemiRequirement).where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id
+            == snapshot_id
+        )
+    )
+    return (
+        requirement is not None
+        and active_semi_requirement_credited_quantity(db, requirement.id)
+        >= required_piece_quantity
+    )
+
+
 def _refresh_composite_production_tasks(
     db: Session,
     item: OrderItem,
@@ -345,6 +368,12 @@ def _refresh_composite_production_tasks(
     tasks: list[ProductionTask] = []
     now = utc_now_naive()
     for demand in demands:
+        snapshot = db.get(SalesOrderItemBomComponent, demand.snapshot_id)
+        if snapshot is None:
+            raise ProductionWorkflowError("订单组件快照不存在", 409)
+        output_factor = cutting_output_factor(
+            snapshot.snapshot_component_default_cutting_mode
+        )
         task = db.scalar(
             select(ProductionTask).where(
                 ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
@@ -362,7 +391,7 @@ def _refresh_composite_production_tasks(
                 ordered_quantity_snapshot=int(item.quantity or 0),
                 material_received_quantity=0,
                 material_input_quantity=0,
-                output_factor=1,
+                output_factor=output_factor,
                 readiness_basis=None,
                 ready_at=None,
                 version=1,
@@ -377,17 +406,32 @@ def _refresh_composite_production_tasks(
             continue
 
         coverage = component_available_quantity(db, demand.snapshot_id)
+        production_needed = max(demand.required_piece_quantity - coverage, 0)
+        semi_inventory_ready = _component_semi_inventory_fully_covers(
+            db,
+            snapshot_id=demand.snapshot_id,
+            required_piece_quantity=production_needed,
+        )
         if coverage >= demand.required_piece_quantity:
             next_status = NOT_REQUIRED
             planned_quantity = 0
+            material_input_quantity = 0
             readiness_basis = "component_finished_inventory"
-        elif item.material_status == "received":
+        elif item.material_status == "received" or semi_inventory_ready:
             next_status = PENDING
-            planned_quantity = max(demand.required_piece_quantity - coverage, 0)
-            readiness_basis = "component_material_received"
+            planned_quantity = production_needed
+            material_input_quantity = ceil(
+                planned_quantity / max(output_factor, 1)
+            )
+            readiness_basis = (
+                "component_semi_finished_inventory"
+                if semi_inventory_ready
+                else "component_material_received"
+            )
         else:
             next_status = WAITING_MATERIAL
             planned_quantity = 0
+            material_input_quantity = 0
             readiness_basis = None
 
         changed = (
@@ -395,6 +439,11 @@ def _refresh_composite_production_tasks(
             or int(task.planned_quantity or 0) != planned_quantity
             or int(task.finished_coverage_snapshot or 0) != coverage
             or task.readiness_basis != readiness_basis
+            or int(task.material_received_quantity or 0)
+            != material_input_quantity
+            or int(task.material_input_quantity or 0)
+            != material_input_quantity
+            or int(task.output_factor or 1) != output_factor
         )
         if changed:
             was_ready = task.status in READY_TASK_STATUSES
@@ -402,6 +451,9 @@ def _refresh_composite_production_tasks(
             task.status = next_status
             task.planned_quantity = planned_quantity
             task.finished_coverage_snapshot = coverage
+            task.material_received_quantity = material_input_quantity
+            task.material_input_quantity = material_input_quantity
+            task.output_factor = output_factor
             task.readiness_basis = readiness_basis
             task.ready_at = (
                 task.ready_at if was_ready and is_ready else (now if is_ready else None)
@@ -771,9 +823,17 @@ def _consume_completion_semi_reservations(
             OrderItemSemiRequirement.id,
         )
     ).all()
+    require_full = task.readiness_basis in {
+        "semi_finished_inventory",
+        "component_semi_finished_inventory",
+    }
     if task.sales_order_item_bom_component_id is not None and not requirements:
+        if require_full:
+            raise ProductionWorkflowError(
+                "组件客户备料需求已不存在，请刷新生产任务后重试",
+                409,
+            )
         return
-    require_full = task.readiness_basis == "semi_finished_inventory"
     product = db.get(Product, item.product_id)
     box_style = str(product.box_style or "") if product is not None else ""
     expected_components = (
@@ -1188,9 +1248,26 @@ def complete_production_batch(
         received_now, allowed_input_now = _material_quantity_facts(db, item)
         factor = cutting_output_factor(item.special_process)
         if is_component_task:
-            factor = 1
-            received_now = int(task.planned_quantity or 0)
-            allowed_input_now = int(task.planned_quantity or 0)
+            component_snapshot = db.get(
+                SalesOrderItemBomComponent,
+                task.sales_order_item_bom_component_id,
+            )
+            if component_snapshot is None:
+                raise ProductionWorkflowError("订单组件快照不存在", 409)
+            factor = cutting_output_factor(
+                component_snapshot.snapshot_component_default_cutting_mode
+            )
+            component_input = ceil(
+                max(int(task.planned_quantity or 0), 0) / max(factor, 1)
+            )
+            received_now = max(
+                int(task.material_received_quantity or 0),
+                component_input,
+            )
+            allowed_input_now = max(
+                int(task.material_input_quantity or 0),
+                component_input,
+            )
         if allowed_input_now <= 0:
             allowed_input_now = int(task.material_input_quantity or 0)
         if allowed_input_now <= 0:
@@ -1244,6 +1321,40 @@ def complete_production_batch(
                 "实际合格产量与次品/损耗之和必须等于理论产量",
                 409,
             )
+        coverage_target_quantity = int(item.quantity or 0)
+        if is_component_task:
+            component_demand = next(
+                (
+                    row
+                    for row in effective_component_demands(db, item.id)
+                    if row.snapshot_id
+                    == task.sales_order_item_bom_component_id
+                ),
+                None,
+            )
+            if component_demand is None:
+                raise ProductionWorkflowError("订单组件需求快照不存在", 409)
+            coverage_target_quantity = int(
+                component_demand.required_piece_quantity
+            )
+            if command.completion_type == "primary":
+                current_finished_coverage = min(
+                    max(
+                        component_available_quantity(
+                            db,
+                            task.sales_order_item_bom_component_id,
+                        ),
+                        0,
+                    ),
+                    coverage_target_quantity,
+                )
+                if current_finished_coverage != int(
+                    task.finished_coverage_snapshot or 0
+                ):
+                    raise ProductionWorkflowError(
+                        "组件成品库存抵扣已变化，请刷新生产任务后重试",
+                        409,
+                    )
         prior_order_coverage = int(task.finished_coverage_snapshot or 0) + int(
             db.scalar(
                 select(
@@ -1260,7 +1371,7 @@ def complete_production_batch(
         )
         order_coverage = min(
             actual_output,
-            max(int(item.quantity or 0) - prior_order_coverage, 0),
+            max(coverage_target_quantity - prior_order_coverage, 0),
         )
         if command.disposition == "stock":
             direct_quantity = 0
@@ -1373,7 +1484,10 @@ def complete_production_batch(
             completion=completion,
             task=task,
             item=item,
-            planned_quantity=actual_output,
+            # Consume the paper that was actually put into production.  Using
+            # only qualified output would leave defective sheets falsely
+            # available in inventory.
+            planned_quantity=int(facts["planned"]),
             operator_id=operator_id,
         )
         result = db.execute(
@@ -1897,9 +2011,14 @@ def _task_product_snapshot(
             else item.flute_type
         ),
         "special_process": (
-            snapshot.snapshot_component_production_process
+            snapshot.snapshot_component_default_cutting_mode
             if snapshot is not None
             else item.special_process
+        ),
+        "production_process": (
+            snapshot.snapshot_component_production_process
+            if snapshot is not None
+            else None
         ),
         "production_notes": (
             snapshot.snapshot_component_report_notes
@@ -1918,6 +2037,83 @@ def _task_product_snapshot(
     }
 
 
+def _active_customer_board_preparation_sources(
+    db: Session,
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+) -> list[dict]:
+    query = (
+        select(InventoryReservation, InventoryLot)
+        .join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        )
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status.notin_(("cancelled", "released", "consumed")),
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+            InventoryLot.inventory_type == "semi_finished",
+        )
+    )
+    if task.sales_order_item_bom_component_id is None:
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id.is_(None)
+        )
+    else:
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id
+            == task.sales_order_item_bom_component_id
+        )
+    rows = db.execute(
+        query.order_by(
+            *inventory_fifo_order_columns(),
+            InventoryReservation.id,
+        )
+    ).all()
+    result: list[dict] = []
+    for reservation, lot in rows:
+        detail = lot.semi_finished_detail
+        location = lot.location
+        if detail is None or detail.owner_customer_id is None:
+            continue
+        remaining_sheets = max(
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0),
+            0,
+        )
+        remaining_pieces = max(
+            int(reservation.credited_requirement_quantity or 0)
+            - int(reservation.consumed_requirement_quantity or 0)
+            - int(reservation.released_requirement_quantity or 0),
+            0,
+        )
+        if remaining_sheets <= 0 or remaining_pieces <= 0:
+            continue
+        result.append(
+            {
+                "reservation_id": reservation.id,
+                "inventory_lot_id": lot.id,
+                "lot_number": lot.lot_number,
+                "source_ref_type": lot.source_ref_type,
+                "source_ref_id": lot.source_ref_id,
+                "location_code": location.location_code,
+                "location_name": location.location_name,
+                "remaining_sheet_quantity": remaining_sheets,
+                "remaining_product_quantity": remaining_pieces,
+                "stock_yield_per_sheet": int(
+                    detail.stock_yield_per_sheet or reservation.yield_factor or 1
+                ),
+                "display_name": "客户专用纸板备料",
+            }
+        )
+    return result
+
+
 def list_production_tasks(
     db: Session,
     *,
@@ -1933,8 +2129,28 @@ def list_production_tasks(
     rows = db.execute(query.order_by(Order.delivery_date, Order.id, OrderItem.id)).all()
     result: list[dict] = []
     for task, item, order, customer, product in rows:
-        received_now, allowed_input_now = _material_quantity_facts(db, item)
-        factor = cutting_output_factor(item.special_process)
+        is_component_task = task.sales_order_item_bom_component_id is not None
+        component_demand = None
+        if is_component_task:
+            component_demand = next(
+                (
+                    row
+                    for row in effective_component_demands(db, item.id)
+                    if row.snapshot_id
+                    == task.sales_order_item_bom_component_id
+                ),
+                None,
+            )
+            if component_demand is None:
+                raise ProductionWorkflowError("订单组件需求快照不存在", 409)
+            received_now = int(task.material_received_quantity or 0)
+            allowed_input_now = int(task.material_input_quantity or 0)
+            factor = max(int(task.output_factor or 1), 1)
+            target_quantity = int(component_demand.required_piece_quantity)
+        else:
+            received_now, allowed_input_now = _material_quantity_facts(db, item)
+            factor = cutting_output_factor(item.special_process)
+            target_quantity = int(item.quantity or 0)
         posted_input = int(
             db.scalar(
                 select(
@@ -1982,12 +2198,16 @@ def list_production_tasks(
                 item=item,
                 parent_product=product,
             ),
-            "order_quantity": int(item.quantity),
+            "order_quantity": target_quantity,
+            "parent_order_quantity": int(item.quantity),
+            "component_required_quantity": (
+                target_quantity if is_component_task else None
+            ),
             "delivered_quantity": int(item.delivered_quantity or 0),
             "material_status": item.material_status,
             "status": task.status,
             "planned_quantity": int(task.planned_quantity),
-            "ordered_quantity": int(item.quantity),
+            "ordered_quantity": target_quantity,
             "material_received_quantity": max(
                 received_now,
                 int(task.material_received_quantity or 0),
@@ -1999,12 +2219,12 @@ def list_production_tasks(
             "actual_output_quantity": posted_output,
             "order_reserved_quantity": min(
                 posted_output + int(task.finished_coverage_snapshot or 0),
-                int(item.quantity or 0),
+                target_quantity,
             ),
             "surplus_finished_quantity": max(
                 posted_output
                 + int(task.finished_coverage_snapshot or 0)
-                - int(item.quantity or 0),
+                - target_quantity,
                 0,
             ),
             "can_supplement": task.status == COMPLETED and available_input > 0,
@@ -2013,6 +2233,13 @@ def list_production_tasks(
             "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
             "version": int(task.version),
             "production_ready_quantity": production_ready_quantity(db, item),
+            "customer_board_preparation_sources": (
+                _active_customer_board_preparation_sources(
+                    db,
+                    task=task,
+                    item=item,
+                )
+            ),
         })
     return result
 
@@ -2135,7 +2362,7 @@ def list_production_completions(
                     received_now,
                     int(task.material_received_quantity or 0),
                 ),
-                "output_factor": cutting_output_factor(item.special_process),
+                "output_factor": max(int(task.output_factor or 1), 1),
                 "can_supplement": (
                     completion.status == "posted"
                     and task.status == COMPLETED

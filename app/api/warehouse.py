@@ -74,6 +74,7 @@ from app.services.semi_finished_inventory import (
     consume_semi_finished_reservation,
     release_semi_finished_reservation,
     reserve_semi_finished_inventory,
+    safe_physical_board_facts_match,
     reverse_semi_finished_consumption,
     save_order_item_semi_requirement,
     semi_finished_candidates_for_product,
@@ -1712,6 +1713,15 @@ def auto_cover_bom_component_inventory(
                     == order.customer_id
                     and not row.signature_differences
                     and row.source in {"signature", "learned"}
+                    and safe_physical_board_facts_match(
+                        row.lot.semi_finished_detail,
+                        supplier_name=snapshot.snapshot_component_supplier_name,
+                        layer_count=snapshot.snapshot_component_layer_count,
+                        crease_type=snapshot.snapshot_component_crease_type,
+                        crease_left_mm=snapshot.snapshot_component_crease_left_mm,
+                        crease_middle_mm=snapshot.snapshot_component_crease_middle_mm,
+                        crease_right_mm=snapshot.snapshot_component_crease_right_mm,
+                    )
                 )
             ]
             # No match means no unexplained empty inventory "draft" is left

@@ -17,6 +17,7 @@ def composite_requisition_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
+    from app.api.production import router as production_router
     from app.api.requisition import router as requisition_router
     from app.api.warehouse import router as warehouse_router
     from app.core.database import create_sqlite_engine
@@ -163,6 +164,7 @@ def composite_requisition_app(tmp_path: Path):
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(orders_router, prefix="/api/orders")
+    app.include_router(production_router, prefix="/api/production")
     app.include_router(requisition_router, prefix="/api/requisition")
     app.include_router(warehouse_router, prefix="/api/warehouse")
 
@@ -663,6 +665,543 @@ def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
     assert int(source.calculated_purchase_quantity) == 13
 
 
+def test_component_one_open_two_completion_consumes_ten_sheets_for_twenty_pieces(
+    composite_requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        InventoryReservation,
+        OrderItemSemiRequirement,
+        SemiFinishedInventoryDetail,
+        SemiFinishedLotAllowedProduct,
+        WarehouseLocation,
+    )
+    from app.services.production_workflow import create_or_refresh_production_task
+    from app.services.warehouse_inventory import normalize_material_code
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as db:
+        item = db.get(OrderItem, 1)
+        snapshot = db.get(SalesOrderItemBomComponent, 1)
+        assert item is not None and snapshot is not None
+        snapshot.snapshot_component_default_cutting_mode = "一开二"
+        item.material_status = "pending"
+        semi_location = WarehouseLocation(
+            location_code="N039-COMP-SEMI",
+            location_name="组件客户备料",
+            warehouse_type="semi_finished",
+            is_active=True,
+        )
+        finished_location = WarehouseLocation(
+            location_code="E1-N039-COMP",
+            location_name="组件成品位",
+            area_code="E1",
+            warehouse_type="finished",
+            warehouse_floor=3,
+            source_version="V11",
+            placement_status="placed",
+            is_active=True,
+        )
+        db.add_all([semi_location, finished_location])
+        db.flush()
+        lot = InventoryLot(
+            lot_number="N039-COMP-SEMI-LOT",
+            inventory_type="semi_finished",
+            warehouse_location_id=semi_location.id,
+            quantity_available=0,
+            quantity_reserved=10,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date.today(),
+            last_movement_at=datetime.now(),
+            version=1,
+        )
+        db.add(lot)
+        db.flush()
+        db.add(
+            SemiFinishedInventoryDetail(
+                inventory_lot_id=lot.id,
+                supplier_name="N039 供应商",
+                owner_customer_id=1,
+                owner_customer_name_snapshot="N039 测试客户",
+                material_code_snapshot="K616K",
+                normalized_material_code=normalize_material_code("K616K"),
+                layer_count=5,
+                flute_type="AB",
+                board_length_mm=1000,
+                board_width_mm=700,
+                component_type="whole",
+                pieces_per_box=1,
+                stock_yield_per_sheet=2,
+                sheet_type="raw_board",
+            )
+        )
+        db.add(
+            SemiFinishedLotAllowedProduct(
+                inventory_lot_id=lot.id,
+                product_id=snapshot.component_product_id,
+                confirmed_by=1,
+                confirmed_at=datetime.now(),
+            )
+        )
+        requirement = OrderItemSemiRequirement(
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=snapshot.id,
+            customer_id=1,
+            component_type="whole",
+            board_length_mm=1000,
+            board_width_mm=700,
+            material_code_snapshot="K616K",
+            normalized_material_code=normalize_material_code("K616K"),
+            flute_type="AB",
+            pieces_per_box=1,
+            stock_yield_per_sheet=2,
+            required_piece_quantity=20,
+        )
+        db.add(requirement)
+        db.flush()
+        db.add(
+            InventoryReservation(
+                reservation_number="N039-COMP-SEMI-RES",
+                inventory_lot_id=lot.id,
+                reservation_type="semi_order",
+                order_id=item.order_id,
+                order_item_id=item.id,
+                sales_order_item_bom_component_id=snapshot.id,
+                semi_requirement_id=requirement.id,
+                reserved_stock_quantity=10,
+                credited_requirement_quantity=20,
+                yield_factor=2,
+                consumed_stock_quantity=0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=0,
+                released_requirement_quantity=0,
+                status="active",
+            )
+        )
+        create_or_refresh_production_task(db, item.id)
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.sales_order_item_bom_component_id == snapshot.id
+            )
+        )
+        assert task is not None
+        assert task.status == "pending"
+        assert task.output_factor == 2
+        assert task.material_input_quantity == 10
+        assert task.planned_quantity == 20
+        db.commit()
+        task_id = task.id
+        task_version = task.version
+        finished_location_id = finished_location.id
+        semi_lot_id = lot.id
+        reservation_id = db.scalar(
+            select(InventoryReservation.id).where(
+                InventoryReservation.semi_requirement_id == requirement.id
+            )
+        )
+
+    with TestClient(app) as client:
+        _login(client)
+        task_response = client.get("/api/production/tasks", params={"status": "pending"})
+    assert task_response.status_code == 200, task_response.text
+    task_row = next(
+        row for row in task_response.json()["items"] if row["id"] == task_id
+    )
+    assert task_row["is_component_task"] is True
+    assert task_row["product_code"] == "COMP-A"
+    assert task_row["parent_order_quantity"] == 10
+    assert task_row["component_required_quantity"] == 20
+    assert task_row["order_quantity"] == 20
+    assert task_row["special_process"] == "一开二"
+    assert task_row["output_factor"] == 2
+    assert task_row["material_input_quantity"] == 10
+    assert task_row["planned_output_quantity"] == 20
+
+    with session_factory() as db:
+        reservation = db.get(InventoryReservation, reservation_id)
+        semi_lot = db.get(InventoryLot, semi_lot_id)
+        reservation.released_stock_quantity = 10
+        reservation.released_requirement_quantity = 20
+        reservation.status = "released"
+        semi_lot.quantity_reserved = 0
+        semi_lot.quantity_available = 10
+        semi_lot.version += 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        blocked_after_release = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "n039-component-released-must-block",
+                "items": [
+                    {
+                        "task_id": task_id,
+                        "expected_version": task_version,
+                        "disposition": "stock",
+                        "material_input_quantity": 10,
+                        "actual_output_quantity": 20,
+                        "defective_quantity": 0,
+                        "location_id": finished_location_id,
+                    }
+                ],
+            },
+        )
+    assert blocked_after_release.status_code == 409
+    with session_factory() as db:
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        assert (
+            db.scalar(
+                select(InventoryLot.id).where(
+                    InventoryLot.source_ref_type == "production_completion"
+                )
+            )
+            is None
+        )
+        reservation = db.get(InventoryReservation, reservation_id)
+        semi_lot = db.get(InventoryLot, semi_lot_id)
+        reservation.released_stock_quantity = 0
+        reservation.released_requirement_quantity = 0
+        reservation.status = "active"
+        semi_lot.quantity_available = 0
+        semi_lot.quantity_reserved = 10
+        semi_lot.version += 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        completed = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "n039-component-one-open-two-completion",
+                "items": [
+                    {
+                        "task_id": task_id,
+                        "expected_version": task_version,
+                        "disposition": "stock",
+                        "material_input_quantity": 10,
+                        "actual_output_quantity": 20,
+                        "defective_quantity": 0,
+                        "location_id": finished_location_id,
+                    }
+                ],
+            },
+        )
+        replay = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "n039-component-one-open-two-completion",
+                "items": [
+                    {
+                        "task_id": task_id,
+                        "expected_version": task_version,
+                        "disposition": "stock",
+                        "material_input_quantity": 10,
+                        "actual_output_quantity": 20,
+                        "defective_quantity": 0,
+                        "location_id": finished_location_id,
+                    }
+                ],
+            },
+        )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["items"][0]["actual_output_quantity"] == 20
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["replayed"] is True
+    with session_factory() as db:
+        semi_lot = db.get(InventoryLot, semi_lot_id)
+        assert semi_lot.quantity_consumed == 10
+        assert semi_lot.quantity_reserved == 0
+        completion = db.scalar(select(ProductionCompletion))
+        assert completion.order_reserved_quantity == 20
+        finished_detail = db.scalar(
+            select(FinishedGoodsInventoryDetail)
+            .join(
+                InventoryLot,
+                InventoryLot.id
+                == FinishedGoodsInventoryDetail.inventory_lot_id,
+            )
+            .where(
+                InventoryLot.source_ref_type == "production_completion"
+            )
+        )
+        assert finished_detail.product_id == snapshot.component_product_id
+
+
+def test_component_finished_release_invalidates_task_and_stale_completion(
+    composite_requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        InventoryReservation,
+        OrderItemSemiRequirement,
+        SemiFinishedInventoryDetail,
+        SemiFinishedLotAllowedProduct,
+        WarehouseLocation,
+    )
+    from app.services.production_workflow import create_or_refresh_production_task
+    from app.services.warehouse_inventory import (
+        normalize_material_code,
+        reserve_finished_inventory_for_bom_component,
+    )
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as db:
+        item = db.get(OrderItem, 1)
+        snapshot = db.get(SalesOrderItemBomComponent, 1)
+        assert item is not None and snapshot is not None
+        snapshot.snapshot_component_default_cutting_mode = "一开二"
+        item.material_status = "pending"
+        finished_location = WarehouseLocation(
+            location_code="N039-COMP-FINISHED-SOURCE",
+            location_name="组件成品库存来源",
+            warehouse_type="finished",
+            warehouse_floor=3,
+            source_version="V11",
+            placement_status="placed",
+            is_active=True,
+        )
+        semi_location = WarehouseLocation(
+            location_code="N039-COMP-SEMI-PARTIAL",
+            location_name="组件纸板备料",
+            warehouse_type="semi_finished",
+            is_active=True,
+        )
+        db.add_all([finished_location, semi_location])
+        db.flush()
+        finished_lot = InventoryLot(
+            lot_number="N039-COMP-FINISHED-LOT",
+            inventory_type="finished",
+            warehouse_location_id=finished_location.id,
+            quantity_available=10,
+            quantity_reserved=0,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="boxes",
+            status="active",
+            source_type="manual",
+            stock_date=date.today(),
+            last_movement_at=datetime.now(),
+            version=1,
+        )
+        db.add(finished_lot)
+        db.flush()
+        db.add(
+            FinishedGoodsInventoryDetail(
+                inventory_lot_id=finished_lot.id,
+                owner_customer_id=1,
+                owner_customer_name_snapshot="N039 测试客户",
+                is_general=False,
+                product_id=snapshot.component_product_id,
+                inventory_code_snapshot=snapshot.snapshot_component_product_code,
+                product_name_snapshot=snapshot.snapshot_component_product_name,
+                material_code_snapshot="K616K",
+                flute_type_snapshot="AB",
+            )
+        )
+        finished_reservation = reserve_finished_inventory_for_bom_component(
+            db,
+            order_item_id=item.id,
+            bom_snapshot_id=snapshot.id,
+            inventory_lot_id=finished_lot.id,
+            quantity=10,
+            expected_version=1,
+            operator_id=1,
+            idempotency_key="n039-component-finished-reserve",
+            warning_acknowledged_codes=[],
+        )
+        semi_lot = InventoryLot(
+            lot_number="N039-COMP-SEMI-PARTIAL-LOT",
+            inventory_type="semi_finished",
+            warehouse_location_id=semi_location.id,
+            quantity_available=0,
+            quantity_reserved=5,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date.today(),
+            last_movement_at=datetime.now(),
+            version=1,
+        )
+        db.add(semi_lot)
+        db.flush()
+        db.add(
+            SemiFinishedInventoryDetail(
+                inventory_lot_id=semi_lot.id,
+                supplier_name="N039 供应商",
+                owner_customer_id=1,
+                owner_customer_name_snapshot="N039 测试客户",
+                material_code_snapshot="K616K",
+                normalized_material_code=normalize_material_code("K616K"),
+                layer_count=5,
+                flute_type="AB",
+                board_length_mm=1000,
+                board_width_mm=700,
+                component_type="whole",
+                pieces_per_box=1,
+                stock_yield_per_sheet=2,
+                sheet_type="raw_board",
+            )
+        )
+        db.add(
+            SemiFinishedLotAllowedProduct(
+                inventory_lot_id=semi_lot.id,
+                product_id=snapshot.component_product_id,
+                confirmed_by=1,
+                confirmed_at=datetime.now(),
+            )
+        )
+        requirement = OrderItemSemiRequirement(
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=snapshot.id,
+            customer_id=1,
+            component_type="whole",
+            board_length_mm=1000,
+            board_width_mm=700,
+            material_code_snapshot="K616K",
+            normalized_material_code=normalize_material_code("K616K"),
+            flute_type="AB",
+            pieces_per_box=1,
+            stock_yield_per_sheet=2,
+            required_piece_quantity=10,
+        )
+        db.add(requirement)
+        db.flush()
+        db.add(
+            InventoryReservation(
+                reservation_number="N039-COMP-SEMI-PARTIAL-RES",
+                inventory_lot_id=semi_lot.id,
+                reservation_type="semi_order",
+                order_id=item.order_id,
+                order_item_id=item.id,
+                sales_order_item_bom_component_id=snapshot.id,
+                semi_requirement_id=requirement.id,
+                reserved_stock_quantity=5,
+                credited_requirement_quantity=10,
+                yield_factor=2,
+                consumed_stock_quantity=0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=0,
+                released_requirement_quantity=0,
+                status="active",
+            )
+        )
+        task = create_or_refresh_production_task(db, item.id)
+        component_task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.sales_order_item_bom_component_id == snapshot.id
+            )
+        )
+        assert task is not None and component_task is not None
+        assert component_task.status == "pending"
+        assert component_task.finished_coverage_snapshot == 10
+        assert component_task.planned_quantity == 10
+        assert component_task.material_input_quantity == 5
+        db.commit()
+        task_id = component_task.id
+        stale_version = component_task.version
+        finished_reservation_id = finished_reservation.id
+
+    # A stale or externally repaired reservation must still fail closed even
+    # before the production task/version has been refreshed.
+    with session_factory() as db:
+        reservation = db.get(InventoryReservation, finished_reservation_id)
+        finished_lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        reservation.released_stock_quantity = 10
+        reservation.released_requirement_quantity = 10
+        reservation.status = "released"
+        finished_lot.quantity_reserved = 0
+        finished_lot.quantity_available = 10
+        finished_lot.version += 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        stale_completion = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "n039-component-stale-finished-coverage",
+                "items": [
+                    {
+                        "task_id": task_id,
+                        "expected_version": stale_version,
+                        "disposition": "direct",
+                        "material_input_quantity": 5,
+                        "actual_output_quantity": 10,
+                        "defective_quantity": 0,
+                    }
+                ],
+            },
+        )
+    assert stale_completion.status_code == 409
+    assert "组件成品库存抵扣已变化" in stale_completion.json()["detail"]
+    with session_factory() as db:
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        assert (
+            db.scalar(
+                select(InventoryLot.id).where(
+                    InventoryLot.source_ref_type == "production_completion"
+                )
+            )
+            is None
+        )
+        finished_lot = db.scalar(
+            select(InventoryLot).where(
+                InventoryLot.lot_number == "N039-COMP-FINISHED-LOT"
+            )
+        )
+        second_reservation = reserve_finished_inventory_for_bom_component(
+            db,
+            order_item_id=1,
+            bom_snapshot_id=1,
+            inventory_lot_id=finished_lot.id,
+            quantity=10,
+            expected_version=finished_lot.version,
+            operator_id=1,
+            idempotency_key="n039-component-finished-reserve-again",
+            warning_acknowledged_codes=[],
+        )
+        create_or_refresh_production_task(db, 1)
+        component_task = db.get(ProductionTask, task_id)
+        assert component_task.status == "pending"
+        db.commit()
+        version_before_api_release = component_task.version
+        second_reservation_id = second_reservation.id
+
+    with TestClient(app) as client:
+        _login(client)
+        api_release = client.post(
+            f"/api/warehouse/reservations/{second_reservation_id}/release",
+            json={
+                "release_reason": "页面释放后刷新组件任务",
+                "idempotency_key": "n039-component-finished-release-api",
+            },
+        )
+    assert api_release.status_code == 200, api_release.text
+    with session_factory() as db:
+        component_task = db.get(ProductionTask, task_id)
+        assert component_task.version > version_before_api_release
+        assert component_task.finished_coverage_snapshot == 0
+        assert component_task.status == "waiting_material"
+
+
 def test_component_finished_stock_reduces_only_component_requisition(
     composite_requisition_app,
 ) -> None:
@@ -737,6 +1276,9 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
         WarehouseLocation,
     )
     from app.services.warehouse_inventory import manual_finished_in
+    from app.services.semi_finished_inventory import (
+        consume_semi_finished_reservation,
+    )
 
     app, session_factory = composite_requisition_app
     with session_factory() as db:
@@ -787,6 +1329,7 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
         db.add(
             SemiFinishedInventoryDetail(
                 inventory_lot_id=semi_lot.id,
+                supplier_name="N039 供应商",
                 owner_customer_id=1,
                 owner_customer_name_snapshot="N039 测试客户",
                 material_code_snapshot="K616K",
@@ -798,7 +1341,7 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
                 component_type="whole",
                 pieces_per_box=1,
                 stock_yield_per_sheet=2,
-                sheet_type="net_sheet",
+                sheet_type="raw_board",
             )
         )
         db.add(
@@ -843,7 +1386,22 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
                 InventoryReservation.sales_order_item_bom_component_id == 1
             )
         ).all()
-    assert len(reservations) == 2
+        assert len(reservations) == 2
+        semi_reservation = next(
+            row for row in reservations if row.reservation_type == "semi_order"
+        )
+        current_lot = db.get(InventoryLot, semi_reservation.inventory_lot_id)
+        consumed = consume_semi_finished_reservation(
+            db,
+            reservation_id=semi_reservation.id,
+            stock_quantity=1,
+            expected_version=current_lot.version,
+            operator_id=1,
+            idempotency_key="n039-component-consume-one-sheet",
+            reason="组合组件生产完工消耗客户专用纸板备料",
+        )
+        assert consumed.reservation.consumed_stock_quantity == 1
+        assert consumed.reservation.consumed_requirement_quantity == 2
 
 
 def test_component_inventory_auto_cover_leaves_no_empty_requirement_draft(

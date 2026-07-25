@@ -36,7 +36,6 @@ from app.services.stock_replenishment import (
     product_replenishment_defaults,
     product_replenishment_signature,
     stock_policy_dict,
-    theoretical_requisition_quantity,
 )
 
 
@@ -274,6 +273,31 @@ def _common_box_low_stock_warnings(
                 "suggested_replenishment_quantity": item[
                     "suggested_replenishment_quantity"
                 ],
+                "customer_board_preparation_available_sheet_quantity": item[
+                    "customer_board_preparation_available_sheet_quantity"
+                ],
+                "customer_board_preparation_finished_capacity": item[
+                    "customer_board_preparation_finished_capacity"
+                ],
+                "customer_board_preparation_auto_cover_capacity": item[
+                    "customer_board_preparation_auto_cover_capacity"
+                ],
+                "incoming_board_preparation_sheet_quantity": item[
+                    "incoming_board_preparation_sheet_quantity"
+                ],
+                "incoming_board_preparation_finished_capacity": item[
+                    "incoming_board_preparation_finished_capacity"
+                ],
+                "incoming_board_preparation_auto_cover_capacity": item[
+                    "incoming_board_preparation_auto_cover_capacity"
+                ],
+                "suggested_new_requisition_finished_quantity": item[
+                    "suggested_new_requisition_finished_quantity"
+                ],
+                "suggested_new_requisition_sheet_quantity": item[
+                    "suggested_new_requisition_sheet_quantity"
+                ],
+                "replenishment_state": item["replenishment_state"],
                 "material_code": defaults["material_code"],
                 "supplier_name": defaults["material_supplier_name"],
                 "layer_count": defaults["layer_count"],
@@ -284,10 +308,7 @@ def _common_box_low_stock_warnings(
                 "cutting_mode": defaults["cutting_mode"],
                 "output_per_sheet": defaults["output_per_sheet"],
                 "theoretical_requisition_quantity": (
-                    theoretical_requisition_quantity(
-                        item["suggested_replenishment_quantity"],
-                        defaults["cutting_mode"],
-                    )
+                    item["suggested_new_requisition_sheet_quantity"]
                 ),
                 "draft_ready": defaults["draft_ready"],
                 "missing_fields": defaults["missing_fields"],

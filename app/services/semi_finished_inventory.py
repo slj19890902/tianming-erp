@@ -302,6 +302,58 @@ def _signature_differences_from_signature(
     return tuple(name for name, expected, actual in pairs if expected != actual)
 
 
+def safe_physical_board_facts_match(
+    detail: SemiFinishedInventoryDetail,
+    *,
+    supplier_name: str | None,
+    layer_count: int | None,
+    crease_type: str | None,
+    crease_left_mm: int | None,
+    crease_middle_mm: int | None,
+    crease_right_mm: int | None,
+) -> bool:
+    """Fail closed for no-dialog customer board-preparation reservations."""
+
+    normalized_supplier = " ".join((supplier_name or "").strip().casefold().split())
+    actual_supplier = " ".join(
+        (detail.supplier_name or "").strip().casefold().split()
+    )
+    expected_layer = int(layer_count or 0)
+    if (
+        not normalized_supplier
+        or normalized_supplier != actual_supplier
+        or expected_layer <= 0
+        or int(detail.layer_count or 0) != expected_layer
+    ):
+        return False
+    normalized_crease = {
+        "净": "净料",
+        "毛": "毛片",
+    }.get((crease_type or "").strip(), (crease_type or "").strip())
+    expected_sheet_type = (
+        "creased_sheet"
+        if normalized_crease == "压线"
+        else "net_sheet"
+        if normalized_crease == "净料"
+        else "raw_board"
+    )
+    if (
+        detail.sheet_type != expected_sheet_type
+        or (detail.crease_type or "").strip() != normalized_crease
+    ):
+        return False
+    expected_segments = (
+        (crease_left_mm, crease_middle_mm, crease_right_mm)
+        if normalized_crease == "压线"
+        else (None, None, None)
+    )
+    return (
+        detail.crease_left_mm,
+        detail.crease_middle_mm,
+        detail.crease_right_mm,
+    ) == expected_segments
+
+
 def _physical_signature_differences(
     expected: SemiFinishedSignature,
     detail: SemiFinishedInventoryDetail,
@@ -2045,10 +2097,11 @@ def consume_semi_finished_reservation(
             or order_item.product_id is None
         ):
             raise WarehouseInventoryError("半成品预占关联数据不完整", 409)
+        requirement_product_id = _requirement_product_id(db, requirement)
         ensure_semi_finished_lot_eligibility(
             db,
             lot=lot,
-            product_id=order_item.product_id,
+            product_id=requirement_product_id,
             customer_id=order.customer_id,
             expected=requirement_signature(requirement),
         )

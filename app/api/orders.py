@@ -104,6 +104,7 @@ from app.services.product_import import (
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
+    cutting_output_factor,
     create_or_refresh_production_task,
     has_production_completion_facts,
     lock_order_rows_for_production_transition,
@@ -1007,7 +1008,7 @@ def _apply_order_reservation_plans(
                         f"第{index}条明细缺少{component_type}半成品签名字段", 409
                     )
                 continue
-            stock_yield_per_sheet = 1
+            stock_yield_per_sheet = cutting_output_factor(item.special_process)
             if component_plans:
                 planned_lot = db.get(InventoryLot, component_plans[0].lot_id)
                 if planned_lot is None or planned_lot.semi_finished_detail is None:

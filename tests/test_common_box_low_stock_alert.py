@@ -130,6 +130,11 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
                     permission_code="requisition.view",
                     is_allowed=True,
                 ),
+                UserPermissionOverride(
+                    user_id=no_warehouse.id,
+                    permission_code="requisition.execute",
+                    is_allowed=True,
+                ),
             ]
         )
         material_a = Material(
@@ -146,6 +151,7 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
             product_code="A-BOX",
             customer_material_code="A-BOX",
             product_name="匿名常用箱A",
+            box_style="模切内盒",
             material_id=material_a.id,
             layer_count=3,
             flute_type="B",
@@ -344,6 +350,12 @@ def test_dashboard_warning_is_read_only_permissioned_and_customer_scoped(
         assert overview["low_stock_warnings"][0][
             "theoretical_requisition_quantity"
         ] == 40
+        assert overview["low_stock_warnings"][0][
+            "suggested_new_requisition_sheet_quantity"
+        ] == 40
+        assert overview["low_stock_warnings"][0][
+            "customer_board_preparation_available_sheet_quantity"
+        ] == 0
 
         with factory() as db:
             no_warehouse = db.get(User, ids["no_warehouse"])
@@ -463,9 +475,12 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
 ) -> None:
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
+    from app.api.orders import router as orders_router
+    from app.api.production import router as production_router
     from app.api.requisition import router as requisition_router
     from app.api.warehouse import router as warehouse_router
     from app.models.customer import Customer
+    from app.models.order import OrderItem
     from app.models.product import Product
     from app.models.stock_replenishment import (
         InventoryStockPolicy,
@@ -562,12 +577,25 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             warehouse_type="semi_finished",
             is_active=True,
         )
-        db.add(semi_location)
+        production_location = WarehouseLocation(
+            location_code="E1-L10",
+            location_name="三楼成品E1-L10",
+            area_code="E1",
+            warehouse_type="finished",
+            warehouse_floor=3,
+            source_version="V11",
+            placement_status="placed",
+            is_active=True,
+        )
+        db.add_all([semi_location, production_location])
         db.commit()
         semi_location_id = semi_location.id
+        production_location_id = production_location.id
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(orders_router, prefix="/api/orders")
+    app.include_router(production_router, prefix="/api/production")
     app.include_router(requisition_router, prefix="/api/requisition")
     app.include_router(warehouse_router, prefix="/api/warehouse")
 
@@ -663,9 +691,43 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         assert repeated_save.status_code == 201, repeated_save.text
         assert repeated_save.json()["id"] == saved.json()["id"]
         with factory() as db:
+            from app.services.stock_replenishment import stock_policy_dict
+
             assert int(
                 db.scalar(select(func.count(StockReplenishmentOrder.id))) or 0
             ) == 1
+            incoming_summary = stock_policy_dict(
+                db,
+                db.get(InventoryStockPolicy, ids["policy_a"]),
+            )
+            assert incoming_summary[
+                "incoming_board_preparation_sheet_quantity"
+            ] == 45
+            assert incoming_summary[
+                "customer_board_preparation_available_sheet_quantity"
+            ] == 0
+            assert incoming_summary[
+                "suggested_new_requisition_sheet_quantity"
+            ] == 0
+            assert incoming_summary["replenishment_state"] == "already_ordered"
+            companion_policy = db.scalar(
+                select(InventoryStockPolicy).where(
+                    InventoryStockPolicy.product_id == companion_product_id
+                )
+            )
+            companion_incoming = stock_policy_dict(db, companion_policy)
+            assert companion_incoming[
+                "incoming_board_preparation_sheet_quantity"
+            ] == 45
+            assert companion_incoming[
+                "incoming_board_preparation_finished_capacity"
+            ] == 90
+            assert companion_incoming[
+                "incoming_board_preparation_auto_cover_capacity"
+            ] == 0
+            assert companion_incoming[
+                "suggested_new_requisition_sheet_quantity"
+            ] == 30
         stocked = client.post(
             f"/api/requisition/stock-replenishment/orders/{saved.json()['id']}/stock"
         )
@@ -677,6 +739,42 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             row["product_code"]
             for row in stocked_item["inventory_lot"]["allowed_products"]
         ] == ["A-BOX", "A-BOX-PRINT-B"]
+        with factory() as db:
+            stocked_summary = stock_policy_dict(
+                db,
+                db.get(InventoryStockPolicy, ids["policy_a"]),
+            )
+            assert stocked_summary[
+                "customer_board_preparation_available_sheet_quantity"
+            ] == 45
+            assert stocked_summary[
+                "incoming_board_preparation_sheet_quantity"
+            ] == 0
+            assert stocked_summary[
+                "suggested_new_requisition_sheet_quantity"
+            ] == 0
+            assert (
+                stocked_summary["replenishment_state"]
+                == "board_preparation_ready"
+            )
+            companion_policy = db.scalar(
+                select(InventoryStockPolicy).where(
+                    InventoryStockPolicy.product_id == companion_product_id
+                )
+            )
+            companion_stocked = stock_policy_dict(db, companion_policy)
+            assert companion_stocked[
+                "customer_board_preparation_available_sheet_quantity"
+            ] == 45
+            assert companion_stocked[
+                "customer_board_preparation_finished_capacity"
+            ] == 90
+            assert companion_stocked[
+                "customer_board_preparation_auto_cover_capacity"
+            ] == 0
+            assert companion_stocked[
+                "suggested_new_requisition_sheet_quantity"
+            ] == 30
         searched = client.get(
             "/api/warehouse/lots",
             params={
@@ -722,6 +820,193 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 db.scalar(select(func.count(SemiFinishedLotAllowedProduct.id))) or 0
             ) == binding_count_before_repeat
 
+        created_order = client.post(
+            "/api/orders",
+            json={
+                "customer_id": ids["customer_a"],
+                "customer_po": "UAT-客户备料闭环",
+                "order_date": "2026-07-25",
+                "import_integrity_status": "ok",
+                "items": [
+                    {
+                        "client_line_id": "UAT-BOARD-PREP-LINE-1",
+                        "product_id": ids["product_a"],
+                        "quantity": 80,
+                        "unit_price": "1.00",
+                        "special_process": "一开二",
+                    }
+                ],
+            },
+        )
+        assert created_order.status_code == 201, created_order.text
+        order_item_id = created_order.json()["items"][0]["id"]
+
+        pending_before = client.get("/api/requisition/pending")
+        assert pending_before.status_code == 200, pending_before.text
+        pending_row = next(
+            row
+            for row in pending_before.json()["items"]
+            if row["item_id"] == order_item_id
+        )
+        assert pending_row["cutting_mode"] == "一开二"
+        assert pending_row["required_piece_qty"] == 80
+        assert pending_row["requisition_qty"] == 40
+        assert pending_row["can_auto_use_customer_board_preparation"] is True
+        assert pending_row["customer_board_preparation_available_sheet_qty"] == 40
+
+        with TestClient(app) as restricted_client:
+            assert restricted_client.post(
+                "/api/auth/login",
+                json={"username": "no-warehouse", "password": "123456"},
+            ).status_code == 200
+            forbidden = restricted_client.post(
+                f"/api/requisition/pending/{order_item_id}/"
+                "auto-use-customer-board-preparation",
+                json={"idempotency_key": "no-warehouse-must-not-reserve"},
+            )
+            assert forbidden.status_code == 403
+
+        with factory() as db:
+            order_item = db.get(OrderItem, order_item_id)
+            semi_lot = db.get(
+                InventoryLot,
+                stocked_item["inventory_lot"]["id"],
+            )
+            assert order_item is not None and semi_lot is not None
+            detail = semi_lot.semi_finished_detail
+            original_supplier = detail.supplier_name
+            detail.supplier_name = "错误供应商"
+            unsafe_policy_summary = stock_policy_dict(
+                db,
+                db.get(InventoryStockPolicy, ids["policy_a"]),
+            )
+            assert unsafe_policy_summary[
+                "customer_board_preparation_available_sheet_quantity"
+            ] == 0
+            assert unsafe_policy_summary[
+                "suggested_new_requisition_sheet_quantity"
+            ] == 40
+            db.commit()
+        unsafe_supplier = client.get("/api/requisition/pending").json()["items"]
+        assert next(
+            row for row in unsafe_supplier if row["item_id"] == order_item_id
+        )["can_auto_use_customer_board_preparation"] is False
+        with factory() as db:
+            detail = db.get(
+                InventoryLot,
+                stocked_item["inventory_lot"]["id"],
+            ).semi_finished_detail
+            detail.supplier_name = original_supplier
+            order_item = db.get(OrderItem, order_item_id)
+            order_item.layer_count = 5
+            db.commit()
+        unsafe_layer = client.get("/api/requisition/pending").json()["items"]
+        assert next(
+            row for row in unsafe_layer if row["item_id"] == order_item_id
+        )["can_auto_use_customer_board_preparation"] is False
+        with factory() as db:
+            order_item = db.get(OrderItem, order_item_id)
+            order_item.layer_count = 3
+            detail = db.get(
+                InventoryLot,
+                stocked_item["inventory_lot"]["id"],
+            ).semi_finished_detail
+            detail.sheet_type = "raw_board"
+            detail.crease_type = "毛片"
+            db.commit()
+        unsafe_sheet = client.get("/api/requisition/pending").json()["items"]
+        assert next(
+            row for row in unsafe_sheet if row["item_id"] == order_item_id
+        )["can_auto_use_customer_board_preparation"] is False
+        with factory() as db:
+            detail = db.get(
+                InventoryLot,
+                stocked_item["inventory_lot"]["id"],
+            ).semi_finished_detail
+            detail.sheet_type = "net_sheet"
+            detail.crease_type = "净料"
+            db.commit()
+
+        auto_used = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-customer-board-preparation",
+            json={"idempotency_key": "uat-board-prep-auto-use"},
+        )
+        assert auto_used.status_code == 200, auto_used.text
+        assert auto_used.json()["allocated_sheet_quantity"] == 40
+        assert auto_used.json()["allocated_piece_quantity"] == 80
+        assert auto_used.json()["remaining_requirement_quantity"] == 0
+        assert auto_used.json()["requisition_qty"] == 0
+
+        repeated_auto_use = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-customer-board-preparation",
+            json={"idempotency_key": "uat-board-prep-auto-use"},
+        )
+        assert repeated_auto_use.status_code == 200, repeated_auto_use.text
+        assert repeated_auto_use.json()["allocated_sheet_quantity"] == 0
+        assert repeated_auto_use.json()["allocated_piece_quantity"] == 0
+
+        tasks = client.get("/api/production/tasks")
+        assert tasks.status_code == 200, tasks.text
+        task = next(
+            row
+            for row in tasks.json()["items"]
+            if row["order_item_id"] == order_item_id
+        )
+        assert task["status"] == "pending"
+        assert task["customer_board_preparation_sources"] == [
+            {
+                "reservation_id": task["customer_board_preparation_sources"][0][
+                    "reservation_id"
+                ],
+                "inventory_lot_id": stocked_item["inventory_lot"]["id"],
+                "lot_number": task["customer_board_preparation_sources"][0][
+                    "lot_number"
+                ],
+                "source_ref_type": "stock_replenishment_item",
+                "source_ref_id": stocked_item["id"],
+                "location_code": "SF-UAT-01",
+                "location_name": "客户纸板备料位",
+                "remaining_sheet_quantity": 40,
+                "remaining_product_quantity": 80,
+                "stock_yield_per_sheet": 2,
+                "display_name": "客户专用纸板备料",
+            }
+        ]
+
+        completion_payload = {
+            "idempotency_key": "uat-board-prep-production-complete",
+            "items": [
+                {
+                    "task_id": task["id"],
+                    "expected_version": task["version"],
+                    "disposition": "stock",
+                    "material_input_quantity": 40,
+                    "actual_output_quantity": 70,
+                    "defective_quantity": 10,
+                    "location_id": production_location_id,
+                }
+            ],
+        }
+        completed = client.post(
+            "/api/production/completion-batches",
+            json=completion_payload,
+        )
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["replayed"] is False
+        completion = completed.json()["items"][0]
+        assert completion["actual_output_quantity"] == 70
+        assert completion["stock_quantity"] == 70
+        assert completion["inventory_lot_id"] is not None
+
+        repeated_completion = client.post(
+            "/api/production/completion-batches",
+            json=completion_payload,
+        )
+        assert repeated_completion.status_code == 200, repeated_completion.text
+        assert repeated_completion.json()["replayed"] is True
+
     with factory() as db:
         order = db.scalar(select(StockReplenishmentOrder))
         item = db.scalar(select(StockReplenishmentOrderItem))
@@ -739,14 +1024,16 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 select(func.count(FinishedGoodsInventoryDetail.inventory_lot_id))
             )
             or 0
-        ) == lots_before
+        ) == lots_before + 1
         semi_lot = db.scalar(
             select(InventoryLot).where(
                 InventoryLot.inventory_type == "semi_finished"
             )
         )
         assert semi_lot is not None
-        assert semi_lot.quantity_available == 45
+        assert semi_lot.quantity_available == 5
+        assert semi_lot.quantity_reserved == 0
+        assert semi_lot.quantity_consumed == 40
         assert semi_lot.unit == "sheets"
         assert semi_lot.semi_finished_detail.owner_customer_id == ids["customer_a"]
         assert set(
@@ -765,8 +1052,11 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "lowStockCustomerGroups" in source
     assert "库存不足 {{ group.items.length }} 款" in source
     assert "当前可用 <strong>{{ item.available_quantity }}</strong>" in source
-    assert "建议补成品 <strong>{{ item.suggested_replenishment_quantity }}</strong>" in source
-    assert "理论报料 <strong>{{ item.theoretical_requisition_quantity }}</strong> 张" in source
+    assert "距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> 个成品" in source
+    assert "已有客户备料" in source
+    assert "已报料待到" in source
+    assert "已计入另一款，不重复计算" in source
+    assert "本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张" in source
     assert "openLowStockReplenishment(item)" in source
     assert "openLowStockLocations(item)" in source
     assert "同客户、同材质和同报料尺寸的其他款" in source
@@ -774,6 +1064,12 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "客户专用纸板备料" in source
     assert "stockWarningExtraSheets(line)" in source
     assert "本次报料张数（可多报）" in source
+    assert "使用备料，只报差额" in source
+    assert "autoUseCustomerBoardPreparation(row)" in source
+    assert "canWarehouseReserve" in source
+    assert "客户备料已预占" in source
+    assert "确认完工后自动消耗" in source
+    assert "auto-use-customer-board-preparation" in source
     assert "openProductStockPolicy(item)" in source
     assert "低于多少预警" in source
     assert "建议补到多少" in source

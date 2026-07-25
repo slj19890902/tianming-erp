@@ -25,7 +25,7 @@ def composite_requisition_app(tmp_path: Path):
     from app.models.customer import Customer
     from app.models.order import Order, OrderItem
     from app.models.product import Product
-    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
     from app.models.user import User
 
     engine = create_sqlite_engine(tmp_path / "n039-requisition.sqlite3")
@@ -75,6 +75,24 @@ def composite_requisition_app(tmp_path: Path):
             unit="片",
         )
         session.add_all([admin, customer, parent, component_a, component_b])
+        session.flush()
+        for display_order, component, per_set in (
+            (1, component_a, 2),
+            (2, component_b, 3),
+        ):
+            session.add(
+                ProductBomComponent(
+                    parent_product_id=parent.id,
+                    component_product_id=component.id,
+                    quantity_per_set=Decimal(per_set),
+                    display_order=display_order,
+                    internal_component_code=f"KIT-001-S{display_order:02d}",
+                    is_die_cut=False,
+                    spare_sheet_quantity=0,
+                    display_mode="internal_only",
+                    is_required=True,
+                )
+            )
         session.flush()
         order = Order(
             order_number="N039-PO-001",
@@ -194,6 +212,149 @@ def _parent_payload(*, requisition_qty: int | None = None) -> dict:
     if requisition_qty is not None:
         payload["requisition_qty"] = requisition_qty
     return payload
+
+
+def test_order_save_applies_component_override_once_and_keeps_other_components_in_sets(
+    composite_requisition_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.product_bom import (
+        ProductBomComponent,
+        SalesOrderItemBomComponent,
+        SalesOrderItemBomDemandAdjustment,
+    )
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as session:
+        parent = session.scalar(
+            select(Product).where(Product.product_code == "KIT-001")
+        )
+        relations = session.scalars(
+            select(ProductBomComponent)
+            .where(ProductBomComponent.parent_product_id == parent.id)
+            .order_by(ProductBomComponent.display_order)
+        ).all()
+
+    create_payload = {
+        "customer_id": 1,
+        "customer_po": "N039-COMPONENT-OVERRIDE",
+        "order_date": "2026-07-25",
+        "delivery_date": "2026-07-31",
+        "items": [
+            {
+                "client_line_id": "n039-component-override-line",
+                "product_id": parent.id,
+                "product_code": parent.product_code,
+                "product_name": parent.product_name,
+                "specification": "组合成品",
+                "quantity": 10,
+                "unit_price": "100",
+                "bom_component_demands": [
+                    {
+                        "product_bom_component_id": relations[0].id,
+                        "required_piece_quantity": 17,
+                        "idempotency_key": "n039-create-component-a-17",
+                    }
+                ],
+            }
+        ],
+    }
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=create_payload)
+
+    assert created.status_code == 201, created.text
+    created_order = created.json()
+    created_item = created_order["items"][0]
+    created_components = {
+        row["product_code"]: row for row in created_item["bom_components"]
+    }
+    assert created_item["quantity"] == 10
+    assert created_components["COMP-A"]["effective_required_piece_quantity"] == 17
+    assert created_components["COMP-B"]["effective_required_piece_quantity"] == 30
+
+    component_a = created_components["COMP-A"]
+    update_payload = {
+        "quantity": 12,
+        "unit_price": "100",
+        "product_code": parent.product_code,
+        "product_name": parent.product_name,
+        "specification": "组合成品",
+        "quantity_adjustment_idempotency_key": "n039-parent-10-to-12",
+        "bom_component_demands": [
+            {
+                "snapshot_id": component_a["id"],
+                "required_piece_quantity": 17,
+                "expected_required_piece_quantity": 17,
+                "idempotency_key": "n039-keep-component-a-17",
+            }
+        ],
+    }
+    with TestClient(app) as client:
+        _login(client)
+        updated = client.put(
+            f"/api/orders/items/{created_item['id']}",
+            json=update_payload,
+        )
+        replay = client.put(
+            f"/api/orders/items/{created_item['id']}",
+            json=update_payload,
+        )
+        reopened = client.get(f"/api/orders/{created_order['id']}")
+        pending = client.get("/api/requisition/pending")
+
+    assert updated.status_code == 200, updated.text
+    assert replay.status_code == 200, replay.text
+    assert reopened.status_code == 200, reopened.text
+    reopened_item = reopened.json()["items"][0]
+    reopened_components = {
+        row["product_code"]: row for row in reopened_item["bom_components"]
+    }
+    assert reopened_item["quantity"] == 12
+    assert reopened_components["COMP-A"]["effective_required_piece_quantity"] == 17
+    assert reopened_components["COMP-B"]["effective_required_piece_quantity"] == 36
+
+    pending_row = next(
+        row
+        for row in pending.json()["items"]
+        if row["item_id"] == created_item["id"]
+    )
+    pending_components = {
+        row["product_code"]: row
+        for row in pending_row["component_requirements"]
+    }
+    assert pending_components["COMP-A"]["required_piece_quantity"] == 17
+    assert pending_components["COMP-B"]["required_piece_quantity"] == 36
+
+    with session_factory() as session:
+        snapshots = session.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(
+                SalesOrderItemBomComponent.sales_order_item_id
+                == created_item["id"]
+            )
+            .order_by(SalesOrderItemBomComponent.display_order)
+        ).all()
+        adjustments = session.scalars(
+            select(SalesOrderItemBomDemandAdjustment)
+            .join(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id,
+            )
+            .where(
+                SalesOrderItemBomComponent.sales_order_item_id
+                == created_item["id"]
+            )
+        ).all()
+        template_quantities = session.scalars(
+            select(ProductBomComponent.quantity_per_set)
+            .where(ProductBomComponent.parent_product_id == parent.id)
+            .order_by(ProductBomComponent.display_order)
+        ).all()
+    assert [int(row.required_piece_quantity) for row in snapshots] == [20, 30]
+    assert [int(value) for value in template_quantities] == [2, 3]
+    assert len(adjustments) == 4
 
 
 def test_composite_pending_keeps_one_parent_with_two_component_requirements(
@@ -878,12 +1039,32 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
                 "idempotency_key": "t250-demand-after-report",
             },
         )
+        blocked_order_save = client.put(
+            "/api/orders/items/1",
+            json={
+                "quantity": 3000,
+                "unit_price": "1",
+                "product_code": "T250-OUTER",
+                "product_name": "T250 外包装盒",
+                "specification": "470×600",
+                "bom_component_demands": [
+                    {
+                        "snapshot_id": 1,
+                        "required_piece_quantity": 2600,
+                        "expected_required_piece_quantity": 2700,
+                        "idempotency_key": "t250-order-save-after-report",
+                    }
+                ],
+            },
+        )
         reported = client.get("/api/requisition/reported-documents")
 
     assert created.status_code == 201, created.text
     assert duplicate.status_code == 409
     assert blocked_history_change.status_code == 409
     assert "历史单据不能自动重算" in blocked_history_change.text
+    assert blocked_order_save.status_code == 409
+    assert "请先取消报料再修改订单明细" in blocked_order_save.text
     assert reported.status_code == 200, reported.text
     reported_row = next(
         row

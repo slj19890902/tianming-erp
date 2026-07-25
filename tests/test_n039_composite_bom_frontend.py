@@ -23,6 +23,20 @@ def test_composite_requisition_submits_snapshot_id_to_batch_api() -> None:
     assert "openCompositeRequisition" in INDEX
 
 
+def test_order_form_edits_component_quantities_with_one_order_save() -> None:
+    assert "本订单子件数量" in INDEX
+    assert "默认随父件成套；客户少要时直接改数量，保存订单即可。" in INDEX
+    assert "loadOrderDraftBom" in INDEX
+    assert "loadExistingOrderItemBom" in INDEX
+    assert "syncOrderBomDemandsForQuantity" in INDEX
+    assert "markOrderBomDemandOverride" in INDEX
+    assert "resetOrderBomDemand" in INDEX
+    assert "product_bom_component_id:Number(component.product_bom_component_id)" in INDEX
+    assert "snapshot_id:Number(component.snapshot_id)" in INDEX
+    assert ".filter(component => component._manual_override)" in INDEX
+    assert ".filter(component => component._dirty)" in INDEX
+
+
 def test_reported_composite_requisition_has_clear_source_and_void_action() -> None:
     assert 'return "组合 BOM 报料单"' in INDEX
     assert "voidReportedCompositeRequisition(row)" in INDEX

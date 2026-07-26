@@ -453,7 +453,7 @@ def test_order_pdf_preview_explains_simair_merge_and_candidate_evidence() -> Non
 
 
 def test_order_pdf_multi_candidate_picker_uses_full_width_subrow() -> None:
-    table_start = INDEX.index('<!-- PDF草稿明细：简洁2行布局，常用箱名称/规格/材质为主 -->')
+    table_start = INDEX.index('<!-- PDF 草稿默认只保留现场核对必需信息')
     table_end = INDEX.index("</table>", table_start)
     table_block = INDEX[table_start:table_end]
     header_start = table_block.index("<thead>")
@@ -468,9 +468,9 @@ def test_order_pdf_multi_candidate_picker_uses_full_width_subrow() -> None:
     main_row = table_block[main_row_start:main_row_end]
     candidate_row = table_block[main_row_end:edit_row_start]
 
-    assert column_count == 8
+    assert column_count == 10
     assert 'class="order-item-sub-row import-product-candidate-row"' in candidate_row
-    assert f'colspan="{column_count}"' in candidate_row
+    assert ':colspan="pdfDraftColumnCount(draft)"' in candidate_row
     assert "匹配候选（只选择常用箱，不会改写 PDF 存货编码）" in candidate_row
     assert 'v-model="item.matched_product_id"' in candidate_row
     assert '@change="selectImportProduct(draft,item)"' in candidate_row

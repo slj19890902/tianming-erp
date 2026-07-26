@@ -1,5 +1,36 @@
 # Codex 项目交接
 
+## 2026-07-26 P0-2 常用箱资料状态、材质变化提醒与 PDF 导入简化候选
+
+- 独立候选从
+  `origin/factory-current-baseline@7792f6f246a1ef8428beebebd0d8075e91ee9f4c`
+  建立；worktree=`D:\tm-worktrees\erp-p0-order-readiness-pdf-simplification-20260726`，
+  branch=`codex/p0-order-readiness-pdf-simplification-20260726`。
+- 常用箱是否能正常下单和报料，改为根据存货编码、产品名称、启用材质、供应商、
+  层数、楞型、报料长宽和压线事实自动派生“资料已完善/待完善”；`manual_modified`
+  只保留为编辑版本事实，不再冒充资料完整性。
+- 常用箱列表、PDF 已匹配常用箱和新建订单“来自常用箱”三处统一显示资料状态；
+  待完善状态可查看中文缺项。客户单价、图纸、产品长宽高不作为报料硬门禁。
+- PDF 默认只展示序号、存货编码、数量与库存、异常和操作；产品名称、材质、规格、
+  客户单价、图纸、匹配候选和匹配证据仍完整保留在“高级匹配详情”，没有删除证据。
+- 本轮只增加材质变化提醒，不增加尺寸变化提醒。PDF 材质与常用箱当前材质不同时，
+  必须明确选择实际材质并“仅本订单使用”，或进入既有受控常用箱编辑器更新；禁止
+  静默覆盖常用箱。
+- PDF 中的库存按钮仍只形成前端草稿计划；只有确认 PDF 并正式调用
+  `POST /api/orders` 后，后端才在同一事务中创建订单、预占和库存流水。未确认 PDF
+  行不能直接扣库或出库。
+- 无 Alembic 变更，唯一 head 仍为 `co71v8x9z60`。扩大后端回归
+  `174 passed`，前端/内联 JavaScript 回归 `85 passed`，Python 编译、
+  `git diff --check` 和只读迁移 head 检查通过。
+- 隔离浏览器 UAT 使用
+  `D:\tm-uat\p0-order-readiness-pdf-simplification-20260726\carton_erp_p0_2_uat.sqlite3`，
+  来源为既有隔离副本，复制前后 SHA-256 均为
+  `BA82D7FD5548C9A0D05D7B72A2DACCD78BD93AEFBB99B99A6CF8B719735693C0`。
+  revision=`co71v8x9z60`、`integrity_check=ok`、外键异常 0；页面核验已看到完整和
+  待完善常用箱、新建订单状态回读，Console 无 error/warn。
+- 家庭侧没有连接、复制、迁移或写入工厂正式数据库；没有创建测试订单，也没有
+  生成库存预占或流水。候选发布后需要重启 ERP，但不需要执行数据库迁移。
+
 ## 2026-07-24 组合 BOM 订单专用组件数量、报料展开与整批作废候选
 
 - 独立候选从

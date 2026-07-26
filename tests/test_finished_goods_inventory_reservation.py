@@ -346,6 +346,11 @@ def test_requisition_batch_uses_remaining_quantity_and_keeps_order_quantity(
     db, data = reservation_db
     lot = add_lot(db, data, quantity=100, key="batch-lot")
     reserve(db, data, lot, 30, "batch-reserve")
+    # This test isolates the already-reserved quantity calculation.  The
+    # unreserved balance is unavailable, so the late-stock gate must not ask
+    # the operator to use it before creating the requisition.
+    lot.status = "frozen"
+    db.flush()
     result = create_batch(
         payload=RequisitionBatchCreate(
             supplier_name="测试供应商",
@@ -381,6 +386,11 @@ def test_supplier_draft_derives_active_reservation_without_changing_stock(
     db, data = reservation_db
     lot = add_lot(db, data, quantity=100, key="supplier-draft-lot")
     reservation = reserve(db, data, lot, 30, "supplier-draft-reserve")
+    # This test isolates server-side deduction derivation.  The unreserved
+    # balance is quarantined, so the late-finished-stock gate does not require
+    # the operator to use that unavailable balance first.
+    lot.status = "frozen"
+    db.flush()
     preview = preview_supplier_orders_from_pending_selection(
         payload=PendingSupplierOrderCreatePayload(
             selections=[
@@ -504,6 +514,8 @@ def test_exact_double_splice_demand_is_recomputed_at_preview_and_save(
         data,
         key_prefix="exact-draft",
     )
+    lot.status = "frozen"
+    db.flush()
     db.refresh(lot)
     lot_before = (
         lot.quantity_available,
@@ -617,6 +629,7 @@ def test_exact_active_reservation_rejects_forged_deduction_at_save(
         data,
         key_prefix="exact-forged",
     )
+    lot.status = "frozen"
     db.commit()
     preview = preview_supplier_orders_from_pending_selection(
         payload=PendingSupplierOrderCreatePayload(
@@ -670,6 +683,10 @@ def test_exact_double_splice_ordinary_batch_ignores_stale_requisition_qty(
         lot.quantity_consumed,
         lot.version,
     )
+    # Keep the one-sheet remainder unavailable; this test verifies exact
+    # double-splice arithmetic, not the later-finished-stock decision gate.
+    lot.status = "frozen"
+    db.flush()
     result = create_batch(
         payload=RequisitionBatchCreate(
             supplier_name="测试供应商",
@@ -736,6 +753,8 @@ def test_merge_paths_recompute_exact_active_reservation_and_stale_group_rows(
         data,
         key_prefix="exact-merged-draft",
     )
+    lot.status = "frozen"
+    db.flush()
     second_item = add_matching_pending_item(db, data, suffix="MERGE-002")
 
     suggestions = merge_suggestions(db=db, _user=data["admin"])["suggestions"]
@@ -892,6 +911,8 @@ def test_direct_merged_pending_supplier_order_recomputes_current_reservation(
         data,
         key_prefix="exact-direct-merge",
     )
+    lot.status = "frozen"
+    db.flush()
     second_item = add_matching_pending_item(db, data, suffix="DIRECT-002")
     group = create_merge_group(
         payload=MergeGroupCreatePayload(

@@ -58,6 +58,7 @@ from app.models.user import User
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
+    InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedLotAllowedProduct,
     WarehouseLocation,
@@ -97,10 +98,12 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
     component_inventory_coverage,
+    finished_inventory_candidates,
     has_unconsumed_inventory_reservations,
     inventory_fifo_sort_key,
     normalize_material_code,
     release_active_finished_reservations_for_items,
+    reserve_finished_inventory,
 )
 from app.services.semi_finished_inventory import (
     SIGNATURE_OVERRIDE_WARNING,
@@ -491,6 +494,10 @@ class PendingSemiInventoryReservationPayload(BaseModel):
 
 
 class PendingCustomerBoardPreparationAutoCoverPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=60)
+
+
+class PendingLateFinishedInventoryAutoReservePayload(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=60)
 
 
@@ -1345,6 +1352,155 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
             }
         )
     return options
+
+
+def _safe_late_finished_inventory_candidates(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> list[InventoryLot]:
+    """Return only exact customer-owned finished lots safe for one-click use."""
+
+    expected_product_code = (item.snapshot_product_code or "").strip()
+    if (
+        not expected_product_code
+        or item.product_id != product.id
+        or product.customer_id != order.customer_id
+    ):
+        return []
+    rows: list[InventoryLot] = []
+    for lot in finished_inventory_candidates(db, item.id):
+        detail = lot.finished_detail
+        if (
+            detail is None
+            or detail.is_general
+            or detail.owner_customer_id != order.customer_id
+            or detail.product_id != item.product_id
+            or (detail.inventory_code_snapshot or "").strip()
+            != expected_product_code
+        ):
+            continue
+        rows.append(lot)
+    rows.sort(key=inventory_fifo_sort_key)
+    return rows
+
+
+def _late_finished_inventory_preview(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> dict:
+    """Describe exact late finished stock without mutating inventory."""
+
+    active_semi_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    )
+    blocked_reason: str | None = None
+    if _bom_pending_component_requirements(db, item):
+        blocked_reason = "组合产品须按父件和组件分别处理库存"
+    elif active_semi_reservation is not None:
+        blocked_reason = "订单已有半成品或客户专用纸板备料预占"
+
+    candidates = (
+        []
+        if blocked_reason is not None
+        else _safe_late_finished_inventory_candidates(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+    )
+    requirements = _current_requisition_summary(db, item)
+    remaining_order_quantity = int(requirements["production_required_qty"])
+    available_quantity = sum(
+        max(int(lot.quantity_available or 0), 0) for lot in candidates
+    )
+    reservable_quantity = min(available_quantity, remaining_order_quantity)
+
+    location_map: dict[int | None, dict] = {}
+    lots: list[dict] = []
+    for lot in candidates:
+        location = lot.location
+        location_id = location.id if location is not None else None
+        quantity = max(int(lot.quantity_available or 0), 0)
+        location_row = location_map.setdefault(
+            location_id,
+            {
+                "location_id": location_id,
+                "location_code": (
+                    location.location_code if location is not None else "未设置"
+                ),
+                "location_name": (
+                    location.location_name if location is not None else "未设置库位"
+                ),
+                "available_quantity": 0,
+            },
+        )
+        location_row["available_quantity"] += quantity
+        lots.append(
+            {
+                "lot_id": lot.id,
+                "lot_number": lot.lot_number,
+                "version": lot.version,
+                "available_quantity": quantity,
+                "stock_date": lot.stock_date.isoformat() if lot.stock_date else None,
+                "location_id": location_id,
+                "location_code": location_row["location_code"],
+                "location_name": location_row["location_name"],
+            }
+        )
+
+    return {
+        "available_quantity": available_quantity,
+        "reservable_quantity": reservable_quantity,
+        "remaining_order_quantity": remaining_order_quantity,
+        "can_auto_reserve": (
+            blocked_reason is None and reservable_quantity > 0
+        ),
+        "blocked_reason": blocked_reason,
+        "locations": list(location_map.values()),
+        "lots": lots,
+    }
+
+
+def _require_late_finished_inventory_resolved(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+    message_prefix: str = "发现订单保存后新增的同客户同存货编码成品库存",
+) -> dict:
+    preview = _late_finished_inventory_preview(
+        db,
+        item=item,
+        order=order,
+        product=product,
+    )
+    if preview["can_auto_reserve"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{message_prefix}，当前可抵扣 "
+                f"{preview['reservable_quantity']} 个；"
+                "请返回待报料列表先点击“使用成品，剩余再报”后重试。"
+            ),
+        )
+    return preview
 
 
 def _safe_customer_board_preparation_options(
@@ -2386,6 +2542,18 @@ def _pending_entry_dict(entry: dict) -> dict:
         ),
         "requisition_qty": entry["requisition_qty"],
         "remark": entry["remark"] or "",
+        "late_finished_inventory": entry.get(
+            "late_finished_inventory",
+            {
+                "available_quantity": 0,
+                "reservable_quantity": 0,
+                "remaining_order_quantity": entry["production_required_qty"],
+                "can_auto_reserve": False,
+                "blocked_reason": None,
+                "locations": [],
+                "lots": [],
+            },
+        ),
         "late_semi_inventory_options": entry.get(
             "late_semi_inventory_options", []
         ),
@@ -2580,6 +2748,12 @@ def _pending_selection_preview_groups(
             raise HTTPException(status_code=409, detail="同一订单明细不能重复加入报料草稿")
         seen_order_item_ids.add(entry["order_item"].id)
         entry["display_registry"] = registry
+        entry["late_finished_inventory"] = _late_finished_inventory_preview(
+            db,
+            item=entry["order_item"],
+            order=entry["order"],
+            product=entry["product"],
+        )
         entry["late_semi_inventory_options"] = _late_semi_inventory_options(
             db, entry
         )
@@ -2863,6 +3037,7 @@ def _draft_group_entries(
 def _draft_group_entries_by_purchase_lines(
     db: Session,
     payload: PendingSupplierOrderFinalizePayload,
+    user: User,
 ) -> tuple[dict[str, list[dict]], list[Requisition]]:
     grouped: dict[str, list[dict]] = {}
     touched_groups_by_id: dict[int, Requisition] = {}
@@ -2885,6 +3060,7 @@ def _draft_group_entries_by_purchase_lines(
                 item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
                     db, source_payload.order_item_id
                 )
+                _require_order_item_customer_access(db, item, user)
                 req_item: RequisitionItem | None = None
                 merge_group: Requisition | None = None
                 if source_payload.source_type == "order_item":
@@ -2917,6 +3093,14 @@ def _draft_group_entries_by_purchase_lines(
                         "req_item": req_item,
                         "merge_group": merge_group,
                     }
+                )
+
+            for ref in source_refs:
+                _require_late_finished_inventory_resolved(
+                    db,
+                    item=ref["item"],
+                    order=ref["order"],
+                    product=ref["product"],
                 )
 
             current_requirements = [
@@ -3290,6 +3474,12 @@ def pending_requisitions(
         )
         if suggested_len is None or suggested_width is None:
             suggested_len, suggested_width = _suggested_dimensions(product)
+        late_finished_inventory = _late_finished_inventory_preview(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
         customer_board_preparation = _safe_customer_board_preparation_options(
             db,
             item=item,
@@ -3345,6 +3535,19 @@ def pending_requisitions(
                 "required_piece_qty": required_piece_qty,
                 "semi_finished_reserved_piece_qty": semi_finished_reserved_piece_qty,
                 "remaining_required_piece_qty": remaining_required_piece_qty,
+                "late_finished_inventory": late_finished_inventory,
+                "late_finished_inventory_available_qty": int(
+                    late_finished_inventory["available_quantity"]
+                ),
+                "late_finished_inventory_reservable_qty": int(
+                    late_finished_inventory["reservable_quantity"]
+                ),
+                "late_finished_inventory_locations": late_finished_inventory[
+                    "locations"
+                ],
+                "can_auto_use_late_finished_inventory": bool(
+                    late_finished_inventory["can_auto_reserve"]
+                ),
                 "customer_board_preparation_available_piece_qty": sum(
                     int(row["available_piece_quantity"])
                     for row in customer_board_preparation
@@ -4513,14 +4716,21 @@ def create_batch(
 
         for order_item_id, lines in lines_by_order_item.items():
             row = db.execute(
-                select(OrderItem, Product)
+                select(OrderItem, Product, Order)
                 .join(Product, Product.id == OrderItem.product_id)
+                .join(Order, Order.id == OrderItem.order_id)
                 .where(OrderItem.id == order_item_id)
             ).one_or_none()
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
-            item, product = row
+            item, product, order = row
             _require_order_item_customer_access(db, item, user)
+            _require_late_finished_inventory_resolved(
+                db,
+                item=item,
+                order=order,
+                product=product,
+            )
             bom_snapshots = _bom_snapshots_for_order_item(db, item.id)
             if bom_snapshots:
                 if item.material_status == "received":
@@ -6961,6 +7171,20 @@ def create_supplier_order_from_merge_group(
         if order_item.requisition_status != "未报料":
             raise HTTPException(status_code=409, detail="合并组中存在已报料明细，不能重复生成")
         _ensure_order_item_crease_width(order_item)
+        late_finished_inventory = _late_finished_inventory_preview(
+            db,
+            item=order_item,
+            order=order_row,
+            product=product,
+        )
+        if late_finished_inventory["can_auto_reserve"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "合并组中发现后来入库的同客户同存货编码成品库存，"
+                    "请先返回待报料列表点击“使用成品，剩余再报”后重试"
+                ),
+            )
         requirements = _current_requisition_requirements(
             db,
             order_item,
@@ -7652,6 +7876,265 @@ def reserve_semi_inventory_from_pending(
         raise
 
 
+def _late_finished_idempotent_replay(
+    db: Session,
+    *,
+    item_id: int,
+    operation_prefix: str,
+    user: User,
+) -> dict | None:
+    repeated = db.scalars(
+        select(InventoryReservation)
+        .where(
+            InventoryReservation.idempotency_key.like(
+                f"{operation_prefix}%"
+            )
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    if not repeated:
+        return None
+    if any(
+        row.order_item_id != item_id
+        or row.reservation_type != "finished_order"
+        for row in repeated
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该请求标识已用于其他库存预占",
+        )
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    _require_order_item_customer_access(db, item, user)
+    order = db.get(Order, item.order_id)
+    product = db.get(Product, item.product_id)
+    if order is None or product is None:
+        raise HTTPException(status_code=409, detail="订单或产品快照关联已失效")
+    updated = _current_requisition_summary(db, item)
+    current_preview = _late_finished_inventory_preview(
+        db,
+        item=item,
+        order=order,
+        product=product,
+    )
+    return {
+        "order_item_id": item.id,
+        "allocated_quantity": sum(
+            int(row.credited_requirement_quantity or 0)
+            for row in repeated
+        ),
+        "finished_inventory_reserved_qty": int(
+            updated["finished_inventory_reserved_qty"]
+        ),
+        "production_required_qty": int(
+            updated["production_required_qty"]
+        ),
+        "requisition_qty": int(updated["requisition_qty"]),
+        "fully_covered_by_finished_inventory": bool(
+            updated["fully_covered_by_finished_inventory"]
+        ),
+        "reservations": [
+            {
+                "reservation_id": row.id,
+                "inventory_lot_id": row.inventory_lot_id,
+                "allocated_quantity": int(
+                    row.credited_requirement_quantity or 0
+                ),
+            }
+            for row in repeated
+        ],
+        "late_finished_inventory": current_preview,
+        "idempotent_replay": True,
+        "message": "该成品库存预占已处理，本次未重复预占",
+    }
+
+
+@router.post("/pending/{item_id}/auto-use-finished-inventory")
+def auto_use_late_finished_inventory(
+    item_id: int,
+    payload: PendingLateFinishedInventoryAutoReservePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    """One-click FIFO reserve exact customer-owned finished stock."""
+
+    operation_prefix = (
+        "late-finished:"
+        f"{hashlib.sha256(payload.idempotency_key.encode('utf-8')).hexdigest()[:24]}:"
+    )
+    try:
+        replay = _late_finished_idempotent_replay(
+            db,
+            item_id=item_id,
+            operation_prefix=operation_prefix,
+            user=user,
+        )
+        if replay is not None:
+            return replay
+        item, order, _customer, product = _ensure_pending_order_item_for_supplier_order(
+            db, item_id
+        )
+        _require_order_item_customer_access(db, item, user)
+        if _bom_pending_component_requirements(db, item):
+            raise HTTPException(
+                status_code=409,
+                detail="组合产品请在展开的父件与组件明细中分别使用匹配库存",
+            )
+
+        repeated = db.scalars(
+            select(InventoryReservation)
+            .where(
+                InventoryReservation.idempotency_key.like(
+                    f"{operation_prefix}%"
+                )
+            )
+            .order_by(InventoryReservation.id)
+        ).all()
+        if repeated:
+            return _late_finished_idempotent_replay(
+                db,
+                item_id=item_id,
+                operation_prefix=operation_prefix,
+                user=user,
+            )
+
+        preview = _late_finished_inventory_preview(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+        if preview["blocked_reason"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{preview['blocked_reason']}，不能改用成品库存",
+            )
+        if not preview["can_auto_reserve"]:
+            raise HTTPException(
+                status_code=409,
+                detail="没有可安全自动匹配的同客户同存货编码成品库存，请刷新后重试",
+            )
+
+        remaining = int(preview["reservable_quantity"])
+        allocation_rows: list[dict] = []
+        for lot in _safe_late_finished_inventory_candidates(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        ):
+            if remaining <= 0:
+                break
+            quantity = min(max(int(lot.quantity_available or 0), 0), remaining)
+            if quantity <= 0:
+                continue
+            location = lot.location
+            reservation = reserve_finished_inventory(
+                db,
+                order_item_id=item.id,
+                inventory_lot_id=lot.id,
+                quantity=quantity,
+                expected_version=lot.version,
+                operator_id=user.id,
+                idempotency_key=f"{operation_prefix}{lot.id}",
+                warning_acknowledged_codes=[],
+            )
+            allocation_rows.append(
+                {
+                    "reservation_id": reservation.id,
+                    "inventory_lot_id": lot.id,
+                    "lot_number": lot.lot_number,
+                    "allocated_quantity": quantity,
+                    "location_id": location.id if location is not None else None,
+                    "location_code": (
+                        location.location_code if location is not None else "未设置"
+                    ),
+                    "location_name": (
+                        location.location_name
+                        if location is not None
+                        else "未设置库位"
+                    ),
+                }
+            )
+            remaining -= quantity
+
+        allocated_quantity = sum(
+            int(row["allocated_quantity"]) for row in allocation_rows
+        )
+        if allocated_quantity <= 0:
+            raise HTTPException(
+                status_code=409,
+                detail="成品库存已发生变化，请刷新后重试",
+            )
+        updated = _current_requisition_summary(db, item)
+        _audit(
+            db,
+            user=user,
+            action="AUTO_USE_LATE_FINISHED_INVENTORY",
+            entity_id=item.id,
+            details={
+                "order_item_id": item.id,
+                "inventory_lot_ids": [
+                    row["inventory_lot_id"] for row in allocation_rows
+                ],
+                "allocated_quantity": allocated_quantity,
+                "finished_inventory_reserved_qty": int(
+                    updated["finished_inventory_reserved_qty"]
+                ),
+                "production_required_qty": int(
+                    updated["production_required_qty"]
+                ),
+                "requisition_qty": int(updated["requisition_qty"]),
+            },
+            description="一键使用后来入库的客户专用成品，剩余数量再报料",
+        )
+        db.commit()
+        return {
+            "order_item_id": item.id,
+            "allocated_quantity": allocated_quantity,
+            "finished_inventory_reserved_qty": int(
+                updated["finished_inventory_reserved_qty"]
+            ),
+            "production_required_qty": int(
+                updated["production_required_qty"]
+            ),
+            "requisition_qty": int(updated["requisition_qty"]),
+            "fully_covered_by_finished_inventory": bool(
+                updated["fully_covered_by_finished_inventory"]
+            ),
+            "reservations": allocation_rows,
+            "late_finished_inventory": _late_finished_inventory_preview(
+                db,
+                item=item,
+                order=order,
+                product=product,
+            ),
+            "idempotent_replay": False,
+            "message": (
+                f"已按先进先出预占成品库存 {allocated_quantity} 个；"
+                f"剩余 {int(updated['production_required_qty'])} 个继续报料"
+            ),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        replay = _late_finished_idempotent_replay(
+            db,
+            item_id=item_id,
+            operation_prefix=operation_prefix,
+            user=user,
+        )
+        if replay is not None:
+            return replay
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+    except HTTPException:
+        db.rollback()
+        raise
+
+
 @router.post("/pending/{item_id}/auto-use-customer-board-preparation")
 def auto_use_customer_board_preparation(
     item_id: int,
@@ -7798,10 +8281,11 @@ def create_supplier_orders_from_pending_selection(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
-        grouped, touched_groups = _draft_group_entries_by_purchase_lines(db, payload)
-        for entries in grouped.values():
-            for entry in entries:
-                _require_order_item_customer_access(db, entry["order_item"], user)
+        grouped, touched_groups = _draft_group_entries_by_purchase_lines(
+            db,
+            payload,
+            user,
+        )
         created_orders: list[SupplierRequisitionOrder] = []
         for supplier_name, entries in grouped.items():
             created_orders.append(
@@ -7889,6 +8373,19 @@ def create_supplier_order(
             raise HTTPException(status_code=404, detail="订单明细不存在")
         if order_item is not None:
             _require_order_item_customer_access(db, order_item, user)
+            order = db.get(Order, order_item.order_id)
+            product = db.get(Product, order_item.product_id)
+            if order is None or product is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="订单或产品快照关联已失效，不能生成供应商报料单",
+                )
+            _require_late_finished_inventory_resolved(
+                db,
+                item=order_item,
+                order=order,
+                product=product,
+            )
         if order_item is None:
             pieces_per_box = max(int(member.pieces_per_box or 1), 1)
             production_required_qty = max(int(member.quantity or 0), 0)

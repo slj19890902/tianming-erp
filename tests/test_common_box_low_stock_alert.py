@@ -92,6 +92,14 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
             customer_access_mode="selected",
             must_change_password=False,
         )
+        other_customer_operator = User(
+            username="other-customer",
+            password_hash=hash_password("123456"),
+            role="sales",
+            real_name="客户B文员",
+            customer_access_mode="selected",
+            must_change_password=False,
+        )
         customer_a = Customer(
             customer_number=9101,
             customer_code="A",
@@ -106,7 +114,16 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
             payment_term_days=0,
             credit_limit=0,
         )
-        db.add_all([admin, scoped, no_warehouse, customer_a, customer_b])
+        db.add_all(
+            [
+                admin,
+                scoped,
+                no_warehouse,
+                other_customer_operator,
+                customer_a,
+                customer_b,
+            ]
+        )
         db.flush()
         db.add_all(
             [
@@ -114,6 +131,10 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
                 UserCustomerScope(
                     user_id=no_warehouse.id,
                     customer_id=customer_a.id,
+                ),
+                UserCustomerScope(
+                    user_id=other_customer_operator.id,
+                    customer_id=customer_b.id,
                 ),
                 UserPermissionOverride(
                     user_id=scoped.id,
@@ -132,6 +153,16 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
                 ),
                 UserPermissionOverride(
                     user_id=no_warehouse.id,
+                    permission_code="requisition.execute",
+                    is_allowed=True,
+                ),
+                UserPermissionOverride(
+                    user_id=other_customer_operator.id,
+                    permission_code="requisition.view",
+                    is_allowed=True,
+                ),
+                UserPermissionOverride(
+                    user_id=other_customer_operator.id,
                     permission_code="requisition.execute",
                     is_allowed=True,
                 ),
@@ -255,6 +286,7 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
             "admin": admin.id,
             "scoped": scoped.id,
             "no_warehouse": no_warehouse.id,
+            "other_customer_operator": other_customer_operator.id,
             "customer_a": customer_a.id,
             "customer_b": customer_b.id,
             "product_a": product_a.id,
@@ -938,6 +970,16 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         assert auto_used.json()["remaining_requirement_quantity"] == 0
         assert auto_used.json()["requisition_qty"] == 0
 
+        blocked_finished_after_board_reservation = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "board-reservation-must-not-be-released"},
+        )
+        assert blocked_finished_after_board_reservation.status_code == 409
+        assert "已有半成品或客户专用纸板备料预占" in (
+            blocked_finished_after_board_reservation.text
+        )
+
         repeated_auto_use = client.post(
             f"/api/requisition/pending/{order_item_id}/"
             "auto-use-customer-board-preparation",
@@ -1045,6 +1087,335 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         ) == {ids["product_a"], companion_product_id}
 
 
+def test_pending_order_uses_later_customer_finished_stock_before_requisition(
+    tmp_path: Path,
+) -> None:
+    from app.api.auth import router as auth_router
+    from app.api.deps import get_db
+    from app.api.orders import router as orders_router
+    from app.api.requisition import router as requisition_router
+    from app.models.product import Product
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        product = db.get(Product, ids["product_a"])
+        location = db.get(WarehouseLocation, ids["standard_location"])
+        assert product is not None and location is not None
+        # The order must exist before any safe exact finished stock appears.
+        for lot_number in ("LOT-A-DEDICATED", "LOT-A-INVALID-V11"):
+            seeded_lot = db.scalar(
+                select(InventoryLot).where(
+                    InventoryLot.lot_number == lot_number
+                )
+            )
+            assert seeded_lot is not None
+            seeded_lot.status = "frozen"
+        _add_finished_lot(
+            db,
+            lot_number="LOT-A-WRONG-CODE",
+            product=product,
+            location=location,
+            quantity_available=777,
+        )
+        wrong_code = db.scalar(
+            select(InventoryLot).where(
+                InventoryLot.lot_number == "LOT-A-WRONG-CODE"
+            )
+        )
+        assert wrong_code is not None and wrong_code.finished_detail is not None
+        wrong_code.finished_detail.inventory_code_snapshot = "OTHER-CODE"
+        _add_finished_lot(
+            db,
+            lot_number="LOT-A-CROSS-CUSTOMER",
+            product=product,
+            location=location,
+            quantity_available=333,
+        )
+        cross_customer = db.scalar(
+            select(InventoryLot).where(
+                InventoryLot.lot_number == "LOT-A-CROSS-CUSTOMER"
+            )
+        )
+        assert (
+            cross_customer is not None
+            and cross_customer.finished_detail is not None
+        )
+        cross_customer.finished_detail.owner_customer_id = ids["customer_b"]
+        cross_customer.finished_detail.owner_customer_name_snapshot = "匿名客户B"
+        db.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(orders_router, prefix="/api/orders")
+    app.include_router(requisition_router, prefix="/api/requisition")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "123456"},
+        ).status_code == 200
+        created = client.post(
+            "/api/orders",
+            json={
+                "customer_id": ids["customer_a"],
+                "customer_po": "UAT-后来成品优先抵扣",
+                "order_date": "2026-07-26",
+                "import_integrity_status": "ok",
+                "items": [
+                    {
+                        "client_line_id": "LATE-FINISHED-LINE-1",
+                        "product_id": ids["product_a"],
+                        "quantity": 1200,
+                        "unit_price": "1.00",
+                        "special_process": "一开二",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        order_item_id = created.json()["items"][0]["id"]
+
+        with factory() as db:
+            product = db.get(Product, ids["product_a"])
+            standard_location = db.get(
+                WarehouseLocation, ids["standard_location"]
+            )
+            alternate_location = db.scalar(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.location_code == "BAD-V11"
+                )
+            )
+            assert (
+                product is not None
+                and standard_location is not None
+                and alternate_location is not None
+            )
+            _add_finished_lot(
+                db,
+                lot_number="LOT-A-LATE-50",
+                product=product,
+                location=standard_location,
+                quantity_available=50,
+            )
+            _add_finished_lot(
+                db,
+                lot_number="LOT-A-LATE-999",
+                product=product,
+                location=alternate_location,
+                quantity_available=999,
+            )
+            db.commit()
+
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        row = next(
+            item
+            for item in pending.json()["items"]
+            if item["item_id"] == order_item_id
+        )
+        assert row["late_finished_inventory_available_qty"] == 1049
+        assert row["late_finished_inventory_reservable_qty"] == 1049
+        assert row["can_auto_use_late_finished_inventory"] is True
+        assert {
+            (item["location_code"], item["available_quantity"])
+            for item in row["late_finished_inventory_locations"]
+        } == {("FG-A01", 50), ("BAD-V11", 999)}
+
+        draft = client.post(
+            "/api/requisition/supplier-orders/preview-from-pending-selection",
+            json={
+                "selections": [
+                    {
+                        "type": "order_item",
+                        "order_item_id": order_item_id,
+                        "supplier_name": "匿名纸板供应商",
+                        "report_length_mm": 600,
+                        "report_width_mm": 470,
+                        "cutting_mode": "一开二",
+                    }
+                ]
+            },
+        )
+        assert draft.status_code == 200, draft.text
+        with TestClient(app) as other_customer_client:
+            assert other_customer_client.post(
+                "/api/auth/login",
+                json={"username": "other-customer", "password": "123456"},
+            ).status_code == 200
+            denied_customer_scope = other_customer_client.post(
+                "/api/requisition/supplier-orders/from-pending-selection",
+                json=draft.json(),
+            )
+            assert denied_customer_scope.status_code == 403
+            assert "当前可抵扣" not in denied_customer_scope.text
+
+        blocked_formal_requisition = client.post(
+            "/api/requisition/supplier-orders/from-pending-selection",
+            json=draft.json(),
+        )
+        assert blocked_formal_requisition.status_code == 409
+        assert "发现订单保存后新增" in blocked_formal_requisition.text
+        blocked_legacy_batch = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "匿名纸板供应商",
+                "items": [
+                    {
+                        "order_item_id": order_item_id,
+                        "requisition_qty": 600,
+                        "cardboard_len": 600,
+                        "cardboard_width": 470,
+                        "special_process": "一开二",
+                    }
+                ],
+            },
+        )
+        assert blocked_legacy_batch.status_code == 409
+        assert "发现订单保存后新增" in blocked_legacy_batch.text
+        blocked_legacy_supplier_order = client.post(
+            "/api/requisition/supplier-orders",
+            json={
+                "supplier_name": "匿名纸板供应商",
+                "material_id": ids["material_a"],
+                "layer_count": 3,
+                "flute_type": "B",
+                "report_length_mm": 600,
+                "report_width_mm": 470,
+                "cutting_mode": "一开二",
+                "members": [
+                    {
+                        "item_id": order_item_id,
+                        "quantity": 1200,
+                        "cutting_mode": "一开二",
+                    }
+                ],
+            },
+        )
+        assert blocked_legacy_supplier_order.status_code == 409
+        assert "发现订单保存后新增" in blocked_legacy_supplier_order.text
+
+        with TestClient(app) as restricted_client:
+            assert restricted_client.post(
+                "/api/auth/login",
+                json={"username": "no-warehouse", "password": "123456"},
+            ).status_code == 200
+            denied = restricted_client.post(
+                f"/api/requisition/pending/{order_item_id}/"
+                "auto-use-finished-inventory",
+                json={"idempotency_key": "late-finished-no-permission"},
+            )
+            assert denied.status_code == 403
+
+        reserved = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "late-finished-first-pass"},
+        )
+        assert reserved.status_code == 200, reserved.text
+        body = reserved.json()
+        assert body["allocated_quantity"] == 1049
+        assert body["production_required_qty"] == 151
+        assert body["requisition_qty"] == 76
+        assert [item["allocated_quantity"] for item in body["reservations"]] == [
+            50,
+            999,
+        ]
+
+        replay = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "late-finished-first-pass"},
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+        assert replay.json()["allocated_quantity"] == 1049
+
+        with factory() as db:
+            product = db.get(Product, ids["product_a"])
+            location = db.get(WarehouseLocation, ids["standard_location"])
+            assert product is not None and location is not None
+            _add_finished_lot(
+                db,
+                lot_number="LOT-A-LATER-100",
+                product=product,
+                location=location,
+                quantity_available=100,
+            )
+            db.commit()
+        replay_after_new_stock = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "late-finished-first-pass"},
+        )
+        assert replay_after_new_stock.status_code == 200
+        assert replay_after_new_stock.json()["allocated_quantity"] == 1049
+
+        second_pass = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "late-finished-second-pass"},
+        )
+        assert second_pass.status_code == 200, second_pass.text
+        assert second_pass.json()["allocated_quantity"] == 100
+        assert second_pass.json()["production_required_qty"] == 51
+        assert second_pass.json()["requisition_qty"] == 26
+
+        with factory() as db:
+            product = db.get(Product, ids["product_a"])
+            location = db.get(WarehouseLocation, ids["standard_location"])
+            assert product is not None and location is not None
+            _add_finished_lot(
+                db,
+                lot_number="LOT-A-FINAL-51",
+                product=product,
+                location=location,
+                quantity_available=51,
+            )
+            db.commit()
+        final_pass = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "late-finished-final-pass"},
+        )
+        assert final_pass.status_code == 200, final_pass.text
+        assert final_pass.json()["allocated_quantity"] == 51
+        assert final_pass.json()["fully_covered_by_finished_inventory"] is True
+        final_replay = client.post(
+            f"/api/requisition/pending/{order_item_id}/"
+            "auto-use-finished-inventory",
+            json={"idempotency_key": "late-finished-final-pass"},
+        )
+        assert final_replay.status_code == 200, final_replay.text
+        assert final_replay.json()["idempotent_replay"] is True
+        assert final_replay.json()["allocated_quantity"] == 51
+        pending_after = client.get("/api/requisition/pending")
+        assert pending_after.status_code == 200
+        assert order_item_id not in {
+            item["item_id"]
+            for item in pending_after.json()["items"]
+            if not item.get("is_merge_group")
+        }
+
+    with factory() as db:
+        rows = db.scalars(
+            select(InventoryReservation)
+            .where(InventoryReservation.order_item_id == order_item_id)
+            .order_by(InventoryReservation.id)
+        ).all()
+        assert sum(int(item.reserved_stock_quantity) for item in rows) == 1200
+        assert len(rows) == 4
+
+
 def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     source = Path("static/index.html").read_text(encoding="utf-8")
 
@@ -1070,6 +1441,27 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "客户备料已预占" in source
     assert "确认完工后自动消耗" in source
     assert "auto-use-customer-board-preparation" in source
+    assert "后来可用 {{ row.late_finished_inventory_reservable_qty || 0 }} 个" in source
+    assert "使用成品，剩余再报" in source
+    assert "supplierDraftLateFinishedSources()" in source
+    assert "confirmDraftLateFinishedInventory(source)" in source
+    assert "后来入库的客户专用成品" in source
+    assert "autoUseLateFinishedInventory(row)" in source
+    assert "auto-use-finished-inventory" in source
+    late_finished_method = source.split(
+        "async autoUseLateFinishedInventory(row)", 1
+    )[1].split("async autoUseCustomerBoardPreparation(row)", 1)[0]
+    assert "await this.loadRequisition()" in late_finished_method
+    assert "confirm(" not in late_finished_method
+    assert "prompt(" not in late_finished_method
+    draft_finished_method = source.split(
+        "async confirmDraftLateFinishedInventory(source)"
+    )[1].split("async confirmDraftSemiInventory(option)")[0]
+    assert "confirm(" not in draft_finished_method
+    assert "prompt(" not in draft_finished_method
+    assert "refreshSupplierRequisitionDraftAfterInventoryReservation()" in (
+        draft_finished_method
+    )
     assert "openProductStockPolicy(item)" in source
     assert "低于多少预警" in source
     assert "建议补到多少" in source

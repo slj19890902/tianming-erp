@@ -553,6 +553,45 @@
       .quotation-edit-table .select { min-height: 32px; }
       .quotation-number-input { width: 78px !important; min-width: 78px !important; }
       .quotation-price-input { width: 94px !important; min-width: 94px !important; font-weight: 700; }
+      .contract-header-grid {
+        display: grid; grid-template-columns: minmax(220px,1.5fr) minmax(180px,1fr) minmax(150px,.8fr) minmax(150px,.8fr);
+        gap: 10px 14px; align-items: end; margin-bottom: 10px;
+      }
+      .contract-header-grid .field, .contract-secondary-row .field { min-width: 0; margin: 0; }
+      .contract-secondary-row { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+      .contract-remark-input { width: 6em !important; min-width: 6em !important; }
+      .contract-table-wrap { overflow: visible; max-height: none; }
+      .contract-edit-table { width: 100%; min-width: 0; table-layout: fixed; font-size: 12px; white-space: normal; }
+      .contract-edit-table th { white-space: nowrap; padding: 8px 6px; }
+      .contract-edit-table td { padding: 8px 6px; vertical-align: top; white-space: normal; overflow: visible; }
+      .contract-edit-table .input, .contract-edit-table .select { width: 100%; min-width: 0; min-height: 32px; padding-left: 7px; padding-right: 7px; }
+      .contract-edit-table th:nth-child(1) { width: 4%; }
+      .contract-edit-table th:nth-child(2) { width: 30%; }
+      .contract-edit-table th:nth-child(3) { width: 21%; }
+      .contract-edit-table th:nth-child(4) { width: 10%; }
+      .contract-edit-table th:nth-child(5) { width: 7%; }
+      .contract-edit-table th:nth-child(6) { width: 8%; }
+      .contract-edit-table th:nth-child(7) { width: 9%; }
+      .contract-edit-table th:nth-child(8) { width: 6%; }
+      .contract-edit-table th:nth-child(9) { width: 5%; }
+      .contract-product-select { position: relative; min-width: 0; }
+      .contract-product-select .search-select { width: 100%; min-width: 0; }
+      .contract-product-select .search-select:focus-within { z-index: 300; }
+      .contract-product-select .search-select-list { left: 0; right: auto; width: min(560px,70vw); z-index: 500; }
+      .contract-product-select .search-select-option { white-space: normal; overflow-wrap: anywhere; }
+      .contract-product-summary { line-height: 1.45; overflow-wrap: anywhere; }
+      .contract-product-summary strong { display: block; color: #111827; }
+      .contract-product-summary .muted { display: block; margin-top: 2px; font-size: 11px; }
+      .contract-material-cell { line-height: 1.45; text-align: center; }
+      .contract-amount-cell { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap !important; }
+      .contract-line-remark { width: 6em !important; min-width: 0 !important; }
+      .contract-status { white-space: nowrap; }
+      @media (max-width: 1050px) {
+        .contract-header-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+        .contract-edit-table { font-size: 11px; }
+        .contract-edit-table th, .contract-edit-table td { padding-left: 4px; padding-right: 4px; }
+        .contract-product-select .search-select-list { width: min(500px,82vw); }
+      }
       .warning-input { background:#fef3c7 !important; border-color:#f59e0b !important; }
       .pieces-per-box-cell { width: 64px; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
       .supplier-print-sheet { font-family: "SimSun", serif; color: #111; }
@@ -1115,7 +1154,7 @@
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
+                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleCustomerStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
@@ -1168,6 +1207,68 @@
                 <div v-if="!quotationHistory.length" class="empty">该客户还没有报价记录</div>
                 <div v-else class="table-wrap"><table><thead><tr><th>报价单号</th><th>报价日期</th><th>状态</th><th>报价金额</th><th>报价明细</th><th>操作</th></tr></thead><tbody>
                   <tr v-for="row in quotationHistory" :key="row.id"><td><strong>{{ row.quotation_no }}</strong></td><td>{{ row.quotation_date }}</td><td><status-tag :value="row.status"></status-tag></td><td>￥ {{ money(row.total_amount) }}</td><td><div v-for="item in row.items" :key="item.id">{{ item.product_name }}｜{{ item.box_type }}｜{{ item.material_code || '-' }}<span v-if="item.converted_product_id" class="status green">已转常用箱</span><button v-else-if="row.status==='accepted'" class="btn small" @click="convertQuotationItem(row,item)">转入常用箱</button></div></td><td class="toolbar-group"><button class="btn small" @click="editQuotation(row)">{{ ['draft','quoted'].includes(row.status) ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printQuotation(row)">打印/PDF</button><button v-if="row.status==='quoted'" class="btn small success" @click="acceptQuotation(row)">客户接受</button><button v-if="!['voided','converted'].includes(row.status)" class="btn small danger" @click="voidQuotation(row)">作废</button></td></tr>
+                </tbody></table></div>
+              </div>
+            </template>
+
+            <template v-else-if="activePage === 'contracts'">
+              <page-head title="客户合同" :desc="contractCustomer ? `当前客户：${contractCustomer.name}` : '从客户管理选择客户后创建合同。'"></page-head>
+              <div class="toolbar">
+                <div class="toolbar-group">
+                  <button class="btn" @click="go('customers')">返回客户管理</button>
+                  <button v-if="canEditContracts" class="btn primary" @click="newContractDraft">新建合同</button>
+                </div>
+                <div class="toolbar-group" v-if="contractCustomer">
+                  <button class="btn" :disabled="loading || !contractEditable" @click="saveContractDraft">保存合同草稿</button>
+                  <button class="btn" :disabled="!contractDraft.id" @click="printContract(contractDraft)">打印/PDF</button>
+                  <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn success" :disabled="loading" @click="confirmContract(contractDraft)">客户确认合同</button>
+                  <button v-if="contractDraft.status === 'confirmed' && canConvertContracts" class="btn success" :disabled="loading" @click="convertContract(contractDraft)">确认并转订单</button>
+                  <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn danger" :disabled="loading" @click="deleteContract(contractDraft)">删除草稿</button>
+                </div>
+              </div>
+              <div v-if="contractCustomer" class="panel contract-panel" style="margin-bottom:14px;overflow:visible">
+                <div class="contract-header-grid">
+                  <div class="field"><label>客户</label><div><strong>{{ contractCustomer.name }}</strong></div></div>
+                  <div class="field"><label>客户单号 / PO</label><input class="input" v-model.trim="contractDraft.customer_po" :placeholder="contractDraft.contract_no || '保存后自动使用天明合同号'" :disabled="!contractEditable" /></div>
+                  <div class="field"><label>合同日期</label><input class="input" type="date" v-model="contractDraft.contract_date" :disabled="!contractEditable" @change="onContractDateChanged" /></div>
+                  <div class="field"><label>交期</label><input class="input" type="date" v-model="contractDraft.delivery_date" :disabled="!contractEditable" @input="markContractDeliveryDateManual" /></div>
+                </div>
+                <div class="contract-secondary-row">
+                  <div class="field"><label>合同备注</label><input class="input contract-remark-input" v-model.trim="contractDraft.remarks" :title="contractDraft.remarks || ''" placeholder="最多显示6字" :disabled="!contractEditable" /></div>
+                  <div class="field"><label>状态</label><span :class="['status','contract-status',contractStatusTone(contractDraft.status)]">{{ contractStatusText(contractDraft.status) }}</span></div>
+                  <div v-if="contractDraft.converted_order_number" class="field"><label>关联订单</label><strong>{{ contractDraft.converted_order_number }}</strong></div>
+                </div>
+                <div v-if="contractDraft.status !== 'draft'" class="notice readonly-hint" style="margin-bottom:10px">合同已{{ contractStatusText(contractDraft.status) }}，合同抬头和明细已锁定。</div>
+                <div class="table-wrap contract-table-wrap">
+                  <table class="contract-edit-table">
+                    <thead><tr><th>序号</th><th>常用箱（编码 / 名称 / 规格）</th><th>产品详情</th><th>材质 / 楞型</th><th>数量</th><th>单价</th><th>金额</th><th>备注</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(line,index) in contractDraft.items" :key="line._key || line.id || index">
+                        <td>{{ index + 1 }}</td>
+                        <td class="contract-product-select"><search-select v-model="line.product_id" :options="contractProductOptions" label-key="_label" value-key="id" placeholder="搜索当前客户常用箱" :disabled="!contractEditable" @search="searchContractProducts" @change="selectContractProduct(line,$event)"></search-select></td>
+                        <td class="contract-product-summary"><strong>{{ line.product_name || '-' }}</strong><span class="muted">{{ line.product_code || '-' }}｜{{ line.specification || contractSpecification(line) || '-' }}｜{{ line.box_type || '-' }}</span></td>
+                        <td class="contract-material-cell">{{ line.material || '-' }}<br><span class="muted">{{ line.flute_type || '-' }}</span></td>
+                        <td><input class="input contract-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="!contractEditable" /></td>
+                        <td><input class="input contract-price-input" type="number" min="0" step="0.0001" v-model.number="line.unit_price" :disabled="!contractEditable" /></td>
+                        <td class="contract-amount-cell">￥{{ money(Number(line.quantity || 0) * Number(line.unit_price || 0)) }}</td>
+                        <td><input class="input contract-line-remark" v-model.trim="line.remarks" :title="line.remarks || ''" placeholder="6字显示" :disabled="!contractEditable" /></td>
+                        <td><button class="btn small danger" :disabled="!contractEditable || contractDraft.items.length === 1" @click="removeContractLine(index)">删除</button></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="toolbar" style="margin-top:10px"><button class="btn" :disabled="!contractEditable" @click="addContractLine">增加一行</button><strong>合同总金额：￥ {{ money(contractTotal) }}</strong></div>
+              </div>
+              <div class="panel">
+                <div class="toolbar"><strong>合同历史</strong><button class="btn" @click="loadContractHistory">刷新</button></div>
+                <div v-if="!contractHistory.length" class="empty">该客户还没有合同记录</div>
+                <div v-else class="table-wrap"><table><thead><tr><th>合同号</th><th>日期</th><th>客户单号/PO</th><th>交期</th><th>状态</th><th>明细</th><th>金额</th><th>操作</th></tr></thead><tbody>
+                  <tr v-for="row in contractHistory" :key="row.id">
+                    <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
+                    <td><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></td>
+                    <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ money(row.total_amount) }}</td>
+                    <td class="toolbar-group"><button class="btn small" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small" @click="printContract(row)">打印/PDF</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" @click="confirmContract(row)">客户确认</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" @click="convertContract(row)">转订单</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" @click="deleteContract(row)">删除</button></td>
+                  </tr>
                 </tbody></table></div>
               </div>
             </template>
@@ -4293,6 +4394,18 @@
       const searchDebounceTimers = new Map();
       const today = () => TmTime.beijingToday();
       const plusDays = (days) => TmTime.addCalendarDays(TmTime.beijingToday(), days);
+      const addWorkingDays = (startDate, workingDays=7) => {
+        const match = String(startDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) return "";
+        const result = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+        let added = 0;
+        while (added < workingDays) {
+          result.setUTCDate(result.getUTCDate() + 1);
+          const weekday = result.getUTCDay();
+          if (weekday !== 0 && weekday !== 6) added += 1;
+        }
+        return result.toISOString().slice(0,10);
+      };
       const month = () => today().slice(0, 7);
       const roleMenus = {
         admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse", "deliveries", "finance", "system"],
@@ -4313,7 +4426,7 @@
       const menuPermissions = {
         dashboard: "dashboard.view", customers: "customers.view", products: "products.view", orders: "orders.view",
         requisition: "requisition.view", incoming: "incoming.view", production: "orders.view", warehouse: "warehouse.view",
-        deliveries: "deliveries.view", finance: "finance.view", system: "system.backup", permissions: "users.manage",
+        deliveries: "deliveries.view", finance: "finance.view", contracts: "contracts.view", system: "system.backup", permissions: "users.manage",
       };
       const blankCustomer = () => ({
         id: null, version: null, customer_number: 1, customer_code: "", name: "",
@@ -4408,6 +4521,39 @@
         _final_manual: false,
         _message: "",
       });
+      let contractLineKey = 0;
+      const blankContractLine = () => ({
+        _key: ++contractLineKey,
+        product_id: null,
+        product_code: "",
+        product_name: "",
+        specification: "",
+        box_type: "",
+        length_mm: null,
+        width_mm: null,
+        height_mm: null,
+        material: "",
+        flute_type: "",
+        quantity: null,
+        unit_price: null,
+        remarks: "",
+      });
+      const blankContractDraft = () => ({
+        id: null,
+        contract_no: "",
+        customer_id: null,
+        contract_date: today(),
+        customer_po: "",
+        delivery_date: addWorkingDays(today(), 7),
+        _delivery_date_manual: false,
+        remarks: "",
+        status: "draft",
+        version: 1,
+        confirmed_at: null,
+        converted_order_id: null,
+        converted_order_number: "",
+        items: [blankContractLine()],
+      });
 
       const app = createApp({
         data() {
@@ -4422,6 +4568,10 @@
             quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
             quotationConvertForm: {},
             quotationHistory: [],
+            contractCustomer: null,
+            contractDraft: blankContractDraft(),
+            contractHistory: [],
+            contractProducts: [],
             materialLayerFilter: 3,
             materialLayerTabs: [
               { value: 3, label: "三层" },
@@ -4744,6 +4894,9 @@
           canDeleteProducts() { return this.hasPermission("products.delete"); },
           canViewQuotations() { return this.hasPermission("quotations.view"); },
           canEditQuotations() { return this.hasPermission("quotations.edit"); },
+          canViewContracts() { return this.hasPermission("contracts.view"); },
+          canEditContracts() { return this.hasPermission("contracts.edit"); },
+          canConvertContracts() { return this.hasPermission("contracts.convert"); },
           canCreateOrders() { return this.hasPermission("orders.create"); },
           canEditOrders() { return this.hasPermission("orders.edit"); },
           canStatusOrders() { return this.hasPermission("orders.status"); },
@@ -4765,6 +4918,21 @@
               (sum, line) => sum + Number(line.quantity || 0) * Number(line.final_unit_price || 0),
               0,
             );
+          },
+          contractTotal() {
+            return (this.contractDraft.items || []).reduce(
+              (sum, line) => sum + Number(line.quantity || 0) * Number(line.unit_price || 0),
+              0,
+            );
+          },
+          contractEditable() {
+            return this.canEditContracts && (!this.contractDraft.id || this.contractDraft.status === "draft");
+          },
+          contractProductOptions() {
+            return (this.contractProducts || []).map(product => ({
+              ...product,
+              _label: `${product.product_code || product.customer_material_code || "-"}｜${product.product_name || "未命名产品"}｜${this.contractSpecification(product)}`,
+            }));
           },
           quotationEditable() {
             return this.canEditQuotations && (!this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status));
@@ -5157,14 +5325,14 @@
             if (Array.isArray(permissions)) return permissions.includes(code);
             const legacy = {
               finance: ["customers.view","products.view","orders.view","cost.view"],
-              sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"],
+              sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
               workshop: ["customers.view","products.view","orders.view"],
               boss: ["customers.view","customers.create","customers.edit","products.view","products.create","products.edit","orders.view","orders.create","orders.edit","orders.status","orders.rollback","requisition.view","requisition.execute","cost.view"],
             };
             return (legacy[this.user?.role] || []).includes(code);
           },
           pagePermission(page) {
-            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
+            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", contracts:"contracts.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
           },
           pageAllowed(page) {
             if (this.isBoss && ["system", "permissions"].includes(page)) return false;
@@ -5934,7 +6102,7 @@
               partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
               delivered:"已送完", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
-              unsettled:"未结清", settled:"已结清", draft:"草稿", quoted:"已报价", accepted:"客户接受", converted:"已转常用箱", voided:"作废",
+              unsettled:"未结清", settled:"已结清", draft:"草稿", quoted:"已报价", accepted:"客户接受", converted:"已转常用箱", voided:"作废", contract_draft:"草稿", contract_confirmed:"客户已确认", contract_converted:"已转订单",
               "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
             })[value] || value || "-";
           },
@@ -6444,7 +6612,7 @@
             return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
           },
           initialPageFromLocation() {
-            const pages = new Set(["dashboard","customers","quotations","products","orders","orders_legacy","requisition","incoming","production","warehouse","deliveries","finance","system"]);
+            const pages = new Set(["dashboard","customers","contracts","quotations","products","orders","orders_legacy","requisition","incoming","production","warehouse","deliveries","finance","system"]);
             const queryPage = new URLSearchParams(window.location.search).get("page") || "";
             if (queryPage === "permissions") return "permissions";
             if (pages.has(queryPage)) return queryPage;
@@ -6571,6 +6739,7 @@
                 await this.loadCustomerOptions(force);
                 if (this.quotationCustomer) await this.loadQuotationHistory();
               }
+              if (page === "contracts" && this.contractCustomer) await Promise.all([this.loadContractProducts(), this.loadContractHistory()]);
               if (page === "products") await Promise.all([this.loadCustomerOptions(force), this.loadProducts(), this.loadMaterials(), this.loadMoldTools()]);
               if (page === "orders" || page === "orders_legacy") await Promise.all([this.loadCustomerOptions(force), this.loadOrders()]);
               if (page === "requisition") {
@@ -7996,7 +8165,7 @@
             const rows = [
               ["customers", "客户查看", "customers.view"], ["customers", "客户新增", "customers.create"], ["customers", "客户编辑", "customers.edit"], ["customers", "客户停用", "customers.deactivate"], ["customers", "客户删除", "customers.delete"],
               ["products", "产品查看", "products.view"], ["products", "产品新增", "products.create"], ["products", "产品编辑", "products.edit"], ["products", "产品停用", "products.deactivate"], ["products", "产品删除", "products.delete"],
-              ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
+              ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["contracts", "合同查看", "contracts.view"], ["contracts", "合同编辑", "contracts.edit"], ["contracts", "合同转订单", "contracts.convert"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
               ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
               ["dashboard", "首页仪表盘查看", "dashboard.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
               ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
@@ -8010,8 +8179,8 @@
             if (role === "admin") return true;
             const defaults = {
               boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","warehouse.stocktake.review","deliveries.over_delivery"].includes(code)),
-              sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"],
-              finance: ["customers.view","quotations.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
+              sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
+              finance: ["customers.view","quotations.view","contracts.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
               workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
               delivery_picker: ["orders.view", "deliveries.pick"],
             };
@@ -8156,6 +8325,188 @@
             this.customerForm = next;
             this.beginMasterEdit("customer",this.customerForm);
             this.modal = { type:"customer", title: row ? (this.canEditCustomers ? "编辑客户" : "查看客户") : "新增客户" };
+          },
+          contractStatusText(status) {
+            return ({ draft:"草稿", confirmed:"客户已确认", converted:"已转订单" })[status] || status || "草稿";
+          },
+          contractStatusTone(status) {
+            return status === "draft" ? "orange" : "green";
+          },
+          contractSpecification(row) {
+            const compact = value => String(value || "")
+              .replace(/mm/gi, "")
+              .replace(/-?\d+(?:\.\d+)?/g, number => String(Math.round(Number(number))));
+            if (row?.specification) return compact(row.specification);
+            const values = [row?.length_mm, row?.width_mm, row?.height_mm];
+            if (!values.every(value => value !== null && value !== undefined && value !== "")) return "-";
+            return values.map(value => Math.round(Number(value))).join("×");
+          },
+          contractMaterialText(row) {
+            if (!row) return "";
+            if (row.material) return String(row.material);
+            if (row.material_display) return String(row.material_display);
+            if (row.material_code) return String(row.material_code);
+            if (row.default_material_code) return String(row.default_material_code);
+            const material = this._findMaterial(row.material_id);
+            return material ? this.buildMaterialDisplay(material) : (row.material_code || "");
+          },
+          contractProductFromId(productId) {
+            return (this.contractProducts || []).find(product => Number(product.id) === Number(productId)) || null;
+          },
+          applyContractProduct(line, product) {
+            if (!product) return;
+            line.product_id = product.id;
+            line.product_code = product.product_code || product.customer_material_code || "";
+            line.product_name = product.product_name || "";
+            line.specification = this.contractSpecification(product);
+            line.box_type = product.box_style || product.box_type || "";
+            line.length_mm = product.length_mm ?? null;
+            line.width_mm = product.width_mm ?? null;
+            line.height_mm = product.height_mm ?? null;
+            line.material = this.contractMaterialText(product);
+            line.flute_type = product.flute_type || "";
+            line.unit_price = product.sale_unit_price ?? product.unit_price ?? null;
+          },
+          selectContractProduct(line, productId) {
+            const product = this.contractProductFromId(productId);
+            if (product) this.applyContractProduct(line, product);
+          },
+          onContractDateChanged() {
+            if (!this.contractDraft._delivery_date_manual) {
+              this.contractDraft.delivery_date = addWorkingDays(this.contractDraft.contract_date || today(), 7);
+            }
+          },
+          markContractDeliveryDateManual() {
+            this.contractDraft._delivery_date_manual = true;
+          },
+          hydrateContract(data) {
+            const source = data || {};
+            return {
+              ...blankContractDraft(),
+              ...source,
+              customer_id: source.customer_id || source.customer?.id || this.contractCustomer?.id || null,
+              customer_po: source.customer_po || source.contract_no || "",
+              delivery_date: source.delivery_date || addWorkingDays(source.contract_date || today(), 7),
+              _delivery_date_manual: Boolean(
+                source.delivery_date && source.delivery_date !== addWorkingDays(source.contract_date || today(), 7)
+              ),
+              items: (source.items || []).map(item => ({ ...blankContractLine(), ...item, specification: item.specification || this.contractSpecification(item) })),
+            };
+          },
+          async openCustomerContracts(row) {
+            if (!this.canViewContracts) return;
+            this.contractCustomer = { ...row };
+            this.newContractDraft();
+            this.activePage = "contracts";
+            await Promise.all([this.loadContractProducts(), this.loadContractHistory()]);
+          },
+          newContractDraft() {
+            this.contractDraft = { ...blankContractDraft(), customer_id: this.contractCustomer?.id || null };
+          },
+          async loadContractProducts() {
+            return this.searchContractProducts("");
+          },
+          async searchContractProducts(keyword="") {
+            if (!this.contractCustomer?.id) return;
+            const { data } = await axios.get("/api/master/products", { params:{ customer_id:this.contractCustomer.id, keyword:String(keyword || "").trim(), include_inactive:false, page:1, page_size:200 } });
+            this.contractProducts = data.items || [];
+          },
+          async loadContractHistory() {
+            if (!this.contractCustomer?.id) return;
+            const { data } = await axios.get("/api/contracts", { params:{ customer_id:this.contractCustomer.id } });
+            this.contractHistory = data.items || data.contracts || data || [];
+          },
+          contractPayload() {
+            if (!this.contractCustomer?.id) throw new Error("请先选择客户");
+            if (!this.contractDraft.items.length) throw new Error("合同至少需要一条明细");
+            return {
+              customer_id: this.contractCustomer.id,
+              contract_date: this.contractDraft.contract_date || today(),
+              customer_po: String(this.contractDraft.customer_po || "").trim() || null,
+              delivery_date: this.contractDraft.delivery_date || null,
+              remarks: String(this.contractDraft.remarks || "").trim() || null,
+              expected_version: this.contractDraft.id ? Number(this.contractDraft.version || 1) : undefined,
+              items: this.contractDraft.items.map((line, index) => {
+                if (!line.product_id) throw new Error(`第${index + 1}行请选择当前客户常用箱`);
+                if (!String(line.product_name || "").trim()) throw new Error(`第${index + 1}行产品名称不能为空`);
+                if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity) <= 0) throw new Error(`第${index + 1}行数量必须是正整数`);
+                if (line.unit_price === null || line.unit_price === undefined || line.unit_price === "" || Number(line.unit_price) < 0) throw new Error(`第${index + 1}行请填写单价`);
+                return {
+                  product_id: Number(line.product_id), product_code:String(line.product_code || "").trim() || null,
+                  product_name:String(line.product_name).trim(), specification:String(line.specification || this.contractSpecification(line)).trim() || null,
+                  box_type:String(line.box_type || "").trim() || null, length_mm:line.length_mm || null, width_mm:line.width_mm || null, height_mm:line.height_mm || null,
+                  material:String(line.material || "").trim() || null, flute_type:String(line.flute_type || "").trim() || null,
+                  quantity:Number(line.quantity), unit_price:Number(line.unit_price), remarks:String(line.remarks || "").trim() || null,
+                };
+              }),
+            };
+          },
+          async persistContractDraft(showMessage=true) {
+            if (!this.contractEditable) return null;
+            const payload = this.contractPayload();
+            const response = this.contractDraft.id
+              ? await axios.put(`/api/contracts/${this.contractDraft.id}`, payload)
+              : await axios.post("/api/contracts", payload);
+            this.contractDraft = this.hydrateContract(response.data);
+            await this.loadContractHistory();
+            if (showMessage) this.showToast(`合同草稿 ${response.data.contract_no || ""} 已保存`);
+            return response.data;
+          },
+          async saveContractDraftSafe() {
+            if (this.loading) return;
+            this.loading = true;
+            try { await this.persistContractDraft(true); }
+            catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.loading = false; }
+          },
+          async saveContractDraft() {
+            return this.saveContractDraftSafe();
+          },
+          async editContract(row) {
+            try {
+              const { data } = await axios.get(`/api/contracts/${row.id}`);
+              this.contractDraft = this.hydrateContract(data);
+              window.scrollTo({ top:0, behavior:"smooth" });
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          contractIdempotencyKey() {
+            if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
+            return `contract-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+          },
+          async deleteContract(row) {
+            if (!confirm(`确认删除合同 ${row.contract_no || "草稿"} 吗？`)) return;
+            try {
+              await axios.delete(`/api/contracts/${row.id}`, { data:{ confirm_text:"我确认删除合同" } });
+              this.newContractDraft();
+              await this.loadContractHistory();
+              this.showToast("合同草稿已删除");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async confirmContract(row) {
+            if (!confirm(`确认客户已确认合同 ${row.contract_no || ""} 吗？确认后合同将锁定。`)) return;
+            try {
+              const { data } = await axios.post(`/api/contracts/${row.id}/confirm`, { expected_version:Number(row.version || 1) });
+              this.contractDraft = this.hydrateContract(data);
+              await this.loadContractHistory();
+              this.showToast("合同已确认并锁定");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async convertContract(row) {
+            if (!confirm(`确认将合同 ${row.contract_no || ""} 转为订单吗？`)) return;
+            try {
+              const { data } = await axios.post(`/api/contracts/${row.id}/convert-order`, { expected_version:Number(row.version || 1), idempotency_key:this.contractIdempotencyKey() });
+              this.contractDraft = this.hydrateContract(data);
+              await this.loadContractHistory();
+              this.showToast(`合同已转订单 ${data.converted_order_number || data.order_number || ""}`);
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          printContract(row) {
+            if (row?.id) window.open(`/contract-print.html?id=${encodeURIComponent(row.id)}`, "_blank");
+          },
+          addContractLine() { this.contractDraft.items.push(blankContractLine()); },
+          removeContractLine(index) {
+            if (this.contractDraft.items.length <= 1) return;
+            this.contractDraft.items.splice(index, 1);
           },
           async openCustomerQuotations(row) {
             this.quotationCustomer = { id:row.id, name:row.name };

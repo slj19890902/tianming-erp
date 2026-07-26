@@ -1,5 +1,35 @@
 # Codex 项目交接
 
+## 2026-07-26 P0 | N041 客户合同能力恢复（待人工 UAT）
+
+- 独立候选从
+  `origin/factory-current-baseline@7792f6f246a1ef8428beebebd0d8075e91ee9f4c`
+  建立；worktree=`D:\tm-worktrees\erp-n041-contract-restore-20260726`，
+  branch=`codex/n041-contract-restore-20260726`。N041 原已验收实现为
+  `9cce9fa21a6c6eecc8275326485dcaf1b49071e8`，但该提交从未进入工厂正式祖先链；
+  本轮是按当前代码恢复，不是解除权限隐藏，也不是重做第二套合同。
+- 已恢复合同草稿、编辑、确认、幂等转订单、删除、权限、操作日志、客户入口、合同
+  工作页、深链和客户可见打印。合同转订单复用当前完整订单创建事务，保留当前组合
+  BOM、报料、生产和权限行为。
+- 新迁移 `cp72v8x9z61` 线性接 `co71v8x9z60`，为唯一 Alembic head；原 N041
+  的旧 `df62` 迁移没有带入。存在合同事实时 downgrade 会在任何 DDL 前 fail-closed。
+- 迁移源为已核验 `co71` 隔离副本
+  `D:\tm-uat\composite-order-overrides-20260725\carton_erp_uat.sqlite3`，
+  源 SHA-256=`BB472EA228C7279DA1224FA4BBD80B10DE72F112FEBBB82F6DECC69FE45B74FA`。
+  再次复制件
+  `D:\tm-uat\n041-contract-restore-20260726\carton_erp_cp72_migration_rehearsal.sqlite3`
+  已完成 `co71 → cp72 → co71 → cp72`，每阶段 `integrity_check=ok`、外键异常 0；
+  最终 SHA-256=`62CF6E1A55340342002EA9CB8421694FA41259D542A22F1487DADF91171D56C3`。
+  另在隔离探针插入匿名合同事实，降级按预期失败且 revision 保持 `cp72`、完整性正常。
+  自动测试还覆盖合同草稿删除后仅保留编号序列或审计日志的情况，均禁止破坏性降级。
+- 合同、迁移、前端和权限专项 `38 passed`。普通订单、组合 BOM 与报料扩大回归
+  `121 passed, 1 failed`；唯一失败
+  `test_mobile_incoming_exposes_latest_pdf_drawing` 已在未修改基线 `7792f6f`
+  单独原样复现，属于既有移动来料 PDF 路径契约差异，与本候选无关。
+- 尚未进行老板人工 UAT。正式发布需要先备份并校验正式库，在备份副本演练
+  `co71 → cp72`，取得明确授权后再迁移、重启和复核；家庭侧未连接或写入工厂
+  正式数据库。
+
 ## 2026-07-24 组合 BOM 订单专用组件数量、报料展开与整批作废候选
 
 - 独立候选从

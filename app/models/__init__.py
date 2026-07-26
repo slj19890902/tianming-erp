@@ -105,6 +105,11 @@ from app.models.quotation import (  # noqa: E402,F401
     QuotationItem,
     QuotationOrder,
 )
+from app.models.customer_contract import (  # noqa: E402,F401
+    ContractDailySequence,
+    CustomerContract,
+    CustomerContractItem,
+)
 from app.models.production import (  # noqa: E402,F401
     ProductionCompletion,
     ProductionCompletionBatch,

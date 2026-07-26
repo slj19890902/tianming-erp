@@ -117,6 +117,9 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
                 "products.edit",
                 "quotations.view",
                 "quotations.edit",
+                "contracts.view",
+                "contracts.edit",
+                "contracts.convert",
                 "orders.view",
                 "orders.create",
                 "orders.edit",
@@ -127,6 +130,9 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
         assert has_permission(sales, "products.edit")
         assert has_permission(sales, "quotations.view")
         assert has_permission(sales, "quotations.edit")
+        assert has_permission(sales, "contracts.view")
+        assert has_permission(sales, "contracts.edit")
+        assert has_permission(sales, "contracts.convert")
         assert has_permission(sales, "orders.create")
         assert has_permission(sales, "orders.edit")
         for permission in (

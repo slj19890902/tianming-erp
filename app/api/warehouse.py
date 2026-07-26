@@ -98,6 +98,10 @@ from app.services.warehouse_inventory import (
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
+from app.services.location_candidates import (
+    list_operational_locations,
+    operational_location_payload,
+)
 from app.services.mold_location import (
     MoldLocationError,
     MoldLocationMoveResult,
@@ -3319,6 +3323,63 @@ def list_locations(
     return {"items": [_location_dict(row) for row in rows]}
 
 
+@router.get("/location-candidates")
+def list_location_candidates(
+    inventory_type: Literal["finished", "semi_finished"] = "finished",
+    empty_only: bool = False,
+    pallet_storage_only: bool = False,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    warehouse_types = (
+        {"finished", "shared"}
+        if inventory_type == "finished"
+        else {"semi_finished", "shared"}
+    )
+    rows = list_operational_locations(
+        db,
+        warehouse_types=warehouse_types,
+        empty_only=empty_only,
+        pallet_storage_only=pallet_storage_only,
+    )
+    items = [operational_location_payload(row) for row in rows]
+    floors: dict[int, dict] = {}
+    for item in items:
+        floor_number = item["warehouse_floor"]
+        area_code = item["area_code"]
+        if floor_number is None or not area_code:
+            continue
+        floor = floors.setdefault(
+            int(floor_number),
+            {
+                "id": item["floor_id"],
+                "floor_code": item["floor_code"],
+                "floor_name": item["floor_name"],
+                "floor_number": int(floor_number),
+                "areas": {},
+            },
+        )
+        area = floor["areas"].setdefault(
+            str(area_code),
+            {
+                "id": item["area_id"],
+                "area_code": area_code,
+                "area_name": item["area_name"],
+                "locations": [],
+            },
+        )
+        area["locations"].append(item)
+    floor_items = []
+    for floor_number in sorted(floors):
+        floor = floors[floor_number]
+        floor["areas"] = [
+            floor["areas"][area_code]
+            for area_code in sorted(floor["areas"])
+        ]
+        floor_items.append(floor)
+    return {"items": items, "floors": floor_items}
+
+
 @router.get("/references/customers")
 def reference_customers(
     db: Session = Depends(get_db),
@@ -3905,6 +3966,8 @@ def list_lots(
     inventory_type: str | None = None,
     status: str | None = None,
     location_id: int | None = None,
+    warehouse_floor: int | None = Query(default=None, ge=1, le=99),
+    area_code: str | None = None,
     keyword: str | None = None,
     stale_level: str | None = None,
     page: int = Query(default=1, ge=1),
@@ -3922,6 +3985,18 @@ def list_lots(
         query = query.where(InventoryLot.status == status)
     if location_id:
         query = query.where(InventoryLot.warehouse_location_id == location_id)
+    elif warehouse_floor is not None or area_code:
+        location_ids = select(WarehouseLocation.id)
+        if warehouse_floor is not None:
+            location_ids = location_ids.where(
+                WarehouseLocation.warehouse_floor == warehouse_floor
+            )
+        if area_code:
+            location_ids = location_ids.where(
+                func.upper(WarehouseLocation.area_code)
+                == area_code.strip().upper()
+            )
+        query = query.where(InventoryLot.warehouse_location_id.in_(location_ids))
     if keyword:
         text = keyword.strip()
         pattern = f"%{text}%"

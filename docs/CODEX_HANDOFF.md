@@ -1971,3 +1971,31 @@ legacy_ruida_* 原始层
 - 本轮不新增 Alembic revision，继续使用 `cg63v8x9z52`。定向 API、订单冻结和前端显示用例 `7 passed`；Python 编译、内联 JavaScript 语法和 `git diff --check` 通过。扩大运行旧 `test_v0208_common_box_edit.py` 时另有 3 个 `28d9052` 基线既有布局断言失败，均在未修改断言位置查找已不存在的 `product-material-row`。
 - 人工 UAT 地址为 `http://127.0.0.1:18082/`，数据库为 `D:\tm-uat\cutting_mode_visibility_20260723_113848\carton_erp_uat.sqlite3`，由指定 SHA-256 为 `A9B0732506453BB86C7267395866B0ADE6EC07600D7F3BE0A06EBBCCA8D871FC` 的工厂副本重新复制并升级；revision=`cg63v8x9z52`、`integrity_check=ok`、外键异常 0。临时账号 `codex_uat`，密码 `123456`。
 - 页面自动 UAT 已确认：模切内盒和隔板显示净/毛/其他及右侧“开料方式”，不再显示压线尺寸，标签与选择框无重叠遮挡；A1、A3 不显示开料方式；浏览器 Console 无 warn/error。用户已于 2026-07-23 明确确认人工验收通过并授权推送给工厂 ERP；正式发布仍须由工厂主机按“备份验证 → 线性迁移 → 重启 → 完整性与页面复核”执行。本轮家庭侧正式数据库未连接、未迁移、未写入。
+
+## 86. 2026-07-27 P0-3 阶段 C 通用库位三级联动候选
+
+- 独立 worktree 为 `D:\tm-worktrees\erp-p0-location-cascade-20260726`，分支为
+  `codex/p0-location-cascade-20260726`，基线为已人工验收的阶段 B
+  `9d234bad5c282f62afd49c3d2573c51abd33136b`。
+- 新增统一的“可实际操作库位”候选规则：库位、所属楼层和所属区域均启用，
+  库位已完成真实布局并属于正确仓型，才能进入正式入仓、生产转库存、盘点、
+  移位和拿货提示。历史未布局或已停用位置不会成为新业务目标；移位仍允许把
+  旧异常位置中的实物移出到合规库位，避免现场纠错被反向锁死。
+- 成品仓查询、成品入仓、批次编辑、生产确认转库存、手机盘点和栈板移位统一
+  使用“楼层 → 区域 → 具体库位”三级选择。仅有一个启用楼层时自动选中，减少
+  两人使用场景的重复操作；区域选中前不加载全仓库位。
+- 新增只读候选接口 `GET /api/warehouse/location-candidates`，并让库存查询支持
+  楼层、区域筛选。送货拿货页仅增加保守的楼层/区域/库位提示；完整 N083
+  一键按库位拿货候选位于不同提交链，本阶段没有混入，后续需单独干净集成。
+- 本阶段没有新增 Alembic revision，唯一 head 继续为 `cr74v8x9z63`。隔离 UAT
+  副本为
+  `D:\tm-uat\p0-location-cascade-20260726\carton_erp_cr74_location_cascade_uat.sqlite3`，
+  初始 SHA-256 为
+  `5A7B93CFE2CB2181BF60420E72F1AD3469E0B4388F6404390D6295FA287BE058`；
+  revision=`cr74v8x9z63`、`integrity_check=ok`、外键异常 0，未执行迁移。
+- 浏览器 UAT 已确认库存查询、成品入仓和手机盘点可从三楼选择 E1 后仅显示
+  E1 的 27 个具体库位，区域未选择时具体库位保持空白/禁用，Console 无
+  error/warn。自动回归、提交 SHA 和推送结果以本轮任务回执为准。
+- 本轮没有连接、迁移或写入工厂正式数据库，没有修改工厂正式服务、
+  `origin/factory-current-baseline` 或 `origin/main`。阶段 C 当前仅为家庭候选，
+  尚待老板统一人工验收。

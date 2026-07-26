@@ -43,6 +43,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.location_candidates import is_operational_location
 from app.services.delivery_numbering import (
     DeliveryNumberingError,
     next_delivery_number,
@@ -306,7 +307,92 @@ class DeliveryPickItemUpdate(BaseModel):
         return normalized
 
 
-def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
+def _pick_item_locations(db: Session, item: DeliveryPickTaskItem) -> list[dict]:
+    order_item = db.get(OrderItem, item.order_item_id)
+    if order_item is None:
+        return []
+    sources = _inventory_sources_for_order_item(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=int(item.original_quantity or 0),
+    )
+    lines: list[dict] = []
+    finished_coverage = 0
+    for source in sources:
+        source_type = str(source.get("source_type") or "")
+        quantity = max(int(source.get("quantity_to_pick_stock") or 0), 0)
+        requirement = max(
+            int(source.get("quantity_to_pick_requirement") or 0),
+            0,
+        )
+        if source_type == "semi_finished":
+            continue
+        if source_type in {"finished", "component_stock"}:
+            finished_coverage += requirement
+        if quantity <= 0 and requirement <= 0:
+            continue
+        location_operational = bool(source.get("location_operational"))
+        lines.append(
+            {
+                "source_type": (
+                    "finished_inventory"
+                    if source_type in {"finished", "component_stock"}
+                    else "production_direct"
+                ),
+                "location_id": source.get("location_id"),
+                "warehouse_floor": source.get("warehouse_floor"),
+                "area_code": source.get("area_code"),
+                "location_code": source.get("location_code"),
+                "location_name": source.get("location_name"),
+                "lot_number": source.get("lot_number"),
+                "quantity": quantity or requirement,
+                "location_operational": location_operational,
+                "requires_attention": bool(
+                    source.get("location_id") is not None
+                    and not location_operational
+                ),
+            }
+        )
+    if not is_composite_order_item(db, order_item.id):
+        direct_quantity = max(
+            int(item.original_quantity or 0) - finished_coverage,
+            0,
+        )
+        if direct_quantity:
+            lines.append(
+                {
+                    "source_type": "production_direct",
+                    "location_id": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "lot_number": None,
+                    "quantity": direct_quantity,
+                    "location_operational": True,
+                    "requires_attention": False,
+                }
+            )
+    return sorted(
+        lines,
+        key=lambda line: (
+            2 if line["requires_attention"] else (
+                1 if line["source_type"] == "production_direct" else 0
+            ),
+            int(line["warehouse_floor"] or 999),
+            str(line["area_code"] or ""),
+            str(line["location_code"] or ""),
+            str(line["lot_number"] or ""),
+        ),
+    )
+
+
+def _pick_item_response(
+    db: Session,
+    item: DeliveryPickTaskItem,
+    *,
+    include_locations: bool = True,
+) -> dict:
     return {
         "id": item.id,
         "delivery_item_id": item.delivery_item_id,
@@ -319,14 +405,20 @@ def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
         "product_code": item.product_code_snapshot,
         "product_name": item.product_name_snapshot,
         "specification": item.specification_snapshot,
+        "pick_locations": _pick_item_locations(db, item) if include_locations else [],
         "updated_at": utc_naive_to_api(item.updated_at) if item.updated_at else None,
     }
 
 
-def _pick_task_response(task: DeliveryPickTask) -> dict:
+def _pick_task_response(
+    db: Session,
+    task: DeliveryPickTask,
+    *,
+    include_locations: bool = True,
+) -> dict:
     exception_items = [
         {
-            **_pick_item_response(item),
+            **_pick_item_response(db, item, include_locations=include_locations),
             "customer_name": task.customer.name if task.customer else None,
         }
         for item in task.items
@@ -347,7 +439,10 @@ def _pick_task_response(task: DeliveryPickTask) -> dict:
         "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
         "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
         "dispatched_at": utc_naive_to_api(task.dispatched_at) if task.dispatched_at else None,
-        "items": [_pick_item_response(item) for item in task.items],
+        "items": [
+            _pick_item_response(db, item, include_locations=include_locations)
+            for item in task.items
+        ],
     }
 
 
@@ -659,6 +754,28 @@ def _require_order_item_customer_access(
         require_customer_access(customer_id, user, db)
 
 
+def _delivery_location_metadata(
+    db: Session,
+    location: WarehouseLocation | None,
+    *,
+    finished: bool,
+) -> dict:
+    warehouse_types = (
+        {"finished", "shared"}
+        if finished
+        else {"semi_finished", "shared"}
+    )
+    return {
+        "warehouse_floor": location.warehouse_floor if location else None,
+        "area_code": location.area_code if location else None,
+        "location_operational": is_operational_location(
+            db,
+            location,
+            warehouse_types=warehouse_types,
+        ),
+    }
+
+
 def _composite_inventory_sources_for_order_item(
     db: Session,
     *,
@@ -694,6 +811,11 @@ def _composite_inventory_sources_for_order_item(
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
             "location_name": location.location_name if location else None,
+            **_delivery_location_metadata(
+                db,
+                location,
+                finished=source_type == "component_stock",
+            ),
             "component_type": "bom_component",
             "component_snapshot_id": demand.snapshot_id,
             "component_code": demand.component_code,
@@ -996,6 +1118,11 @@ def _inventory_sources_for_order_item(
                 "location_id": location.id if location else None,
                 "location_code": location.location_code if location else None,
                 "location_name": location.location_name if location else None,
+                **_delivery_location_metadata(
+                    db,
+                    location,
+                    finished=reservation.reservation_type == "finished_order",
+                ),
                 "component_type": (
                     requirement.component_type if requirement else "whole"
                 ),
@@ -1064,7 +1191,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
     } if order_ids else {}
     pick_task = _delivery_pick_task(db, delivery_id)
     pick_by_delivery_item = {
-        item.delivery_item_id: _pick_item_response(item)
+        item.delivery_item_id: _pick_item_response(db, item)
         for item in (pick_task.items if pick_task else [])
     }
     return {
@@ -1090,7 +1217,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
-        "pick_task": _pick_task_response(pick_task) if pick_task else None,
+        "pick_task": _pick_task_response(db, pick_task) if pick_task else None,
         "items": [
             {
                 **dict(row._mapping),
@@ -1237,7 +1364,7 @@ def create_or_rebuild_delivery_pick_task(
     try:
         task = _build_pick_task(db, delivery=delivery, user=user)
         db.commit()
-        return _pick_task_response(task)
+        return _pick_task_response(db, task)
     except HTTPException:
         db.rollback()
         raise
@@ -1262,7 +1389,12 @@ def list_delivery_pick_tasks(
             raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
         query = query.where(DeliveryPickTask.status == normalized_status)
     tasks = db.scalars(query).all()
-    return {"items": [_pick_task_response(task) for task in tasks]}
+    return {
+        "items": [
+            _pick_task_response(db, task, include_locations=False)
+            for task in tasks
+        ]
+    }
 
 
 @pick_router.get("/{task_id}")
@@ -1271,7 +1403,7 @@ def get_delivery_pick_task(
     db: Session = Depends(get_db),
     user: User = Depends(can_pick),
 ) -> dict:
-    return _pick_task_response(_pick_task_for_user(db, task_id, user))
+    return _pick_task_response(db, _pick_task_for_user(db, task_id, user))
 
 
 @pick_router.put("/{task_id}/items/{item_id}")
@@ -1323,7 +1455,10 @@ def update_delivery_pick_task_item(
         description="更新送货拿货结果",
     )
     db.commit()
-    return {"task": _pick_task_response(task), "item": _pick_item_response(item)}
+    return {
+        "task": _pick_task_response(db, task),
+        "item": _pick_item_response(db, item),
+    }
 
 
 @pick_router.post("/{task_id}/submit")
@@ -1355,7 +1490,7 @@ def submit_delivery_pick_task(
         description="司机提交送货拿货结果",
     )
     db.commit()
-    return _pick_task_response(task)
+    return _pick_task_response(db, task)
 
 
 @pick_router.post("/{task_id}/apply")

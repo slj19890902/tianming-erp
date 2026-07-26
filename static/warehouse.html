@@ -138,6 +138,7 @@
         <div class="toolbar">
           <button id="openInForm" class="btn primary operate-only">入成品仓</button>
           <select id="statusFilter" style="width:140px"><option value="">全部状态</option><option value="active">正常</option><option value="frozen">冻结</option><option value="closed">关闭</option></select>
+          <select id="floorFilter" style="width:140px"><option value="">全部楼层</option></select>
           <select id="areaFilter" style="width:150px"><option value="">全部区域</option></select>
           <select id="locationFilter" style="width:180px"><option value="">全部库位</option></select>
           <select id="staleFilter" style="width:180px"><option value="">全部库龄</option><option value="attention">超过1年</option><option value="handling">超过18个月</option><option value="cleanup">超过2年</option></select>
@@ -149,14 +150,15 @@
 
       <form id="finishedForm" class="panel hidden operate-only">
         <h2>入成品仓（一步完成）</h2>
-        <p class="notice info">做完马上送货时无需办理入仓；需要暂存时，只选客户、产品、数量和三楼货位，系统会自动建立库存、栈板绑定和流水。</p>
+        <p class="notice info">做完马上送货时无需办理入仓；需要暂存时，只选客户、产品、数量和实际库位，系统会自动建立库存、栈板绑定和流水。</p>
         <div class="grid">
           <div class="field"><label>客户</label><select id="fgCustomer" required></select></div>
           <div class="field" style="grid-column:span 2"><label>输入存货编码 / 产品名称</label><input id="fgProductKeyword" maxlength="150" autocomplete="off" placeholder="输入后自动显示匹配候选"></div>
           <div class="field" style="grid-column:span 2"><label>已选择常用箱 / 产品</label><input id="fgProduct" type="hidden"><div id="fgProductSelected" class="muted">尚未选择（必须点击下方候选）</div></div>
           <div class="field" style="grid-column:1/-1"><label>匹配候选</label><div id="fgProductCandidates" class="floor3-candidates"><span class="muted">请先选择客户，再输入存货编码或产品名称</span></div></div>
           <div class="field"><label>实际成品数量（个）</label><input id="fgQuantity" type="number" min="1" required></div>
-          <div class="field"><label>先选区域</label><select id="fgArea" required></select></div>
+          <div class="field"><label>先选楼层</label><select id="fgFloor" required></select></div>
+          <div class="field"><label>再选区域</label><select id="fgArea" required></select></div>
           <div class="field"><label>再选具体货位</label><select id="fgLocation" required></select></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">入成品仓</button></div>
           <details style="grid-column:1/-1"><summary>可选：修改日期、来源或备注</summary><div class="grid" style="margin-top:10px">
@@ -211,7 +213,8 @@
             <div class="field" style="grid-column:span 2"><label>已选择产品</label><input id="lotEditProduct" type="hidden"><div id="lotEditProductSelected" class="lot-edit-selected muted">尚未选择产品</div></div>
             <div class="field" style="grid-column:span 3"><label>匹配候选</label><div id="lotEditProductCandidates" class="floor3-candidates"><span class="muted">选择客户后输入存货编码或产品名称</span></div></div>
             <div class="field"><label for="lotEditQuantity">可用数量（个）</label><input id="lotEditQuantity" type="number" min="0" step="1" required></div>
-            <div class="field"><label for="lotEditArea">先选区域</label><select id="lotEditArea" required></select></div>
+            <div class="field"><label for="lotEditFloor">先选楼层</label><select id="lotEditFloor" required></select></div>
+            <div class="field"><label for="lotEditArea">再选区域</label><select id="lotEditArea" required></select></div>
             <div class="field"><label for="lotEditLocation">再选具体货位</label><select id="lotEditLocation" required></select></div>
             <div class="field" style="grid-column:span 2"><label for="lotEditStockDate">入库日期（决定库龄）</label><input id="lotEditStockDate" type="date" required></div>
           </div>
@@ -427,7 +430,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],tab:"finished",locationView:"floor3",locations:[],finishedLocationCandidates:[],warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>hasPermission("warehouse.stocktake.review");
@@ -441,7 +444,7 @@
       if(typeof body.detail==="string"&&body.detail.trim())return body.detail;
       if(body.detail&&typeof body.detail==="object"&&!Array.isArray(body.detail)){const message=body.detail.message||body.detail.detail||body.detail.msg;if(typeof message==="string"&&message.trim())return message}
       if(Array.isArray(body.detail)&&body.detail.length){
-        const fields={location_id:"库位",inventory_type:"库存类型",status:"状态",stale_level:"库龄",keyword:"关键词",page:"页码",page_size:"每页数量"};
+        const fields={location_id:"库位",warehouse_floor:"楼层",area_code:"区域",inventory_type:"库存类型",status:"状态",stale_level:"库龄",keyword:"关键词",page:"页码",page_size:"每页数量"};
         return body.detail.map(item=>{const field=item.loc&&item.loc.length?item.loc[item.loc.length-1]:"";return `${fields[field]||field||"请求参数"}输入有误`}).join("；");
       }
       return `仓库接口请求失败（HTTP ${status}）：${url}`;
@@ -499,10 +502,10 @@
     async function applyWarehouseDeepLink(){
       const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),locationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id"));
       if(requestedTab&&["finished","semi_finished"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
-      if(locationId)selectLocationCascade("areaFilter","locationFilter",locationId,state.tab);
+      if(locationId)selectInventoryLocationCascade("floorFilter","areaFilter","locationFilter",locationId,state.tab);
       if(lotId){
         const row=(state.lots||[]).find(item=>Number(item.id)===lotId);
-        if(row){$("keywordFilter").value=row.lot_number||"";if(row.location?.id)selectLocationCascade("areaFilter","locationFilter",row.location.id,state.tab)}
+        if(row){$("keywordFilter").value=row.lot_number||"";if(row.location?.id)selectInventoryLocationCascade("floorFilter","areaFilter","locationFilter",row.location.id,state.tab)}
       }
       if(locationId||lotId){await loadLots();const target=lotId?(state.lots||[]).find(item=>Number(item.id)===lotId):null;toast(target?`已定位库存批次 ${target.lot_number}`:"已按生产记录定位库存货位");$("lotTable").scrollIntoView({behavior:"smooth",block:"start"})}
     }
@@ -515,7 +518,8 @@
       $("warehouseFloorForm").onsubmit=saveWarehouseFloor;
       $("warehouseAreaForm").onsubmit=saveWarehouseArea;
       $("locationFloor").onchange=refreshLocationLedgerAreaOptions;
-      $("areaFilter").onchange=()=>{refreshLocationCascade("areaFilter","locationFilter",state.tab);loadLots()};
+      $("floorFilter").onchange=()=>{refreshInventoryAreaOptions("floorFilter","areaFilter",state.tab,"全部区域");refreshInventoryLocationOptions("floorFilter","areaFilter","locationFilter",state.tab,"全部库位");loadLots()};
+      $("areaFilter").onchange=()=>{refreshInventoryLocationOptions("floorFilter","areaFilter","locationFilter",state.tab,"全部库位");loadLots()};
       $("refreshInsights").onclick=loadInsights;
       $("refreshMolds").onclick=loadMolds;$("moldKeyword").onkeydown=event=>{if(event.key==="Enter")loadMolds()};$("refreshStocktakeReviews").onclick=loadStocktakeReviews;$("stocktakeStatusFilter").onchange=renderStocktakeReviews;$("stocktakeDifferenceFilter").onchange=renderStocktakeReviews;
       $("assignmentKeyword").onkeydown=event=>{if(event.key==="Enter")searchAssignmentProducts()};
@@ -557,12 +561,14 @@
       $("floor3AddSave").onclick=saveFloor3AdditionalItem;
       $("openInForm").onclick=()=>{(state.tab==="finished"?$("finishedForm"):$("semiForm")).classList.toggle("hidden")};
       $("fgCustomer").onchange=resetFinishedProductSearch;
-      $("fgArea").onchange=()=>refreshLocationCascade("fgArea","fgLocation","finished");
+      $("fgFloor").onchange=()=>{refreshInventoryAreaOptions("fgFloor","fgArea","finished","请选择区域");refreshInventoryLocationOptions("fgFloor","fgArea","fgLocation","finished","请选择具体货位")};
+      $("fgArea").onchange=()=>refreshInventoryLocationOptions("fgFloor","fgArea","fgLocation","finished","请选择具体货位");
       $("fgProductKeyword").oninput=scheduleFinishedProductSearch;
       $("fgProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchFinishedProductCandidates()}};
       $("siLayer").onchange=updateFlutes;updateFlutes();
       $("siArea").onchange=()=>refreshLocationCascade("siArea","siLocation","semi_finished");
-      $("lotEditArea").onchange=()=>refreshLocationCascade("lotEditArea","lotEditLocation","finished");
+      $("lotEditFloor").onchange=()=>{refreshInventoryAreaOptions("lotEditFloor","lotEditArea","finished","请选择区域");refreshInventoryLocationOptions("lotEditFloor","lotEditArea","lotEditLocation","finished","请选择具体货位")};
+      $("lotEditArea").onchange=()=>refreshInventoryLocationOptions("lotEditFloor","lotEditArea","lotEditLocation","finished","请选择具体货位");
       $("finishedForm").onsubmit=saveFinished;$("semiForm").onsubmit=saveSemi;$("locationForm").onsubmit=saveLocation;$("moldForm").onsubmit=saveMold;
       $("lotEditForm").onsubmit=saveLotEditor;$("lotEditClose").onclick=$("lotEditCancel").onclick=closeLotEditor;$("lotEditMask").onclick=event=>{if(event.target===$("lotEditMask"))closeLotEditor()};
       $("lotEditOwnership").onchange=()=>updateLotEditOwnership();$("lotEditCustomer").onchange=resetLotEditProductSearch;$("lotEditProductKeyword").oninput=scheduleLotEditProductSearch;$("lotEditProductKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchLotEditProductCandidates()}};
@@ -598,7 +604,7 @@
         $("floor3AreaFilter").value="";$("floor3CustomerFilter").value="";$("floor3KeywordFilter").value="";$("floor3OccupancyFilter").value="";closeFloor3Detail();
         await switchLocationView("floor3");return
       }
-      if(["finished","semi_finished"].includes(tab)){refreshAreaOptions("areaFilter",tab,"全部区域");$("areaFilter").value="";refreshLocationCascade("areaFilter","locationFilter",tab,"全部库位");loadLots()}else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else if(tab==="stocktake_review")loadStocktakeReviews();
+      if(["finished","semi_finished"].includes(tab)){refreshInventoryFloorOptions("floorFilter",tab,"全部楼层",true);refreshInventoryAreaOptions("floorFilter","areaFilter",tab,"全部区域");refreshInventoryLocationOptions("floorFilter","areaFilter","locationFilter",tab,"全部库位");loadLots()}else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds")loadMolds();else if(tab==="stocktake_review")loadStocktakeReviews();
     }
     async function loadInsights(){
       try{state.insights=await api("/api/warehouse/insights");renderInsights()}catch(err){toast(`库存经营看板加载失败：${err.message}`,true)}
@@ -700,11 +706,15 @@
       $("locationArea").disabled=!rows.length;
     }
     async function loadLocations(includeInactive=false){
-      const data=await api(`/api/warehouse/locations?include_inactive=${includeInactive}`);state.locations=data.items;
+      const [data,candidates]=await Promise.all([
+        api(`/api/warehouse/locations?include_inactive=${includeInactive}`),
+        api("/api/warehouse/location-candidates?inventory_type=finished"),
+      ]);
+      state.locations=data.items;state.finishedLocationCandidates=candidates.items||[];
       const active=data.items.filter(x=>x.is_active);
-      refreshAreaOptions("areaFilter",state.tab,"全部区域");refreshLocationCascade("areaFilter","locationFilter",state.tab,"全部库位");
-      refreshAreaOptions("fgArea","finished","请选择区域");refreshLocationCascade("fgArea","fgLocation","finished","请先选择区域");
-      refreshAreaOptions("lotEditArea","finished","请选择区域");refreshLocationCascade("lotEditArea","lotEditLocation","finished","请先选择区域");
+      refreshInventoryFloorOptions("floorFilter",state.tab,"全部楼层",true);refreshInventoryAreaOptions("floorFilter","areaFilter",state.tab,"全部区域");refreshInventoryLocationOptions("floorFilter","areaFilter","locationFilter",state.tab,"全部库位");
+      refreshInventoryFloorOptions("fgFloor","finished","请选择楼层",true);refreshInventoryAreaOptions("fgFloor","fgArea","finished","请选择区域",true);refreshInventoryLocationOptions("fgFloor","fgArea","fgLocation","finished","请选择具体货位");
+      refreshInventoryFloorOptions("lotEditFloor","finished","请选择楼层",true);refreshInventoryAreaOptions("lotEditFloor","lotEditArea","finished","请选择区域",true);refreshInventoryLocationOptions("lotEditFloor","lotEditArea","lotEditLocation","finished","请选择具体货位");
       refreshAreaOptions("siArea","semi_finished","请选择区域");refreshLocationCascade("siArea","siLocation","semi_finished","请先选择区域");
       const semiLocations=active.filter(x=>x.placement_status!=="unplaced"&&["semi_finished","shared"].includes(x.warehouse_type));
       $("siLocation").disabled=!semiLocations.length;$("siLocationHint").classList.toggle("hidden",Boolean(semiLocations.length));
@@ -721,7 +731,34 @@
     }
     function locationsForInventoryType(inventoryType){
       const allowed=inventoryType==="semi_finished"?["semi_finished","shared"]:["finished","shared"];
-      return (state.locations||[]).filter(row=>row.is_active&&row.placement_status!=="unplaced"&&allowed.includes(row.warehouse_type)).sort((a,b)=>locationAreaLabel(a).localeCompare(locationAreaLabel(b),"zh-CN",{numeric:true})||String(a.location_code).localeCompare(String(b.location_code),"zh-CN",{numeric:true}));
+      const source=inventoryType==="finished"?state.finishedLocationCandidates:state.locations;
+      return (source||[]).filter(row=>row.is_active!==false&&row.placement_status!=="unplaced"&&allowed.includes(row.warehouse_type)).sort((a,b)=>Number(a.warehouse_floor||0)-Number(b.warehouse_floor||0)||String(a.area_code||"").localeCompare(String(b.area_code||""),"zh-CN",{numeric:true})||String(a.location_code).localeCompare(String(b.location_code),"zh-CN",{numeric:true}));
+    }
+    function inventoryFloorKey(row){return row.warehouse_floor==null?"other":String(row.warehouse_floor)}
+    function inventoryFloorLabel(row){return row.warehouse_floor==null?"其他库位":(row.floor_name?`${row.floor_name}（${row.warehouse_floor} 楼）`:`${row.warehouse_floor} 楼`)}
+    function refreshInventoryFloorOptions(selectId,inventoryType,placeholder,autoSelectSingle=false){
+      const select=$(selectId),previous=select.value,seen=new Map();
+      locationsForInventoryType(inventoryType).forEach(row=>seen.set(inventoryFloorKey(row),inventoryFloorLabel(row)));
+      options(select,[...seen].map(([id,label])=>({id,label})),placeholder||"请选择楼层");
+      if(seen.has(previous))select.value=previous;else if(autoSelectSingle&&seen.size===1)select.value=[...seen.keys()][0];
+    }
+    function refreshInventoryAreaOptions(floorSelectId,areaSelectId,inventoryType,placeholder,autoSelectSingle=false){
+      const floor=$(floorSelectId),select=$(areaSelectId),previous=select.value,floorKey=floor.value,seen=new Map();
+      locationsForInventoryType(inventoryType).filter(row=>floorKey&&inventoryFloorKey(row)===floorKey).forEach(row=>seen.set(String(row.area_code||"").trim().toUpperCase(),row.area_name?`${row.area_code} · ${row.area_name}`:`${row.area_code} 区`));
+      options(select,[...seen].filter(([id])=>id).map(([id,label])=>({id,label})),floorKey?(placeholder||"请选择区域"):(placeholder||"请先选择楼层"));
+      if(seen.has(previous))select.value=previous;else if(autoSelectSingle&&floorKey&&seen.size===1)select.value=[...seen.keys()][0];
+      select.disabled=!floorKey||!seen.size;
+    }
+    function refreshInventoryLocationOptions(floorSelectId,areaSelectId,locationSelectId,inventoryType,placeholder){
+      const floor=$(floorSelectId),area=$(areaSelectId),select=$(locationSelectId),previous=select.value,floorKey=floor.value,areaCode=area.value;
+      const rows=locationsForInventoryType(inventoryType).filter(row=>floorKey&&areaCode&&inventoryFloorKey(row)===floorKey&&String(row.area_code||"").trim().toUpperCase()===areaCode);
+      options(select,rows.map(row=>({id:row.id,label:`${row.location_code} ${row.location_name||""}`})),areaCode?(placeholder||"请选择具体货位"):(placeholder||"请先选择区域"));
+      if(rows.some(row=>String(row.id)===String(previous)))select.value=previous;
+      select.disabled=!floorKey||!areaCode||!rows.length;
+    }
+    function selectInventoryLocationCascade(floorSelectId,areaSelectId,locationSelectId,locationId,inventoryType){
+      const row=locationsForInventoryType(inventoryType).find(item=>Number(item.id)===Number(locationId));if(!row)return;
+      $(floorSelectId).value=inventoryFloorKey(row);refreshInventoryAreaOptions(floorSelectId,areaSelectId,inventoryType,"请选择区域");$(areaSelectId).value=String(row.area_code||"").trim().toUpperCase();refreshInventoryLocationOptions(floorSelectId,areaSelectId,locationSelectId,inventoryType,"请选择具体货位");$(locationSelectId).value=String(row.id);
     }
     function refreshAreaOptions(selectId,inventoryType,placeholder){
       const select=$(selectId),previous=select.value,seen=new Map();
@@ -818,14 +855,14 @@
     function openLotEditor(lotId){
       const row=state.lots.find(item=>Number(item.id)===Number(lotId));if(!row||row.inventory_type!=="finished"){toast("未找到可编辑的成品库存批次",true);return}
       const detail=row.detail||{},currentProduct={id:detail.product_id,product_id:detail.product_id,product_code:detail.inventory_code,product_name:detail.product_name,customer_id:detail.owner_customer_id},sessionId=state.lotEdit.sessionId+1;state.lotEdit={lotId:row.id,version:row.version,candidates:[],selectedProduct:currentProduct,searchTimer:null,requestId:state.lotEdit.requestId+1,sessionId,saving:false};
-      $("lotEditTitle").textContent=`编辑 ${row.lot_number}`;$("lotEditOwnership").value=detail.is_general?"general":"customer";$("lotEditCustomer").value=detail.owner_customer_id||"";$("lotEditProduct").value=detail.product_id||"";$("lotEditProductKeyword").value="";$("lotEditProductSelected").textContent=`当前：${detail.inventory_code||"-"} · ${detail.product_name||"-"}`;$("lotEditProductSelected").classList.remove("muted");$("lotEditQuantity").value=row.quantity_available;selectLocationCascade("lotEditArea","lotEditLocation",row.location?.id,"finished");$("lotEditStockDate").value=String(row.stock_date||"").slice(0,10);updateLotEditOwnership(true);$("lotEditMask").classList.remove("hidden");
+      $("lotEditTitle").textContent=`编辑 ${row.lot_number}`;$("lotEditOwnership").value=detail.is_general?"general":"customer";$("lotEditCustomer").value=detail.owner_customer_id||"";$("lotEditProduct").value=detail.product_id||"";$("lotEditProductKeyword").value="";$("lotEditProductSelected").textContent=`当前：${detail.inventory_code||"-"} · ${detail.product_name||"-"}`;$("lotEditProductSelected").classList.remove("muted");$("lotEditQuantity").value=row.quantity_available;selectInventoryLocationCascade("lotEditFloor","lotEditArea","lotEditLocation",row.location?.id,"finished");$("lotEditStockDate").value=String(row.stock_date||"").slice(0,10);updateLotEditOwnership(true);$("lotEditMask").classList.remove("hidden");
       $("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";setTimeout(()=>$("lotEditOwnership").focus(),0);
     }
     function closeLotEditor(){clearTimeout(state.lotEdit.searchTimer);state.lotEdit.requestId+=1;state.lotEdit.sessionId+=1;state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改";$("lotEditMask").classList.add("hidden")}
     async function saveLotEditor(event){
       event.preventDefault();if(state.lotEdit.saving)return;
       const isGeneral=$("lotEditOwnership").value==="general",customerId=Number($("lotEditCustomer").value)||null,productId=Number($("lotEditProduct").value),quantity=Number($("lotEditQuantity").value),locationId=Number($("lotEditLocation").value),stockDate=$("lotEditStockDate").value;
-      if(!isGeneral&&!customerId){toast("客户专用库存必须选择客户",true);return}if(!productId){toast("请选择与客户匹配的存货编码",true);return}if(!Number.isInteger(quantity)||quantity<0){toast("可用数量必须是大于或等于 0 的整数",true);return}if(!locationId){toast("请选择三楼具体货位",true);return}if(!stockDate){toast("请选择入库日期",true);return}
+      if(!isGeneral&&!customerId){toast("客户专用库存必须选择客户",true);return}if(!productId){toast("请选择与客户匹配的存货编码",true);return}if(!Number.isInteger(quantity)||quantity<0){toast("可用数量必须是大于或等于 0 的整数",true);return}if(!locationId){toast("请选择具体货位",true);return}if(!stockDate){toast("请选择入库日期",true);return}
       const lotId=state.lotEdit.lotId,sessionId=state.lotEdit.sessionId;state.lotEdit.saving=true;$("lotEditSave").disabled=true;$("lotEditSave").textContent="保存中…";
       try{const saved=await api(`/api/warehouse/lots/${lotId}/edit-finished`,{method:"POST",body:JSON.stringify({expected_version:state.lotEdit.version,is_general:isGeneral,customer_id:isGeneral?null:customerId,product_id:productId,quantity_available:quantity,location_id:locationId,stock_date:stockDate,idempotency_key:createIdempotencyKey()})});if(state.lotEdit.sessionId===sessionId&&state.lotEdit.lotId===lotId)closeLotEditor();toast(`已更新批次 ${saved.lot_number||""}`);await loadLots();await loadFloor3Locations()}catch(error){if(state.lotEdit.sessionId===sessionId)toast(error.message,true)}finally{if(state.lotEdit.sessionId===sessionId){state.lotEdit.saving=false;$("lotEditSave").disabled=false;$("lotEditSave").textContent="保存批次修改"}}
     }
@@ -837,14 +874,15 @@
     }
     async function saveFinished(e){
       e.preventDefault();const customerId=Number($("fgCustomer").value),productId=Number($("fgProduct").value),locationId=Number($("fgLocation").value),quantity=Number($("fgQuantity").value);
-      if(!customerId){toast("请先选择客户",true);return}if(!productId){toast("请先输入存货编码或产品名称，并点击选择匹配候选",true);return}if(!Number.isFinite(quantity)||quantity<=0){toast("实际成品数量必须大于 0",true);return}if(!locationId){toast("请选择三楼具体货位",true);return}
-      try{const saved=await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:customerId,product_id:productId,location_id:locationId,quantity,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:createIdempotencyKey()})}),location=saved.location?.location_code||"所选货位";toast(`已入成品仓并绑定 ${location}`);e.target.reset();$("fgDate").value=today();resetFinishedProductSearch();await loadLots();await loadFloor3Locations()}catch(err){toast(err.message,true)}
+      if(!customerId){toast("请先选择客户",true);return}if(!productId){toast("请先输入存货编码或产品名称，并点击选择匹配候选",true);return}if(!Number.isFinite(quantity)||quantity<=0){toast("实际成品数量必须大于 0",true);return}if(!locationId){toast("请选择具体货位",true);return}
+      try{const saved=await api("/api/warehouse/finished/manual-in",{method:"POST",body:JSON.stringify({customer_id:customerId,product_id:productId,location_id:locationId,quantity,stock_date:$("fgDate").value,source_type:$("fgSource").value,remarks:$("fgRemarks").value||null,idempotency_key:createIdempotencyKey()})}),location=saved.location?.location_code||"所选货位";toast(`已入成品仓并绑定 ${location}`);e.target.reset();$("fgDate").value=today();resetFinishedProductSearch();refreshInventoryFloorOptions("fgFloor","finished","请选择楼层",true);refreshInventoryAreaOptions("fgFloor","fgArea","finished","请选择区域",true);refreshInventoryLocationOptions("fgFloor","fgArea","fgLocation","finished","请选择具体货位");await loadLots();await loadFloor3Locations()}catch(err){toast(err.message,true)}
     }
     async function saveSemi(e){
       e.preventDefault();if(!$("siLocation").value){toast("暂无可用半成品库位，请先完成 SF-TEMP 迁移或新增半成品库位",true);return}try{await api("/api/warehouse/semi-finished/manual-in",{method:"POST",body:JSON.stringify({location_id:+$("siLocation").value,quantity:+$("siQuantity").value,stock_date:$("siDate").value,source_type:$("siSource").value,material_code:$("siMaterial").value,layer_count:+$("siLayer").value,flute_type:$("siFlute").value,board_length_mm:+$("siLength").value,board_width_mm:+$("siWidth").value,sheet_type:$("siSheetType").value,supplier_name:$("siSupplier").value||null,customer_id:$("siCustomer").value?+$("siCustomer").value:null,cutting_note:$("siCuttingNote").value||null,remarks:$("siRemarks").value||null,idempotency_key:createIdempotencyKey()})});toast("半成品入库成功");e.target.reset();$("siDate").value=today();updateFlutes();await loadLots()}catch(err){toast(err.message,true)}
     }
     async function loadLots(){
-      const p=queryString({inventory_type:state.tab,status:$("statusFilter").value,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
+      const selectedFloor=$("floorFilter").value,selectedArea=$("areaFilter").value;
+      const p=queryString({inventory_type:state.tab,status:$("statusFilter").value,warehouse_floor:selectedFloor&&selectedFloor!=="other"?selectedFloor:"",area_code:selectedArea,location_id:$("locationFilter").value,stale_level:$("staleFilter").value,keyword:$("keywordFilter").value,page_size:"200"});
       const data=await api("/api/warehouse/lots?"+p);state.lots=data.items||[];renderLots();
     }
     function applyFinishedLotColumnWidths(widths){
@@ -1124,7 +1162,7 @@
     function floor3CanEditLayout(){return state.user?.role==="admin"}
     function floor3LocationOccupied(row){
       const pallet=floor3CurrentPallet(row);
-      return Boolean(pallet||row?.occupancy==="occupied"||row?.occupancy_status==="occupied"||row?.status==="occupied"||row?.is_occupied);
+      return Boolean(pallet||row?.occupied===true||row?.occupancy==="occupied"||row?.occupancy_status==="occupied"||row?.status==="occupied"||row?.is_occupied);
     }
     function floor3IsTemporary(row){
       const code=String(row?.area_code||"").toUpperCase(),locationCode=String(row?.location_code||row?.code||"").toUpperCase();
@@ -1442,8 +1480,7 @@
       await loadFloor3Locations(true);
     }
     async function loadFloor3MoveLocations(){
-      const query=queryString({occupancy:"empty",page_size:"500"});
-      const data=await api(`/api/warehouse/floor3/locations?${query}`);
+      const data=await api("/api/warehouse/location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true");
       state.floor3.moveLocations=(data.items||[]).filter(floor3CanReceivePallet);
     }
     function renderFloor3Locations(){
@@ -1572,8 +1609,29 @@
       const itemTypeLabel=item.item_type==="finished"?"成品":(item.item_type==="semi_finished"?"半成品":"其他");
       return `<div class="floor3-item"><b>${h(item.product_name||item.name||item.inventory_code||"待匹配")}</b><div class="floor3-item-labels"><span class="floor3-item-label"><small>客户</small><b>${h(item.customer_name||item.customer||"-")}</b></span><span class="floor3-item-label"><small>存货编码</small><b>${h(item.inventory_code||item.product_code||"-")}</b></span><span class="floor3-item-label"><small>订单</small><b>${h(item.order_no||item.order_number||"-")}</b></span><span class="floor3-item-label"><small>货物类型</small><b>${h(itemTypeLabel)}</b></span></div>${floor3QuantityHtml(item)}${sourceTag}${floor3PromotionButton(item,pallet,locationId)}</div>`;
     }
-    function floor3MoveOptions(currentId){
-      return '<option value="">请选择空闲启用地面位 / 临时位</option>'+state.floor3.moveLocations.filter(row=>Number(row.id)!==Number(currentId)&&floor3CanReceivePallet(row)).map(row=>`<option value="${row.id}">${h(row.location_code||row.code||row.id)} · ${h(row.area_name||row.area_code||"")}</option>`).join("");
+    function floor3MoveFloorOptions(){
+      const seen=new Map();
+      state.floor3.moveLocations.forEach(row=>{const floor=Number(row.warehouse_floor);if(floor)seen.set(floor,row.floor_name||`${floor} 楼`)});
+      return '<option value="">先选楼层</option>'+[...seen].sort((a,b)=>a[0]-b[0]).map(([floor,label])=>`<option value="${floor}">${h(label)}（${floor} 楼）</option>`).join("");
+    }
+    function refreshFloor3MoveAreaOptions(){
+      const floor=Number($("floor3MoveFloor")?.value),select=$("floor3MoveArea");if(!select)return;
+      const previous=select.value,seen=new Map();
+      state.floor3.moveLocations.filter(row=>Number(row.warehouse_floor)===floor).forEach(row=>seen.set(String(row.area_code||"").toUpperCase(),row.area_name?`${row.area_code} · ${row.area_name}`:`${row.area_code} 区`));
+      select.innerHTML='<option value="">'+(floor?"再选区域":"请先选择楼层")+'</option>'+[...seen].map(([code,label])=>`<option value="${h(code)}">${h(label)}</option>`).join("");
+      if(seen.has(previous))select.value=previous;select.disabled=!floor||!seen.size;refreshFloor3MoveTargetOptions();
+    }
+    function refreshFloor3MoveTargetOptions(){
+      const floor=Number($("floor3MoveFloor")?.value),area=String($("floor3MoveArea")?.value||"").toUpperCase(),select=$("floor3MoveTarget");if(!select)return;
+      const previous=select.value,rows=state.floor3.moveLocations.filter(row=>Number(row.warehouse_floor)===floor&&String(row.area_code||"").toUpperCase()===area&&Number(row.id)!==Number(state.floor3.selectedLocationId));
+      select.innerHTML='<option value="">'+(area?"再选具体空位":"请先选择区域")+'</option>'+rows.map(row=>`<option value="${row.id}">${h(row.location_code||row.code||row.id)} · ${h(row.location_name||"")}</option>`).join("");
+      if(rows.some(row=>String(row.id)===String(previous)))select.value=previous;select.disabled=!area||!rows.length;
+    }
+    function initializeFloor3MoveCascade(){
+      const floorSelect=$("floor3MoveFloor");if(!floorSelect)return;
+      const floors=[...new Set(state.floor3.moveLocations.map(row=>Number(row.warehouse_floor)).filter(Boolean))];
+      if(floors.length===1)floorSelect.value=String(floors[0]);
+      refreshFloor3MoveAreaOptions();
     }
     function renderFloor3Detail(){
       const detail=state.floor3.detail;if(!detail)return;
@@ -1584,7 +1642,7 @@
       const rack=floor3IsRack(location),movable=floor3CanMovePallet({...location,current_pallet:pallet});
       const palletSummary=restricted?"当前位置已占用（客户范围受限）":(pallet?`当前${rack?"货架登记单元":"栈板"}：${h(pallet.pallet_code||pallet.code||pallet.id)}`:"当前为空闲");
       const itemSummary=restricted?'<div class="empty">位置内容受客户范围权限保护</div>':(items.map(item=>floor3FormatItem(item,pallet,location.id)).join("")||`<div class="empty">当前没有${rack?"货架物料":"栈板产品"}</div>`);
-      const movePanel=movable?`<div class="panel"><h2>移动栈板</h2><select id="floor3MoveTarget">${floor3MoveOptions(location.id)}</select><input id="floor3MoveRemarks" style="margin-top:8px" placeholder="移动备注"><button class="btn primary" style="margin-top:8px" type="button" onclick="moveFloor3Pallet(${pallet.id})">确认移动</button></div>`:"";
+      const movePanel=movable?`<div class="panel"><h2>移动栈板</h2><div class="grid"><div class="field"><label>楼层</label><select id="floor3MoveFloor" onchange="refreshFloor3MoveAreaOptions()">${floor3MoveFloorOptions()}</select></div><div class="field"><label>区域</label><select id="floor3MoveArea" onchange="refreshFloor3MoveTargetOptions()"></select></div><div class="field"><label>具体空位</label><select id="floor3MoveTarget"></select></div></div><input id="floor3MoveRemarks" style="margin-top:8px" placeholder="移动备注（可不填）"><button class="btn primary" style="margin-top:8px" type="button" onclick="moveFloor3Pallet(${pallet.id})">确认移动</button></div>`:"";
       const relocationAction=!pallet||rack?"":(needs?(floor3IsTemporary(location)?'<span class="muted">请先移动到固定货位后归位</span>':`<button class="btn primary" type="button" onclick="confirmFloor3Placement(${pallet.id})">确认已归位</button>`):`<button class="btn" type="button" onclick="setFloor3Relocation(${pallet.id},true)">标记待归位</button>`);
       const actionPanel=pallet&&!restricted&&canOperate()?`<div class="panel"><div class="actions"><button class="btn" type="button" onclick="toggleFloor3AddItemPanel()">增加${rack?"货架物料":"同栈板产品"}</button>${relocationAction}<button class="btn danger" type="button" onclick="clearFloor3Pallet(${pallet.id})">清空${rack?"货架格":"栈板"}</button></div></div>`:"";
       const emptyPanel=!pallet?`<div class="floor3-empty-binding"><b>当前位空闲</b>${canOperate()?'<button class="btn primary" type="button" onclick="openFloor3BindPanel()">绑定货物</button>':""}</div>`:`<div class="panel" style="padding:10px;margin-top:10px"><b>${palletSummary}</b>${!restricted&&needs&&!rack?'<span class="tag red" style="margin-left:8px">需归位</span>':""}<div class="floor3-item-grid" style="margin-top:10px">${itemSummary}</div></div>`;
@@ -1594,6 +1652,7 @@
       $("floor3BindPanel").classList.toggle("hidden",Boolean(pallet)||!canOperate()||!state.floor3.bindPanelOpen);
       $("floor3DetailPanel").classList.toggle("hidden",!pallet&&canOperate()&&state.floor3.bindPanelOpen);
       $("floor3AddItemPanel").classList.add("hidden");
+      if(movable)initializeFloor3MoveCascade();
       if(pallet&&!restricted&&canOperate())resetFloor3AddItemForm();
     }
     function closeFloor3Detail(){

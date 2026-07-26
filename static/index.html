@@ -1940,7 +1940,7 @@
                     <td style="white-space:normal"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong></div><div>已收 <strong>{{ row.material_received_quantity || 0 }}</strong></div><div>计划 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong></div><span class="muted">{{ row.special_process || '一开一' }} × {{ row.output_factor || 1 }}</span></td>
                     <td style="white-space:normal"><div class="toolbar-group"><label class="muted">投入</label><input class="input" style="width:82px" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /></div><div class="toolbar-group" style="margin-top:4px"><label class="muted">合格</label><input class="input" style="width:82px" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /></div><div style="margin-top:4px">损耗 <strong>{{ productionDefectiveQuantity(row) }}</strong></div></td>
                     <td style="white-space:normal"><div>覆盖订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">客户余货 {{ productionSurplusQuantity(row) }}</div></td>
-                    <td v-if="canProductionExecute" style="white-space:normal"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><select class="select" v-model="row.location_area_code" :disabled="productionBusy" @change="onProductionAreaChange(row,'location_area_code','location_id')"><option value="">先选区域</option><option v-for="area in productionLocationAreas" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><div v-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">余货 {{ productionSurplusQuantity(row) }} 个将保存为本客户专用库存</div></td>
+                    <td v-if="canProductionExecute" style="white-space:normal"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.location_floor_number)" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><div v-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">余货 {{ productionSurplusQuantity(row) }} 个将保存为本客户专用库存</div></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -1951,7 +1951,7 @@
                     <td>{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
                     <td style="white-space:normal"><span v-if="row.is_component_task" class="status blue">复合组件</span><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
                     <td style="white-space:normal"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_code"><strong>{{ row.warehouse_location_code }}</strong></template><template v-else-if="row.status!=='reversed'"><span class="muted">已进入待送货</span></template><div>投入 {{ row.material_input_quantity }} / 合格 {{ row.actual_output_quantity }} / 损耗 {{ row.defective_quantity }}</div><div v-if="row.surplus_finished_quantity" class="status orange">客户余货 {{ row.surplus_finished_quantity }}</div><div v-if="row.status==='reversed'" class="muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</div></td>
-                    <td><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy" @change="onProductionAreaChange(row,'transfer_area_code','transfer_location_id')"><option value="">先选区域</option><option v-for="area in productionLocationAreas" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></td>
+                    <td><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -5226,6 +5226,21 @@
           productionAvailableLocations() {
             return (this.productionLocations || []).filter(location => location.is_empty);
           },
+          productionLocationFloors() {
+            const counts = new Map();
+            this.productionAvailableLocations.forEach(location => {
+              const number = this.productionLocationFloorNumber(location);
+              if (!number) return;
+              const current = counts.get(number) || {
+                number,
+                label: location.floor_name || `${number} 楼`,
+                count: 0,
+              };
+              current.count += 1;
+              counts.set(number, current);
+            });
+            return [...counts.values()].sort((a, b) => a.number - b.number);
+          },
           productionLocationAreas() {
             const counts = new Map();
             this.productionAvailableLocations.forEach(location => {
@@ -7665,6 +7680,8 @@
               axios.get("/api/production/temporary-locations"),
             ]);
             const locationItems = locations.data.items || [];
+            const floorNumbers = [...new Set(locationItems.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
+            const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
             const previous = new Map(this.productionPending.map(row => [String(row.id), row]));
             this.productionPending = (pending.data.items || []).map(row => {
               const old = previous.get(String(row.id));
@@ -7674,6 +7691,7 @@
                 ...row,
                 delivery_date: row.delivery_date || sourceOrder?.delivery_date || null,
                 completion_mode: old?.completion_mode || "",
+                location_floor_number: old?.location_floor_number || this.productionLocationFloorNumber(selectedLocation) || defaultFloorNumber,
                 location_area_code: old?.location_area_code || this.productionLocationAreaCode(selectedLocation),
                 location_id: old?.location_id || null,
                 actual_input_quantity: old?.actual_input_quantity || Number(row.available_material_input_quantity || row.material_input_quantity || 0),
@@ -7682,6 +7700,7 @@
             });
             this.productionHistory = (history.data.items || []).map(row => ({
               ...row,
+              transfer_floor_number: defaultFloorNumber,
               transfer_area_code: "",
               transfer_location_id: null,
             }));
@@ -7699,16 +7718,40 @@
             if (explicit) return explicit;
             return String(location?.location_code || "").split("-", 1)[0].trim();
           },
-          productionLocationsForArea(areaCode) {
+          productionLocationFloorNumber(location) {
+            const value = Number(location?.warehouse_floor);
+            return Number.isInteger(value) && value > 0 ? value : null;
+          },
+          productionAreasForFloor(floorNumber) {
+            const targetFloor = Number(floorNumber);
+            if (!targetFloor) return [];
+            const counts = new Map();
+            this.productionAvailableLocations.forEach(location => {
+              if (this.productionLocationFloorNumber(location) !== targetFloor) return;
+              const code = this.productionLocationAreaCode(location);
+              if (code) counts.set(code, (counts.get(code) || 0) + 1);
+            });
+            return [...counts.entries()].map(([code, count]) => ({ code, count }));
+          },
+          productionLocationsForArea(floorNumber, areaCode) {
+            const targetFloor = Number(floorNumber);
             const target = String(areaCode || "").trim();
-            if (!target) return [];
+            if (!targetFloor || !target) return [];
             return this.productionAvailableLocations.filter(
-              location => this.productionLocationAreaCode(location) === target
+              location => this.productionLocationFloorNumber(location) === targetFloor
+                && this.productionLocationAreaCode(location) === target
             );
           },
-          onProductionAreaChange(row, areaField, locationField) {
+          onProductionFloorChange(row, floorField, areaField, locationField) {
+            const allowedAreas = new Set(
+              this.productionAreasForFloor(row?.[floorField]).map(area => area.code)
+            );
+            if (!allowedAreas.has(String(row?.[areaField] || ""))) row[areaField] = "";
+            this.onProductionAreaChange(row, floorField, areaField, locationField);
+          },
+          onProductionAreaChange(row, floorField, areaField, locationField) {
             const allowedIds = new Set(
-              this.productionLocationsForArea(row?.[areaField]).map(location => Number(location.id))
+              this.productionLocationsForArea(row?.[floorField], row?.[areaField]).map(location => Number(location.id))
             );
             if (!allowedIds.has(Number(row?.[locationField]))) row[locationField] = null;
             if (locationField === "location_id" && !this.canConfirmProductionRow(row)) {
@@ -7743,6 +7786,7 @@
             const theoretical = Number(row.actual_input_quantity || 0) * Number(row.output_factor || 1);
             if (Number(row.actual_output_quantity || 0) > theoretical) row.actual_output_quantity = theoretical;
             if (!this.productionNeedsLocation(row)) {
+              row.location_floor_number = null;
               row.location_area_code = "";
               row.location_id = null;
             }
@@ -7750,7 +7794,10 @@
           },
           ensureProductionMode(row) {
             if (row.completion_mode === "stock" && !this.canWarehouseExecute) row.completion_mode = "";
-            if (!this.productionNeedsLocation(row)) {
+            if (this.productionNeedsLocation(row) && !row.location_floor_number && this.productionLocationFloors.length === 1) {
+              row.location_floor_number = this.productionLocationFloors[0].number;
+            } else if (!this.productionNeedsLocation(row)) {
+              row.location_floor_number = null;
               row.location_area_code = "";
               row.location_id = null;
             }

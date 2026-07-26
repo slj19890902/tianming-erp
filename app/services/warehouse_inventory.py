@@ -36,6 +36,7 @@ from app.services.inventory_cost_snapshot import (
     estimate_finished_product_cost,
     estimate_semi_finished_cost,
 )
+from app.services.location_candidates import operational_location_issue
 
 
 class WarehouseInventoryError(ValueError):
@@ -110,6 +111,20 @@ def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLo
             raise WarehouseInventoryError(
                 "V11 货位楼层无效，不能办理成品入库", 409
             )
+    if inventory_type == "finished":
+        if getattr(location, "placement_status", None) == "unplaced":
+            raise WarehouseInventoryError(
+                "该库位尚未完成空间放置，不能办理成品库存业务",
+                409,
+            )
+        issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types=allowed,
+        )
+        if issue:
+            raise WarehouseInventoryError(f"{issue}，不能办理成品库存业务", 409)
+        return location
     if not location.is_active:
         raise WarehouseInventoryError("该库位已停用，不能入库")
     if getattr(location, "placement_status", None) == "unplaced":

@@ -854,6 +854,15 @@
       .bom-requisition-component.disabled { opacity: .62; background: #f8fafc; }
       .bom-requisition-component-summary { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 4px; font-size: 11px; }
       .bom-requisition-component-summary strong { color: #1d4ed8; }
+      .delivery-component-plan { margin-top: 10px; padding: 10px; border: 1px solid #bfdbfe; border-radius: 8px; background: #f8fbff; }
+      .delivery-component-plan-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+      .delivery-component-plan-list { display: grid; gap: 6px; }
+      .delivery-component-plan-row { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(76px, .55fr)); gap: 8px; align-items: center; padding: 7px 8px; border-radius: 6px; background: #fff; font-size: 12px; }
+      .delivery-component-plan-row strong { color: #1d4ed8; }
+      @media (max-width: 900px) {
+        .delivery-component-plan-row { grid-template-columns: 1fr 1fr; }
+        .delivery-component-plan-name { grid-column: 1 / -1; }
+      }
       .bom-kit-warning { margin-top: 4px; white-space: normal; }
       .merge-size-editor { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
       .merge-size-input { width: 76px !important; min-width: 76px !important; padding-left: 8px; padding-right: 8px; }
@@ -1922,7 +1931,39 @@
               <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <data-panel :empty="!deliveries.length">
                 <table><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in deliveries" :key="row.id"><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivery_date }}</td><td>{{ row.vehicle_number || "-" }}</td><td>{{ row.total_quantity }}</td><td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td><td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td><td><div v-for="item in row.items" :key="item.id">{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></div></td><td class="toolbar-group"><button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" @click="createDeliveryPickTask(row)">拿货</button><button v-if="row.pick_task" class="btn small" @click="openDeliveryPickTask(row)">打开手机拿货</button><button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">{{ row.pick_task ? '发货打印' : '直接发货打印' }}</button><button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button><button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button><button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button><button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button><button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button></td></tr></tbody></table>
+                <tbody>
+                  <tr v-for="row in deliveries" :key="row.id">
+                    <td>{{ row.delivery_number }}</td>
+                    <td>{{ row.customer_name }}</td>
+                    <td>{{ row.delivery_date }}</td>
+                    <td>{{ row.vehicle_number || "-" }}</td>
+                    <td>{{ deliveryActualGoodsQuantity(row) }}</td>
+                    <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
+                    <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
+                    <td>
+                      <div v-for="item in row.items" :key="item.id" style="margin-bottom:4px">
+                        <div>{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div>
+                        <div v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code" class="muted" style="font-size:11px">
+                          套内子件：{{ component.component_code || component.product_code || "-" }} {{ component.component_name || component.product_name || "未命名组件" }} × {{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}（不单独计价）
+                        </div>
+                        <div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div>
+                      </div>
+                    </td>
+                    <td class="toolbar-group">
+                      <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" @click="createDeliveryPickTask(row)">拿货</button>
+                      <button v-if="row.pick_task" class="btn small" @click="openDeliveryPickTask(row)">打开手机拿货</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">{{ row.pick_task ? '发货打印' : '直接发货打印' }}</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button>
+                      <button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small" @click="openReceipt(row)">编辑回单</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger" @click="cancelReceipt(row)">取消回单</button>
+                      <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small" @click="openReceipt(row)">确认回单</button>
+                      <button v-if="row.status==='dispatched'" class="btn small" @click="printDelivery(row)">补打</button>
+                      <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
               </data-panel>
               <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
@@ -3852,6 +3893,24 @@
                 <table><thead><tr><th>选择</th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单号 / 客户单号</th><th>未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" v-model="deliveryBatchPicker.selected[item.order_item_id]" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td>{{ displayOrderNumber(item) }}<div class="muted">{{ item.customer_po || "-" }}</div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td><td>{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
               <table v-else><thead><tr><th>搜索存货编码 / 客户单号 / 产品名称</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货与超量确认</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td style="min-width:230px"><input class="input" v-model.trim="line.inventory_code" :disabled="!!deliveryForm.editingId && !!line.order_item_id" placeholder="输入编码、客户单号或产品名称" @keyup.enter.prevent="searchDeliveryLine(line)" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" :disabled="!deliveryForm.customer_id || !line.inventory_code || line.search_loading" @click="searchDeliveryLine(line)">{{ line.search_loading ? "查询中..." : "查询" }}</button><button class="btn small" type="button" @click="clearDeliveryLine(line)">清空</button></div><select v-if="line.product_options.length > 1" class="select" style="margin-top:6px" v-model="line.selected_product_key" @change="selectDeliveryProductCandidate(line, line.selected_product_key)"><option value="">请选择具体产品</option><option v-for="option in line.product_options" :key="option.key" :value="option.key">{{ deliveryProductOptionLabel(option) }}</option></select><select v-if="line.candidate_options.length > 1" class="select" style="margin-top:6px" :value="line.order_item_id || ''" @change="selectDeliveryCandidateById(line, $event.target.value)"><option value="">请选择具体订单明细</option><option v-for="candidate in line.candidate_options" :key="candidate.order_item_id" :value="candidate.order_item_id">{{ deliveryDetailOptionLabel(candidate) }}</option></select><div v-if="line.candidate_message" :class="line.candidate_error ? 'danger-text' : 'muted'" style="margin-top:6px">{{ line.candidate_message }}</div></td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}</div><template v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)"><label style="display:block;margin-top:6px"><input type="checkbox" v-model="line.over_delivery_confirmed" /> 二次确认超量送货</label><input class="input" style="margin-top:4px" v-model.trim="line.over_delivery_reason" placeholder="填写客户确认或超送原因" /></template></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button v-if="deliveryForm.lines.length > 5" class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除行</button><span v-else class="muted">保留</span></td></tr></tbody></table>
+              <div v-if="deliveryActiveLines.some(line => deliveryDraftComponents(line).length)" class="delivery-component-plan">
+                <div class="delivery-component-plan-title">
+                  <strong>统一计价组合 · 本次实际随货明细</strong>
+                  <span class="status blue">组件数量来自订单级需求，只读；子件不单独计价</span>
+                </div>
+                <div v-for="line in deliveryActiveLines" :key="`delivery-components-${line.key}`">
+                  <div v-if="deliveryDraftComponents(line).length" class="delivery-component-plan-list">
+                    <div class="muted" style="margin-top:4px">{{ line.product_code || "-" }} / {{ line.product_name || "-" }}　本次主产品 {{ Number(line.delivered_quantity || 0) }}</div>
+                    <div v-for="component in deliveryDraftComponents(line)" :key="component.component_snapshot_id || component.snapshot_id || component.component_product_id || component.component_code || component.product_code" class="delivery-component-plan-row">
+                      <span class="delivery-component-plan-name">{{ component.component_code || component.product_code || "-" }} / {{ component.component_name || component.product_name || "未命名组件" }}</span>
+                      <span>订单目标 <strong>{{ deliveryComponentTargetQuantity(component) }}</strong></span>
+                      <span>已送 <strong>{{ deliveryComponentDeliveredQuantity(component) }}</strong></span>
+                      <span>剩余 <strong>{{ deliveryComponentRemainingQuantity(component) }}</strong></span>
+                      <span>本次随货 <strong>{{ deliveryComponentPlannedQuantity(line, component) }}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
@@ -6493,6 +6552,108 @@
               return shortage === undefined || shortage === null ? label : `${label}缺${shortage}片`;
             }).filter(Boolean);
             return `按套可发 ${Number(kit.available_sets || 0)} 套${missing.length ? `；缺件：${missing.join("、")}` : ""}`;
+          },
+          deliveryDraftComponents(line) {
+            const components = Array.isArray(line?.kit_availability?.components)
+              ? line.kit_availability.components
+              : [];
+            const planned = Array.isArray(line?.component_lines)
+              ? line.component_lines
+              : [];
+            if (components.length) {
+              return components.map(component => {
+                const componentKey = component.component_snapshot_id ?? component.snapshot_id;
+                const plannedLine = planned.find(row => (
+                  (row.component_snapshot_id ?? row.snapshot_id) === componentKey
+                )) || {};
+                return { ...component, ...plannedLine };
+              });
+            }
+            return planned.map(component => ({
+              ...component,
+              target_quantity: component.target_quantity ?? component.ordered_quantity,
+              delivered_quantity: component.delivered_quantity ?? 0,
+              remaining_quantity: component.remaining_quantity ?? 0,
+              available_quantity: component.available_quantity
+                ?? component.planned_delivery_quantity
+                ?? component.quantity
+                ?? 0,
+              planned_delivery_quantity: component.planned_delivery_quantity
+                ?? component.quantity,
+            }));
+          },
+          deliveryComponentTargetQuantity(component) {
+            return Math.max(Number(
+              component?.target_quantity
+              ?? component?.required_piece_quantity
+              ?? component?.required_quantity
+              ?? 0
+            ) || 0, 0);
+          },
+          deliveryComponentDeliveredQuantity(component) {
+            return Math.max(Number(
+              component?.delivered_quantity
+              ?? component?.delivered_piece_quantity
+              ?? component?.already_delivered_quantity
+              ?? 0
+            ) || 0, 0);
+          },
+          deliveryComponentRemainingQuantity(component) {
+            const explicit = component?.remaining_quantity
+              ?? component?.remaining_required_piece_quantity;
+            if (explicit !== undefined && explicit !== null) {
+              return Math.max(Number(explicit) || 0, 0);
+            }
+            return Math.max(
+              this.deliveryComponentTargetQuantity(component)
+              - this.deliveryComponentDeliveredQuantity(component),
+              0
+            );
+          },
+          deliveryComponentPlannedQuantity(line, component) {
+            const parentQuantity = Math.max(Number(line?.delivered_quantity || 0), 0);
+            const perSet = Math.max(Number(component?.quantity_per_set || 1), 1);
+            const remaining = this.deliveryComponentRemainingQuantity(component);
+            const available = Math.max(Number(
+              component?.available_quantity ?? remaining
+            ) || 0, 0);
+            const explicitPlan = component?.planned_delivery_quantity;
+            const limits = [parentQuantity * perSet, remaining, available];
+            if (explicitPlan !== undefined && explicitPlan !== null) {
+              limits.push(Math.max(Number(explicitPlan) || 0, 0));
+            }
+            return Math.max(Math.floor(Math.min(...limits)), 0);
+          },
+          deliverySavedComponentLines(item) {
+            const actualGoods = item?.actual_goods_lines;
+            if (Array.isArray(actualGoods)) {
+              return actualGoods.filter(row => (
+                row?.line_type === "component" || row?.pricing_included === false
+              ));
+            }
+            const rows = item?.component_lines;
+            return Array.isArray(rows) ? rows : [];
+          },
+          deliveryActualGoodsQuantity(delivery) {
+            const documentTotal = Number(delivery?.total_actual_goods_quantity);
+            if (Number.isFinite(documentTotal)) return documentTotal;
+            return (delivery?.items || []).reduce((total, item) => {
+              const itemTotal = Number(item?.actual_goods_quantity);
+              if (Number.isFinite(itemTotal)) return total + itemTotal;
+              const parentQuantity = Number(item?.delivered_quantity ?? item?.quantity ?? 0) || 0;
+              const componentQuantity = this.deliverySavedComponentLines(item).reduce(
+                (sum, component) => sum + (
+                  Number(
+                    component?.quantity
+                    ?? component?.planned_delivery_quantity
+                    ?? component?.delivered_quantity
+                    ?? 0
+                  ) || 0
+                ),
+                0
+              );
+              return total + parentQuantity + componentQuantity;
+            }, 0);
           },
           inventoryCandidatePayload(line, component) {
             const product = line._inventory_product || line;
@@ -12271,6 +12432,7 @@
               is_composite_bom: false,
               kit_availability: null,
               missing_components: [],
+              component_lines: [],
               ...overrides,
             };
           },
@@ -12573,6 +12735,7 @@
               is_composite_bom: !!candidate.is_composite_bom,
               kit_availability: candidate.kit_availability || null,
               missing_components: candidate.missing_components || candidate.kit_availability?.missing_components || [],
+              component_lines: candidate.component_lines || [],
               remaining_quantity: candidate.remaining_quantity,
               order_remaining_quantity: candidate.order_remaining_quantity ?? candidate.remaining_quantity,
               deliverable_quantity: candidate.deliverable_quantity ?? candidate.remaining_quantity,
@@ -13237,6 +13400,9 @@
                 specification: it.specification || "",
                 material_display: pending?.material_display || pending?.material || "",
                 inventory_sources: it.inventory_sources || [],
+                is_composite_bom: !!(pending?.is_composite_bom || it.is_composite_bom || (it.component_lines || []).length),
+                kit_availability: pending?.kit_availability || null,
+                component_lines: it.component_lines || [],
                 remaining_quantity: pending?.remaining_quantity ?? it.delivered_quantity,
                 order_remaining_quantity: pending?.order_remaining_quantity ?? it.order_remaining_snapshot ?? it.delivered_quantity,
                 deliverable_quantity: pending?.deliverable_quantity ?? it.delivered_quantity,

@@ -115,6 +115,9 @@
     .product-name { text-align: left; overflow-wrap: anywhere; }
     .product-name.long-name { font-size: 11px; line-height: 1.18; }
     .item-remark { font-size: 11px; }
+    .component-line td { background: #fafafa; }
+    .component-line .product-name { padding-left: 10px; }
+    .component-marker { font-size: 10px; font-weight: 700; white-space: nowrap; }
     .total {
       padding: 3px 2px 2px;
       text-align: right;
@@ -254,7 +257,7 @@
     </table>
 
     <footer class="print-footer">
-      <div class="total">本页数量：<span data-field="pageQuantity"></span>　送货总量：<span data-field="totalQuantity"></span></div>
+      <div class="total">本页数量（实际货物）：<span data-field="pageQuantity"></span>　计价主件总数：<span data-field="pricedQuantity"></span>　实际货物总数：<span data-field="totalQuantity"></span></div>
       <section data-field="remarkNotes" class="remark-notes" hidden>
         <strong>备注说明：</strong>
         <div data-field="remarkNoteItems"></div>
@@ -314,6 +317,54 @@
       }
     }
 
+    function normalizeComponentPrintLine(component, parentItem = {}) {
+      return {
+        customer_po: component.customer_po ?? parentItem.customer_po ?? "",
+        product_code: component.product_code ?? component.component_code ?? "",
+        product_name: component.product_name ?? component.component_name ?? "未命名组件",
+        unit: component.unit || parentItem.unit || "PCS",
+        quantity: component.quantity
+          ?? component.planned_delivery_quantity
+          ?? component.delivered_quantity
+          ?? 0,
+        remarks: component.remarks || "",
+        pricing_included: false,
+        is_component_line: true,
+      };
+    }
+
+    function normalizeDeliveryPrintItems(data) {
+      if (Array.isArray(data.actual_goods_items) && data.actual_goods_items.length) {
+        return data.actual_goods_items.map((item) => ({
+          ...item,
+          pricing_included: item.pricing_included !== false,
+          is_component_line: (
+            item.line_type === "component" || item.pricing_included === false
+          ),
+        }));
+      }
+      const normalized = [];
+      let hasNestedComponents = false;
+      (data.items || []).forEach((item) => {
+        normalized.push({
+          ...item,
+          pricing_included: item.pricing_included !== false,
+          is_component_line: item.is_component_line === true,
+        });
+        const components = Array.isArray(item.component_lines) ? item.component_lines : [];
+        if (components.length) hasNestedComponents = true;
+        components.forEach((component) => {
+          normalized.push(normalizeComponentPrintLine(component, item));
+        });
+      });
+      if (!hasNestedComponents && Array.isArray(data.component_lines)) {
+        data.component_lines.forEach((component) => {
+          normalized.push(normalizeComponentPrintLine(component));
+        });
+      }
+      return normalized;
+    }
+
     function populateSheet(sheet, data, entries, pageNumber, totalPages) {
       const sender = data.sender || {};
       const senderParts = [];
@@ -329,7 +380,8 @@
       getField(sheet, "deliveryNumber").textContent = data.delivery_number || "";
       getField(sheet, "deliveryDate").textContent = data.delivery_date || "";
       getField(sheet, "vehicleNumber").textContent = data.vehicle_number || "";
-      getField(sheet, "totalQuantity").textContent = data.total_quantity ?? 0;
+      getField(sheet, "pricedQuantity").textContent = data.total_quantity ?? 0;
+      getField(sheet, "totalQuantity").textContent = data.total_actual_goods_quantity ?? data.total_quantity ?? 0;
       getField(sheet, "createdAt").textContent = data.created_at
         ? TmTime.formatBeijingDateTime(data.created_at)
         : "";
@@ -341,20 +393,35 @@
         const item = entry.item;
         const productName = String(item.product_name || "").trim();
         const customerRemark = String(item.remarks || "").trim();
-        const tableRemark = customerRemark.length > 12 ? "详见备注说明" : customerRemark;
+        const pricingNote = item.pricing_included === false ? "套内子件，不单独计价" : "";
+        const fullRemark = [pricingNote, customerRemark].filter(Boolean).join("；");
+        const tableRemark = fullRemark.length > 12 ? "详见备注说明" : fullRemark;
         const longNameClass = productName.length > 28 ? " long-name" : "";
-        return `<tr>
+        const rowClass = item.is_component_line ? ' class="component-line"' : "";
+        const componentMarker = item.is_component_line
+          ? '<span class="component-marker">套内子件</span> '
+          : "";
+        return `<tr${rowClass}>
           <td class="sequence">${entry.index + 1}</td>
           <td>${escapeHtml(item.customer_po)}</td>
           <td class="product-code">${escapeHtml(item.product_code)}</td>
-          <td class="product-name${longNameClass}">${escapeHtml(productName)}</td>
+          <td class="product-name${longNameClass}">${componentMarker}${escapeHtml(productName)}</td>
           <td>${escapeHtml(item.unit)}</td>
           <td>${escapeHtml(item.quantity)}</td>
           <td class="item-remark">${escapeHtml(tableRemark)}</td>
         </tr>`;
       }).join("");
       const remarkNotes = entries
-        .map((entry) => ({ index: entry.index + 1, text: String(entry.item.remarks || "").trim() }))
+        .map((entry) => {
+          const pricingNote = entry.item.pricing_included === false
+            ? "套内子件，不单独计价"
+            : "";
+          const customerRemark = String(entry.item.remarks || "").trim();
+          return {
+            index: entry.index + 1,
+            text: [pricingNote, customerRemark].filter(Boolean).join("；"),
+          };
+        })
         .filter((entry) => entry.text);
       if (remarkNotes.length) {
         getField(sheet, "remarkNoteItems").innerHTML = remarkNotes
@@ -366,7 +433,16 @@
 
     function renderDelivery(data) {
       const container = document.getElementById("sheets");
-      const entries = (data.items || []).map((item, index) => ({ item, index }));
+      const normalizedItems = normalizeDeliveryPrintItems(data);
+      const entries = normalizedItems.map((item, index) => ({ item, index }));
+      const actualGoodsTotalQuantity = normalizedItems.reduce(
+        (total, item) => total + (Number(item.quantity) || 0),
+        0,
+      );
+      const printData = {
+        ...data,
+        total_actual_goods_quantity: actualGoodsTotalQuantity,
+      };
       const pages = [];
       let currentPage = [];
       container.hidden = false;
@@ -374,7 +450,7 @@
       container.innerHTML = "";
       const pageFits = (candidateEntries) => {
         const probe = createSheet();
-        populateSheet(probe, data, candidateEntries, 1, 1);
+        populateSheet(probe, printData, candidateEntries, 1, 1);
         container.appendChild(probe);
         const fits = probe.scrollHeight <= probe.clientHeight + 1;
         probe.remove();
@@ -398,7 +474,7 @@
       container.innerHTML = "";
       pages.forEach((pageEntries, index) => {
         const sheet = createSheet();
-        populateSheet(sheet, data, pageEntries, index + 1, pages.length);
+        populateSheet(sheet, printData, pageEntries, index + 1, pages.length);
         container.appendChild(sheet);
       });
       container.style.visibility = "visible";

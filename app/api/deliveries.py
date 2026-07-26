@@ -59,6 +59,9 @@ from app.services.production_workflow import (
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     component_availability,
+    delivery_component_required_quantities,
+    delivered_component_quantities,
+    delivery_item_component_quantities,
     effective_component_demands,
     execute_delivery_component_consumption,
     is_composite_order_item,
@@ -353,7 +356,45 @@ class DeliveryPickItemUpdate(BaseModel):
         return normalized
 
 
-def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
+def _pick_item_component_lines(
+    db: Session,
+    item: DeliveryPickTaskItem,
+) -> list[dict]:
+    """Return read-only parent-priced component goods for one pick row.
+
+    Pick tasks persist exactly one operable row per delivery item.  Components
+    deliberately remain derived display data: the driver still confirms only
+    the parent delivery quantity, while the later dispatch transaction applies
+    the existing component inventory gate and allocation facts.
+    """
+    delivery_item = (
+        db.get(DeliveryItem, item.delivery_item_id)
+        if item.delivery_item_id is not None
+        else None
+    )
+    if (
+        delivery_item is None
+        or delivery_item.order_item_id != item.order_item_id
+    ):
+        return []
+    order_item = db.get(OrderItem, item.order_item_id)
+    if order_item is None or not is_composite_order_item(db, order_item.id):
+        return []
+    return [
+        component
+        for component in _delivery_component_lines(
+            db,
+            order_item=order_item,
+            planned_delivery_quantity=int(item.original_quantity or 0),
+            delivery_item_id=delivery_item.id,
+            dispatched=False,
+        )
+        if int(component.get("planned_delivery_quantity") or 0) > 0
+    ]
+
+
+def _pick_item_response(db: Session, item: DeliveryPickTaskItem) -> dict:
+    component_lines = _pick_item_component_lines(db, item)
     return {
         "id": item.id,
         "delivery_item_id": item.delivery_item_id,
@@ -366,17 +407,20 @@ def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
         "product_code": item.product_code_snapshot,
         "product_name": item.product_name_snapshot,
         "specification": item.specification_snapshot,
+        "is_composite_bom": bool(component_lines),
+        "component_lines": component_lines,
         "updated_at": utc_naive_to_api(item.updated_at) if item.updated_at else None,
     }
 
 
-def _pick_task_response(task: DeliveryPickTask) -> dict:
+def _pick_task_response(db: Session, task: DeliveryPickTask) -> dict:
+    item_responses = [_pick_item_response(db, item) for item in task.items]
     exception_items = [
         {
-            **_pick_item_response(item),
+            **item_response,
             "customer_name": task.customer.name if task.customer else None,
         }
-        for item in task.items
+        for item, item_response in zip(task.items, item_responses, strict=True)
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
@@ -394,7 +438,7 @@ def _pick_task_response(task: DeliveryPickTask) -> dict:
         "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
         "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
         "dispatched_at": utc_naive_to_api(task.dispatched_at) if task.dispatched_at else None,
-        "items": [_pick_item_response(item) for item in task.items],
+        "items": item_responses,
     }
 
 
@@ -813,8 +857,13 @@ def _composite_inventory_sources_for_order_item(
         return items
 
     delivery_sets = max(int(planned_delivery_quantity or 0), 0)
+    required_quantities = delivery_component_required_quantities(
+        db,
+        order_item_id=order_item.id,
+        delivery_sets=delivery_sets,
+    )
     for demand in demands:
-        required_pieces = delivery_sets * demand.quantity_per_set
+        required_pieces = required_quantities.get(demand.snapshot_id, 0)
         if required_pieces <= 0:
             continue
         remaining = required_pieces
@@ -870,20 +919,135 @@ def _composite_inventory_sources_for_order_item(
     return items
 
 
-def _delivery_kit_metadata(db: Session, order_item: OrderItem | None) -> dict:
+def _delivery_component_lines(
+    db: Session,
+    *,
+    order_item: OrderItem,
+    planned_delivery_quantity: int,
+    delivery_item_id: int | None = None,
+    dispatched: bool = False,
+) -> list[dict]:
+    demands = effective_component_demands(db, order_item.id)
+    if not demands:
+        return []
+    cumulative = delivered_component_quantities(db, order_item.id)
+    document_quantities = (
+        delivery_item_component_quantities(db, delivery_item_id)
+        if dispatched and delivery_item_id is not None
+        else delivery_component_required_quantities(
+            db,
+            order_item_id=order_item.id,
+            delivery_sets=max(int(planned_delivery_quantity or 0), 0),
+        )
+    )
+    return [
+        {
+            "line_type": "component",
+            "component_snapshot_id": demand.snapshot_id,
+            "component_product_id": demand.component_product_id,
+            "product_code": demand.component_code,
+            "product_name": demand.component_name,
+            "specification": demand.specification,
+            "unit": "PCS",
+            "quantity_per_set": demand.quantity_per_set,
+            "target_quantity": demand.required_piece_quantity,
+            "delivered_quantity": cumulative.get(demand.snapshot_id, 0),
+            "remaining_quantity": max(
+                demand.required_piece_quantity
+                - cumulative.get(demand.snapshot_id, 0),
+                0,
+            ),
+            "planned_delivery_quantity": document_quantities.get(
+                demand.snapshot_id,
+                0,
+            ),
+            "pricing_included": False,
+            "independent_return_receipt": False,
+            "independent_statement": False,
+        }
+        for demand in demands
+    ]
+
+
+def _actual_goods_lines(
+    *,
+    order_item_id: int,
+    product_code: str | None,
+    product_name: str | None,
+    specification: str | None,
+    parent_quantity: int,
+    component_lines: list[dict],
+) -> list[dict]:
+    lines = [
+        {
+            "line_type": "parent",
+            "order_item_id": order_item_id,
+            "component_snapshot_id": None,
+            "product_code": product_code,
+            "product_name": product_name,
+            "specification": specification,
+            "unit": "PCS",
+            "quantity": max(int(parent_quantity or 0), 0),
+            "pricing_included": True,
+            "independent_return_receipt": True,
+            "independent_statement": True,
+        }
+    ]
+    lines.extend(
+        {
+            "line_type": "component",
+            "order_item_id": order_item_id,
+            "component_snapshot_id": component["component_snapshot_id"],
+            "product_code": component["product_code"],
+            "product_name": component["product_name"],
+            "specification": component["specification"],
+            "unit": component["unit"],
+            "quantity": component["planned_delivery_quantity"],
+            "pricing_included": False,
+            "independent_return_receipt": False,
+            "independent_statement": False,
+        }
+        for component in component_lines
+        if int(component["planned_delivery_quantity"] or 0) > 0
+    )
+    return lines
+
+
+def _delivery_kit_metadata(
+    db: Session,
+    order_item: OrderItem | None,
+    *,
+    planned_delivery_quantity: int | None = None,
+    delivery_item_id: int | None = None,
+    dispatched: bool = False,
+) -> dict:
     if order_item is None or not is_composite_order_item(db, order_item.id):
         return {
             "is_composite_bom": False,
             "kit_availability": None,
             "available_sets": None,
             "missing_components": [],
+            "component_lines": [],
         }
     availability = kit_availability(db, order_item.id)
+    planned_quantity = (
+        int(availability.get("available_sets") or 0)
+        if planned_delivery_quantity is None
+        else max(int(planned_delivery_quantity or 0), 0)
+    )
+    component_lines = _delivery_component_lines(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=planned_quantity,
+        delivery_item_id=delivery_item_id,
+        dispatched=dispatched,
+    )
     return {
         "is_composite_bom": True,
         "kit_availability": availability,
         "available_sets": int(availability.get("available_sets") or 0),
         "missing_components": availability.get("missing_components") or [],
+        "component_lines": component_lines,
     }
 
 
@@ -1113,7 +1277,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
     } if order_ids else {}
     pick_task = _delivery_pick_task(db, delivery_id)
     pick_by_delivery_item = {
-        item.delivery_item_id: _pick_item_response(item)
+        item.delivery_item_id: _pick_item_response(db, item)
         for item in (pick_task.items if pick_task else [])
     }
     internal_remarks = _tianhua_internal_remarks_by_delivery_item(
@@ -1126,6 +1290,64 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
             )
         ],
     )
+    response_items: list[dict] = []
+    total_actual_goods_quantity = 0
+    for row in items:
+        mapping = row._mapping
+        order_item = db.get(OrderItem, mapping["order_item_id"])
+        kit_metadata = _delivery_kit_metadata(
+            db,
+            order_item,
+            planned_delivery_quantity=mapping["delivered_quantity"],
+            delivery_item_id=mapping["id"],
+            dispatched=delivery.status == "dispatched",
+        )
+        actual_goods_lines = _actual_goods_lines(
+            order_item_id=mapping["order_item_id"],
+            product_code=mapping["product_code"],
+            product_name=mapping["product_name"],
+            specification=mapping["specification"],
+            parent_quantity=mapping["delivered_quantity"],
+            component_lines=kit_metadata["component_lines"],
+        )
+        actual_goods_quantity = sum(
+            int(line["quantity"] or 0) for line in actual_goods_lines
+        )
+        total_actual_goods_quantity += actual_goods_quantity
+        response_items.append(
+            {
+                **dict(mapping),
+                "remarks": _customer_visible_delivery_remark(
+                    mapping["id"],
+                    mapping["remarks"],
+                    internal_remarks,
+                ),
+                "actual_delivery_quantity": mapping["delivered_quantity"],
+                "order_number": display_order_number(
+                    orders.get(mapping["order_id"]),
+                    registry,
+                )
+                if "order_id" in mapping
+                else mapping["order_number"],
+                "display_order_number": display_order_number(
+                    orders.get(mapping["order_id"]),
+                    registry,
+                )
+                if "order_id" in mapping
+                else mapping["order_number"],
+                **kit_metadata,
+                "actual_goods_lines": actual_goods_lines,
+                "actual_goods_quantity": actual_goods_quantity,
+                "inventory_sources": _inventory_sources_for_order_item(
+                    db,
+                    order_item=order_item,
+                    planned_delivery_quantity=mapping["delivered_quantity"],
+                    delivery_item_id=mapping["id"],
+                    dispatched=delivery.status == "dispatched",
+                ),
+                "pick_result": pick_by_delivery_item.get(mapping["id"]),
+            }
+        )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -1135,6 +1357,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "vehicle_number": delivery.vehicle_number,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
+        "total_actual_goods_quantity": total_actual_goods_quantity,
         "dispatched_at": (
             utc_naive_to_api(delivery.dispatched_at)
             if delivery.dispatched_at
@@ -1149,43 +1372,8 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
-        "pick_task": _pick_task_response(pick_task) if pick_task else None,
-        "items": [
-            {
-                **dict(row._mapping),
-                "remarks": _customer_visible_delivery_remark(
-                    row._mapping["id"],
-                    row._mapping["remarks"],
-                    internal_remarks,
-                ),
-                "actual_delivery_quantity": row._mapping["delivered_quantity"],
-                "order_number": display_order_number(
-                    orders.get(row._mapping["order_id"]),
-                    registry,
-                )
-                if "order_id" in row._mapping
-                else row._mapping["order_number"],
-                "display_order_number": display_order_number(
-                    orders.get(row._mapping["order_id"]),
-                    registry,
-                )
-                if "order_id" in row._mapping
-                else row._mapping["order_number"],
-                **_delivery_kit_metadata(
-                    db,
-                    db.get(OrderItem, row._mapping["order_item_id"]),
-                ),
-                "inventory_sources": _inventory_sources_for_order_item(
-                    db,
-                    order_item=db.get(OrderItem, row._mapping["order_item_id"]),
-                    planned_delivery_quantity=row._mapping["delivered_quantity"],
-                    delivery_item_id=row._mapping["id"],
-                    dispatched=delivery.status == "dispatched",
-                ),
-                "pick_result": pick_by_delivery_item.get(row._mapping["id"]),
-            }
-            for row in items
-        ],
+        "pick_task": _pick_task_response(db, pick_task) if pick_task else None,
+        "items": response_items,
     }
 
 
@@ -1301,7 +1489,7 @@ def create_or_rebuild_delivery_pick_task(
     try:
         task = _build_pick_task(db, delivery=delivery, user=user)
         db.commit()
-        return _pick_task_response(task)
+        return _pick_task_response(db, task)
     except HTTPException:
         db.rollback()
         raise
@@ -1326,7 +1514,7 @@ def list_delivery_pick_tasks(
             raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
         query = query.where(DeliveryPickTask.status == normalized_status)
     tasks = db.scalars(query).all()
-    return {"items": [_pick_task_response(task) for task in tasks]}
+    return {"items": [_pick_task_response(db, task) for task in tasks]}
 
 
 @pick_router.get("/{task_id}")
@@ -1335,7 +1523,7 @@ def get_delivery_pick_task(
     db: Session = Depends(get_db),
     user: User = Depends(can_pick),
 ) -> dict:
-    return _pick_task_response(_pick_task_for_user(db, task_id, user))
+    return _pick_task_response(db, _pick_task_for_user(db, task_id, user))
 
 
 @pick_router.put("/{task_id}/items/{item_id}")
@@ -1387,7 +1575,10 @@ def update_delivery_pick_task_item(
         description="更新送货拿货结果",
     )
     db.commit()
-    return {"task": _pick_task_response(task), "item": _pick_item_response(item)}
+    return {
+        "task": _pick_task_response(db, task),
+        "item": _pick_item_response(db, item),
+    }
 
 
 @pick_router.post("/{task_id}/submit")
@@ -1419,7 +1610,7 @@ def submit_delivery_pick_task(
         description="司机提交送货拿货结果",
     )
     db.commit()
-    return _pick_task_response(task)
+    return _pick_task_response(db, task)
 
 
 @pick_router.post("/{task_id}/apply")
@@ -2802,9 +2993,11 @@ def get_delivery_print_data(
     rows = db.execute(
         select(
             DeliveryItem.id.label("delivery_item_id"),
+            DeliveryItem.order_item_id,
             Order.customer_po,
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
+            OrderItem.snapshot_spec.label("specification"),
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.over_delivery_quantity,
@@ -2826,6 +3019,59 @@ def get_delivery_print_data(
             )
         ],
     )
+    print_items: list[dict] = []
+    actual_goods_items: list[dict] = []
+    for row in rows:
+        order_item = db.get(OrderItem, row.order_item_id)
+        kit_metadata = _delivery_kit_metadata(
+            db,
+            order_item,
+            planned_delivery_quantity=row.quantity,
+            delivery_item_id=row.delivery_item_id,
+            dispatched=delivery.status == "dispatched",
+        )
+        actual_goods_lines = _actual_goods_lines(
+            order_item_id=row.order_item_id,
+            product_code=_print_product_code(row.product_code),
+            product_name=row.product_name,
+            specification=row.specification,
+            parent_quantity=row.quantity,
+            component_lines=kit_metadata["component_lines"],
+        )
+        document_goods_lines = [
+            {
+                **line,
+                "delivery_item_id": row.delivery_item_id,
+                "customer_po": row.customer_po,
+                "product_code": _print_product_code(line["product_code"]),
+            }
+            for line in actual_goods_lines
+        ]
+        actual_goods_items.extend(document_goods_lines)
+        print_items.append(
+            {
+                "delivery_item_id": row.delivery_item_id,
+                "order_item_id": row.order_item_id,
+                "customer_po": row.customer_po,
+                "product_code": _print_product_code(row.product_code),
+                "product_name": row.product_name,
+                "specification": row.specification,
+                "unit": "PCS",
+                "quantity": row.quantity,
+                "ordered_quantity": row.ordered_quantity_snapshot,
+                "over_delivery_quantity": row.over_delivery_quantity,
+                "remarks": _customer_visible_delivery_remark(
+                    row.delivery_item_id,
+                    row.remarks,
+                    internal_remarks,
+                ),
+                "component_lines": kit_metadata["component_lines"],
+                "actual_goods_lines": document_goods_lines,
+                "actual_goods_quantity": sum(
+                    int(line["quantity"] or 0) for line in document_goods_lines
+                ),
+            }
+        )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -2833,6 +3079,10 @@ def get_delivery_print_data(
         "vehicle_number": delivery.vehicle_number,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
+        "total_actual_goods_quantity": sum(
+            int(line["quantity"] or 0) for line in actual_goods_items
+        ),
+        "actual_goods_items": actual_goods_items,
         "created_at": utc_naive_to_api(delivery.created_at),
         "customer": {
             "name": customer.name if customer else "",
@@ -2851,21 +3101,5 @@ def get_delivery_print_data(
             "contact_person": company.contact_person if company else None,
             "contact_phone": company.contact_phone if company else None,
         },
-        "items": [
-            {
-                "customer_po": row.customer_po,
-                "product_code": _print_product_code(row.product_code),
-                "product_name": row.product_name,
-                "unit": "PCS",
-                "quantity": row.quantity,
-                "ordered_quantity": row.ordered_quantity_snapshot,
-                "over_delivery_quantity": row.over_delivery_quantity,
-                "remarks": _customer_visible_delivery_remark(
-                    row.delivery_item_id,
-                    row.remarks,
-                    internal_remarks,
-                ),
-            }
-            for row in rows
-        ],
+        "items": print_items,
     }

@@ -31,6 +31,106 @@ if TYPE_CHECKING:
     from app.models.product import Product
 
 
+WAREHOUSE_CONSTRUCTION_STATUSES = (
+    "not_started",
+    "ledger_building",
+    "ledger_complete",
+    "layout_building",
+    "layout_complete",
+    "enabled",
+)
+
+
+class WarehouseFloor(Base):
+    """One physical warehouse floor and its digitisation progress."""
+
+    __tablename__ = "warehouse_floors"
+    __table_args__ = (
+        CheckConstraint(
+            "floor_number >= 1 AND floor_number <= 99",
+            name="ck_warehouse_floors_number",
+        ),
+        CheckConstraint(
+            "construction_status IN "
+            "('not_started','ledger_building','ledger_complete',"
+            "'layout_building','layout_complete','enabled')",
+            name="ck_warehouse_floors_construction_status",
+        ),
+        UniqueConstraint("floor_code", name="uq_warehouse_floors_code"),
+        UniqueConstraint("floor_number", name="uq_warehouse_floors_number"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    floor_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    floor_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    floor_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    construction_status: Mapped[str] = mapped_column(
+        String(30), default="not_started", server_default="not_started", nullable=False
+    )
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+    areas: Mapped[list["WarehouseArea"]] = relationship(
+        back_populates="floor", cascade="all, delete-orphan"
+    )
+
+
+class WarehouseArea(Base):
+    """A real area ledger; capacity does not create or move locations."""
+
+    __tablename__ = "warehouse_areas"
+    __table_args__ = (
+        CheckConstraint(
+            "planned_location_count >= 0",
+            name="ck_warehouse_areas_planned_location_count",
+        ),
+        CheckConstraint(
+            "planned_pallet_capacity >= 0",
+            name="ck_warehouse_areas_planned_pallet_capacity",
+        ),
+        CheckConstraint(
+            "construction_status IN "
+            "('not_started','ledger_building','ledger_complete',"
+            "'layout_building','layout_complete','enabled')",
+            name="ck_warehouse_areas_construction_status",
+        ),
+        UniqueConstraint(
+            "floor_id", "area_code", name="uq_warehouse_areas_floor_code"
+        ),
+        Index("ix_warehouse_areas_floor_id", "floor_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    floor_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_floors.id", ondelete="RESTRICT"), nullable=False
+    )
+    area_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    area_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    planned_location_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    planned_pallet_capacity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    construction_status: Mapped[str] = mapped_column(
+        String(30), default="ledger_building", server_default="ledger_building", nullable=False
+    )
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+    floor: Mapped["WarehouseFloor"] = relationship(back_populates="areas")
+
+
 class WarehouseLocation(Base):
     __tablename__ = "warehouse_locations"
     __table_args__ = (

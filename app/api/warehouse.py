@@ -48,6 +48,8 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
+    WarehouseArea,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.services.floor3_locations import (
@@ -122,6 +124,14 @@ VALID_SOURCE_TYPES = {
     "transfer",
     "replenishment",
 }
+WAREHOUSE_CONSTRUCTION_STATUSES = {
+    "not_started",
+    "ledger_building",
+    "ledger_complete",
+    "layout_building",
+    "layout_complete",
+    "enabled",
+}
 
 
 class LocationPayload(BaseModel):
@@ -175,6 +185,70 @@ class LocationPayload(BaseModel):
         ):
             raise ValueError("普通库位要启用入库，必须同时填写楼层、区域和存储方式")
         return self
+
+
+class WarehouseFloorPayload(BaseModel):
+    floor_code: str = Field(min_length=1, max_length=30)
+    floor_name: str = Field(min_length=1, max_length=100)
+    floor_number: int = Field(ge=1, le=99)
+    construction_status: str = "not_started"
+    remarks: str | None = None
+
+    @field_validator("floor_code")
+    @classmethod
+    def normalize_floor_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("floor_name")
+    @classmethod
+    def strip_floor_name(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("construction_status")
+    @classmethod
+    def valid_construction_status(cls, value: str) -> str:
+        if value not in WAREHOUSE_CONSTRUCTION_STATUSES:
+            raise ValueError("建设状态不合法")
+        return value
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_floor_remarks(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
+
+
+class WarehouseAreaPayload(BaseModel):
+    floor_id: int = Field(gt=0)
+    area_code: str = Field(min_length=1, max_length=30)
+    area_name: str = Field(min_length=1, max_length=100)
+    planned_location_count: int = Field(default=0, ge=0)
+    planned_pallet_capacity: int = Field(default=0, ge=0)
+    construction_status: str = "ledger_building"
+    remarks: str | None = None
+
+    @field_validator("area_code")
+    @classmethod
+    def normalize_area_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("area_name")
+    @classmethod
+    def strip_area_name(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("construction_status")
+    @classmethod
+    def valid_area_construction_status(cls, value: str) -> str:
+        if value not in WAREHOUSE_CONSTRUCTION_STATUSES:
+            raise ValueError("建设状态不合法")
+        return value
+
+    @field_validator("remarks")
+    @classmethod
+    def strip_area_remarks(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
 
 
 class Floor3PalletItemPayload(BaseModel):
@@ -2993,6 +3067,245 @@ def set_floor3_pallet_relocation_flag(
         _handle_integrity(error)
 
 
+def _warehouse_area_stats(db: Session, area: WarehouseArea) -> dict:
+    location_match = and_(
+        WarehouseLocation.warehouse_floor == area.floor.floor_number,
+        func.upper(WarehouseLocation.area_code) == area.area_code,
+    )
+    recorded_location_count = int(
+        db.scalar(select(func.count(WarehouseLocation.id)).where(location_match)) or 0
+    )
+    laid_out_location_count = int(
+        db.scalar(
+            select(func.count(WarehouseLocation.id)).where(
+                location_match,
+                WarehouseLocation.is_active.is_(True),
+                or_(
+                    WarehouseLocation.placement_status == "placed",
+                    WarehouseLocation.placement_status.is_(None),
+                ),
+            )
+        )
+        or 0
+    )
+    pending_layout_count = int(
+        db.scalar(
+            select(func.count(WarehouseLocation.id)).where(
+                location_match,
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.placement_status == "unplaced",
+            )
+        )
+        or 0
+    )
+    retired_location_count = int(
+        db.scalar(
+            select(func.count(WarehouseLocation.id)).where(
+                location_match,
+                WarehouseLocation.is_active.is_(False),
+            )
+        )
+        or 0
+    )
+    occupied_pallet_count = int(
+        db.scalar(
+            select(func.count(InventoryPallet.id))
+            .join(
+                WarehouseLocation,
+                WarehouseLocation.id == InventoryPallet.location_id,
+            )
+            .where(location_match, InventoryPallet.is_current.is_(True))
+        )
+        or 0
+    )
+    return {
+        "recorded_location_count": recorded_location_count,
+        "laid_out_location_count": laid_out_location_count,
+        "pending_layout_count": pending_layout_count,
+        "retired_location_count": retired_location_count,
+        "occupied_pallet_count": occupied_pallet_count,
+    }
+
+
+def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
+    return {
+        "id": row.id,
+        "floor_id": row.floor_id,
+        "floor_code": row.floor.floor_code,
+        "floor_name": row.floor.floor_name,
+        "floor_number": row.floor.floor_number,
+        "area_code": row.area_code,
+        "area_name": row.area_name,
+        "planned_location_count": row.planned_location_count,
+        "planned_pallet_capacity": row.planned_pallet_capacity,
+        "construction_status": row.construction_status,
+        "remarks": row.remarks,
+        **_warehouse_area_stats(db, row),
+    }
+
+
+def _warehouse_floor_dict(db: Session, row: WarehouseFloor) -> dict:
+    areas = sorted(row.areas, key=lambda item: (item.area_code, item.id))
+    area_items = [_warehouse_area_dict(db, area) for area in areas]
+    return {
+        "id": row.id,
+        "floor_code": row.floor_code,
+        "floor_name": row.floor_name,
+        "floor_number": row.floor_number,
+        "construction_status": row.construction_status,
+        "remarks": row.remarks,
+        "area_count": len(area_items),
+        "planned_location_count": sum(
+            area["planned_location_count"] for area in area_items
+        ),
+        "recorded_location_count": sum(
+            area["recorded_location_count"] for area in area_items
+        ),
+        "planned_pallet_capacity": sum(
+            area["planned_pallet_capacity"] for area in area_items
+        ),
+        "occupied_pallet_count": sum(
+            area["occupied_pallet_count"] for area in area_items
+        ),
+        "laid_out_location_count": sum(
+            area["laid_out_location_count"] for area in area_items
+        ),
+        "pending_layout_count": sum(
+            area["pending_layout_count"] for area in area_items
+        ),
+        "areas": area_items,
+    }
+
+
+def _require_registered_area(
+    db: Session,
+    *,
+    floor_number: int | None,
+    area_code: str | None,
+) -> WarehouseArea | None:
+    if floor_number is None and area_code is None:
+        return None
+    if floor_number is None or area_code is None:
+        raise HTTPException(status_code=409, detail="请先同时选择楼层和区域")
+    area = db.scalar(
+        select(WarehouseArea)
+        .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+        .where(
+            WarehouseFloor.floor_number == floor_number,
+            WarehouseArea.area_code == area_code,
+        )
+    )
+    if area is None:
+        raise HTTPException(
+            status_code=409,
+            detail="该楼层区域尚未建立台账，请先新增楼层和区域。",
+        )
+    return area
+
+
+@router.get("/space/floors")
+def list_warehouse_floors(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    rows = db.scalars(
+        select(WarehouseFloor)
+        .options(selectinload(WarehouseFloor.areas).selectinload(WarehouseArea.floor))
+        .order_by(WarehouseFloor.floor_number, WarehouseFloor.id)
+    ).all()
+    return {"items": [_warehouse_floor_dict(db, row) for row in rows]}
+
+
+@router.post("/space/floors", status_code=201)
+def create_warehouse_floor(
+    payload: WarehouseFloorPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    row = WarehouseFloor(**payload.model_dump())
+    db.add(row)
+    try:
+        db.commit()
+        db.refresh(row)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="楼层编码或楼层序号已存在"
+        ) from error
+    return _warehouse_floor_dict(db, row)
+
+
+@router.put("/space/floors/{floor_id}")
+def update_warehouse_floor(
+    floor_id: int,
+    payload: WarehouseFloorPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(WarehouseFloor, floor_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="楼层不存在")
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    try:
+        db.commit()
+        db.refresh(row)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="楼层编码或楼层序号已存在"
+        ) from error
+    return _warehouse_floor_dict(db, row)
+
+
+@router.post("/space/areas", status_code=201)
+def create_warehouse_area(
+    payload: WarehouseAreaPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    floor = db.get(WarehouseFloor, payload.floor_id)
+    if floor is None:
+        raise HTTPException(status_code=404, detail="楼层不存在")
+    row = WarehouseArea(**payload.model_dump())
+    db.add(row)
+    try:
+        db.commit()
+        db.refresh(row)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="该楼层的区域编码已存在"
+        ) from error
+    return _warehouse_area_dict(db, row)
+
+
+@router.put("/space/areas/{area_id}")
+def update_warehouse_area(
+    area_id: int,
+    payload: WarehouseAreaPayload,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(WarehouseArea, area_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="区域不存在")
+    floor = db.get(WarehouseFloor, payload.floor_id)
+    if floor is None:
+        raise HTTPException(status_code=404, detail="楼层不存在")
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    try:
+        db.commit()
+        db.refresh(row)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="该楼层的区域编码已存在"
+        ) from error
+    return _warehouse_area_dict(db, row)
+
+
 @router.get("/locations")
 def list_locations(
     include_inactive: bool = False,
@@ -3478,57 +3791,19 @@ def create_location(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    _require_registered_area(
+        db,
+        floor_number=payload.warehouse_floor,
+        area_code=payload.area_code,
+    )
     try:
-        if payload.warehouse_floor == 3:
-            existing_count = int(
-                db.scalar(
-                    select(func.count(Floor3LocationLayout.id))
-                    .join(WarehouseLocation, WarehouseLocation.id == Floor3LocationLayout.location_id)
-                    .where(WarehouseLocation.area_code == payload.area_code)
-                )
-                or 0
-            )
-            column_count = 8
-            row_index, column_index = divmod(existing_count, column_count)
-            if row_index >= 10:
-                raise HTTPException(
-                    status_code=409,
-                    detail="该区域平面图的自动排位已满，请先在平面图调整现有货位大小或布局后再新增。",
-                )
-            row = create_layout_slot(
-                db,
-                area_code=payload.area_code or "",
-                location_code=payload.location_code,
-                location_name=payload.location_name,
-                left_pct=Decimal(column_index * 12),
-                top_pct=Decimal(row_index * 10),
-                width_pct=Decimal("10"),
-                height_pct=Decimal("8"),
-                z_index=4,
-                operator_id=user.id,
-            )
-            row.warehouse_type = payload.warehouse_type
-            row.remarks = payload.remarks
-        else:
-            values = payload.model_dump()
-            values["placement_status"] = (
-                "placed"
-                if all(
-                    (
-                        payload.warehouse_floor,
-                        payload.area_code,
-                        payload.storage_type,
-                    )
-                )
-                else "unplaced"
-            )
-            values["is_temporary"] = payload.storage_type == "temporary_aisle"
-            row = WarehouseLocation(**values)
-            db.add(row)
+        values = payload.model_dump()
+        values["placement_status"] = "unplaced"
+        values["is_temporary"] = payload.storage_type == "temporary_aisle"
+        values["source_version"] = None
+        row = WarehouseLocation(**values)
+        db.add(row)
         db.commit()
-    except Floor3LocationError as error:
-        db.rollback()
-        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="库位编码已存在") from error
@@ -3546,16 +3821,21 @@ def update_location(
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
     _reject_v11_location_configuration(row)
-    if payload.warehouse_floor == 3:
-        raise HTTPException(
-            status_code=409,
-            detail="已有普通库位不能直接改成三楼平面图货位；请在三楼区域新增物理位后迁移库存。",
-        )
+    _require_registered_area(
+        db,
+        floor_number=payload.warehouse_floor,
+        area_code=payload.area_code,
+    )
     values = payload.model_dump()
+    spatial_changed = any(
+        (
+            row.warehouse_floor != payload.warehouse_floor,
+            (row.area_code or None) != payload.area_code,
+            (row.storage_type or None) != payload.storage_type,
+        )
+    )
     values["placement_status"] = (
-        "placed"
-        if all((payload.warehouse_floor, payload.area_code, payload.storage_type))
-        else "unplaced"
+        "unplaced" if spatial_changed else (row.placement_status or "placed")
     )
     values["is_temporary"] = payload.storage_type == "temporary_aisle"
     if values["placement_status"] == "unplaced":

@@ -2199,12 +2199,49 @@ def test_floor3_add_finished_idempotency_key_cannot_cross_pallets(floor3_app) ->
         assert "其它物理栈板" in response.json()["detail"]
 
 
-def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate(
+def test_location_ledger_create_stays_pending_until_real_layout_is_recorded(
     floor3_app,
 ) -> None:
     app, _ids, _factory = floor3_app
     with TestClient(app) as client:
         _login(client, "floor3-admin")
+        floor3_master = client.post(
+            "/api/warehouse/space/floors",
+            json={
+                "floor_code": "3F",
+                "floor_name": "三楼",
+                "floor_number": 3,
+                "construction_status": "ledger_building",
+            },
+        )
+        assert floor3_master.status_code == 201, floor3_master.text
+        floor1_master = client.post(
+            "/api/warehouse/space/floors",
+            json={
+                "floor_code": "1F",
+                "floor_name": "一楼",
+                "floor_number": 1,
+                "construction_status": "ledger_building",
+            },
+        )
+        assert floor1_master.status_code == 201, floor1_master.text
+        for floor_id, code, name in (
+            (floor3_master.json()["id"], "A1", "三楼 A1 区"),
+            (floor1_master.json()["id"], "C1", "一楼 C1 区"),
+        ):
+            area = client.post(
+                "/api/warehouse/space/areas",
+                json={
+                    "floor_id": floor_id,
+                    "area_code": code,
+                    "area_name": name,
+                    "planned_location_count": 10,
+                    "planned_pallet_capacity": 10,
+                    "construction_status": "ledger_building",
+                },
+            )
+            assert area.status_code == 201, area.text
+
         floor3 = client.post(
             "/api/warehouse/locations",
             json={
@@ -2219,20 +2256,19 @@ def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate
         )
         assert floor3.status_code == 200, floor3.text
         floor3_row = floor3.json()
-        assert floor3_row["source_version"] == "V11"
+        assert floor3_row["source_version"] is None
         assert floor3_row["warehouse_floor"] == 3
         assert floor3_row["area_code"] == "A1"
-        assert floor3_row["placement_status"] == "placed"
+        assert floor3_row["placement_status"] == "unplaced"
 
         mapped = client.get(
             "/api/warehouse/floor3/locations",
             params={"area_code": "A1", "include_inactive": True},
         )
         assert mapped.status_code == 200, mapped.text
-        mapped_row = next(
-            row for row in mapped.json()["items"] if row["id"] == floor3_row["id"]
-        )
-        assert mapped_row["layout"]["source_type"] == "manual"
+        assert floor3_row["id"] not in {
+            row["id"] for row in mapped.json()["items"]
+        }
 
         floor1 = client.post(
             "/api/warehouse/locations",
@@ -2249,10 +2285,38 @@ def test_location_ledger_create_links_floor3_map_and_keeps_other_floors_separate
         assert floor1.status_code == 200, floor1.text
         assert floor1.json()["warehouse_floor"] == 1
         assert floor1.json()["source_version"] is None
-        assert floor1.json()["placement_status"] == "placed"
+        assert floor1.json()["placement_status"] == "unplaced"
         assert floor1.json()["id"] not in {
             row["id"] for row in mapped.json()["items"]
         }
+
+        progress = client.get("/api/warehouse/space/floors")
+        assert progress.status_code == 200, progress.text
+        floors = {row["floor_code"]: row for row in progress.json()["items"]}
+        assert floors["3F"]["recorded_location_count"] == 4
+        a1 = next(row for row in floors["3F"]["areas"] if row["area_code"] == "A1")
+        assert a1["recorded_location_count"] == 4
+        assert a1["laid_out_location_count"] == 3
+        assert a1["pending_layout_count"] == 1
+
+
+def test_location_ledger_rejects_unregistered_floor_area(floor3_app) -> None:
+    app, _ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        response = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "1F-UNKNOWN-L01",
+                "location_name": "未登记区域库位",
+                "warehouse_type": "finished",
+                "warehouse_floor": 1,
+                "area_code": "UNKNOWN",
+                "storage_type": "ground",
+            },
+        )
+        assert response.status_code == 409
+        assert "先新增楼层和区域" in response.json()["detail"]
 
 
 def test_floor3_official_create_requires_target_location_to_be_empty(floor3_app) -> None:

@@ -42,7 +42,7 @@ def test_order_group_detail_keeps_active_page_else_if_chain_adjacent() -> None:
     assert '<template v-else-if="activePage === \'orders_legacy\'">' in INDEX
 
 
-def test_warehouse_uses_area_then_location_and_ledger_map_linkage() -> None:
+def test_warehouse_uses_area_then_location_and_keeps_layout_separate() -> None:
     for element_id in (
         'id="areaFilter"',
         'id="fgArea"',
@@ -54,6 +54,8 @@ def test_warehouse_uses_area_then_location_and_ledger_map_linkage() -> None:
         assert element_id in WAREHOUSE
     assert "refreshLocationCascade" in WAREHOUSE
     assert "selectLocationCascade" in WAREHOUSE
-    assert "已联动三楼平面图" in WAREHOUSE
+    assert "楼层与区域建设进度" in WAREHOUSE
+    assert "待布局，禁止入库" in WAREHOUSE
+    assert "不会自动出现在三楼或其他平面图" in WAREHOUSE
     assert "applyWarehouseDeepLink" in WAREHOUSE
     assert "选择客户、存货编码和数量后加入当前栈板。" in WAREHOUSE

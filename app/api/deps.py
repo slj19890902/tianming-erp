@@ -75,6 +75,9 @@ PERMISSION_CATALOG = frozenset(
         "finance.cost.confirm",
         "finance.cost.export",
         "cost.view",
+        "ai.inventory.view",
+        "ai.usage.view",
+        "ai.configure",
         "pdf_training.view",
         "pdf_training.manage",
         "system.backup",
@@ -108,6 +111,8 @@ ADMIN_ONLY_PERMISSIONS = frozenset(
         "pdf_training.manage",
         "warehouse.stocktake.review",
         "audit.view",
+        "ai.usage.view",
+        "ai.configure",
     }
 )
 BOSS_FINANCE_MUTATION_PERMISSIONS = frozenset(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Protocol
 
 
@@ -183,3 +184,41 @@ class MockInventoryInsightProvider:
             model_code=self.model_code,
             output=output,
         )
+
+
+def inventory_provider_status() -> dict[str, object]:
+    """Return a credential-free provider status safe for authenticated users.
+
+    Phase B intentionally supports only a deterministic local Mock provider in
+    development/test.  Production remains fail-closed until a later, separately
+    approved provider/key-management task is completed.
+    """
+
+    environment = os.getenv("ERP_ENVIRONMENT", "development").strip().lower()
+    configured = (
+        os.getenv("ERP_AI_INVENTORY_PROVIDER", "disabled").strip().lower()
+        or "disabled"
+    )
+    mock_enabled = environment in {"development", "test"} and configured == "mock"
+    if mock_enabled:
+        return {
+            "enabled": True,
+            "provider_code": "mock",
+            "model_code": "deterministic-v1",
+            "mode": "isolated_mock",
+            "message": "当前为隔离 Mock 解读，不连接外部模型。",
+        }
+    return {
+        "enabled": False,
+        "provider_code": "disabled",
+        "model_code": "disabled",
+        "mode": "disabled",
+        "message": "AI 经营解读尚未启用，原库存经营看板仍可正常使用。",
+    }
+
+
+def resolve_inventory_provider() -> InventoryInsightProvider:
+    status = inventory_provider_status()
+    if status["enabled"]:
+        return MockInventoryInsightProvider()
+    return DisabledInventoryInsightProvider()

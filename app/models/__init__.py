@@ -13,6 +13,11 @@ from app.models.access_control import (  # noqa: E402,F401
     UserPermissionOverride,
 )
 from app.models.audit import OperationLog  # noqa: E402,F401
+from app.models.ai_assistant import (  # noqa: E402,F401
+    AiAnalysisFeedback,
+    AiAnalysisRun,
+    AiUsageLedger,
+)
 from app.models.customer import Customer  # noqa: E402,F401
 from app.models.customer_material import (  # noqa: E402,F401
     CustomerMaterialCandidate,

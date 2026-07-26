@@ -18,6 +18,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import main as legacy
 from app.api.auth import router as auth_router
+from app.api.ai_assistant import router as ai_assistant_router
 from app.api.customers import router as customers_router
 from app.api.deliveries import (
     order_actions_router,
@@ -493,6 +494,15 @@ def create_app() -> FastAPI:
             pdf_training_router,
             prefix="/api/pdf-training",
             tags=["pdf-training"],
+        )
+    if not any(
+        route.path == "/api/ai/inventory-insights/runs"
+        for route in application.routes
+    ):
+        application.include_router(
+            ai_assistant_router,
+            prefix="/api/ai",
+            tags=["ai-assistant"],
         )
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         application.include_router(

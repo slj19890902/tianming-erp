@@ -13,6 +13,8 @@ from app.services.ai.providers import (
     MockInventoryInsightProvider,
     ProviderLimits,
     ProviderUnavailable,
+    inventory_provider_status,
+    resolve_inventory_provider,
 )
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     "ProviderUnavailable",
     "build_inventory_snapshot",
     "generate_inventory_interpretation",
+    "inventory_provider_status",
     "inventory_snapshot_hash",
+    "resolve_inventory_provider",
     "validate_inventory_interpretation",
 ]

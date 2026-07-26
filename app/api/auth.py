@@ -79,6 +79,9 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "finance.view": ("finance", "财务查看"),
     "finance.execute": ("finance", "财务操作"),
     "cost.view": ("sensitive", "成本/毛利查看"),
+    "ai.inventory.view": ("ai", "AI 库存经营解读"),
+    "ai.usage.view": ("ai", "AI 使用量查看"),
+    "ai.configure": ("ai", "AI 安全配置"),
     "system.backup": ("system", "系统备份"),
     "users.manage": ("system", "用户权限管理"),
 }

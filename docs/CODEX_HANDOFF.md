@@ -1,5 +1,35 @@
 # Codex 项目交接
 
+## 2026-07-26 AI-001 第一期 A 段：只读快照与模型安全底座（待人工验收）
+
+- 本轮从已推送但尚待周一工厂人工验收的 N083 候选
+  `6a91088256f377b547a5524182eb738e3a81a9de` 建立独立 worktree
+  `D:\tm-worktrees\erp-ai001-inventory-insight-assistant-20260726` 和分支
+  `codex/ai001-inventory-insight-assistant-20260726`。没有修改
+  `origin/factory-current-baseline`、`origin/main`、工厂正式目录或正式数据库。
+- 本段只建立 AI 库存经营解读的安全底座，尚未在页面开放生成按钮：复用既有
+  `build_inventory_insights()` 确定性结果，按字段白名单生成最多 50 条库存依据
+  的只读快照和稳定 SHA-256。客户、产品等业务文字只作为数据，不作为指令。
+- 无 `cost.view` 时，快照在进入模型适配器前删除金额、估算值、成本覆盖率、
+  成本状态和成本缺失原因；选择“成本缺失”关注方向会直接拒绝。快照不会包含
+  联系人、电话、地址、账号、密码、Cookie、Token、数据库路径或 SQL。
+- 新增 `MockInventoryInsightProvider` 和 `DisabledInventoryInsightProvider`。
+  Mock 只供自动测试与隔离 UAT，不访问网络、不产生费用；停用状态明确降级，
+  原库存经营看板保持可用。模型输出必须通过类别、库存证据引用、既有目标页面、
+  数量和文本长度白名单；HTML、脚本、SQL、外部链接或虚构批次引用均 fail-closed。
+- 新增 `ai.inventory.view`、`ai.usage.view`、`ai.configure` 权限。管理员拥有三项；
+  老板默认只有库存 AI 解读；其他业务角色默认无；用量查看和安全配置属于管理员
+  专用权限，不能通过普通账号覆盖授权。
+- 本段没有新增 API、页面入口、云模型、密钥、运行审计表或 Alembic revision，
+  数据库唯一 head 保持 `cn70v8x9z59`。定向 AI/权限回归 `38 passed`，其中
+  AI 新增契约 `11 passed`；首页内联 JavaScript 语法、Python 编译、
+  Alembic 单 head 和 `git diff --check` 通过。扩大回归另有两个基线环境失败
+  是当前 Python 3.12 未安装可选 `cv2`，一个旧 PDF 权限清单失败是基线已有
+  路由未列入旧断言，均未修改对应模块。
+- 当前状态为“安全底座完成、未开放功能、未人工验收”。老板已明确授权当前轮次
+  不等待人工验收即可形成独立提交并推送 `codex/` 候选分支；这不代表 AI 功能
+  已上线，也不授权工厂正式迁移、真实云模型联调或更新正式分支。
+
 ## 2026-07-26 组合订单子件送货数量闭环 P0（待老板人工 UAT）
 
 - 本轮从累计候选

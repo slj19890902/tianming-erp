@@ -21,6 +21,8 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import main as legacy
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
+from app.api.ai_assistant import router as ai_assistant_router
+from app.api.ai_assistant import router as ai_assistant_router
 from app.api.customers import router as customers_router
 from app.api.deliveries import (
     order_actions_router,
@@ -917,6 +919,15 @@ def create_app() -> FastAPI:
     if not any(route.path == "/api/inventory-assistant" for route in application.routes):
         from app.api.inventory_assistant import router as inventory_assistant_router
         application.include_router(inventory_assistant_router, prefix="/api/inventory-assistant", tags=["warehouse"])
+    if not any(
+        route.path == "/api/ai/inventory-insights/runs"
+        for route in application.routes
+    ):
+        application.include_router(
+            ai_assistant_router,
+            prefix="/api/ai",
+            tags=["ai-assistant"],
+        )
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         from app.api.material_candidates import router as material_candidates_router
         application.include_router(material_candidates_router, prefix="/api/warehouse/lots", tags=["warehouse"])

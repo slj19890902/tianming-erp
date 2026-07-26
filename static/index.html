@@ -8425,7 +8425,7 @@
             const task = this.normalizeDeliveryPickTask(row);
             if (!task) return row?.status === "pending" ? "待推送拿货" : "-";
             if (task.has_exception || task.status === "exception") return "存在数量异常/没货";
-            return ({ created: "已推送拿货", pushed: "已推送拿货", submitted: "司机已确认", confirmed: "司机已确认", driver_confirmed: "司机已确认", applied: "可发货打印", dispatched: "已发货" }[task.status] || "已推送拿货");
+            return ({ created: "已推送拿货", pushed: "已推送拿货", submitted: "可发货打印", confirmed: "可发货打印", driver_confirmed: "可发货打印", applied: "可发货打印", dispatched: "已发货" }[task.status] || "已推送拿货");
           },
           deliveryPickStatusClass(row) {
             const task = this.normalizeDeliveryPickTask(row);

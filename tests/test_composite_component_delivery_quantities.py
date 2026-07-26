@@ -337,6 +337,14 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
                 row["pricing_included"]
                 for row in pick_payload["items"][0]["component_lines"]
             ] == [False]
+            assert pick_payload["location_plan_complete"] is True
+            assert [group["label"] for group in pick_payload["location_groups"]] == [
+                "生产区直接拿货"
+            ]
+            assert [
+                (line["product_code"], line["pick_quantity"])
+                for line in pick_payload["location_groups"][0]["lines"]
+            ] == [("KIT-LINER", 2700), ("KIT-PARENT", 3000)]
 
             first, first_item = _delivery(
                 db,

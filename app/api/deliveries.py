@@ -393,8 +393,398 @@ def _pick_item_component_lines(
     ]
 
 
-def _pick_item_response(db: Session, item: DeliveryPickTaskItem) -> dict:
+def _pick_source_location(
+    db: Session,
+    *,
+    source: dict,
+) -> dict:
+    lot = (
+        db.get(InventoryLot, int(source["lot_id"]))
+        if source.get("lot_id") is not None
+        else None
+    )
+    location = (
+        db.get(WarehouseLocation, lot.warehouse_location_id)
+        if lot is not None
+        else None
+    )
+    pallet_item = lot.pallet_item if lot is not None else None
+    pallet = pallet_item.pallet if pallet_item is not None else None
+    needs_relocation = bool(
+        (pallet is not None and pallet.needs_relocation)
+        or (location is not None and location.placement_status == "unplaced")
+    )
+    return {
+        "location_id": location.id if location else None,
+        "location_code": location.location_code if location else None,
+        "location_name": location.location_name if location else None,
+        "warehouse_floor": location.warehouse_floor if location else None,
+        "area_code": location.area_code if location else None,
+        "location_sort_order": int(location.sort_order or 0) if location else None,
+        "placement_status": location.placement_status if location else None,
+        "pallet_id": pallet.id if pallet else None,
+        "pallet_code": pallet.pallet_code if pallet else None,
+        "needs_relocation": needs_relocation,
+    }
+
+
+def _pick_parent_finished_sources(
+    db: Session,
+    *,
+    order_item: OrderItem,
+    planned_quantity: int,
+) -> list[dict]:
+    """Select unconsumed parent-product reservations for a composite delivery."""
+
+    remaining = max(int(planned_quantity or 0), 0)
+    if remaining <= 0:
+        return []
+    reservations = db.scalars(
+        select(InventoryReservation)
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .where(
+            InventoryReservation.order_item_id == order_item.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .order_by(*inventory_fifo_order_columns(), InventoryReservation.id)
+    ).all()
+    sources: list[dict] = []
+    for reservation in reservations:
+        available = max(
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0),
+            0,
+        )
+        picked = min(available, remaining)
+        if picked <= 0:
+            continue
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        sources.append(
+            {
+                "source_type": "finished",
+                "reservation_id": reservation.id,
+                "lot_id": lot.id if lot else None,
+                "lot_number": lot.lot_number if lot else None,
+                "component_snapshot_id": None,
+                "quantity_to_pick_stock": picked,
+                "quantity_to_pick_requirement": picked,
+            }
+        )
+        remaining -= picked
+        if remaining <= 0:
+            break
+    return sources
+
+
+def _pick_item_location_plan(
+    db: Session,
+    *,
+    item: DeliveryPickTaskItem,
+    component_lines: list[dict],
+) -> tuple[list[dict], bool]:
+    """Build a read-only loading plan from current inventory and production facts."""
+
+    order_item = db.get(OrderItem, item.order_item_id)
+    if order_item is None:
+        return [], False
+    planned_quantity = max(int(item.original_quantity or 0), 0)
+    raw_sources = _inventory_sources_for_order_item(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=planned_quantity,
+        delivery_item_id=item.delivery_item_id,
+        dispatched=False,
+    )
+    if component_lines:
+        raw_sources = [
+            *_pick_parent_finished_sources(
+                db,
+                order_item=order_item,
+                planned_quantity=planned_quantity,
+            ),
+            *raw_sources,
+        ]
+    component_by_snapshot = {
+        int(row["component_snapshot_id"]): row
+        for row in component_lines
+        if row.get("component_snapshot_id") is not None
+    }
+    lines: list[dict] = []
+    covered_by_component: dict[int, int] = {}
+    finished_covered = 0
+
+    for source in raw_sources:
+        source_type = str(source.get("source_type") or "")
+        # Semi-finished reservations are production inputs, not finished goods
+        # that a driver should load.  Their eventual finished output is listed
+        # below as a production-area direct pick.
+        if source_type == "semi_finished":
+            continue
+        stock_quantity = max(int(source.get("quantity_to_pick_stock") or 0), 0)
+        requirement_quantity = max(
+            int(source.get("quantity_to_pick_requirement") or 0),
+            0,
+        )
+        display_quantity = stock_quantity or requirement_quantity
+        if display_quantity <= 0:
+            continue
+        component_snapshot_id = source.get("component_snapshot_id")
+        component = (
+            component_by_snapshot.get(int(component_snapshot_id))
+            if component_snapshot_id is not None
+            else None
+        )
+        if component_snapshot_id is not None:
+            snapshot_id = int(component_snapshot_id)
+            covered_by_component[snapshot_id] = (
+                covered_by_component.get(snapshot_id, 0) + requirement_quantity
+            )
+        elif source_type == "finished":
+            finished_covered += requirement_quantity
+        location = _pick_source_location(db, source=source)
+        is_direct = source_type == "component_direct"
+        lines.append(
+            {
+                "pick_item_id": item.id,
+                "order_item_id": item.order_item_id,
+                "source_type": (
+                    "production_direct" if is_direct else "finished_inventory"
+                ),
+                "reservation_id": source.get("reservation_id"),
+                "lot_id": source.get("lot_id"),
+                "lot_number": source.get("lot_number"),
+                "component_snapshot_id": component_snapshot_id,
+                "product_code": (
+                    (component or {}).get("product_code")
+                    or source.get("component_code")
+                    or item.product_code_snapshot
+                ),
+                "product_name": (
+                    (component or {}).get("product_name")
+                    or source.get("component_name")
+                    or item.product_name_snapshot
+                ),
+                "specification": (
+                    (component or {}).get("specification")
+                    or item.specification_snapshot
+                ),
+                "pick_quantity": display_quantity,
+                "requirement_quantity": requirement_quantity,
+                "unit": "个",
+                "location_id": None if is_direct else location["location_id"],
+                "location_code": None if is_direct else location["location_code"],
+                "location_name": None if is_direct else location["location_name"],
+                "warehouse_floor": (
+                    None if is_direct else location["warehouse_floor"]
+                ),
+                "area_code": None if is_direct else location["area_code"],
+                "location_sort_order": (
+                    None if is_direct else location["location_sort_order"]
+                ),
+                "placement_status": (
+                    None if is_direct else location["placement_status"]
+                ),
+                "pallet_id": None if is_direct else location["pallet_id"],
+                "pallet_code": None if is_direct else location["pallet_code"],
+                "needs_relocation": (
+                    False if is_direct else location["needs_relocation"]
+                ),
+                "requires_attention": False,
+            }
+        )
+
+    if component_lines:
+        parent_direct_quantity = max(planned_quantity - finished_covered, 0)
+        if parent_direct_quantity > 0:
+            lines.append(
+                {
+                    "pick_item_id": item.id,
+                    "order_item_id": item.order_item_id,
+                    "source_type": "production_direct",
+                    "reservation_id": None,
+                    "lot_id": None,
+                    "lot_number": None,
+                    "component_snapshot_id": None,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "specification": item.specification_snapshot,
+                    "pick_quantity": parent_direct_quantity,
+                    "requirement_quantity": parent_direct_quantity,
+                    "unit": "个",
+                    "location_id": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_sort_order": None,
+                    "placement_status": None,
+                    "pallet_id": None,
+                    "pallet_code": None,
+                    "needs_relocation": False,
+                    "requires_attention": False,
+                }
+            )
+        for component in component_lines:
+            snapshot_id = int(component["component_snapshot_id"])
+            expected = max(
+                int(component.get("planned_delivery_quantity") or 0),
+                0,
+            )
+            missing = max(expected - covered_by_component.get(snapshot_id, 0), 0)
+            if missing <= 0:
+                continue
+            lines.append(
+                {
+                    "pick_item_id": item.id,
+                    "order_item_id": item.order_item_id,
+                    "source_type": "unassigned",
+                    "reservation_id": None,
+                    "lot_id": None,
+                    "lot_number": None,
+                    "component_snapshot_id": snapshot_id,
+                    "product_code": component.get("product_code"),
+                    "product_name": component.get("product_name"),
+                    "specification": component.get("specification"),
+                    "pick_quantity": missing,
+                    "requirement_quantity": missing,
+                    "unit": "个",
+                    "location_id": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_sort_order": None,
+                    "placement_status": None,
+                    "pallet_id": None,
+                    "pallet_code": None,
+                    "needs_relocation": False,
+                    "requires_attention": True,
+                }
+            )
+    else:
+        direct_quantity = max(planned_quantity - finished_covered, 0)
+        if direct_quantity > 0:
+            lines.append(
+                {
+                    "pick_item_id": item.id,
+                    "order_item_id": item.order_item_id,
+                    "source_type": "production_direct",
+                    "reservation_id": None,
+                    "lot_id": None,
+                    "lot_number": None,
+                    "component_snapshot_id": None,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "specification": item.specification_snapshot,
+                    "pick_quantity": direct_quantity,
+                    "requirement_quantity": direct_quantity,
+                    "unit": "个",
+                    "location_id": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_sort_order": None,
+                    "placement_status": None,
+                    "pallet_id": None,
+                    "pallet_code": None,
+                    "needs_relocation": False,
+                    "requires_attention": False,
+                }
+            )
+    return lines, not any(line["requires_attention"] for line in lines)
+
+
+def _pick_location_groups(item_responses: list[dict]) -> list[dict]:
+    groups: dict[tuple, dict] = {}
+    for item in item_responses:
+        for line in item.get("location_lines") or []:
+            source_type = str(line.get("source_type") or "")
+            if source_type == "production_direct":
+                priority = 1
+                group_key = ("production_direct",)
+                label = "生产区直接拿货"
+            elif source_type == "unassigned":
+                priority = 3
+                group_key = ("unassigned",)
+                label = "未分配拿货位置（请核对）"
+            else:
+                priority = 2 if line.get("needs_relocation") else 0
+                group_key = (
+                    "finished_inventory",
+                    line.get("location_id"),
+                    line.get("pallet_id"),
+                    bool(line.get("needs_relocation")),
+                )
+                floor = line.get("warehouse_floor")
+                prefix = f"{floor}楼" if floor is not None else "仓库"
+                area = line.get("area_code") or "未分区"
+                location = line.get("location_code") or "未标库位"
+                label = f"{prefix} · {area} · {location}"
+                if line.get("needs_relocation"):
+                    label += "（待归位）"
+            group = groups.setdefault(
+                group_key,
+                {
+                    "key": "|".join(str(part) for part in group_key),
+                    "priority": priority,
+                    "label": label,
+                    "source_type": source_type,
+                    "warehouse_floor": line.get("warehouse_floor"),
+                    "area_code": line.get("area_code"),
+                    "location_id": line.get("location_id"),
+                    "location_code": line.get("location_code"),
+                    "location_name": line.get("location_name"),
+                    "location_sort_order": line.get("location_sort_order"),
+                    "pallet_id": line.get("pallet_id"),
+                    "pallet_code": line.get("pallet_code"),
+                    "needs_relocation": bool(line.get("needs_relocation")),
+                    "requires_attention": bool(line.get("requires_attention")),
+                    "total_pick_quantity": 0,
+                    "lines": [],
+                },
+            )
+            group["total_pick_quantity"] += int(line.get("pick_quantity") or 0)
+            group["requires_attention"] = bool(
+                group["requires_attention"] or line.get("requires_attention")
+            )
+            group["lines"].append(line)
+
+    def sort_key(group: dict) -> tuple:
+        return (
+            int(group["priority"]),
+            int(group["warehouse_floor"] or 999),
+            str(group["area_code"] or ""),
+            int(group["location_sort_order"] or 0),
+            str(group["location_code"] or ""),
+            str(group["pallet_code"] or ""),
+        )
+
+    return sorted(groups.values(), key=sort_key)
+
+
+def _pick_item_response(
+    db: Session,
+    item: DeliveryPickTaskItem,
+    *,
+    include_location_plan: bool = True,
+) -> dict:
     component_lines = _pick_item_component_lines(db, item)
+    location_lines, location_plan_complete = (
+        _pick_item_location_plan(
+            db,
+            item=item,
+            component_lines=component_lines,
+        )
+        if include_location_plan
+        else ([], True)
+    )
     return {
         "id": item.id,
         "delivery_item_id": item.delivery_item_id,
@@ -409,12 +799,29 @@ def _pick_item_response(db: Session, item: DeliveryPickTaskItem) -> dict:
         "specification": item.specification_snapshot,
         "is_composite_bom": bool(component_lines),
         "component_lines": component_lines,
+        "location_lines": location_lines,
+        "location_plan_complete": location_plan_complete,
         "updated_at": utc_naive_to_api(item.updated_at) if item.updated_at else None,
     }
 
 
-def _pick_task_response(db: Session, task: DeliveryPickTask) -> dict:
-    item_responses = [_pick_item_response(db, item) for item in task.items]
+def _pick_task_response(
+    db: Session,
+    task: DeliveryPickTask,
+    *,
+    include_location_plan: bool = True,
+) -> dict:
+    item_responses = [
+        _pick_item_response(
+            db,
+            item,
+            include_location_plan=include_location_plan,
+        )
+        for item in task.items
+    ]
+    location_groups = (
+        _pick_location_groups(item_responses) if include_location_plan else []
+    )
     exception_items = [
         {
             **item_response,
@@ -439,6 +846,12 @@ def _pick_task_response(db: Session, task: DeliveryPickTask) -> dict:
         "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
         "dispatched_at": utc_naive_to_api(task.dispatched_at) if task.dispatched_at else None,
         "items": item_responses,
+        "location_groups": location_groups,
+        "location_plan_complete": (
+            all(bool(item.get("location_plan_complete")) for item in item_responses)
+            if include_location_plan
+            else None
+        ),
     }
 
 
@@ -1514,7 +1927,12 @@ def list_delivery_pick_tasks(
             raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
         query = query.where(DeliveryPickTask.status == normalized_status)
     tasks = db.scalars(query).all()
-    return {"items": [_pick_task_response(db, task) for task in tasks]}
+    return {
+        "items": [
+            _pick_task_response(db, task, include_location_plan=False)
+            for task in tasks
+        ]
+    }
 
 
 @pick_router.get("/{task_id}")
@@ -1524,6 +1942,55 @@ def get_delivery_pick_task(
     user: User = Depends(can_pick),
 ) -> dict:
     return _pick_task_response(db, _pick_task_for_user(db, task_id, user))
+
+
+@pick_router.post("/{task_id}/complete-planned")
+def complete_delivery_pick_task_as_planned(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_pick),
+) -> dict:
+    """Confirm the normal path in one action without dispatching the delivery."""
+
+    task = _pick_task_for_user(db, task_id, user)
+    if task.status == "driver_confirmed" and all(
+        item.status == "picked"
+        and int(item.picked_quantity or 0) == int(item.original_quantity or 0)
+        for item in task.items
+    ):
+        return _pick_task_response(db, task)
+    if task.status != "pushed":
+        raise HTTPException(status_code=409, detail="当前拿货任务不能一键按计划拿齐")
+    response = _pick_task_response(db, task)
+    if not response["location_plan_complete"]:
+        raise HTTPException(
+            status_code=409,
+            detail="存在未分配拿货来源，请按实际情况登记部分拿货或没货",
+        )
+    if not task.items:
+        raise HTTPException(status_code=409, detail="拿货任务没有可确认明细")
+    for item in task.items:
+        item.status = "picked"
+        item.picked_quantity = int(item.original_quantity or 0)
+    task.status = "driver_confirmed"
+    task.submitted_by = user.id
+    task.submitted_at = _utc_now()
+    _write_audit(
+        db,
+        user=user,
+        action="COMPLETE_PICK_TASK_PLANNED",
+        resource="DeliveryPickTask",
+        entity_id=task.id,
+        details={
+            "delivery_id": task.delivery_id,
+            "item_count": len(task.items),
+            "location_group_count": len(response["location_groups"]),
+            "status": task.status,
+        },
+        description="本单全部按库位计划拿齐，进入可发货打印",
+    )
+    db.commit()
+    return _pick_task_response(db, task)
 
 
 @pick_router.put("/{task_id}/items/{item_id}")

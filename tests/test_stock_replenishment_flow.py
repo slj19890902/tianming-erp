@@ -251,8 +251,14 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
                 "stock_now": False,
                 "items": [
                     {
-                        "target_inventory_type": "finished",
+                        "target_inventory_type": "semi_finished",
                         "product_id": 1,
+                        "customer_id": 1,
+                        "material_code": "A416D",
+                        "layer_count": 5,
+                        "flute_type": "AB",
+                        "report_length_mm": 1865,
+                        "report_width_mm": 830,
                         "quantity": 1,
                         "location_id": 3,
                     }
@@ -263,7 +269,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         assert "V11 三楼 Phase A" in rejected_item.json()["detail"]
 
 
-def test_historical_replenishment_can_stock_one_traceable_semi_finished_lot(
+def test_historical_replenishment_is_read_only_but_existing_order_can_close(
     stock_replenishment_app,
 ) -> None:
     app, session_factory = stock_replenishment_app
@@ -273,10 +279,35 @@ def test_historical_replenishment_can_stock_one_traceable_semi_finished_lot(
             "/api/requisition/stock-policies",
             json=_semi_policy_payload(),
         ).json()
-        response = client.post(
+        retired_create = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
                 "source_type": "manual_history",
+                "supplier_name": "佳丰",
+                "customer_id": 1,
+                "stock_now": False,
+                "items": [
+                    {
+                        "stock_policy_id": policy["id"],
+                        "target_inventory_type": "semi_finished",
+                        "product_name": "21301010 历史纸板",
+                        "quantity": 30,
+                        "location_id": 2,
+                        "historical_workbook": "2025年采购单.xlsx",
+                        "historical_sheet": "2020.1-2026",
+                        "historical_row": 333,
+                        "historical_search_text": "21301010 116*66.5*16",
+                    }
+                ],
+            },
+        )
+        assert retired_create.status_code == 409
+        assert "历史采购检索" in retired_create.text
+
+        direct_stock = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "customer_id": 1,
                 "stock_now": True,
@@ -295,18 +326,72 @@ def test_historical_replenishment_can_stock_one_traceable_semi_finished_lot(
                 ],
             },
         )
-        assert response.status_code == 201, response.text
+        assert direct_stock.status_code == 400
+        assert "不能保存后直接写入库存" in direct_stock.text
+
+    from app.models.stock_replenishment import (
+        StockReplenishmentOrder,
+        StockReplenishmentOrderItem,
+    )
+
+    with session_factory() as session:
+        legacy_order = StockReplenishmentOrder(
+            order_number="REP-LEGACY-0001",
+            supplier_name="佳丰",
+            customer_id=1,
+            source_type="manual_history",
+            status="confirmed",
+            created_by=1,
+            confirmed_by=1,
+        )
+        legacy_order.items = [
+            StockReplenishmentOrderItem(
+                stock_policy_id=policy["id"],
+                target_inventory_type="semi_finished",
+                customer_id=1,
+                product_name_snapshot="21301010 历史纸板",
+                material_code_snapshot="A416D",
+                normalized_material_code="A416D",
+                layer_count=5,
+                flute_type="AB",
+                report_length_mm=1865,
+                report_width_mm=830,
+                quantity=30,
+                location_id=2,
+                historical_workbook="2025年采购单.xlsx",
+                historical_sheet="2020.1-2026",
+                historical_row=333,
+                historical_search_text="21301010 116*66.5*16",
+            )
+        ]
+        session.add(legacy_order)
+        session.commit()
+        legacy_order_id = legacy_order.id
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.get(
+            f"/api/requisition/stock-replenishment/orders/{legacy_order_id}"
+        )
+        assert response.status_code == 200, response.text
         order = response.json()
-        assert order["status"] == "stocked"
-        assert order["stocked_quantity"] == 30
-        assert order["items"][0]["inventory_lot"]["quantity_available"] == 30
+        assert order["status"] == "confirmed"
+        assert order["stocked_quantity"] == 0
+        assert order["items"][0]["inventory_lot"] is None
         assert order["items"][0]["historical_source"]["row"] == 333
+        stocked = client.post(
+            f"/api/requisition/stock-replenishment/orders/{legacy_order_id}/stock"
+        )
+        assert stocked.status_code == 200
+        assert stocked.json()["status"] == "stocked"
+        assert stocked.json()["stocked_quantity"] == 30
+        lot_id = stocked.json()["items"][0]["inventory_lot"]["id"]
 
         repeated = client.post(
-            f"/api/requisition/stock-replenishment/orders/{order['id']}/stock"
+            f"/api/requisition/stock-replenishment/orders/{legacy_order_id}/stock"
         )
         assert repeated.status_code == 200
-        assert repeated.json()["items"][0]["inventory_lot"]["id"] == order["items"][0]["inventory_lot"]["id"]
+        assert repeated.json()["items"][0]["inventory_lot"]["id"] == lot_id
 
         policies = client.get(
             "/api/requisition/stock-policies?warning_only=true"
@@ -397,7 +482,7 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
             json={
                 "source_type": "customer_request",
                 "supplier_name": "错误供应商",
-                "stock_now": True,
+                "stock_now": False,
                 "items": [
                     {
                         "target_inventory_type": "semi_finished",
@@ -426,6 +511,11 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
         assert item["product_id"] == 1
         assert item["material_id"] == 1
         assert item["material_code"] == "A416D"
+        assert created_payload["status"] == "confirmed"
+        stocked = client.post(
+            f"/api/requisition/stock-replenishment/orders/{created_payload['id']}/stock"
+        )
+        assert stocked.status_code == 200, stocked.text
 
     from app.models.warehouse_inventory import SemiFinishedInventoryDetail
 
@@ -434,6 +524,32 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
         assert detail is not None
         assert detail.material_id == 1
         assert detail.material_code_snapshot == "A416D"
+
+
+def test_new_replenishment_cannot_create_finished_inventory_directly(
+    stock_replenishment_app,
+) -> None:
+    app, _session_factory = stock_replenishment_app
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "customer_request",
+                "stock_now": False,
+                "items": [
+                    {
+                        "target_inventory_type": "finished",
+                        "customer_id": 1,
+                        "product_id": 1,
+                        "quantity": 30,
+                        "location_id": 1,
+                    }
+                ],
+            },
+        )
+    assert response.status_code == 400, response.text
+    assert "只能进入客户专用纸板备料" in response.text
 
 
 def test_replenishment_rejects_incomplete_or_mismatched_crease(

@@ -132,7 +132,7 @@ def test_seven_layer_policy_order_save_and_semi_finished_stock(
         order_response = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
-                "source_type": "stock_warning",
+                "source_type": "customer_request",
                 "supplier_name": "不会覆盖材质供应商",
                 "stock_now": False,
                 "items": [
@@ -201,7 +201,7 @@ def test_seven_layer_invalid_flute_is_rejected_by_api_and_inventory_service(
             "/api/requisition/stock-replenishment/orders",
             json={
                 "source_type": "customer_request",
-                "stock_now": True,
+                "stock_now": False,
                 "items": [
                     {
                         "target_inventory_type": "semi_finished",
@@ -338,7 +338,7 @@ def test_three_and_five_layer_replenishment_regression(
             json={
                 "source_type": "customer_request",
                 "supplier_name": "三五层回归纸板厂",
-                "stock_now": True,
+                "stock_now": False,
                 "items": [
                     {
                         "target_inventory_type": "semi_finished",
@@ -354,7 +354,13 @@ def test_three_and_five_layer_replenishment_regression(
             },
         )
         assert response.status_code == 201, response.text
-        assert response.json()["status"] == "stocked"
+        order = response.json()
+        assert order["status"] == "confirmed"
+        stocked = client.post(
+            f"/api/requisition/stock-replenishment/orders/{order['id']}/stock"
+        )
+        assert stocked.status_code == 200, stocked.text
+        assert stocked.json()["status"] == "stocked"
 
     from app.models.warehouse_inventory import SemiFinishedInventoryDetail
 

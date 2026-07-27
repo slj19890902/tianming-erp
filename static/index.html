@@ -1916,8 +1916,8 @@
             </template>
 
             <template v-else-if="activePage === 'requisition'">
-              <page-head title="智能报料工作台" desc="历史智索、库存抵扣、合并报料；供应商到货后直接在 WMS 确认入库。"></page-head>
-              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button><button v-if="canRequisition" class="btn primary" @click="openStockReplenishment">库存补库 / 历史采购<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button></div><button class="btn" @click="loadRequisition">刷新</button></div>
+              <page-head title="智能报料工作台" desc="订单报料、库存抵扣和库存补库统一先生成可核对草稿；实际到料后再确认入账。"></page-head>
+              <div class="toolbar"><div class="toolbar-group"><button :class="['btn',{primary:requisitionTab==='pending'}]" @click="requisitionTab='pending'">待报料 {{ requisitionPending.length }}</button><button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="requisitionTab='submitted'">已报料/已入库 {{ requisitionItems.length }}</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button><button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button><button v-if="canRequisition" class="btn primary" @click="openStockReplenishment">手动库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button></div><button class="btn" @click="loadRequisition">刷新</button></div>
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
                 <strong>供应商优先选择</strong>
                 <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" @click="requisitionSupplierFilter=''">全部供应商（{{ requisitionPending.length }}）</button>
@@ -3831,8 +3831,7 @@
               <div style="margin-top:10px"><a :href="mobileEntry.url" target="_blank">{{ mobileEntry.url }}</a></div>
             </div>
             <div v-else-if="modal.type === 'stockReplenishment'">
-              <div v-if="stockReplenishmentForm.source_type==='stock_warning'" class="status blue" style="display:block;white-space:normal;margin-bottom:10px">当前只是库存补库报料草稿。系统已按常用箱带出材质、尺寸和理论报料张数；供应商到料后统一进入“客户专用纸板备料”，不增加任何成品库存，实际生产后才转成具体款号成品。</div>
-              <div v-else class="status blue" style="display:block;white-space:normal;margin-bottom:10px">用于历史采购或客户指定备库。保存前请核对材质、尺寸、数量和实际库存去向。</div>
+              <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">当前只是库存补库报料草稿。优先选择客户和常用箱，由系统带出材质、尺寸和供应商；保存不会增加库存。供应商实际到料确认后只进入“客户专用纸板备料”，生产完成后才形成具体款号成品。</div>
               <div v-if="stockReplenishmentForm.source_type==='stock_warning' && stockReplenishmentCompanions.length" class="stock-warning-companions">
                 <strong>同客户、同材质和同报料尺寸的其他款</strong>
                 <div class="muted">印刷内容不同，不会自动增加各款成品。多报纸板统一作为客户专用纸板备料，可供下列同规格款号共用；只有点击“同时加入”才增加该款的计划补货。</div>
@@ -3855,27 +3854,15 @@
                 </tbody></table>
               </div>
               <div v-if="stockReplenishmentForm.source_type!=='stock_warning'" class="toolbar" style="margin-bottom:10px">
-                <div class="toolbar-group" style="flex:1"><input class="input" style="min-width:320px" v-model.trim="stockHistorySearch.query" @keyup.enter="searchStockHistory" placeholder="输入款号、产品名称或规格，例如 3D90095 / 屏蔽袋 / 46*30.5*22.5" /><button class="btn primary" type="button" :disabled="stockHistorySearch.loading" @click="searchStockHistory">搜索 2020.1-2026</button></div>
-                <button class="btn" type="button" @click="addBlankStockReplenishmentLine">新增空白行</button>
-              </div>
-              <div v-if="stockReplenishmentForm.source_type!=='stock_warning' && stockHistorySearch.items.length" class="panel" style="max-height:260px;overflow:auto;margin-bottom:12px">
-                <div class="muted">共匹配 {{ stockHistorySearch.total_matches }} 种采购规格（源记录 {{ stockHistorySearch.source_record_matches || stockHistorySearch.total_matches }} 条），本次显示 {{ stockHistorySearch.items.length }} 种；相同款号、材质、报料尺寸和压线只显示一行。</div>
-                <table style="font-size:12px"><thead><tr><th>日期 / 来源</th><th>款号 / 名称 / 规格</th><th>材质</th><th>报料长宽</th><th>压线</th><th>历史数量</th><th>操作</th></tr></thead><tbody>
-                  <tr v-for="row in stockHistorySearch.items" :key="row.source_ref">
-                    <td>{{ row.record_date || '-' }}<div class="muted">{{ row.source_ref }}</div></td>
-                    <td style="white-space:normal"><strong>{{ row.product_reference }}</strong><div v-if="row.notes" class="muted">{{ row.notes }}</div></td>
-                    <td>{{ row.material_code }}</td><td>{{ row.report_length_mm }} × {{ row.report_width_mm }} mm</td><td>{{ row.crease_text || '-' }}</td><td>{{ row.historical_quantity || '-' }}<div v-if="row.history_count > 1" class="muted">历史 {{ row.history_count }} 次，仅供参考</div></td>
-                    <td><button class="btn small success" type="button" @click="addHistoricalStockLine(row)">加入补库单</button></td>
-                  </tr>
-                </tbody></table>
+                <div class="muted">不再从旧采购工作簿复制参数。请选择客户和常用箱，系统使用当前已维护资料；历史报料事实仍在原单据中只读保留。</div>
+                <button class="btn primary" type="button" @click="addBlankStockReplenishmentLine">新增补库行</button>
               </div>
               <div class="form-grid" style="margin-bottom:10px">
-                <div class="field"><label>补库来源</label><select class="select" v-model="stockReplenishmentForm.source_type" :disabled="stockReplenishmentForm.source_type==='stock_warning'"><option value="manual_history">历史采购</option><option value="customer_request">客户要求备库</option><option value="stock_warning">库存预警</option></select></div>
+                <div class="field"><label>补库来源</label><input class="input" :value="stockReplenishmentForm.source_type==='stock_warning' ? '库存预警' : '手动库存补库'" disabled /></div>
                 <div class="field"><label>供应商（随材质联动）</label><select class="select" v-model="stockReplenishmentForm.supplier_name" :disabled="stockReplenishmentMaterialSuppliers().length === 1"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length === 1" class="muted">已按材质主数据自动确定</div><div v-else-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
-                <label v-if="stockReplenishmentForm.source_type!=='stock_warning'" class="remember-line"><input type="checkbox" v-model="stockReplenishmentForm.stock_now" /> 保存后立即进入仓库可用库存</label>
-                <div v-else class="status green">只保存报料草稿；到料后进入客户专用纸板备料，不直接增加成品库存</div>
+                <div class="status green">只保存报料草稿；到料后进入客户专用纸板备料，不直接增加成品库存</div>
               </div>
-              <div v-if="!stockReplenishmentForm.items.length" class="empty">请从历史记录加入，或新增空白行。</div>
+              <div v-if="!stockReplenishmentForm.items.length" class="empty">点击“新增补库行”，再选择客户和常用箱。</div>
               <div v-else class="stock-replenishment-lines">
                 <div v-for="(line,index) in stockReplenishmentForm.items" :key="line._key" class="stock-replenishment-line-card">
                   <div class="stock-replenishment-line-head"><div><strong>补库明细 {{ index + 1 }}</strong><span class="muted" style="margin-left:10px">{{ line.material_supplier_name || stockReplenishmentForm.supplier_name || '供应商待确认' }}｜{{ line.material_code || '材质待选择' }}</span></div><button class="btn small danger" type="button" @click="removeStockReplenishmentLine(index)">删除行</button></div>
@@ -3888,7 +3875,7 @@
                   <details :open="stockReplenishmentForm.source_type!=='stock_warning' || !line.draft_ready" :class="{'stock-warning-advanced':stockReplenishmentForm.source_type==='stock_warning'}">
                     <summary v-if="stockReplenishmentForm.source_type==='stock_warning'">查看详细参数</summary>
                     <div class="stock-replenishment-line-grid">
-                    <div class="field stock-span-2"><label>库存类型</label><select class="select" v-model="line.target_inventory_type" :disabled="stockReplenishmentForm.source_type==='stock_warning'" @change="onStockTargetTypeChanged(line)"><option value="semi_finished">客户专用纸板备料</option><option value="finished">成品</option></select></div>
+                    <div class="field stock-span-2"><label>到料去向</label><select class="select" v-model="line.target_inventory_type" disabled><option value="semi_finished">客户专用纸板备料</option></select></div>
                     <div class="field stock-span-3"><label>客户</label><select class="select" v-model.number="line.customer_id" @change="onStockCustomerChanged(line)"><option :value="null">通用 / 未指定</option><option v-for="c in activeCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
                     <div class="field stock-span-4"><label>存货编码 / 常用箱</label><search-select v-model="line.product_id" :options="stockProductSelectOptions(line.customer_id)" label-key="_label" value-key="id" :placeholder="line.customer_id ? '输入存货编码、产品名称或规格' : '请先选择客户'" :allow-empty="true" :disabled="!line.customer_id" @search="searchStockProducts(line.customer_id,$event)" @change="applyStockProduct(line)"></search-select><input v-if="line.target_inventory_type==='semi_finished' && !line.product_id" class="input" v-model.trim="line.product_name" placeholder="未关联常用箱时填写片料名称" /></div>
                     <div class="field stock-span-3"><label>数量（必填）</label><input class="input" type="number" min="1" step="1" v-model.number="line.quantity" placeholder="请人工填写" /></div>
@@ -4890,8 +4877,7 @@
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
             stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
-            stockHistorySearch: { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0 },
-            stockReplenishmentForm: { source_type:"manual_history", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:true, items:[] },
+            stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [], incomingLocations: [],
             productionTab: "pending", productionPending: [], productionHistory: [], productionLocations: [], productionSelected: {}, productionBusy: false,
@@ -7943,11 +7929,10 @@
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
             const warningOnly = !!options.warningOnly;
-            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "manual_history", idempotency_key:warningOnly ? createIdempotencyKey() : null, supplier_name:"", customer_id:null, remark:"", stock_now:!warningOnly, items:[] };
-            this.stockHistorySearch = { query:"", loading:false, items:[], total_matches:0, source_record_matches:0, indexed_records:0, source_workbook:null, source_sheet:null };
+            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:warningOnly ? createIdempotencyKey() : null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
-            this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "库存补库 / 历史采购检索" };
+            this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
             try {
               const [locations, policies] = await Promise.all([
                 axios.get("/api/requisition/stock-replenishment/locations"),
@@ -7959,72 +7944,8 @@
               this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
             }
           },
-          async searchStockHistory() {
-            const query = String(this.stockHistorySearch.query || "").trim();
-            if (!query) { this.showToast("请输入款号、产品名称或规格", true); return; }
-            this.stockHistorySearch.loading = true;
-            try {
-              const { data } = await axios.get("/api/requisition/historical-purchases/search", {params:{q:query,limit:30}});
-              this.stockHistorySearch = {...this.stockHistorySearch, ...data, loading:false};
-              if (!(data.items || []).length) this.showToast("未在 2020.1-2026 工作表找到匹配记录", true);
-            } catch (error) {
-              this.stockHistorySearch.loading = false;
-              this.showToast("历史采购检索失败：" + this.errorMessage(error), true);
-            }
-          },
-          parseHistoricalStockMaterial(material) {
-            const raw = String(material || "").trim().toUpperCase();
-            const parts = raw.split("/").map(v=>v.trim()).filter(Boolean);
-            const suffix = parts.length > 1 ? parts[parts.length - 1] : "";
-            const validFlutes = ["A","B","E","AB","BE","AAA","ABC"];
-            const flute = validFlutes.includes(suffix) ? suffix : "";
-            const code = flute ? parts.slice(0,-1).join("/") : raw;
-            const layer = ["AAA","ABC"].includes(flute) ? 7 : ["AB","BE"].includes(flute) ? 5 : ["A","B","E"].includes(flute) ? 3 : (code.replace(/[^A-Z0-9]/g,"").length >= 7 ? 7 : code.replace(/[^A-Z0-9]/g,"").length >= 5 ? 5 : 3);
-            return { code, flute, layer };
-          },
-          normalizeStockSupplierName(name) {
-            const value=String(name||"").trim();
-            const aliases={"佳丰":"苏州佳丰","苏州佳丰":"苏州佳丰","鸣朋":"昆山鸣朋","昆山鸣朋":"昆山鸣朋","嘉林亿":"苏州嘉林亿","苏州嘉林亿":"苏州嘉林亿"};
-            return aliases[value] || value;
-          },
           defaultStockLocation(type) {
             return this.stockLocationsForType(type)[0]?.id || null;
-          },
-          stockMaterialIdByCode(code, layerCount) {
-            const normalized = String(code || "").trim().toUpperCase().split("-")[0];
-            const source = this.allMaterials.length ? this.allMaterials : this.materials;
-            return source.find(row =>
-              this.materialBaseCode(row).toUpperCase() === normalized &&
-              (!layerCount || Number(row.layer_count) === Number(layerCount))
-            )?.id || null;
-          },
-          async addHistoricalStockLine(row) {
-            const material = this.parseHistoricalStockMaterial(row.material_code);
-            const line={
-              _key:createIdempotencyKey(), stock_policy_id:null, target_inventory_type:"semi_finished",
-              product_id:row.product_id || null, customer_id:row.customer_id || this.stockReplenishmentForm.customer_id || null,
-              product_code:"", product_name:row.product_reference || "历史库存片料",
-              material_id:this.stockMaterialIdByCode(material.code, material.layer), material_code:material.code, material_supplier_name:"", layer_count:material.layer, flute_type:material.flute,
-              report_length_mm:Number(row.report_length_mm || 0), report_width_mm:Number(row.report_width_mm || 0),
-              crease_type:row.crease_type || null, crease_text:row.crease_text || "",
-              crease_left_mm:row.crease_left_mm, crease_middle_mm:row.crease_middle_mm, crease_right_mm:row.crease_right_mm,
-              sheet_type:"raw_board", component_type:"whole", pieces_per_box:1, stock_yield_per_sheet:1,
-              quantity:null, location_id:this.defaultStockLocation("semi_finished"),
-              historical_workbook:this.stockHistorySearch.source_workbook || "2025年采购单.xlsx",
-              historical_sheet:this.stockHistorySearch.source_sheet || "2020.1-2026", historical_row:row.source_row,
-              historical_search_text:row.search_text, remark:row.notes || "",
-            };
-            this.stockReplenishmentForm.items.push(line);
-            if (line.product_id && line.customer_id) {
-              await this.loadStockProducts(line.customer_id);
-              this.applyStockProduct(line,{preserveExisting:true});
-            } else if (line.material_id) {
-              this.applyStockMaterial(line);
-            }
-            if (!line.material_supplier_name && !this.stockReplenishmentForm.supplier_name && row.supplier_name) {
-              this.stockReplenishmentForm.supplier_name = this.normalizeStockSupplierName(row.supplier_name);
-            }
-            this.syncStockReplenishmentSupplier();
           },
           addBlankStockReplenishmentLine() {
             this.stockReplenishmentForm.items.push({
@@ -8046,6 +7967,7 @@
                 return;
               }
               this.stockReplenishmentForm.source_type = "stock_warning";
+              this.stockReplenishmentForm.idempotency_key = this.stockReplenishmentForm.idempotency_key || createIdempotencyKey();
               this.stockReplenishmentForm.stock_now = false;
               this.stockReplenishmentForm.supplier_name = data.supplier_name || this.stockReplenishmentForm.supplier_name;
               this.stockReplenishmentForm.customer_id = data.customer_id || null;
@@ -8221,16 +8143,15 @@
           },
           validateStockReplenishmentForm() {
             if (!this.stockReplenishmentForm.items.length) return "至少添加一条补库明细";
-            if (this.stockReplenishmentForm.source_type === "stock_warning" && this.stockReplenishmentForm.stock_now) return "库存预警只能先生成报料草稿，不能直接写入库存";
+            if (this.stockReplenishmentForm.stock_now) return "库存补库只能先生成报料草稿，不能保存后直接写入库存";
             const suppliers=this.stockReplenishmentMaterialSuppliers();
             if (suppliers.length > 1) return "一张库存补库单只能包含同一供应商的材质，请拆分后保存";
             for (let i=0;i<this.stockReplenishmentForm.items.length;i+=1) {
               const line=this.stockReplenishmentForm.items[i], label=`第 ${i+1} 行`;
               if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity)<=0) return `${label}数量必须是大于0的整数`;
-              if (this.stockReplenishmentForm.stock_now && !line.location_id) return `${label}立即入库前必须选择库位`;
-              if (line.target_inventory_type === "finished" && !line.product_id) return `${label}成品补库必须选择产品`;
+              if (line.target_inventory_type !== "semi_finished") return `${label}库存补库到料只能进入客户专用纸板备料`;
+              if (this.stockReplenishmentForm.source_type === "customer_request" && (!line.customer_id || !line.product_id)) return `${label}请先选择客户和常用箱`;
               if (this.stockReplenishmentForm.source_type === "stock_warning") {
-                if (line.target_inventory_type !== "semi_finished") return `${label}库存预警到料只能进入客户专用纸板备料`;
                 if (!line.customer_id || !line.product_id) return `${label}客户专用纸板备料必须关联客户和常用箱`;
                 if (!line.material_code || !line.layer_count || !line.flute_type || !(Number(line.report_length_mm)>0) || !(Number(line.report_width_mm)>0)) return `${label}常用箱必须先补全材质、层数、楞型和报料长宽`;
               }
@@ -13727,7 +13648,7 @@
                   supplier_name:this.stockReplenishmentForm.supplier_name || null,
                   customer_id:this.stockReplenishmentForm.customer_id || null,
                   remark:this.stockReplenishmentForm.remark || null,
-                  stock_now:this.stockReplenishmentForm.source_type === "stock_warning" ? false : !!this.stockReplenishmentForm.stock_now,
+                  stock_now:false,
                   items:this.stockReplenishmentForm.items.map(line => {
                     const item={...line}; delete item._key; delete item.crease_text; delete item.material_supplier_name; delete item.suggested_finished_quantity; delete item.theoretical_requisition_quantity; delete item.compatible_product_ids; delete item.compatible_product_codes; delete item.draft_ready; delete item.missing_fields; delete item.cutting_mode; delete item.output_per_sheet;
                     return item;
@@ -13737,7 +13658,7 @@
                 const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
                 this.openStockReplenishmentPrint(printable);
                 await this.loadRequisition();
-                this.showToast(this.stockReplenishmentForm.source_type === "stock_warning" ? "报料草稿已保存；到料后进入客户专用纸板备料，不增加成品库存" : (data.status === "stocked" ? "补库单已保存，库存批次已生成" : "补库单已保存，可打印后等待实际到库"));
+                this.showToast("补库报料草稿已保存；到料确认后进入客户专用纸板备料，不增加成品库存");
                 return;
               }
               if (this.modal.type === "supplierRequisitionDraft") {

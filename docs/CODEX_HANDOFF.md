@@ -2474,3 +2474,47 @@ legacy_ruida_* 原始层
 - 本轮没有连接、迁移或写入工厂正式数据库，没有修改工厂正式服务、
   `origin/factory-current-baseline` 或 `origin/main`。阶段 C 当前仅为家庭候选，
   尚待老板统一人工验收。
+
+## 90. 2026-07-27 P0-4 库存预警与智能补库收口候选（人工验收通过）
+
+- 独立 worktree：
+  `D:\tm-worktrees\erp-p0-4-replenishment-workbench-closure-20260727`；分支：
+  `codex/p0-4-replenishment-workbench-closure-20260727`；唯一基线：
+  `origin/factory-current-baseline@9a1fdd9eea90fc9833651937fddf8c468f2e1091`。
+- 本轮不重做已经上线的客户分组低库存提醒、常用箱资料带出、同规格款号共用
+  建议和客户专用纸板备料。本轮只收口旧入口与库存事实边界：
+  “库存补库 / 历史采购”改为“手动库存补库”，停止从旧采购工作簿复制参数，
+  手动补库必须选择客户与当前常用箱；历史采购 API、旧单据及其原有入账闭环
+  继续只读/兼容保留。
+- 新建库存补库统一只保存报料草稿。前后端均禁止 `stock_now=true`，并禁止新建
+  补库直接生成成品库存；供应商实际到料后只能通过原有明确入账动作形成
+  `semi_finished/sheets` 客户专用纸板备料，生产完成后才能形成具体款号成品。
+  本轮没有删除原有入账 API，因此现存报料单和新草稿在真实到料时仍可正常确认。
+- 新建手动补库行固定为客户专用纸板备料，必须选择客户和常用箱，系统按当前
+  常用箱、材质主数据带出供应商、层数、楞型和报料尺寸；缺资料时阻止保存并
+  直接列明缺项。库存预警草稿继续复用固定幂等键，重复触发不会重复创建草稿。
+- 自动回归：
+  `test_stock_replenishment_frontend.py`、`test_stock_replenishment_flow.py`、
+  `test_seven_layer_inventory.py`、`test_common_box_low_stock_alert.py`、
+  `test_n028_customer_scopes.py`、`test_phase10_frontend.py`、
+  `test_stock_replenishment_models.py` 合计 `74 passed`。Python 编译、首页内联
+  JavaScript 语法、`git diff --check` 及 Alembic 单一 head 检查均通过；
+  数据库 head 仍为 `cr74v8x9z63`，无新增 migration。
+- 相邻扩大测试中另有 10 个失败；已在未修改的 `9a1fdd9` 临时基线 worktree
+  原样复现为 `34 passed, 10 failed`：9 个是七层报料测试未传正式函数已要求的
+  `source_type`，1 个是 N033 时间测试的 NullObject 缺少 `scalars`。本轮未修改
+  对应生产代码，也未把这些基线遗留测试混入 P0-4。
+- 隔离 UAT：
+  `http://127.0.0.1:18103/`，账号 `codex_uat / 123456`；数据库为
+  `D:\tm-uat\p0-4-replenishment-closure-20260727\carton_erp_uat.sqlite3`，
+  从已发布 `cr74` 隔离演练副本再次复制，原始 SHA-256 为
+  `CCE64D51D1A985D57995C4419224314E357A4D5004E0D24C4351BE894E91BCDD`。
+  页面已核对旧入口和历史复制区消失、预警资料自动带出、缺报料长宽时禁止保存、
+  不显示保存即入库选项，Console 无 error/warn。
+- UAT 前后 `stock_replenishment_orders` 与 `stock_replenishment_order_items` 均为
+  0；只发生隔离账号登录审计，没有保存补库单、创建库存批次或修改工厂正式库。
+  隔离副本最终 revision=`cr74v8x9z63`、`integrity_check=ok`、外键异常 0。
+- 老板已于 2026-07-27 明确回复“P0-4 验收通过，授权提交并推送”。本授权仅
+  允许形成独立提交并推送当前 `codex/` 候选分支，不授权修改
+  `origin/factory-current-baseline`、`origin/main` 或工厂正式数据库；提交 SHA
+  和远端推送结果以 NAS 任务回执为准。

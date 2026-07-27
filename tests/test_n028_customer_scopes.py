@@ -1278,7 +1278,10 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
     n028_customer_scope_app,
 ) -> None:
     from app.models.product import Product
-    from app.models.stock_replenishment import StockReplenishmentOrder
+    from app.models.stock_replenishment import (
+        StockReplenishmentOrder,
+        StockReplenishmentOrderItem,
+    )
     from app.models.warehouse_inventory import WarehouseLocation
 
     app, ids, factory = n028_customer_scope_app
@@ -1316,10 +1319,16 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
 
     def finished_item(customer_id: int, quantity: int = 2) -> dict:
         return {
-            "target_inventory_type": "finished",
+            "target_inventory_type": "semi_finished",
+            "customer_id": customer_id,
             "product_id": product_ids[customer_id],
+            "material_code": "A416D",
+            "layer_count": 5,
+            "flute_type": "AB",
+            "report_length_mm": 1000,
+            "report_width_mm": 800,
             "quantity": quantity,
-            "location_id": finished_location_id,
+            "location_id": semi_location_id,
         }
 
     with TestClient(app) as client:
@@ -1355,23 +1364,6 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
                     finished_item(ids["other_customer"]),
                 ],
             },
-            "UNLINKED": {
-                "source_type": "manual_history",
-                "stock_now": False,
-                "items": [
-                    {
-                        "target_inventory_type": "semi_finished",
-                        "product_name": "N028 GLOBAL UNLINKED SECRET",
-                        "material_code": "A416D",
-                        "layer_count": 5,
-                        "flute_type": "AB",
-                        "report_length_mm": 1000,
-                        "report_width_mm": 800,
-                        "quantity": 1,
-                        "location_id": semi_location_id,
-                    }
-                ],
-            },
         }
         order_ids = {}
         for label, payload in order_payloads.items():
@@ -1380,6 +1372,32 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
             )
             assert response.status_code == 201, response.text
             order_ids[label] = response.json()["id"]
+
+        with factory() as db:
+            legacy_unlinked = StockReplenishmentOrder(
+                order_number="N028-LEGACY-UNLINKED",
+                source_type="manual_history",
+                status="confirmed",
+                created_by=1,
+                confirmed_by=1,
+            )
+            legacy_unlinked.items = [
+                StockReplenishmentOrderItem(
+                    target_inventory_type="semi_finished",
+                    product_name_snapshot="N028 GLOBAL UNLINKED SECRET",
+                    material_code_snapshot="A416D",
+                    normalized_material_code="A416D",
+                    layer_count=5,
+                    flute_type="AB",
+                    report_length_mm=1000,
+                    report_width_mm=800,
+                    quantity=1,
+                    location_id=semi_location_id,
+                )
+            ]
+            db.add(legacy_unlinked)
+            db.commit()
+            order_ids["UNLINKED"] = legacy_unlinked.id
         client.post("/api/auth/logout")
 
         _login(client, "n028-sales", "SalesPass123!")
@@ -1446,10 +1464,6 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         assert client.post(
             "/api/requisition/stock-replenishment/orders",
             json=order_payloads["MIXED"],
-        ).status_code == 403
-        assert client.post(
-            "/api/requisition/stock-replenishment/orders",
-            json=order_payloads["UNLINKED"],
         ).status_code == 403
         top_level_mismatch = {
             **order_payloads["A"],

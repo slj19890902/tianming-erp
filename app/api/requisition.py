@@ -6463,9 +6463,23 @@ def create_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
-        if payload.source_type == "stock_warning" and payload.stock_now:
+        if payload.source_type == "manual_history":
             raise StockReplenishmentError(
-                "库存预警只能先生成报料草稿，不能保存后直接写入库存。"
+                "旧“历史采购检索”新建入口已停用；"
+                "请使用库存预警或手动选择客户和常用箱生成报料草稿。",
+                409,
+            )
+        if payload.stock_now:
+            raise StockReplenishmentError(
+                "库存补库只能先生成报料草稿，不能保存后直接写入库存。"
+            )
+        if any(
+            item.target_inventory_type != "semi_finished"
+            for item in payload.items
+        ):
+            raise StockReplenishmentError(
+                "新建库存补库到料只能进入客户专用纸板备料，"
+                "不能直接生成成品库存。"
             )
         stock_warning_order_number: str | None = None
         if payload.source_type == "stock_warning":

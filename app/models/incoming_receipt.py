@@ -98,19 +98,37 @@ class IncomingReceiptItem(Base):
             "requisition_item_id",
             "status",
         ),
+        CheckConstraint(
+            "(order_id IS NOT NULL AND order_item_id IS NOT NULL "
+            "AND stock_replenishment_item_id IS NULL) "
+            "OR (order_id IS NULL AND order_item_id IS NULL "
+            "AND requisition_id IS NULL AND requisition_item_id IS NULL "
+            "AND supplier_order_id IS NULL AND supplier_order_item_id IS NULL "
+            "AND stock_replenishment_item_id IS NOT NULL)",
+            name="ck_incoming_receipt_items_exactly_one_source",
+        ),
         Index("ix_incoming_receipt_items_receipt", "receipt_id"),
         Index("ix_incoming_receipt_items_surplus_lot", "surplus_inventory_lot_id"),
+        Index(
+            "ix_incoming_receipt_items_stock_replenishment_item",
+            "stock_replenishment_item_id",
+            "status",
+        ),
+        Index(
+            "ix_incoming_receipt_items_received_inventory_lot",
+            "received_inventory_lot_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     receipt_id: Mapped[int] = mapped_column(
         ForeignKey("incoming_receipts.id", ondelete="CASCADE"), nullable=False
     )
-    order_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False
+    order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=True
     )
-    order_item_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=False
+    order_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=True
     )
     requisition_id: Mapped[int | None] = mapped_column(
         ForeignKey("material_requisitions.id", ondelete="SET NULL"), nullable=True
@@ -123,6 +141,10 @@ class IncomingReceiptItem(Base):
     )
     supplier_order_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("supplier_requisition_order_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    stock_replenishment_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("stock_replenishment_order_items.id", ondelete="RESTRICT"),
         nullable=True,
     )
     planned_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -138,6 +160,9 @@ class IncomingReceiptItem(Base):
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     surplus_inventory_lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="SET NULL"), nullable=True
+    )
+    received_inventory_lot_id: Mapped[int | None] = mapped_column(
         ForeignKey("inventory_lots.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="posted")

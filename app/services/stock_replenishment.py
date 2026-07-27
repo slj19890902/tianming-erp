@@ -787,6 +787,154 @@ def replenishment_order_dict(order: StockReplenishmentOrder) -> dict:
     }
 
 
+def receive_replenishment_item(
+    db: Session,
+    *,
+    order: StockReplenishmentOrder,
+    item: StockReplenishmentOrderItem,
+    quantity: int,
+    operator_id: int | None,
+    receipt_item_id: int,
+    source_ref_type: str = "stock_replenishment_receipt",
+) -> InventoryLot:
+    """Put one actually received replenishment line into inventory.
+
+    Saving the replenishment document never calls this function.  The incoming
+    receipt workflow calls it only after the operator confirms an actual
+    receipt, so the inventory movement and the receipt fact share one
+    idempotent source.
+    """
+    if order.status == "voided":
+        raise StockReplenishmentError("已作废补库单不能收货。", 409)
+    remaining = int(item.quantity or 0) - int(item.stocked_quantity or 0)
+    if quantity <= 0:
+        raise StockReplenishmentError("本次实收数量必须大于0。")
+    if quantity > remaining:
+        raise StockReplenishmentError(
+            "本次实收超过补库单剩余待收数量；请核对后另建补库单处理超收。",
+            409,
+        )
+    if (
+        order.source_type == "stock_warning"
+        and item.target_inventory_type != "semi_finished"
+    ):
+        raise StockReplenishmentError(
+            "库存预警到料只能进入客户专用纸板备料，不能直接增加成品库存。"
+        )
+    if item.location_id is None:
+        raise StockReplenishmentError(
+            f"补库明细“{item.product_name_snapshot}”未选择入库库位。"
+        )
+
+    customer_board_preparation = (
+        item.target_inventory_type == "semi_finished"
+        and item.customer_id is not None
+        and item.product_id is not None
+    )
+    common = {
+        "location_id": item.location_id,
+        "quantity": quantity,
+        "stock_date": beijing_today(),
+        "source_type": "replenishment",
+        "remarks": (
+            f"补库单 {order.order_number}；"
+            f"{'客户专用纸板备料；' if customer_board_preparation else ''}"
+            f"{item.remark or ''}"
+        ).strip("；"),
+        "operator_id": operator_id,
+        "idempotency_key": (
+            f"incoming-replenishment-item-{receipt_item_id}"
+            if source_ref_type == "stock_replenishment_receipt"
+            else f"stock-replenishment-item-{item.id}"
+        ),
+        "source_ref_type": source_ref_type,
+        "source_ref_id": receipt_item_id,
+    }
+    try:
+        if item.target_inventory_type == "finished":
+            product = db.get(Product, item.product_id) if item.product_id else None
+            if product is None:
+                raise StockReplenishmentError("成品补库明细缺少有效产品。")
+            lot = manual_finished_in(
+                db,
+                customer_id=item.customer_id or product.customer_id,
+                product_id=product.id,
+                **common,
+            )
+        elif item.target_inventory_type == "semi_finished":
+            required = (
+                item.material_code_snapshot,
+                item.layer_count,
+                item.flute_type,
+                item.report_length_mm,
+                item.report_width_mm,
+            )
+            if not all(value not in (None, "") for value in required):
+                raise StockReplenishmentError(
+                    "半成品补库明细缺少材质、层数、楞型或报料长宽。"
+                )
+            lot = manual_semi_finished_in(
+                db,
+                material_code=item.material_code_snapshot or "",
+                layer_count=int(item.layer_count or 0),
+                flute_type=item.flute_type or "",
+                board_length_mm=int(item.report_length_mm or 0),
+                board_width_mm=int(item.report_width_mm or 0),
+                sheet_type=item.sheet_type,
+                component_type=item.component_type,
+                pieces_per_box=item.pieces_per_box,
+                stock_yield_per_sheet=item.stock_yield_per_sheet,
+                supplier_name=order.supplier_name,
+                customer_id=item.customer_id,
+                material_id=item.material_id,
+                crease_type=item.crease_type,
+                crease_left_mm=item.crease_left_mm,
+                crease_middle_mm=item.crease_middle_mm,
+                crease_right_mm=item.crease_right_mm,
+                cutting_note=item.remark,
+                movement_reason=(
+                    "库存预警到料转客户专用纸板备料"
+                    if customer_board_preparation
+                    else "补库来料转半成品库存"
+                ),
+                **common,
+            )
+            if customer_board_preparation:
+                allowed_product_ids = compatible_customer_product_ids(db, item)
+                if not allowed_product_ids:
+                    raise StockReplenishmentError(
+                        "客户专用纸板备料没有可绑定的同规格成品款号。"
+                    )
+                lot = replace_semi_finished_lot_allowed_products(
+                    db,
+                    inventory_lot_id=lot.id,
+                    product_ids=allowed_product_ids,
+                    expected_version=lot.version,
+                    operator_id=operator_id,
+                )
+        else:
+            raise StockReplenishmentError("补库目标类型无效。")
+    except WarehouseInventoryError as error:
+        raise StockReplenishmentError(str(error), error.status_code) from error
+
+    now = utc_now_naive()
+    item.inventory_lot_id = lot.id
+    item.inventory_lot = lot
+    item.stocked_quantity = int(item.stocked_quantity or 0) + quantity
+    item.stocked_at = now
+    remaining_items = [
+        row for row in order.items if int(row.stocked_quantity or 0) < int(row.quantity or 0)
+    ]
+    order.status = "partially_stocked" if remaining_items else "stocked"
+    order.stocked_by = operator_id
+    order.stocked_at = now if not remaining_items else None
+    if order.confirmed_at is None:
+        order.confirmed_at = now
+        order.confirmed_by = operator_id
+    db.flush()
+    return lot
+
+
 def stock_replenishment_order(
     db: Session,
     *,
@@ -798,128 +946,18 @@ def stock_replenishment_order(
     if order.status == "stocked":
         return order
 
-    now = utc_now_naive()
     for item in order.items:
         if item.stocked_quantity >= item.quantity:
             continue
-        if (
-            order.source_type == "stock_warning"
-            and item.target_inventory_type != "semi_finished"
-        ):
-            raise StockReplenishmentError(
-                "库存预警到料只能进入客户专用纸板备料，不能直接增加成品库存。"
-            )
-        if item.location_id is None:
-            raise StockReplenishmentError(
-                f"补库明细“{item.product_name_snapshot}”未选择入库库位。"
-            )
         quantity = item.quantity - item.stocked_quantity
-        customer_board_preparation = (
-            order.source_type == "stock_warning"
-            and item.target_inventory_type == "semi_finished"
-            and item.customer_id is not None
-            and item.product_id is not None
+        receive_replenishment_item(
+            db,
+            order=order,
+            item=item,
+            quantity=quantity,
+            operator_id=operator_id,
+            receipt_item_id=item.id,
+            source_ref_type="stock_replenishment_item",
         )
-        common = {
-            "location_id": item.location_id,
-            "quantity": quantity,
-            "stock_date": beijing_today(),
-            "source_type": "replenishment",
-            "remarks": (
-                f"补库单 {order.order_number}；"
-                f"{'客户专用纸板备料；' if customer_board_preparation else ''}"
-                f"{item.remark or ''}"
-            ).strip("；"),
-            "operator_id": operator_id,
-            "idempotency_key": f"stock-replenishment-item-{item.id}",
-            "source_ref_type": "stock_replenishment_item",
-            "source_ref_id": item.id,
-        }
-        try:
-            if item.target_inventory_type == "finished":
-                product = db.get(Product, item.product_id) if item.product_id else None
-                if product is None:
-                    raise StockReplenishmentError("成品补库明细缺少有效产品。")
-                lot = manual_finished_in(
-                    db,
-                    customer_id=item.customer_id or product.customer_id,
-                    product_id=product.id,
-                    **common,
-                )
-            elif item.target_inventory_type == "semi_finished":
-                required = (
-                    item.material_code_snapshot,
-                    item.layer_count,
-                    item.flute_type,
-                    item.report_length_mm,
-                    item.report_width_mm,
-                )
-                if not all(value not in (None, "") for value in required):
-                    raise StockReplenishmentError(
-                        "半成品补库明细缺少材质、层数、楞型或报料长宽。"
-                    )
-                lot = manual_semi_finished_in(
-                    db,
-                    material_code=item.material_code_snapshot or "",
-                    layer_count=int(item.layer_count or 0),
-                    flute_type=item.flute_type or "",
-                    board_length_mm=int(item.report_length_mm or 0),
-                    board_width_mm=int(item.report_width_mm or 0),
-                    sheet_type=item.sheet_type,
-                    component_type=item.component_type,
-                    pieces_per_box=item.pieces_per_box,
-                    stock_yield_per_sheet=item.stock_yield_per_sheet,
-                    supplier_name=order.supplier_name,
-                    customer_id=item.customer_id,
-                    material_id=item.material_id,
-                    crease_type=item.crease_type,
-                    crease_left_mm=item.crease_left_mm,
-                    crease_middle_mm=item.crease_middle_mm,
-                    crease_right_mm=item.crease_right_mm,
-                    cutting_note=item.remark,
-                    movement_reason=(
-                        "库存预警到料转客户专用纸板备料"
-                        if customer_board_preparation
-                        else "手工半成品入库"
-                    ),
-                    **common,
-                )
-                if customer_board_preparation:
-                    if item.customer_id is None:
-                        raise StockReplenishmentError(
-                            "客户专用纸板备料必须明确归属客户。"
-                        )
-                    allowed_product_ids = compatible_customer_product_ids(
-                        db,
-                        item,
-                    )
-                    if not allowed_product_ids:
-                        raise StockReplenishmentError(
-                            "客户专用纸板备料没有可绑定的同规格成品款号。"
-                        )
-                    lot = replace_semi_finished_lot_allowed_products(
-                        db,
-                        inventory_lot_id=lot.id,
-                        product_ids=allowed_product_ids,
-                        expected_version=lot.version,
-                        operator_id=operator_id,
-                    )
-            else:
-                raise StockReplenishmentError("补库目标类型无效。")
-        except WarehouseInventoryError as error:
-            raise StockReplenishmentError(str(error), error.status_code) from error
-
-        item.inventory_lot_id = lot.id
-        item.inventory_lot = lot
-        item.stocked_quantity = item.quantity
-        item.stocked_at = now
-
-    remaining = [item for item in order.items if item.stocked_quantity < item.quantity]
-    order.status = "partially_stocked" if remaining else "stocked"
-    order.stocked_by = operator_id
-    order.stocked_at = now if not remaining else None
-    if order.confirmed_at is None:
-        order.confirmed_at = now
-        order.confirmed_by = operator_id
     db.flush()
     return order

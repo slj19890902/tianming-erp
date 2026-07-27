@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 def stock_replenishment_app(tmp_path: Path):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
+    from app.api.incoming import router as incoming_router
     from app.api.requisition import router as requisition_router
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
@@ -103,6 +104,7 @@ def stock_replenishment_app(tmp_path: Path):
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(requisition_router, prefix="/api/requisition")
+    app.include_router(incoming_router, prefix="/api/incoming")
 
     def override_get_db() -> Generator[Session, None, None]:
         with session_factory() as session:
@@ -515,7 +517,17 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
         stocked = client.post(
             f"/api/requisition/stock-replenishment/orders/{created_payload['id']}/stock"
         )
-        assert stocked.status_code == 200, stocked.text
+        assert stocked.status_code == 409, stocked.text
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        received = client.put(
+            f"/api/incoming/receive/sr{item['id']}",
+            json={
+                "received_quantity": 30,
+                "idempotency_key": "test-common-box-incoming",
+            },
+        )
+        assert received.status_code == 200, received.text
 
     from app.models.warehouse_inventory import SemiFinishedInventoryDetail
 
@@ -648,3 +660,163 @@ def test_replenishment_order_can_save_multiple_lines_before_stocking(
         assert row["source_type"] == "stock_replenishment"
         assert row["incoming_status"] == "待入库"
         assert row["requisition_qty"] == 80
+
+
+def _customer_replenishment_payload(quantity: int = 30) -> dict:
+    return {
+        "source_type": "customer_request",
+        "supplier_name": "苏州佳丰",
+        "customer_id": 1,
+        "stock_now": False,
+        "items": [
+            {
+                "target_inventory_type": "semi_finished",
+                "customer_id": 1,
+                "product_id": 1,
+                "material_id": 1,
+                "material_code": "A416D",
+                "layer_count": 5,
+                "flute_type": "AB",
+                "report_length_mm": 1865,
+                "report_width_mm": 830,
+                "crease_type": "压线",
+                "crease_left_mm": 335,
+                "crease_middle_mm": 160,
+                "crease_right_mm": 335,
+                "sheet_type": "creased_sheet",
+                "quantity": quantity,
+                "location_id": 2,
+            }
+        ],
+    }
+
+
+def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_receipt(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        InventoryMovement,
+        SemiFinishedInventoryDetail,
+    )
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(),
+        )
+        assert created.status_code == 201, created.text
+        order = created.json()
+        item = order["items"][0]
+
+        reported = client.get("/api/requisition/reported-documents")
+        reported_row = next(
+            row
+            for row in reported.json()["items"]
+            if row["document_number"] == order["order_number"]
+        )
+        assert reported_row["incoming_status"] == "待入库"
+        assert reported_row["can_void"] is True
+
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        pending_row = next(
+            row
+            for row in pending.json()["items"]
+            if row["item_id"] == f"sr{item['id']}"
+        )
+        assert pending_row["source_type"] == "stock_replenishment"
+        assert pending_row["incoming_quantity"] == 30
+        assert pending_row["can_revert_receipt"] is False
+
+        with session_factory() as session:
+            assert session.scalar(select(func.count(InventoryLot.id))) == 0
+            assert session.scalar(select(func.count(InventoryMovement.id))) == 0
+            assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 0
+
+        direct_stock = client.post(
+            f"/api/requisition/stock-replenishment/orders/{order['id']}/stock"
+        )
+        assert direct_stock.status_code == 409
+        assert "来料入库" in direct_stock.json()["detail"]
+
+        received = client.put(
+            f"/api/incoming/receive/sr{item['id']}",
+            json={
+                "received_quantity": 30,
+                "idempotency_key": "test-replenishment-incoming-1",
+            },
+        )
+        assert received.status_code == 200, received.text
+        assert received.json()["received_inventory_lot_id"] is not None
+        repeated = client.put(
+            f"/api/incoming/receive/sr{item['id']}",
+            json={
+                "received_quantity": 30,
+                "idempotency_key": "test-replenishment-incoming-1",
+            },
+        )
+        assert repeated.status_code == 200, repeated.text
+        assert (
+            repeated.json()["received_inventory_lot_id"]
+            == received.json()["received_inventory_lot_id"]
+        )
+
+        after_pending = client.get("/api/incoming/pending").json()["items"]
+        assert all(row["item_id"] != f"sr{item['id']}" for row in after_pending)
+        after_reported = client.get("/api/requisition/reported-documents").json()[
+            "items"
+        ]
+        after_row = next(
+            row
+            for row in after_reported
+            if row["document_number"] == order["order_number"]
+        )
+        assert after_row["incoming_status"] == "已入库"
+        assert after_row["can_void"] is False
+        blocked_void = client.put(
+            f"/api/requisition/stock-replenishment/orders/{order['id']}/void"
+        )
+        assert blocked_void.status_code == 409
+
+        second = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=20),
+        )
+        assert second.status_code == 201, second.text
+        second_order = second.json()
+        second_item_id = second_order["items"][0]["id"]
+        voided = client.put(
+            f"/api/requisition/stock-replenishment/orders/{second_order['id']}/void"
+        )
+        assert voided.status_code == 200, voided.text
+        assert voided.json()["status"] == "voided"
+        after_void_pending = client.get("/api/incoming/pending").json()["items"]
+        assert all(
+            row["item_id"] != f"sr{second_item_id}" for row in after_void_pending
+        )
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(InventoryLot.id))) == 1
+        assert session.scalar(select(func.count(InventoryMovement.id))) == 1
+        assert (
+            session.scalar(
+                select(func.count()).select_from(SemiFinishedInventoryDetail)
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count()).select_from(FinishedGoodsInventoryDetail)
+            )
+            == 0
+        )
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+        lot = session.scalar(select(InventoryLot))
+        assert lot is not None
+        assert lot.inventory_type == "semi_finished"
+        assert lot.source_ref_type == "stock_replenishment_receipt"

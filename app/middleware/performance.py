@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from time import perf_counter
+from uuid import uuid4
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -19,20 +20,24 @@ class PerformanceObservabilityMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         started = perf_counter()
+        request_id = uuid4().hex
+        request.state.request_id = request_id
         try:
             response = await call_next(request)
         except Exception:
             duration_ms = (perf_counter() - started) * 1000
             if request.url.path.startswith("/api/"):
                 performance_logger.exception(
-                    "slow_api method=%s path=%s status=500 duration_ms=%.1f",
+                    "slow_api method=%s path=%s status=500 duration_ms=%.1f request_id=%s",
                     request.method,
                     request.url.path,
                     duration_ms,
+                    request_id,
                 )
             raise
 
         duration_ms = (perf_counter() - started) * 1000
+        response.headers["X-Request-ID"] = request_id
         response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
         if request.url.path.startswith("/static/vendor/"):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
@@ -41,11 +46,12 @@ class PerformanceObservabilityMiddleware(BaseHTTPMiddleware):
             and duration_ms >= self.slow_request_ms
         ):
             performance_logger.warning(
-                "slow_api method=%s path=%s status=%s duration_ms=%.1f",
+                "slow_api method=%s path=%s status=%s duration_ms=%.1f request_id=%s",
                 request.method,
                 request.url.path,
                 response.status_code,
                 duration_ms,
+                request_id,
             )
         return response
 

@@ -2995,6 +2995,11 @@
                 <span class="muted" v-if="orderImportBatch.files.length">已选择 {{ orderImportBatch.files.length }} 个文件</span>
               </div>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" class="order-group-detail-card" style="margin-bottom:12px">
+                <fieldset
+                  class="pdf-import-draft-fields"
+                  :disabled="isImportDraftLocked(draft)"
+                  style="border:0;margin:0;padding:0;min-width:0"
+                >
                 <div class="toolbar" style="margin-bottom:8px">
                   <div><strong>识别结果：{{ draft.items?.length || 0 }} 行</strong><span class="muted" style="margin-left:8px">请核对行数、存货编码和数量</span></div>
                   <button class="btn small" type="button" @click="draft._show_advanced_details=!draft._show_advanced_details">{{ draft._show_advanced_details ? '隐藏高级详情' : '高级匹配详情' }}</button>
@@ -3004,7 +3009,7 @@
                   <div class="field"><label>状态</label><div>{{ importStatusText(draft) }}</div></div>
                   <div class="field"><label>识别客户原文</label><div>{{ draft.customer_name_raw || draft.customer_name || "-" }}</div></div>
                   <div class="field"><label>系统匹配客户</label><div :class="{'danger-text':!draft.matched_customer_id}">{{ importCustomerMatchText(draft) }}</div></div>
-                  <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" @change="rematchImportDraft(draftIndex)"></search-select></div>
+                  <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" :disabled="isImportDraftLocked(draft)" @change="rematchImportDraft(draftIndex)"></search-select></div>
                   <div v-if="!draft.matched_customer_id" class="field wide">
                     <div class="notice danger" style="margin:0;white-space:normal">尚未选择确认客户。请先选择客户；提交改进和保存正式订单都需要确认客户。</div>
                   </div>
@@ -3014,7 +3019,25 @@
                   </div>
                   <div class="field"><label>下单日期</label><input class="input" type="date" v-model="draft.order_date" @input="invalidateImportDraftConfirmation(draft)" /></div>
                   <div class="field"><label>交货日期</label><input class="input" type="date" v-model="draft.delivery_date" @input="invalidateImportDraftConfirmation(draft)" /></div>
-                  <div class="field"><label>保存状态</label><span :class="['status',draft.confirmed ? 'green' : 'orange']">{{ draft.confirmed ? "已加入批量保存" : "待核对" }}</span></div>
+                  <div class="field">
+                    <label>保存状态</label>
+                    <span :class="['status',importDraftSaveStatusClass(draft)]">{{ importDraftSaveStatusText(draft) }}</span>
+                  </div>
+                </div>
+                <div
+                  v-if="draft._save_status && draft._save_status !== 'idle'"
+                  :class="['status',importDraftSaveStatusClass(draft)]"
+                  style="display:block;margin-bottom:10px;line-height:1.7;white-space:normal"
+                >
+                  <strong>{{ draft.source_name || "草稿" }}：</strong>{{ draft._save_message || importDraftSaveStatusText(draft) }}
+                  <button
+                    v-if="draft._save_status === 'failed'"
+                    class="btn small"
+                    type="button"
+                    style="margin-left:8px"
+                    :disabled="loading || !draft.confirmed || !canConfirmImportDraft(draft)"
+                    @click="retryFailedImportDraft(draft)"
+                  >重试此文件</button>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
                 <div v-if="importDraftBlockReasons(draft).length" class="status red" style="display:block;margin-bottom:10px;line-height:1.7">
@@ -3195,7 +3218,7 @@
                       <td style="padding:4px 6px;vertical-align:top;font-size:11px;white-space:normal">
                         <div v-if="pdfMaterialDifference(item)" class="status orange" style="display:block;line-height:1.5">PDF材质与常用箱不同，请核对。</div>
                         <div v-if="pdfMaterialDifference(item)" style="margin-top:4px">
-                          <search-select v-model="item._actual_material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="选择实际材质"></search-select>
+                          <search-select v-model="item._actual_material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="选择实际材质" :disabled="isImportDraftLocked(draft)"></search-select>
                           <div class="toolbar-group" style="justify-content:flex-start;margin-top:4px">
                             <button class="btn small" type="button" :disabled="!item._actual_material_id" @click="usePdfActualMaterialForOrder(draft,item)">仅本订单使用</button>
                             <button v-if="canEditProducts" class="btn small" type="button" @click="openCommonBoxEditorFromPdf(draftIndex,item)">更新常用箱</button>
@@ -3333,6 +3356,7 @@
                   <button class="btn small" :disabled="!draft.confirmed || !canConfirmImportDraft(draft)" @click="applyPdfDraftToOrderForm(draft)">带入新建订单</button>
                   <button class="btn primary small" :disabled="!draft.confirmed || !canConfirmImportDraft(draft)" @click="saveConfirmedImportDrafts()">直接保存订单</button>
                 </div>
+                </fieldset>
               </div>
               <div class="muted">识别结果只进入独立草稿层；识别失败或未确认的草稿不会写入正式订单。</div>
             </div>
@@ -4468,8 +4492,8 @@
             <button v-if="!isForcedPassword" class="btn" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
-              <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
-              <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
+              <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
+              <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts()">保存/重试已确认草稿</button>
             </template>
             <template v-if="modal?.type === 'pdfTemplate' && !pdfTemplateFormReadonly">
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
@@ -4942,7 +4966,7 @@
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
             orderEditGroup: null,
             orderNumberPreview: "",
-            orderImportBatch: { files: [], status: "idle" },
+            orderImportBatch: { files: [], status: "idle", retryDraft: null },
             orderImportDrafts: [],
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
@@ -5194,12 +5218,23 @@
             return this.canEditQuotations && (!this.quotationDraft.id || ["draft","quoted"].includes(this.quotationDraft.status));
           },
           confirmableImportDraftCount() {
-            return this.orderImportDrafts.filter(draft => this.canConfirmImportDraft(draft)).length;
+            return this.orderImportDrafts.filter(
+              draft => this.canConfirmImportDraft(draft)
+                && !["saving","success"].includes(draft._save_status)
+            ).length;
           },
           confirmedImportDraftCount() {
             return this.orderImportDrafts.filter(
-              draft => draft.confirmed && this.canConfirmImportDraft(draft)
+              draft => draft.confirmed
+                && this.canConfirmImportDraft(draft)
+                && !["saving","success"].includes(draft._save_status)
             ).length;
+          },
+          successfulImportDraftCount() {
+            return this.orderImportDrafts.filter(draft => draft._save_status === "success").length;
+          },
+          failedImportDraftCount() {
+            return this.orderImportDrafts.filter(draft => draft._save_status === "failed").length;
           },
           materialComposerCanSave() {
             const currentKey = `${String(this.materialComposer.supplier_name || "").trim()}|${Number(this.materialComposer.layer_count || 0)}|${String(this.materialComposer.material_code || "").trim().toUpperCase()}`;
@@ -6153,6 +6188,7 @@
             item._actual_material_id = item.matched_material_id || null;
           },
           usePdfActualMaterialForOrder(draft, item) {
+            if (this.isImportDraftLocked(draft)) return;
             const materialId = Number(item?._actual_material_id || 0);
             const material = this.allMaterials.find(row => Number(row.id) === materialId);
             if (!material) { this.showToast("请选择有效的实际材质", true); return; }
@@ -6578,23 +6614,170 @@
               return `${fieldLabel}：${message}`;
             }).join("；");
           },
+          orderSaveRequestId(error) {
+            const response = error?.response;
+            const data = response?.data;
+            const detail = data && typeof data === "object" && !Array.isArray(data)
+              ? data.detail
+              : null;
+            const headers = response?.headers;
+            let headerRequestId = null;
+            if (headers && typeof headers.get === "function") {
+              headerRequestId = headers.get("x-request-id") || headers.get("x-correlation-id");
+            } else if (headers && typeof headers === "object") {
+              headerRequestId = headers["x-request-id"]
+                || headers["X-Request-ID"]
+                || headers["x-correlation-id"]
+                || headers["X-Correlation-ID"];
+            }
+            const rawRequestId = detail && typeof detail === "object" && !Array.isArray(detail)
+              ? (detail.request_id || detail.requestId)
+              : null;
+            const candidate = rawRequestId
+              || (data && typeof data === "object" && !Array.isArray(data)
+                ? (data.request_id || data.requestId)
+                : null)
+              || headerRequestId;
+            const normalized = String(candidate || "").trim();
+            return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(normalized)
+              ? normalized
+              : "";
+          },
+          orderSaveResponseMeta(error) {
+            const status = Number(error?.response?.status);
+            const requestId = this.orderSaveRequestId(error);
+            const parts = [];
+            if (Number.isInteger(status) && status >= 100) parts.push(`HTTP ${status}`);
+            if (requestId) parts.push(`请求编号：${requestId}`);
+            return parts.length ? `（${parts.join("，")}）` : "";
+          },
           normalizeOrderSaveError(error) {
-            if (error?.message && !error?.response) return error.message;
-            const validation = this.normalizeValidationErrors(error, {
-              "items.0.product_id": "第1条产品",
-              "items.0.quantity": "第1条数量",
-              "items.0.unit_price": "第1条单价",
+            if (!error?.response) {
+              const errorCode = String(error?.code || "").toUpperCase();
+              const rawMessage = String(error?.message || "").trim();
+              if (
+                ["ECONNABORTED","ETIMEDOUT"].includes(errorCode)
+                || /timeout|timed out|超时/i.test(rawMessage)
+              ) {
+                return "订单保存请求超时，尚未确认保存成功；请检查网络或 ERP 服务后重试。";
+              }
+              if (
+                errorCode === "ERR_NETWORK"
+                || /network error|failed to fetch|load failed|连接失败/i.test(rawMessage)
+              ) {
+                return "网络连接失败，尚未确认保存成功；请检查 ERP 服务和网络连接后重试。";
+              }
+              return rawMessage || "订单保存请求未能发出，请检查网络连接后重试。";
+            }
+
+            const detail = error.response?.data?.detail;
+            const itemFieldLabels = {
+              client_line_id: "客户端行号",
+              reservation_plan: "库存预占方案",
+              finished: "成品库存预占",
+              semi: "半成品库存预占",
+              lot_id: "库存批次",
+              requested_qty: "预占数量",
+              expected_version: "库存版本",
+              component_type: "半成品类型",
+              override: "人工覆盖确认",
+              confirmed: "确认状态",
+              warning_acknowledged_codes: "警告确认",
+              bom_component_demands: "组合组件需求",
+              product_bom_component_id: "组合组件",
+              required_piece_quantity: "组件需求数量",
+              idempotency_key: "幂等键",
               product_id: "产品",
               quantity: "数量",
-              unit_price: "单价"
-            });
+              unit_price: "单价",
+              product_code: "存货编码",
+              product_name: "产品名称",
+              material: "材质",
+              material_id: "材质",
+              specification: "规格",
+              customer_model: "客户型号",
+              production_notes: "生产说明",
+              is_new_product: "新产品标记",
+              layer_count: "层数",
+              flute_type: "楞型",
+              temp_drawing_token: "临时图纸",
+              drawing_save_option: "图纸保存方式",
+              combination_mode_snapshot: "组合计价模式",
+              combination_role: "组合角色",
+              combination_group_key: "组合分组",
+              combination_parent_product_id: "组合父产品",
+              combination_parent_name_snapshot: "组合父产品名称",
+              combination_set_quantity_snapshot: "组合套数",
+              combination_quantity_per_set_snapshot: "每套数量",
+            };
+            const fieldMap = {
+              customer_id: "客户",
+              customer_name: "客户名称",
+              customer_po: "客户单号",
+              order_date: "下单日期",
+              delivery_date: "交货日期",
+              status: "订单状态",
+              payment_status: "收款状态",
+              remark: "订单备注",
+              items: "订单明细",
+              import_integrity_status: "PDF完整性状态",
+              import_integrity_errors: "PDF完整性错误",
+              import_draft: "PDF草稿标记",
+              pdf_import_confirmation: "PDF保存确认",
+              preview_safety_token: "PDF预览安全确认",
+              confirmed: "PDF人工确认状态",
+              ...itemFieldLabels,
+            };
+            if (Array.isArray(detail)) {
+              detail.forEach(item => {
+                const loc = Array.isArray(item?.loc) ? item.loc : [];
+                const itemsPosition = loc.findIndex(part => part === "items");
+                const itemIndex = itemsPosition >= 0 ? Number(loc[itemsPosition + 1]) : NaN;
+                const leafKey = loc.length ? String(loc[loc.length - 1]) : "";
+                if (Number.isInteger(itemIndex) && itemIndex >= 0) {
+                  const fieldKey = loc.slice(1).join(".");
+                  const fieldLabel = itemFieldLabels[leafKey] || "字段";
+                  fieldMap[fieldKey] = `第${itemIndex + 1}条${fieldLabel}`;
+                }
+              });
+            }
+            const validation = this.normalizeValidationErrors(error, fieldMap);
             if (validation) return validation;
-            const detail = error?.response?.data?.detail;
             if (Array.isArray(detail)) {
               return detail.map(item => item?.msg || item?.message || "订单保存失败").join("；");
             }
-            if (typeof detail === "string" && detail.trim()) return detail.trim();
-            return "订单保存失败，请先检查客户、产品和数量是否填写完整。";
+            const status = Number(error.response?.status);
+            const responseMeta = this.orderSaveResponseMeta(error);
+            if (typeof detail === "string" && detail.trim()) {
+              return status >= 500
+                ? `${detail.trim()}${responseMeta}`
+                : detail.trim();
+            }
+            const data = error.response?.data;
+            const objectDetail = detail && typeof detail === "object" && !Array.isArray(detail)
+              ? detail
+              : null;
+            const objectMessage = String(
+              objectDetail?.message
+                || (data && typeof data === "object" && !Array.isArray(data) ? data.message : "")
+                || ""
+            ).trim();
+            const rawCode = String(
+              objectDetail?.code
+                || (data && typeof data === "object" && !Array.isArray(data) ? data.code : "")
+                || ""
+            ).trim();
+            const safeCode = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(rawCode)
+              ? rawCode
+              : "";
+            if (objectMessage) {
+              const withCode = `${objectMessage}${safeCode ? `（错误代码：${safeCode}）` : ""}`;
+              return status >= 500 ? `${withCode}${responseMeta}` : withCode;
+            }
+            if (status >= 500) {
+              return `订单保存失败：服务器内部错误${responseMeta}。`;
+            }
+            return `订单保存失败${responseMeta || "，服务器未返回可识别的错误详情"}。`;
           },
           resetOrderFilters() {
             this.filters.orderKeyword = "";
@@ -9706,6 +9889,7 @@
             }
           },
           async openCommonBoxEditorFromPdf(draftIndex, item) {
+            if (this.isImportDraftLocked(this.orderImportDrafts[draftIndex])) return;
             if (!item?.matched_product_id || !this.canEditProducts) return;
             this.productEditReturnContext = {
               source: "pdf",
@@ -11035,6 +11219,7 @@
             item._backup = null;
           },
           async saveImportItemEdit(draft, item, draftIndex) {
+            if (this.isImportDraftLocked(draft)) return;
             if (!item.matched_product_id || item.is_new_product) return;
             if (!confirm('确认保存并覆盖常用箱产品资料？此操作将更新常用箱数据，不可撤销。')) return;
             this.loading = true;
@@ -11275,6 +11460,7 @@
             };
           },
           openPdfCorrectionForm(draft) {
+            if (this.isImportDraftLocked(draft)) return;
             if (!this.canSubmitPdfCorrection) return;
             draft._correction_form = draft._correction_form || this.pdfCorrectionFormFromDraft(draft);
             draft._correction_open = true;
@@ -11292,6 +11478,7 @@
             draft._correction_error = "";
           },
           async submitPdfCorrection(draft) {
+            if (this.isImportDraftLocked(draft)) return;
             if (!this.canSubmitPdfCorrection || draft?._correction_submitting) return;
             draft._correction_error = "";
             if (!draft?.matched_customer_id) {
@@ -11344,6 +11531,7 @@
           },
           onOrderPdfFileChange(event) {
             this.orderImportBatch.files = Array.from(event?.target?.files || []);
+            this.orderImportBatch.retryDraft = null;
             this.orderImportDrafts = [];
           },
           async previewOrderPdfImport() {
@@ -11365,6 +11553,8 @@
                 _correction_error:"",
                 _correction_success:null,
                 _correction_form:null,
+                _save_status:"idle",
+                _save_message:"",
                 items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState(), _actual_material_id:item.matched_material_id || null, _material_difference_acknowledged:item.standard_match?.material_differs !== true}))
               }));
               await Promise.all(this.orderImportDrafts.map(draft => Promise.all((draft.items || []).filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id)))));
@@ -11458,6 +11648,7 @@
           toggleConfirmableImportDrafts() {
             const confirmable = this.orderImportDrafts.filter(
               draft => this.canConfirmImportDraft(draft)
+                && !["saving","success"].includes(draft._save_status)
             );
             if (!confirmable.length) {
               this.showToast("当前没有可以加入批量保存的完整草稿", true);
@@ -11466,19 +11657,57 @@
             const shouldConfirm = !confirmable.every(draft => draft.confirmed);
             confirmable.forEach(draft => { draft.confirmed = shouldConfirm; });
           },
+          isImportDraftLocked(draft) {
+            return ["saving","success"].includes(draft?._save_status);
+          },
           invalidateImportDraftConfirmation(draft) {
-            if (draft) draft.confirmed = false;
+            if (!draft || this.isImportDraftLocked(draft)) return;
+            draft.confirmed = false;
+            if (draft._save_status === "failed") {
+              draft._save_status = "idle";
+              draft._save_message = "";
+            }
+          },
+          importDraftSaveStatusClass(draft) {
+            if (draft?._save_status === "success") return "green";
+            if (draft?._save_status === "failed") return "red";
+            if (draft?._save_status === "saving") return "blue";
+            return draft?.confirmed ? "green" : "orange";
+          },
+          importDraftSaveStatusText(draft) {
+            if (draft?._save_status === "success") return "保存成功";
+            if (draft?._save_status === "failed") return "保存失败，可重试";
+            if (draft?._save_status === "saving") return "正在保存";
+            return draft?.confirmed ? "已加入批量保存" : "待核对";
+          },
+          async retryFailedImportDraft(draft) {
+            if (
+              !draft
+              || draft._save_status !== "failed"
+              || !draft.confirmed
+              || !this.canConfirmImportDraft(draft)
+            ) return;
+            this.orderImportBatch.retryDraft = draft;
+            try {
+              await this.saveConfirmedImportDrafts();
+            } finally {
+              if (this.orderImportBatch.retryDraft === draft) {
+                this.orderImportBatch.retryDraft = null;
+              }
+            }
           },
           invalidatePdfDraftForItem(item) {
             const draft = this.orderImportDrafts.find(row => (row.items || []).includes(item));
             if (draft) this.invalidateImportDraftConfirmation(draft);
           },
           removeImportDraftItem(draft, item) {
+            if (this.isImportDraftLocked(draft)) return;
             this.invalidateImportDraftConfirmation(draft);
             const index = (draft?.items || []).indexOf(item);
             if (index >= 0) draft.items.splice(index, 1);
           },
           toggleNewProduct(draft, item) {
+            if (this.isImportDraftLocked(draft)) return;
             this.invalidateImportDraftConfirmation(draft);
             if (item.is_new_product) {
               item.matched_product_id = null;
@@ -11490,7 +11719,7 @@
           },
           async rematchImportDraft(index) {
             const draft = this.orderImportDrafts[index];
-            if (!draft?.matched_customer_id) return;
+            if (!draft?.matched_customer_id || this.isImportDraftLocked(draft)) return;
             this.invalidateImportDraftConfirmation(draft);
             const preserved = draft.items.map(item => ({
               raw_product_code:item.raw_product_code, raw_product_name:item.raw_product_name,
@@ -11506,15 +11735,18 @@
               ...data,
               confirmed:false,
               _correction_open:false,
-              _correction_submitting:false,
-              _correction_error:"",
-              _correction_success:null,
-              _correction_form:null,
-              items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState(), _actual_material_id:item.matched_material_id || null, _material_difference_acknowledged:item.standard_match?.material_differs !== true}))
-            };
+               _correction_submitting:false,
+               _correction_error:"",
+               _correction_success:null,
+               _correction_form:null,
+               _save_status:"idle",
+               _save_message:"",
+               items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState(), _actual_material_id:item.matched_material_id || null, _material_difference_acknowledged:item.standard_match?.material_differs !== true}))
+             };
             await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
           async selectImportProduct(draft, item) {
+            if (this.isImportDraftLocked(draft)) return;
             this.invalidateImportDraftConfirmation(draft);
             const candidate = (item.product_candidates || []).find(row => row.id === item.matched_product_id);
             if (candidate) {
@@ -11564,6 +11796,7 @@
             return parts.join("｜") || "-";
           },
           async uploadImportDraftDrawing(draft, item, event) {
+            if (this.isImportDraftLocked(draft)) return;
             const file = event.target.files?.[0];
             if (!file) return;
             const formData = new FormData();
@@ -11615,6 +11848,7 @@
           async applyPdfDraftToOrderForm(selectedDraft=null) {
             const draft = selectedDraft || this.orderImportDrafts.find(row => row.confirmed);
             if (!draft) { this.showToast("请先完成 PDF 识别", true); return; }
+            if (this.isImportDraftLocked(draft)) return;
             this.orderForm = {
               customer_id: draft.matched_customer_id || null,
               customer_po: draft.customer_po || "",
@@ -11682,7 +11916,13 @@
             await this.refreshOrderNumberPreview();
           },
           async saveConfirmedImportDrafts() {
-            const drafts = this.orderImportDrafts.filter(draft => draft.confirmed && this.canConfirmImportDraft(draft));
+            const retryDraft = this.orderImportBatch.retryDraft;
+            const candidates = retryDraft ? [retryDraft] : this.orderImportDrafts;
+            const drafts = candidates.filter(
+              draft => draft.confirmed
+                && this.canConfirmImportDraft(draft)
+                && !["saving","success"].includes(draft._save_status)
+            );
             if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
             this.loading = true;
             const succeeded = [];
@@ -11692,6 +11932,8 @@
             try {
               for (const draft of drafts) {
                 try {
+                  draft._save_status = "saving";
+                  draft._save_message = "正在保存正式订单…";
                   const inventoryError = (draft.items || []).map((item, index) => {
                     const reason = this.inventoryDecisionRequired(item);
                     return reason ? `第${index + 1}条${reason}` : "";
@@ -11734,6 +11976,9 @@
                     })
                   });
                   succeeded.push(draft.source_name || "草稿");
+                  draft._save_status = "success";
+                  draft._save_message = "保存成功；本草稿已锁定，不会再次提交。";
+                  draft.confirmed = false;
                   // Collect price conflict items from this draft
                   for (const item of (draft.items || [])) {
                     if (item.price_conflict && item.matched_product_id && !item.is_new_product) {
@@ -11747,15 +11992,29 @@
                     }
                   }
                 } catch (error) {
-                  failed.push(`${draft.source_name || "草稿"}：${this.normalizeOrderSaveError(error)}`);
+                  const message = this.normalizeOrderSaveError(error);
+                  draft._save_status = "failed";
+                  draft._save_message = message;
+                  failed.push(`${draft.source_name || "草稿"}：${message}`);
                 }
               }
               await Promise.all([this.loadOrders(),this.loadKpi()]);
-              if (!failed.length) {
+              const remainingFailed = this.orderImportDrafts.filter(
+                draft => draft._save_status === "failed"
+              );
+              const remainingPending = this.orderImportDrafts.filter(
+                draft => draft.confirmed
+                  && this.canConfirmImportDraft(draft)
+                  && draft._save_status !== "success"
+              );
+              if (!remainingFailed.length && !remainingPending.length) {
                 this.modal=null;
                 this.showToast(`已保存 ${succeeded.length} 份确认草稿`);
               } else {
-                this.showToast(`成功 ${succeeded.length} 份；失败 ${failed.length} 份 — ${failed.join("｜")}`, true);
+                const failedSummary = remainingFailed.map(
+                  draft => `${draft.source_name || "草稿"}：${draft._save_message || "订单保存失败"}`
+                );
+                this.showToast(`本次成功 ${succeeded.length} 份；当前失败 ${remainingFailed.length} 份 — ${failedSummary.join("｜")}`, true);
               }
               // Post-save: prompt to sync price conflicts to common box default price
               if (priceConflictItems.length && succeeded.length) {

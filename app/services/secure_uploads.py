@@ -89,6 +89,16 @@ class StoredUpload:
     sha256: str
 
 
+@dataclass(frozen=True)
+class PendingTemporaryConsumption:
+    """A claimed temporary token whose permanent file is not committed yet."""
+
+    metadata_path: Path
+    claimed_path: Path
+    source_path: Path
+    stored: StoredUpload
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -225,10 +235,14 @@ def _metadata_path(path: Path) -> Path:
 def _write_metadata(path: Path, metadata: dict[str, object]) -> None:
     metadata_path = _metadata_path(path)
     temporary = metadata_path.with_name(f".{metadata_path.name}.{uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(metadata, ensure_ascii=False, sort_keys=True), encoding="utf-8"
-    )
-    temporary.replace(metadata_path)
+    try:
+        temporary.write_text(
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+        temporary.replace(metadata_path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def store_private_upload(
@@ -254,21 +268,27 @@ def store_private_upload(
     if not _is_within(target, target_dir):
         raise ValueError("private upload path escaped category")
     temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
-    with temporary.open("xb") as handle:
-        for offset in range(0, len(payload), CHUNK_SIZE):
-            handle.write(payload[offset : offset + CHUNK_SIZE])
-        handle.flush()
-        os.fsync(handle.fileno())
-    temporary.replace(target)
-    digest = hashlib.sha256(payload).hexdigest()
-    metadata = {
-        "original_filename": validated.original_filename,
-        "content_type": final_content_type,
-        "size": len(payload),
-        "sha256": digest,
-        "stored_at": datetime.now(timezone.utc).isoformat(),
-    }
-    _write_metadata(target, metadata)
+    try:
+        with temporary.open("xb") as handle:
+            for offset in range(0, len(payload), CHUNK_SIZE):
+                handle.write(payload[offset : offset + CHUNK_SIZE])
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target)
+        digest = hashlib.sha256(payload).hexdigest()
+        metadata = {
+            "original_filename": validated.original_filename,
+            "content_type": final_content_type,
+            "size": len(payload),
+            "sha256": digest,
+            "stored_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_metadata(target, metadata)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        _metadata_path(target).unlink(missing_ok=True)
+        raise
     reference = f"private:{category}/{filename}"
     return StoredUpload(
         reference=reference,
@@ -393,34 +413,80 @@ def consume_temporary_token(
     owner_id: int,
     category: str = "drawings",
 ) -> StoredUpload:
+    pending = stage_temporary_token_consumption(
+        token,
+        owner_id=owner_id,
+        category=category,
+    )
+    finalize_temporary_token_consumption(pending)
+    return pending.stored
+
+
+def stage_temporary_token_consumption(
+    token: str,
+    *,
+    owner_id: int,
+    category: str = "drawings",
+) -> PendingTemporaryConsumption:
+    """Claim a token and stage its permanent file without consuming the source."""
+
     metadata_path, source, metadata = _load_token(token, owner_id=owner_id)
     claimed = metadata_path.with_suffix(".claimed")
     try:
         metadata_path.replace(claimed)
     except OSError as error:
         raise UploadTokenError("图纸上传 token 已被使用") from error
-    validated = ValidatedUpload(
-        content=source.read_bytes(),
-        original_filename=str(metadata["original_filename"]),
-        extension=source.suffix.lower(),
-        content_type=str(metadata["content_type"]),
-        size=int(metadata["size"]),
-        sha256=str(metadata["sha256"]),
-    )
-    if (
-        len(validated.content) != validated.size
-        or hashlib.sha256(validated.content).hexdigest() != validated.sha256
-    ):
-        claimed.replace(metadata_path)
-        raise UploadTokenError("图纸临时文件校验失败")
     try:
+        validated = ValidatedUpload(
+            content=source.read_bytes(),
+            original_filename=str(metadata["original_filename"]),
+            extension=source.suffix.lower(),
+            content_type=str(metadata["content_type"]),
+            size=int(metadata["size"]),
+            sha256=str(metadata["sha256"]),
+        )
+        if (
+            len(validated.content) != validated.size
+            or hashlib.sha256(validated.content).hexdigest() != validated.sha256
+        ):
+            raise UploadTokenError("图纸临时文件校验失败")
         stored = store_private_upload(validated, category=category)
     except Exception:
-        claimed.replace(metadata_path)
+        try:
+            if claimed.is_file() and not metadata_path.exists():
+                claimed.replace(metadata_path)
+        except OSError:
+            pass
         raise
-    source.unlink(missing_ok=True)
-    claimed.unlink(missing_ok=True)
-    return stored
+    return PendingTemporaryConsumption(
+        metadata_path=metadata_path,
+        claimed_path=claimed,
+        source_path=source,
+        stored=stored,
+    )
+
+
+def finalize_temporary_token_consumption(
+    pending: PendingTemporaryConsumption,
+) -> None:
+    """Make a staged token consumption final after the database commits."""
+
+    pending.source_path.unlink(missing_ok=True)
+    pending.claimed_path.unlink(missing_ok=True)
+
+
+def rollback_temporary_token_consumption(
+    pending: PendingTemporaryConsumption,
+) -> list[str]:
+    """Remove the staged permanent file and restore the original token."""
+
+    errors = remove_stored_reference(pending.stored.reference)
+    try:
+        if pending.claimed_path.is_file() and not pending.metadata_path.exists():
+            pending.claimed_path.replace(pending.metadata_path)
+    except OSError as error:
+        errors.append(f"temporary token restore failed: {error}")
+    return errors
 
 
 def resolve_stored_reference(reference: str) -> Path:

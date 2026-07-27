@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -10,7 +11,17 @@ from pathlib import Path
 from typing import Literal
 
 import jwt
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, delete, func, or_, select
@@ -135,12 +146,15 @@ from app.services.product_drawings import (
 from app.services.secure_uploads import (
     DRAWING_POLICY,
     PDF_POLICY,
+    PendingTemporaryConsumption,
     UploadTokenError,
     UploadValidationError,
-    consume_temporary_token,
     create_temporary_token,
+    finalize_temporary_token_consumption,
     read_validated_upload,
     resolve_stored_reference,
+    rollback_temporary_token_consumption,
+    stage_temporary_token_consumption,
     stored_file_metadata,
     temporary_token_file,
 )
@@ -170,6 +184,7 @@ from app.services.semi_finished_inventory import (
 
 
 router = APIRouter()
+order_save_logger = logging.getLogger("erp.order_save")
 can_create = PermissionChecker("orders.create")
 can_read = PermissionChecker("orders.view")
 can_edit = PermissionChecker("orders.edit")
@@ -561,29 +576,52 @@ def _pdf_preview_token_error(message: str) -> HTTPException:
     )
 
 
-def _decode_pdf_preview_safety_token(token: str, user: User) -> dict:
+def _decode_pdf_preview_safety_token(
+    token: str,
+    user: User,
+    *,
+    observability: dict[str, object] | None = None,
+) -> dict:
+    required_claims = [
+        "sub",
+        "type",
+        "source_name",
+        "source_hash",
+        "recognition_status",
+        "customer_route_status",
+        "customer_match_status",
+        "integrity_status",
+        "matched_customer_id",
+        "iat",
+        "exp",
+    ]
     try:
         claims = jwt.decode(
             token,
             load_settings().secret_key,
             algorithms=["HS256"],
-            options={
-                "require": [
-                    "sub",
-                    "type",
-                    "source_name",
-                    "source_hash",
-                    "recognition_status",
-                    "customer_route_status",
-                    "customer_match_status",
-                    "integrity_status",
-                    "matched_customer_id",
-                    "iat",
-                    "exp",
-                ]
-            },
+            options={"require": required_claims},
         )
     except jwt.ExpiredSignatureError as error:
+        # Expiry still blocks the save.  A second signature-verified decode is
+        # used only to attach the trusted basename to the failure log.
+        try:
+            expired_claims = jwt.decode(
+                token,
+                load_settings().secret_key,
+                algorithms=["HS256"],
+                options={"require": required_claims, "verify_exp": False},
+            )
+        except jwt.PyJWTError:
+            expired_claims = {}
+        if (
+            observability is not None
+            and expired_claims.get("type") == PDF_PREVIEW_SAFETY_TOKEN_TYPE
+            and expired_claims.get("sub") == _pdf_preview_actor(user)
+        ):
+            observability["pdf_filename"] = _safe_pdf_log_filename(
+                expired_claims.get("source_name")
+            )
         raise _pdf_preview_token_error("PDF 预览确认已过期，请重新预览") from error
     except jwt.PyJWTError as error:
         raise _pdf_preview_token_error("PDF 预览确认无效，请重新预览") from error
@@ -592,6 +630,10 @@ def _decode_pdf_preview_safety_token(token: str, user: User) -> dict:
         or claims.get("sub") != _pdf_preview_actor(user)
     ):
         raise _pdf_preview_token_error("PDF 预览确认与当前操作员不匹配")
+    if observability is not None:
+        observability["pdf_filename"] = _safe_pdf_log_filename(
+            claims.get("source_name")
+        )
     try:
         claims["matched_customer_id"] = int(claims["matched_customer_id"])
     except (TypeError, ValueError) as error:
@@ -602,6 +644,8 @@ def _decode_pdf_preview_safety_token(token: str, user: User) -> dict:
 def _validate_pdf_import_safety(
     payload: OrderCreate,
     user: User,
+    *,
+    observability: dict[str, object] | None = None,
 ) -> tuple[list[str], dict]:
     context = payload.pdf_import_confirmation
     if context is None:
@@ -628,7 +672,11 @@ def _validate_pdf_import_safety(
                 detail=f"第{index}条 PDF 明细必须明确选择唯一常用箱产品后才能直接保存",
             )
 
-    claims = _decode_pdf_preview_safety_token(context.preview_safety_token, user)
+    claims = _decode_pdf_preview_safety_token(
+        context.preview_safety_token,
+        user,
+        observability=observability,
+    )
     if claims["integrity_status"] != "passed":
         raise HTTPException(
             status_code=409,
@@ -3673,6 +3721,60 @@ def _apply_existing_component_demands(
     ensure_component_production_tasks(db, item.id)
 
 
+def _safe_order_save_log_text(
+    value: object,
+    *,
+    max_length: int = 160,
+) -> str | None:
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or "")).strip()
+    return text[:max_length] or None
+
+
+def _safe_pdf_log_filename(value: object) -> str | None:
+    normalized = str(value or "").replace("\\", "/")
+    return _safe_order_save_log_text(Path(normalized).name, max_length=180)
+
+
+def _set_order_save_stage(
+    observability: dict[str, object] | None,
+    stage: str,
+) -> None:
+    if observability is not None:
+        observability["failure_stage"] = stage
+
+
+def _rollback_order_drawing_consumptions(
+    pending: list[PendingTemporaryConsumption],
+    *,
+    observability: dict[str, object] | None,
+) -> None:
+    for consumption in reversed(pending):
+        errors = rollback_temporary_token_consumption(consumption)
+        if errors:
+            order_save_logger.error(
+                "order_save_drawing_rollback_failed request_id=%s error_count=%s",
+                (observability or {}).get("request_id"),
+                len(errors),
+            )
+
+
+def _finalize_order_drawing_consumptions(
+    pending: list[PendingTemporaryConsumption],
+    *,
+    observability: dict[str, object] | None,
+) -> None:
+    for consumption in pending:
+        try:
+            finalize_temporary_token_consumption(consumption)
+        except OSError:
+            # The database and permanent drawing are already committed.  Keep
+            # the success response and let age-based cleanup remove the claim.
+            order_save_logger.exception(
+                "order_save_drawing_finalize_failed request_id=%s",
+                (observability or {}).get("request_id"),
+            )
+
+
 def _create_order_impl(
     payload: OrderCreate,
     db: Session,
@@ -3680,19 +3782,34 @@ def _create_order_impl(
     *,
     commit: bool = True,
     source_contract_id: int | None = None,
+    observability: dict[str, object] | None = None,
 ):
+    pending_drawing_consumptions: list[PendingTemporaryConsumption] = []
+    _set_order_save_stage(observability, "customer_scope")
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, current_user=user, db=db)
     if payload.items is None:
+        _set_order_save_stage(observability, "legacy_create")
         return _legacy_create(payload, user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    if not commit and any(item.temp_drawing_token for item in payload.items):
+        raise HTTPException(
+            status_code=400,
+            detail="当前订单来源不支持临时图纸，请改用普通新建订单保存",
+        )
+    _set_order_save_stage(observability, "pdf_safety")
     pdf_safety_override_reasons, pdf_safety_claims = _validate_pdf_import_safety(
         payload,
         user,
+        observability=observability,
     )
+    if observability is not None and pdf_safety_claims:
+        observability["pdf_filename"] = _safe_pdf_log_filename(
+            pdf_safety_claims.get("source_name")
+        )
     if (
         any(
             item.drawing_save_option in _PRODUCT_DRAWING_SAVE_OPTIONS
@@ -3726,6 +3843,7 @@ def _create_order_impl(
         raise HTTPException(status_code=400, detail=message)
 
     try:
+        _set_order_save_stage(observability, "validate_customer")
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
             raise HTTPException(status_code=400, detail="客户不存在")
@@ -3744,6 +3862,7 @@ def _create_order_impl(
             tuple[int | None, str | None, int | None, Material | None],
         ] = {}
         combination_provenances: dict[int, dict[str, object]] = {}
+        _set_order_save_stage(observability, "validate_items")
         for index, item_payload in enumerate(payload.items, start=1):
             validated_quantities[index] = _validated_order_quantity(
                 item_payload.quantity,
@@ -3885,6 +4004,7 @@ def _create_order_impl(
             )
 
         _validate_combination_group_consistency(combination_provenances)
+        _set_order_save_stage(observability, "inventory_preflight")
         reservation_plan_states = _preflight_reservation_plans(
             db,
             customer_id=customer.id,
@@ -3893,6 +4013,7 @@ def _create_order_impl(
         )
 
         if customer_po:
+            _set_order_save_stage(observability, "duplicate_check")
             existing_orders = db.scalars(
                 select(Order)
                 .options(selectinload(Order.items))
@@ -3930,6 +4051,7 @@ def _create_order_impl(
                         detail="系统中已存在相同客户、客户单号和明细的订单，未重复生成。",
                     )
 
+        _set_order_save_stage(observability, "persist_order")
         order_date = payload.order_date or beijing_today()
         order = Order(
             order_number=reserve_next_order_number(db, order_date),
@@ -3949,6 +4071,7 @@ def _create_order_impl(
 
         total = Decimal("0")
         created_items: list[OrderItem] = []
+        _set_order_save_stage(observability, "persist_items")
         for index, item_payload in enumerate(payload.items, start=1):
             try:
                 unit_price = Decimal(str(item_payload.unit_price))
@@ -4058,15 +4181,18 @@ def _create_order_impl(
             # P0-B: the client can submit only a short-lived, owner-bound token.
             # A filesystem path is never interpreted from request data.
             if item_payload.temp_drawing_token:
+                _set_order_save_stage(observability, "stage_drawing")
                 try:
-                    stored_drawing = consume_temporary_token(
+                    pending_drawing = stage_temporary_token_consumption(
                         item_payload.temp_drawing_token,
                         owner_id=user.id,
                         category="drawings",
                     )
                 except UploadTokenError as error:
                     raise HTTPException(status_code=400, detail=str(error)) from error
-                item.drawing_file = stored_drawing.reference
+                pending_drawing_consumptions.append(pending_drawing)
+                item.drawing_file = pending_drawing.stored.reference
+                _set_order_save_stage(observability, "persist_items")
             db.add(item)
             created_items.append(item)
 
@@ -4128,6 +4254,7 @@ def _create_order_impl(
                     description="人工明确确认后保存存在安全闸门状态的 PDF 草稿",
                 )
             )
+        _set_order_save_stage(observability, "bom_and_production")
         db.flush()  # 获取 item.id 以便处理图纸
         for index, created_item in enumerate(created_items, start=1):
             product = resolved_products[index]
@@ -4160,6 +4287,7 @@ def _create_order_impl(
                     thumbnail_path=item.drawing_file,
                     uploaded_by=user.id,
                 ))
+        _set_order_save_stage(observability, "inventory_reservation")
         _apply_order_reservation_plans(
             db,
             order=order,
@@ -4173,11 +4301,9 @@ def _create_order_impl(
             if created_item.combination_role != "set_parent":
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
-        if commit:
-            db.commit()
-            db.refresh(order)
-        else:
-            db.flush()
+        _set_order_save_stage(observability, "build_response")
+        db.flush()
+        db.refresh(order)
         response = _order_response(
             order,
             user,
@@ -4188,36 +4314,112 @@ def _create_order_impl(
             response["items"], payload.items, strict=True
         ):
             response_item["client_line_id"] = request_item.client_line_id
+        if commit:
+            _set_order_save_stage(observability, "commit")
+            db.commit()
+            _set_order_save_stage(observability, "finalize_drawing")
+            _finalize_order_drawing_consumptions(
+                pending_drawing_consumptions,
+                observability=observability,
+            )
+        _set_order_save_stage(observability, "completed")
         return response
     except HTTPException:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise
     except CompositeBOMError as error:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise raise_composite_bom_http(error) from error
     except CompositeBomWorkflowError as error:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ProductionWorkflowError as error:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except WarehouseInventoryError as error:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise HTTPException(
             status_code=error.status_code,
             detail=str(error),
         ) from error
     except IntegrityError as error:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise HTTPException(status_code=409, detail="订单号或订单数据冲突") from error
     except Exception:
         db.rollback()
+        _rollback_order_drawing_consumptions(
+            pending_drawing_consumptions,
+            observability=observability,
+        )
         raise
+
+
+def _order_save_error_code(error: Exception) -> str | None:
+    if not isinstance(error, HTTPException) or not isinstance(error.detail, dict):
+        return None
+    return _safe_order_save_log_text(error.detail.get("code"), max_length=80)
+
+
+def _safe_order_save_exc_info(error: Exception) -> tuple[type[Exception], Exception, object]:
+    safe_error = RuntimeError(type(error).__name__)
+    return RuntimeError, safe_error, error.__traceback__
+
+
+def _log_order_save_failure(
+    *,
+    error: Exception,
+    observability: dict[str, object],
+    status_code: int,
+) -> None:
+    order_save_logger.warning(
+        (
+            "order_save_failed request_id=%s actor_id=%s actor=%s "
+            "pdf_filename=%s customer_id=%s customer_po=%s item_count=%s "
+            "failure_stage=%s status=%s error_code=%s error_type=%s"
+        ),
+        observability.get("request_id"),
+        observability.get("actor_id"),
+        observability.get("actor"),
+        observability.get("pdf_filename"),
+        observability.get("customer_id"),
+        observability.get("customer_po"),
+        observability.get("item_count"),
+        observability.get("failure_stage"),
+        status_code,
+        _order_save_error_code(error),
+        type(error).__name__,
+        exc_info=_safe_order_save_exc_info(error),
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_order(
     payload: OrderCreate,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ):
@@ -4227,7 +4429,52 @@ def create_order(
     and ``create_or_refresh_production_task`` so normal orders and contractual
     orders follow the identical production workflow.
     """
-    return _create_order_impl(payload, db, user, commit=True)
+    request_id = _safe_order_save_log_text(
+        getattr(request.state, "request_id", None) if request is not None else None,
+        max_length=80,
+    )
+    observability: dict[str, object] = {
+        "request_id": request_id,
+        "actor_id": user.id,
+        "actor": _safe_order_save_log_text(user.username, max_length=80),
+        "pdf_filename": None,
+        "customer_id": payload.customer_id,
+        "customer_po": _safe_order_save_log_text(
+            payload.customer_po,
+            max_length=120,
+        ),
+        "item_count": len(payload.items or []),
+        "failure_stage": "entry",
+    }
+    try:
+        return _create_order_impl(
+            payload,
+            db,
+            user,
+            commit=True,
+            observability=observability,
+        )
+    except HTTPException as error:
+        _log_order_save_failure(
+            error=error,
+            observability=observability,
+            status_code=error.status_code,
+        )
+        raise
+    except Exception as error:
+        _log_order_save_failure(
+            error=error,
+            observability=observability,
+            status_code=500,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "订单保存失败：服务器内部错误",
+                "code": "ORDER_SAVE_INTERNAL_ERROR",
+                "request_id": request_id,
+            },
+        ) from error
 
 
 @router.get("/items/{item_id}/bom")

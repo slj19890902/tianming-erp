@@ -1,5 +1,135 @@
 # Codex 项目交接
 
+## 2026-07-27 P0-5B 阶段 2 活动运行目录切换与失败恢复（老板人工 UAT 已通过）
+
+- 独立 worktree：
+  `D:\tm-worktrees\erp-p0-5b-stage2-active-runtime-switch-20260727`；分支：
+  `codex/p0-5b-stage2-active-runtime-switch-20260727`；基线：
+  `origin/factory-current-baseline@0982e107053f9161a23501cc0c88429497e42307`。
+  已在该基线上干净重放已验收 P0-5A 与 P0-5B 阶段 1。老板已于
+  2026-07-27 确认本阶段人工 UAT 通过，并授权形成独立提交、推送当前
+  `codex/` 候选分支；该授权不包含更新 `origin/factory-current-baseline`、
+  `origin/main`、工厂正式发布或执行真实回退。
+- 新增离线 `rollback_execute.py/.ps1`。Prepare 重新验签发布与阶段 1 证据，
+  在正式 checkout 外创建现场备份、候选 SQLite、旧版活动目录、签名计划和短时
+  一次口令；完整数据库回退另需独立数据库口令。Prepare 不停服、不创建活动
+  指针、不写原正式数据库。
+- Apply 先在当前服务仍运行时，让旧目标使用本轮独立数据库、会话密钥、
+  private uploads、临时上传和备份目录在 loopback 端口预热；预热前后正式私有
+  文件清单必须一致。随后按签名进程身份精确停服，原子发布活动运行指针，形成
+  正式开放证据，再按该指针启动目标。
+- 正式开放前只允许一次受控恢复当前运行目录；恢复也失败时签发
+  `stopped_manual_recovery_required` 并保持停机。一旦自动恢复许可已经消费，
+  即使 intent 尚未来得及写入，也禁止 restore/revoke，必须保留目标指针和候选
+  数据库并转人工处理。原正式 PID 已退出但端口被未知 PID 抢占时不误杀未知
+  进程，使用独立签名终态记录双方 PID。
+- `start_erp.ps1` 以后只通过固定参数调用控制器解析受签名活动指针；进程身份、
+  唯一监听、单 worker、命令行、Python 和健康响应均为 fail-closed。控制文件、
+  活动目录和可变文件副本中的 symlink/reparse point、路径逃逸和同内容数据库
+  替换均会阻断。
+- 普通 `release_erp.ps1` 以及直接调用的 `release_erp.py` 在 Prepare/Apply 的
+  第一阶段统一检查活动指针和持久激活声明。未撤销声明、正式开放证据、损坏或
+  未知状态存在时，普通发布不能覆盖阶段 2 现场。
+- 自动回归：
+  `test_release_rollback_execution.py`、`test_release_rollback_compatibility.py`、
+  `test_release_rollback_safety.py`、`test_release_safety.py`、
+  `test_backup_retention.py`、`test_phase9_system.py` 合计
+  `95 passed, 36 warnings`；warnings 为基线既有 `datetime.utcnow()` 弃用提示。
+  Python 编译、4 份 PowerShell 5.1 AST、wrapper LibraryOnly、
+  `git diff --check` 和最终安全复审均通过。
+- 隔离 UAT：
+  `D:\tm-uat\p0-5b-stage2-runtime-20260727-202348\formal`。当前模拟服务只监听
+  `127.0.0.1:18161`，目标预热只监听 `127.0.0.1:18162`，均为单 worker 且
+  `/api/health={"ok":true}`；目标停止后当前服务仍健康。两份隔离库均为
+  `cr74v8x9z63`、`integrity_check=ok`、外键异常 0，最终 SHA-256 均为
+  `F1C5E669E1EF06F0A7C1A0117EEA2598329DA00A921AB812D4C6911502607030`。
+  沙箱控制器回归 `50 passed, 1 deselected`；被排除的历史夹具固定使用 18139，
+  与本轮仅 18161/18162 的端口边界冲突，其真实预热目的已由 18162 实机验证覆盖。
+  最终 18161、18162 均已关闭。
+- 本轮没有新增 migration，Alembic 唯一 head 仍为 `cr74v8x9z63`。家庭侧只
+  创建并启动隔离 SQLite；没有连接、复制、迁移或写入工厂正式数据库，没有停止
+  工厂服务，也没有执行真实回退。完整证据见
+  `docs/migration_reports/P0-5B_STAGE2_ISOLATED_UAT_20260727.md`。
+
+## 2026-07-27 P0-5B 阶段 1 上一版本隔离兼容演练（老板人工 UAT 已通过）
+
+- 本轮以老板已验收并推送的 P0-5A 提交
+  `8cdd12cf3660e17fdcbca55696a15c2c0b582406` 建立独立 worktree
+  `D:\tm-worktrees\erp-p0-5b-isolated-rollback-executor-20260727` 和分支
+  `codex/p0-5b-isolated-rollback-executor-20260727`。未连接、复制、迁移或
+  写入工厂正式数据库，未停止正式服务，未修改 `origin/main`。
+- P0-5B 按两个授权阶段实施。本阶段只新增
+  `scripts\admin\rollback_runtime.py/.ps1`：从 P0-5A 已签名最近发布指针自动
+  定位上一版本，将 Git archive 解包到 checkout 外的新目录，并只使用 SQLite
+  Backup API 生成的数据库副本在 `127.0.0.1` 非 8000 端口演练。
+- 数据没有变化时生成“完整回退兼容演练”证据；数据已变化但 revision 与旧代码
+  head 相同时生成“仅代码回退兼容演练”证据；revision 不同、备份/签名损坏、
+  依赖真正变化、端口占用或旧程序产生任何写入时均阻断。阶段 1 的模式是证据
+  分类，不会自动执行正式回退；正式选择与切换仍需阶段 2 再次明确授权。
+- 依赖清单按规范化 UTF-8 内容比较，避免 Windows CRLF 与 Git LF 造成误报；
+  旧程序使用临时环境会话密钥并禁写 `.pyc`，启动前后的代码文件清单必须完全
+  一致。报告同时绑定当前数据库逻辑指纹、演练副本、旧代码目录、依赖、端口、
+  健康结果和两个独立 HMAC purpose。旧进程只继承最小系统环境白名单，使用
+  Python 隔离模式；健康响应必须绑定本次启动的进程树，结束后进程树和端口必须
+  全部退出。
+- 阶段 1 报告包含随机证据编号、24 小时有效期并固定
+  `execution_eligible=false`；它只能证明隔离兼容，不是正式回退授权。正式
+  checkout HEAD 必须等于签名发布 SHA；回退控制文件、实际 Python 依赖、指针、
+  发布报告、旧代码目录、演练库或当前库任一漂移后，重新验签都会失败。
+- 真实隔离集成测试已用当前提交的上一 Git 版本、由空库迁移得到的临时 SQLite
+  副本和 `127.0.0.1:18139` 完成 Alembic current 与健康启动；正式 checkout
+  和正式数据库未参与。没有新增 migration，Alembic 唯一 head 仍为
+  `cr74v8x9z63`。
+- 老板已于 2026-07-27 确认 P0-5B 阶段 1 人工 UAT 通过，并授权形成独立提交、
+  推送当前 `codex/` 候选分支。该授权不包含更新 `origin/main`、更新工厂正式
+  基线、写入正式数据库或进入 P0-5B 阶段 2；阶段 2 仍须另立任务并再次取得
+  明确授权。
+
+## 2026-07-27 P0-5A 发布回退证据与离线故障检查（人工验收通过）
+
+- 本轮从工厂已发布正式基线
+  `origin/factory-current-baseline@9a1fdd9eea90fc9833651937fddf8c468f2e1091`
+  建立独立 worktree
+  `D:\tm-worktrees\erp-p0-5-release-rollback-safety-20260727`
+  和分支 `codex/p0-5-release-rollback-safety-20260727`。没有修改正式目录原有
+  `AGENTS.md`、`docs/CODEX_HANDOFF.md` 本机改动，没有连接或写入正式数据库，
+  也没有修改 `origin/main`。
+- P0-5 分为两步。本候选只完成 P0-5A：发布报告升级为签名 schema v3，记录真正的
+  上一远端正式 SHA、目标 SHA、两端 Alembic head、更新前备份、配置/依赖指纹；
+  报告和最近发布指针均使用从现有会话密钥域隔离派生的 HMAC-SHA256 签名，先
+  验签再读取授权口令或回退资格；文件被手工改写、签名密钥轮换或缺失时均阻断。
+  配置指纹同时覆盖当前 Python 环境实际安装包版本及安装记录，不只核对
+  requirements 声明文件；
+  停服迁移完成后计算全部应用表逻辑指纹，健康启动后只核对数据库未变化，再原子
+  更新 `data\release_state\latest_completed_release.json`。启动窗口出现写入或
+  完成证据失败时，发布脚本会重新停止刚启动的 ERP。
+- 全表逻辑指纹可发现 INSERT、UPDATE、DELETE 和“行数不变但内容变化”，并纳入
+  `sqlite_sequence`；日常故障检查先用 SQLite Backup API 分页创建系统临时
+  一致性副本，再在副本执行长时间哈希，避免锁住工厂正式库。
+- 新增 `scripts\windows\erp_fault_check.bat` 和只读
+  `scripts\admin\rollback_erp.ps1/.py`。默认界面只显示短程序编号、服务状态、
+  数据状态、备份状态和明确下一步；无原因、口令、SHA 或 revision 输入。技术
+  详情只在显式 `-TechnicalDetails` 时显示。桌面快捷方式安装器会额外创建
+  “天明ERP故障检查”，但不会创建更新或恢复按钮。
+- 只读判断只分为“具备完整回退申请条件”和“当前不能安全回退”。数据库只要发生
+  变化，即使 revision 相同也一律阻断；P0-5A 不接受发布报告内可被手工填写的
+  “兼容”声明。仅代码回退必须等 P0-5B 建立绑定当前数据指纹、可验签且不可伪造
+  的隔离兼容证据链后再评估。
+- production 环境网页 `/api/system/backups/restore` 已 fail-closed 禁用；
+  test/UAT 底层恢复测试仍可隔离执行。发布前备份、回退前现场备份统一纳入自动
+  清理、网页批量清理和单文件删除保护，不再只依赖“最新 5 份”。
+- 本轮没有新增 migration，Alembic 唯一 head 仍为 `cr74v8x9z63`。发布/回退、
+  备份、系统 API 和启动脚本定向回归 `57 passed`；Python 编译、三份
+  PowerShell 5.1 语法、两个 Python CLI 直接执行和 `git diff --check` 通过。
+  全量回归运行到 `102 passed` 后遇到基线既有的 N031
+  `auth_version` downgrade fail-closed 测试环境授权缺失，和本轮改动无关。
+- 老板已于 2026-07-27 完成人工 UAT：无业务写入时显示“具备完整回退申请
+  条件”；数据库内容变化但行数不变时、签名报告被修改时、更新前备份损坏时和
+  运行配置变化时均按预期阻断。老板随后明确确认 P0-5A 整体验收通过并授权提交、
+  推送独立 `codex/` 候选分支。本授权不包含更新
+  `origin/factory-current-baseline`、`origin/main`、部署工厂系统或执行回退。
+  P0-5B 实际回退执行器仍须独立开发、隔离演练和再次授权。
+
 ## 2026-07-27 全部已验收候选统一发布集成
 
 - 唯一远端正式基线：

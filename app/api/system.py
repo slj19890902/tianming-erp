@@ -21,6 +21,7 @@ from app.core.time_contract import (
     utc_naive_to_api,
 )
 from app.core.config import load_settings, normalize_path
+from app.core.backup_retention import build_cleanup_plan
 from app.core.database import (
     backup_to_nas,
     create_sqlite_engine,
@@ -222,10 +223,21 @@ def list_backups(
         }
     try:
         files = _list_backup_files(backup_dir)
+        cleanup_plan = build_cleanup_plan(
+            backup_dir=backup_dir,
+            keep=BACKUP_KEEP_COUNT,
+        )
+        protected_names = {
+            path.name
+            for path in (
+                *cleanup_plan.regular_keep,
+                *cleanup_plan.protected_files,
+            )
+        }
         items = []
-        for index, path in enumerate(files):
+        for path in files:
             stat = path.stat()
-            is_protected = index < BACKUP_KEEP_COUNT
+            is_protected = path.name in protected_names
             items.append(
                 {
                     "filename": path.name,
@@ -237,8 +249,8 @@ def list_backups(
                 }
             )
         total_size = sum(item["size"] for item in items)
-        protected_count = min(len(items), BACKUP_KEEP_COUNT)
-        deletable_count = max(0, len(items) - BACKUP_KEEP_COUNT)
+        protected_count = len(protected_names)
+        deletable_count = len(cleanup_plan.regular_delete)
         return {
             "items": items,
             "backup_dir": str(backup_dir),
@@ -289,13 +301,24 @@ def cleanup_preview(
     if not backup_dir.exists():
         raise HTTPException(status_code=503, detail="备份目录不可达")
     try:
-        files = _list_backup_files(backup_dir)
+        plan = build_cleanup_plan(
+            backup_dir=backup_dir,
+            keep=BACKUP_KEEP_COUNT,
+        )
     except OSError as error:
         raise HTTPException(status_code=503, detail="无法访问备份目录") from error
 
     will_keep = []
     will_delete = []
-    for index, path in enumerate(files):
+    protected_paths = sorted(
+        (*plan.regular_keep, *plan.protected_files),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path, target in (
+        *((path, will_keep) for path in protected_paths),
+        *((path, will_delete) for path in plan.regular_delete),
+    ):
         stat = path.stat()
         entry = {
             "filename": path.name,
@@ -304,10 +327,7 @@ def cleanup_preview(
             ),
             "size": stat.st_size,
         }
-        if index < BACKUP_KEEP_COUNT:
-            will_keep.append(entry)
-        else:
-            will_delete.append(entry)
+        target.append(entry)
 
     freed_size = sum(item["size"] for item in will_delete)
     return {
@@ -330,11 +350,14 @@ def cleanup_backups(
     if not backup_dir.exists():
         raise HTTPException(status_code=503, detail="备份目录不可达")
     try:
-        files = _list_backup_files(backup_dir)
+        plan = build_cleanup_plan(
+            backup_dir=backup_dir,
+            keep=BACKUP_KEEP_COUNT,
+        )
     except OSError as error:
         raise HTTPException(status_code=503, detail="无法访问备份目录") from error
 
-    to_delete = files[BACKUP_KEEP_COUNT:]
+    to_delete = plan.regular_delete
     deleted_files: list[str] = []
     freed_size = 0
     errors: list[str] = []
@@ -406,11 +429,20 @@ def delete_backup(
 
     # 确认文件是否在保护范围内（最新 BACKUP_KEEP_COUNT 个）
     try:
-        files = _list_backup_files(backup_dir)
+        plan = build_cleanup_plan(
+            backup_dir=backup_dir,
+            keep=BACKUP_KEEP_COUNT,
+        )
     except OSError as error:
         raise HTTPException(status_code=503, detail="无法访问备份目录") from error
 
-    protected_names = {path.name for path in files[:BACKUP_KEEP_COUNT]}
+    protected_names = {
+        path.name
+        for path in (
+            *plan.regular_keep,
+            *plan.protected_files,
+        )
+    }
     if filename in protected_names:
         raise HTTPException(
             status_code=409,
@@ -455,6 +487,11 @@ def restore_backup(
     user: User = Depends(admin_only),
 ) -> dict:
     current = load_settings()
+    if current.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="正式环境禁止在网页内恢复数据库，请使用离线发布回退门禁",
+        )
     source = _safe_backup_path(current.backup_dir, payload.filename)
     if not source.is_file():
         raise HTTPException(status_code=404, detail="备份文件不存在")

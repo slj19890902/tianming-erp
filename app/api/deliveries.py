@@ -47,6 +47,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.location_candidates import is_operational_location
 from app.services.delivery_numbering import (
     DeliveryNumberingError,
     next_delivery_number,
@@ -410,9 +411,18 @@ def _pick_source_location(
     )
     pallet_item = lot.pallet_item if lot is not None else None
     pallet = pallet_item.pallet if pallet_item is not None else None
+    location_operational = bool(
+        location is not None
+        and is_operational_location(
+            db,
+            location,
+            warehouse_types={"finished", "shared"},
+        )
+    )
     needs_relocation = bool(
         (pallet is not None and pallet.needs_relocation)
         or (location is not None and location.placement_status == "unplaced")
+        or (location is not None and not location_operational)
     )
     return {
         "location_id": location.id if location else None,
@@ -424,6 +434,7 @@ def _pick_source_location(
         "placement_status": location.placement_status if location else None,
         "pallet_id": pallet.id if pallet else None,
         "pallet_code": pallet.pallet_code if pallet else None,
+        "location_operational": location_operational,
         "needs_relocation": needs_relocation,
     }
 
@@ -592,10 +603,17 @@ def _pick_item_location_plan(
                 ),
                 "pallet_id": None if is_direct else location["pallet_id"],
                 "pallet_code": None if is_direct else location["pallet_code"],
+                "location_operational": (
+                    True if is_direct else location["location_operational"]
+                ),
                 "needs_relocation": (
                     False if is_direct else location["needs_relocation"]
                 ),
-                "requires_attention": False,
+                "requires_attention": bool(
+                    not is_direct
+                    and location["location_id"] is not None
+                    and not location["location_operational"]
+                ),
             }
         )
 
@@ -626,6 +644,7 @@ def _pick_item_location_plan(
                     "placement_status": None,
                     "pallet_id": None,
                     "pallet_code": None,
+                    "location_operational": True,
                     "needs_relocation": False,
                     "requires_attention": False,
                 }
@@ -663,6 +682,7 @@ def _pick_item_location_plan(
                     "placement_status": None,
                     "pallet_id": None,
                     "pallet_code": None,
+                    "location_operational": False,
                     "needs_relocation": False,
                     "requires_attention": True,
                 }
@@ -694,6 +714,7 @@ def _pick_item_location_plan(
                     "placement_status": None,
                     "pallet_id": None,
                     "pallet_code": None,
+                    "location_operational": True,
                     "needs_relocation": False,
                     "requires_attention": False,
                 }
@@ -767,8 +788,6 @@ def _pick_location_groups(item_responses: list[dict]) -> list[dict]:
         )
 
     return sorted(groups.values(), key=sort_key)
-
-
 def _pick_item_response(
     db: Session,
     item: DeliveryPickTaskItem,
@@ -1163,6 +1182,28 @@ def _require_order_item_customer_access(
         require_customer_access(customer_id, user, db)
 
 
+def _delivery_location_metadata(
+    db: Session,
+    location: WarehouseLocation | None,
+    *,
+    finished: bool,
+) -> dict:
+    warehouse_types = (
+        {"finished", "shared"}
+        if finished
+        else {"semi_finished", "shared"}
+    )
+    return {
+        "warehouse_floor": location.warehouse_floor if location else None,
+        "area_code": location.area_code if location else None,
+        "location_operational": is_operational_location(
+            db,
+            location,
+            warehouse_types=warehouse_types,
+        ),
+    }
+
+
 def _composite_inventory_sources_for_order_item(
     db: Session,
     *,
@@ -1198,6 +1239,11 @@ def _composite_inventory_sources_for_order_item(
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
             "location_name": location.location_name if location else None,
+            **_delivery_location_metadata(
+                db,
+                location,
+                finished=source_type == "component_stock",
+            ),
             "component_type": "bom_component",
             "component_snapshot_id": demand.snapshot_id,
             "component_code": demand.component_code,
@@ -1622,6 +1668,11 @@ def _inventory_sources_for_order_item(
                 "location_id": location.id if location else None,
                 "location_code": location.location_code if location else None,
                 "location_name": location.location_name if location else None,
+                **_delivery_location_metadata(
+                    db,
+                    location,
+                    finished=reservation.reservation_type == "finished_order",
+                ),
                 "component_type": (
                     requirement.component_type if requirement else "whole"
                 ),

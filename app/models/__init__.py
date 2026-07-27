@@ -112,6 +112,11 @@ from app.models.quotation import (  # noqa: E402,F401
     QuotationItem,
     QuotationOrder,
 )
+from app.models.customer_contract import (  # noqa: E402,F401
+    ContractDailySequence,
+    CustomerContract,
+    CustomerContractItem,
+)
 from app.models.production import (  # noqa: E402,F401
     ProductionCompletion,
     ProductionCompletionBatch,
@@ -133,6 +138,8 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     SemiFinishedLotAllowedProduct,
     SemiFinishedMatchRule,
     SemiFinishedMatchRuleProduct,
+    WarehouseArea,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.models.incoming_receipt import (  # noqa: E402,F401

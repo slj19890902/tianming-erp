@@ -44,6 +44,11 @@ from app.services.composite_bom_workflow import (
     is_composite_order_item,
     kit_availability,
 )
+from app.services.location_candidates import (
+    has_space_ledger,
+    list_operational_locations,
+    operational_location_issue,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -711,15 +716,13 @@ def _production_stock_location(
     pallet_id: int | None,
 ) -> WarehouseLocation:
     if location_id is None:
-        raise ProductionWorkflowError("库存完工必须选择三楼成品库位", 400)
+        raise ProductionWorkflowError("库存完工必须选择成品库位", 400)
     location = db.get(WarehouseLocation, location_id)
     if location is None:
-        raise ProductionWorkflowError("三楼成品库位不存在", 404)
-    if (
+        raise ProductionWorkflowError("成品库位不存在", 404)
+    if not has_space_ledger(db) and (
         location.source_version != "V11"
         or location.warehouse_floor != 3
-        or location.warehouse_type not in {"finished", "shared"}
-        or not location.is_active
     ):
         raise ProductionWorkflowError(
             "生产完工库存仅允许进入已启用的三楼成品或共用库位",
@@ -727,7 +730,17 @@ def _production_stock_location(
         )
     if getattr(location, "placement_status", None) == "unplaced":
         raise ProductionWorkflowError(
-            "该三楼成品库位尚未完成空间放置，不能办理生产入库",
+            "该成品库位尚未完成空间放置，不能办理生产完工入库",
+            409,
+        )
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types={"finished", "shared"},
+    )
+    if issue:
+        raise ProductionWorkflowError(
+            f"{issue}，不能办理生产完工入库",
             409,
         )
     pallet = _current_pallet(db, location.id)
@@ -745,37 +758,36 @@ def _production_stock_location(
 
 
 def list_temporary_locations(db: Session) -> list[dict]:
-    locations = db.scalars(
-        select(WarehouseLocation)
-        .where(
-            WarehouseLocation.source_version == "V11",
-            WarehouseLocation.warehouse_floor == 3,
-            WarehouseLocation.warehouse_type.in_(("finished", "shared")),
-            WarehouseLocation.is_active.is_(True),
-            or_(
-                WarehouseLocation.placement_status.is_(None),
-                WarehouseLocation.placement_status != "unplaced",
-            ),
-        )
-        .order_by(WarehouseLocation.sort_order, WarehouseLocation.location_code)
-    ).all()
+    locations = list_operational_locations(
+        db,
+        warehouse_types={"finished", "shared"},
+    )
+    if not has_space_ledger(db):
+        locations = [
+            candidate
+            for candidate in locations
+            if candidate.location.source_version == "V11"
+            and candidate.location.warehouse_floor == 3
+        ]
     result: list[dict] = []
-    for location in locations:
+    for candidate in locations:
+        location = candidate.location
         pallet = _current_pallet(db, location.id)
-        occupied = False
-        if pallet is not None:
-            occupied = (
-                db.scalar(
-                    select(InventoryPalletItem.id)
-                    .where(InventoryPalletItem.pallet_id == pallet.id)
-                    .limit(1)
-                )
-                is not None
-            )
+        occupied = candidate.occupied
         result.append(
             {
                 "id": location.id,
+                "warehouse_floor": location.warehouse_floor,
+                "floor_id": candidate.floor.id if candidate.floor else None,
+                "floor_code": (
+                    candidate.floor.floor_code if candidate.floor else None
+                ),
+                "floor_name": (
+                    candidate.floor.floor_name if candidate.floor else None
+                ),
+                "area_id": candidate.area.id if candidate.area else None,
                 "area_code": location.area_code,
+                "area_name": candidate.area.area_name if candidate.area else None,
                 "location_code": location.location_code,
                 "location_name": location.location_name,
                 "pallet_id": pallet.id if pallet is not None else None,

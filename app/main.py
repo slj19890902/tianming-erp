@@ -34,6 +34,7 @@ from app.api.pricing import router as pricing_router
 from app.api.products import router as products_router
 from app.api.requisition import router as requisition_router
 from app.api.quotations import router as quotations_router
+from app.api.contracts import router as contracts_router
 from app.api.pdf_training import router as pdf_training_router
 from app.api.production import router as production_router
 from app.api.system import router as system_router
@@ -228,6 +229,7 @@ def create_app() -> FastAPI:
     spa_page_paths = {
         "/dashboard",
         "/customers",
+        "/contracts",
         "/quotations",
         "/products",
         "/orders",
@@ -271,6 +273,18 @@ def create_app() -> FastAPI:
         application.add_api_route(
             "/quotation-print.html",
             lambda: FileResponse(quotation_print_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/contract-print.html" for route in application.routes):
+        contract_print_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "contract-print.html"
+        )
+        application.add_api_route(
+            "/contract-print.html",
+            lambda: FileResponse(contract_print_path),
             methods=["GET"],
             include_in_schema=False,
         )
@@ -481,6 +495,12 @@ def create_app() -> FastAPI:
             quotations_router,
             prefix="/api/quotations",
             tags=["quotations"],
+        )
+    if not any(route.path == "/api/contracts" for route in application.routes):
+        application.include_router(
+            contracts_router,
+            prefix="/api/contracts",
+            tags=["contracts"],
         )
     if not any(route.path == "/api/system/backups" for route in application.routes):
         application.include_router(

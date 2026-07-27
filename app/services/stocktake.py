@@ -16,6 +16,10 @@ from app.models.warehouse_inventory import (
     InventoryMovement,
     WarehouseLocation,
 )
+from app.services.location_candidates import (
+    list_operational_locations,
+    operational_location_issue,
+)
 
 
 COUNTABLE_LOT_STATUSES = frozenset({"active", "frozen"})
@@ -78,22 +82,39 @@ def _countable_lots_statement(location_id: int):
 
 def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
     location = db.get(WarehouseLocation, location_id)
-    if location is None or not location.is_active:
+    if location is None:
         raise StocktakeError(
             "可盘点库位不存在或已停用",
             404,
             "STOCKTAKE_LOCATION_NOT_FOUND",
         )
-    if getattr(location, "placement_status", None) == "unplaced":
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types={"finished", "shared"},
+    )
+    if issue:
+        error_code = (
+            "STOCKTAKE_LOCATION_UNPLACED"
+            if (location.placement_status or "placed") != "placed"
+            else "STOCKTAKE_LOCATION_NOT_OPERATIONAL"
+        )
         raise StocktakeError(
-            "该库位尚未完成空间放置，不能发起盘点",
+            f"{issue}，不能发起成品盘点",
             409,
-            "STOCKTAKE_LOCATION_UNPLACED",
+            error_code,
         )
     return location
 
 
 def list_locations(db: Session) -> list[dict[str, object]]:
+    candidates = list_operational_locations(
+        db,
+        warehouse_types={"finished", "shared"},
+    )
+    candidate_by_id = {row.location.id: row for row in candidates}
+    if not candidate_by_id:
+        return []
     active_count = func.sum(case((InventoryLot.status == "active", 1), else_=0))
     frozen_count = func.sum(case((InventoryLot.status == "frozen", 1), else_=0))
     on_hand = func.sum(
@@ -120,11 +141,7 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             ),
         )
         .where(
-            WarehouseLocation.is_active.is_(True),
-            or_(
-                WarehouseLocation.placement_status == "placed",
-                WarehouseLocation.placement_status.is_(None),
-            ),
+            WarehouseLocation.id.in_(candidate_by_id),
         )
         .group_by(WarehouseLocation.id)
         .order_by(
@@ -139,7 +156,33 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             "location_code": location.location_code,
             "location_name": location.location_name,
             "warehouse_type": location.warehouse_type,
+            "warehouse_floor": location.warehouse_floor,
+            "floor_id": (
+                candidate_by_id[location.id].floor.id
+                if candidate_by_id[location.id].floor
+                else None
+            ),
+            "floor_code": (
+                candidate_by_id[location.id].floor.floor_code
+                if candidate_by_id[location.id].floor
+                else None
+            ),
+            "floor_name": (
+                candidate_by_id[location.id].floor.floor_name
+                if candidate_by_id[location.id].floor
+                else None
+            ),
+            "area_id": (
+                candidate_by_id[location.id].area.id
+                if candidate_by_id[location.id].area
+                else None
+            ),
             "area_code": location.area_code,
+            "area_name": (
+                candidate_by_id[location.id].area.area_name
+                if candidate_by_id[location.id].area
+                else None
+            ),
             "placement_status": location.placement_status or "placed",
             "is_temporary": location.is_temporary,
             "active_lot_count": int(active_lot_count),

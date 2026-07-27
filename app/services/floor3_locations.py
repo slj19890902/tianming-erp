@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
@@ -22,6 +22,7 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     WarehouseLocation,
 )
+from app.services.location_candidates import operational_location_issue
 
 
 class Floor3LocationError(ValueError):
@@ -95,6 +96,7 @@ def _pallet(
     pallet_id: int,
     *,
     refresh: bool = False,
+    allow_non_operational_source: bool = False,
 ) -> InventoryPallet:
     query = (
         select(InventoryPallet)
@@ -110,8 +112,20 @@ def _pallet(
     row = db.scalar(query)
     if row is None:
         raise Floor3LocationError("栈板不存在", status_code=404)
-    if row.location_id is not None:
-        _location(db, row.location_id)
+    if row.location_id is not None and not allow_non_operational_source:
+        location = db.get(WarehouseLocation, row.location_id)
+        if location is None:
+            raise Floor3LocationError("栈板所在库位不存在", status_code=409)
+        issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types={"finished", "shared"},
+        )
+        if issue:
+            raise Floor3LocationError(
+                f"栈板所在库位不可用：{issue}",
+                status_code=409,
+            )
     return row
 
 
@@ -167,9 +181,12 @@ def _claim_empty_active_location(
         update(WarehouseLocation)
         .where(
             WarehouseLocation.id == location.id,
-            WarehouseLocation.warehouse_floor == 3,
-            WarehouseLocation.source_version == "V11",
             WarehouseLocation.is_active.is_(True),
+            or_(
+                WarehouseLocation.placement_status == "placed",
+                WarehouseLocation.placement_status.is_(None),
+            ),
+            WarehouseLocation.warehouse_type.in_(("finished", "shared")),
             ~_active_pallet_exists(location.id),
         )
         .values(
@@ -185,8 +202,6 @@ def _claim_empty_active_location(
     is_active = db.scalar(
         select(WarehouseLocation.is_active).where(
             WarehouseLocation.id == location.id,
-            WarehouseLocation.warehouse_floor == 3,
-            WarehouseLocation.source_version == "V11",
         )
     )
     if is_active is not True:
@@ -970,19 +985,35 @@ def move_pallet(
         )
 
     try:
-        row = _pallet(db, pallet_id)
+        row = _pallet(
+            db,
+            pallet_id,
+            allow_non_operational_source=True,
+        )
         if not row.is_current or row.location_id is None:
             raise Floor3LocationError(
                 "栈板当前不在有效货位，不能移位", status_code=409
             )
         if row.location_id == to_location_id:
             raise Floor3LocationError("目标货位与当前货位相同")
-        source = _location(db, row.location_id)
+        source = db.get(WarehouseLocation, row.location_id)
+        if source is None:
+            raise Floor3LocationError("栈板所在库位不存在", status_code=409)
         if source.storage_type == "rack":
             raise Floor3LocationError("真实木栈板不能从货架格移出", status_code=409)
-        target = _location(db, to_location_id)
+        target = db.get(WarehouseLocation, to_location_id)
+        if target is None:
+            raise Floor3LocationError("目标货位不存在", status_code=404)
         if target.storage_type == "rack":
             raise Floor3LocationError("真实木栈板不能移入货架格", status_code=409)
+        issue = operational_location_issue(
+            db,
+            target,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+        )
+        if issue:
+            raise Floor3LocationError(f"目标货位不可用：{issue}", status_code=409)
         # Acquire SQLite's writer lock before opening a savepoint. Two deferred
         # read transactions cannot reliably upgrade to writers concurrently.
         _claim_empty_active_location(db, target)

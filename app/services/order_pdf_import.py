@@ -19,6 +19,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.api.materials import _parse_layer_weights
 from app.services.pricing import PricingError, calculate_price
+from app.services.product_readiness import material_comparison, product_readiness
 from app.services.template_regex import safe_regex_finditer, safe_regex_search
 
 
@@ -2422,6 +2423,7 @@ def _product_candidate(product: Product) -> dict:
             if product.manual_modified_at is not None
             else None
         ),
+        "readiness": product_readiness(product),
     }
 
 
@@ -2636,6 +2638,10 @@ def _apply_standard_product(item: dict, product: Product) -> None:
     pdf_size = item.get("size_spec") or item.get("raw_spec_model") or ""
     pdf_material_code = item.get("old_material_code") or ""
     std_size = _product_spec(product) or ""
+    material_comparison_state = material_comparison(
+        pdf_material_code or item.get("raw_material"),
+        material.code if material else product.legacy_material_text,
+    )
 
     # 标准字段：常用箱优先
     if product.product_name:
@@ -2700,9 +2706,11 @@ def _apply_standard_product(item: dict, product: Product) -> None:
         "pdf_size": pdf_size,
         "standard_size": std_size,
         "size_differs": bool(std_size and pdf_size and _normalized_text(std_size) != _normalized_text(pdf_size)),
-        "pdf_material_code": pdf_material_code,
+        "pdf_material_code": pdf_material_code or item.get("raw_material"),
         "standard_material_label": _material_label(material),
-        "material_differs": bool(material and pdf_material_code),
+        "material_comparison": material_comparison_state,
+        "material_differs": material_comparison_state == "different",
+        "readiness": product_readiness(product),
         "manual_modified": bool(product.manual_modified),
     }
 
@@ -2804,8 +2812,10 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
         # v0.19.2 六/七：唯一命中常用箱 → 标准字段以常用箱为准（不覆盖 PDF 订单事实字段）
         if selected is not None:
             _apply_standard_product(item, selected)
+            item["readiness"] = product_readiness(selected)
         else:
             item["standard_match"] = {"matched": False}
+            item["readiness"] = None
         # 客户单价仍以 PDF 为准；仅当 PDF 未识别到单价时回退常用箱默认价
         if selected and not item.get("unit_price") and selected.sale_unit_price is not None:
             item["unit_price"] = str(selected.sale_unit_price)

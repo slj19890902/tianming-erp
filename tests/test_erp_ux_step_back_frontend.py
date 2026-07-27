@@ -6,9 +6,10 @@ WAREHOUSE = Path("static/warehouse.html").read_text(encoding="utf-8")
 
 
 def test_pdf_import_shows_common_box_adaptation_and_inline_full_editor() -> None:
-    assert "常用箱已修改" in INDEX
-    assert "常用箱未修改" in INDEX
-    assert "立即编辑常用箱" in INDEX
+    assert "资料已完善" in INDEX
+    assert "commonBoxReadiness(item).ready ? '资料已完善' : '待完善'" in INDEX
+    assert "已匹配常用箱" in INDEX
+    assert "已人工编辑（版本事实）" in INDEX
     assert "openCommonBoxEditorFromPdf" in INDEX
     assert "returnFromCommonBoxEditor" in INDEX
     assert "识别结果：{{ draft.items?.length || 0 }} 行" in INDEX

@@ -64,6 +64,7 @@ from app.services.product_lifecycle import (
     has_historical_references,
 )
 from app.services.report_crease import crease_width_error
+from app.services.product_readiness import product_readiness
 from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
@@ -565,6 +566,7 @@ def _response(product: Product, user: User) -> dict:
         data["material_supplier_name"] = None
         data["material_weight"] = None
         data["material_flute_type"] = None
+    data["readiness"] = product_readiness(product)
     if product.mold_tool is not None:
         data["mold_tool"] = {
             "id": product.mold_tool.id,

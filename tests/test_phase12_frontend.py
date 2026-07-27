@@ -123,7 +123,10 @@ def test_n029_production_page_deep_link_and_manual_destination_are_present() -> 
     assert 'v-model="row.location_area_code"' in INDEX
     assert 'v-model="row.transfer_area_code"' in INDEX
     assert "productionLocationsForArea" in INDEX
-    assert "先选区域" in INDEX
+    assert 'v-model.number="row.location_floor_number"' in INDEX
+    assert 'v-model.number="row.transfer_floor_number"' in INDEX
+    assert "先选楼层" in INDEX
+    assert "再选区域" in INDEX
     assert "再选库位" in INDEX
     assert ':checked="!!productionSelected[row.id]"' in INDEX
     assert 'activePage === \'production\'' in INDEX

@@ -21,17 +21,17 @@ def test_shared_inventory_order_payload_uses_idempotent_client_lines() -> None:
 
 
 def test_quantity_input_debounces_inventory_candidate_refresh() -> None:
-    assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
+    assert '@input="onOrderDraftQuantityInput(item)"' in INDEX
     assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
     assert "scheduleOrderLineInventoryRefresh(line, customerId)" in INDEX
     assert "line._inventory_refresh_timer = setTimeout" in INDEX
 
 
 def test_pending_requisition_explains_semi_deduction_and_purchase_shortage() -> None:
-    assert "小片需求 / 库存 / 采购" in INDEX
-    assert "半成品抵扣：{{ row.semi_finished_reserved_piece_qty || 0 }} 片" in INDEX
-    assert "剩余：{{ row.remaining_required_piece_qty || 0 }} 片" in INDEX
-    assert "采购：{{ row.requisition_qty || 0 }} 张" in INDEX
+    assert "需求 / 客户备料 / 采购" in INDEX
+    assert "客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 个" in INDEX
+    assert "仍需生产：{{ row.remaining_required_piece_qty || 0 }} 个" in INDEX
+    assert "本次只需报：{{ row.requisition_qty || 0 }} 张" in INDEX
 
 
 def test_supplier_draft_rechecks_late_semi_inventory_before_purchase() -> None:
@@ -262,6 +262,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
   const pdfContext = {{
     orderImportDrafts:[draft], orderForm:{{items:[]}}, newOrderInventoryState:methods.newOrderInventoryState,
     inventoryStateMatchesLine:methods.inventoryStateMatchesLine, searchOrderProducts:async () => {{}},
+    loadOrderDraftBom:async () => {{}},
     loadOrderLineInventory:async () => {{ reloads += 1; }}, reallocateAllDraftInventory() {{}}, refreshOrderNumberPreview:async () => {{}},
   }};
   await methods.applyPdfDraftToOrderForm.call(pdfContext, draft);
@@ -345,7 +346,7 @@ def test_new_and_pdf_order_quantity_cells_share_automatic_inventory_summary() ->
     assert "现有成品${availableFinished}" in INDEX
     assert "自动预占${reservedFinished}" in INDEX
     assert "需生产${productionRequired}" in INDEX
-    assert '@input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)"' in INDEX
+    assert '@input="onOrderDraftQuantityInput(item)"' in INDEX
     assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
     load = INDEX.split("async loadOrderLineInventory(line, customerId) {", 1)[1].split(
         "async loadOrderLineManualInventory", 1

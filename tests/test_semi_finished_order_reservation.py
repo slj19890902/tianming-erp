@@ -193,6 +193,7 @@ def add_semi_lot(
     length: int = 800,
     width: int = 600,
     pieces_per_box: int = 1,
+    stock_yield_per_sheet: int = 1,
     customer_id: int | None = 1,
     allowed_product_ids: list[int] | None = None,
     bind_product: bool = True,
@@ -215,7 +216,7 @@ def add_semi_lot(
             sheet_type="net_sheet",
             component_type=component_type,
             pieces_per_box=pieces_per_box,
-            stock_yield_per_sheet=1,
+            stock_yield_per_sheet=stock_yield_per_sheet,
             supplier_name=None,
             customer_id=customer_id,
             crease_type=None,
@@ -584,7 +585,10 @@ def test_warehouse_lot_keyword_searches_location_and_product_text(b1_app) -> Non
     assert by_location.status_code == 200
     assert {row["id"] for row in by_location.json()["items"]} == {semi_id}
     assert by_product.status_code == 200
-    assert {row["id"] for row in by_product.json()["items"]} == {finished_id}
+    assert {row["id"] for row in by_product.json()["items"]} == {
+        semi_id,
+        finished_id,
+    }
 
 
 def test_warehouse_searches_registered_template_location(b1_app) -> None:
@@ -1235,6 +1239,73 @@ def test_requisition_preview_rechecks_late_semi_stock_and_recalculates_purchase(
             )
         )
         assert mapping is not None
+
+
+def test_late_first_match_keeps_frozen_one_open_two_yield(b1_app) -> None:
+    app, factory = b1_app
+    with factory() as db:
+        product = db.get(Product, 1)
+        product.box_style = "模切内盒"
+        product.default_cutting_mode = "一开二"
+        db.commit()
+    with TestClient(app) as client:
+        login(client)
+        one_two_item = order_item(1, 80, None, "LATE-ONE-TWO")
+        one_two_item["special_process"] = "一开二"
+        created = post_order(
+            client,
+            [one_two_item],
+            "B1-LATE-ONE-TWO",
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        with factory() as db:
+            item = db.get(OrderItem, item_id)
+            assert item.special_process == "一开二"
+            requirement = db.scalar(
+                select(OrderItemSemiRequirement).where(
+                    OrderItemSemiRequirement.order_item_id == item_id
+                )
+            )
+            assert requirement.stock_yield_per_sheet == 2
+            db.delete(requirement)
+            db.commit()
+
+        lot_id, _version = add_semi_lot(
+            factory,
+            quantity=45,
+            key="late-one-two-board-prep",
+            stock_yield_per_sheet=2,
+            allowed_product_ids=[1],
+        )
+        preview = client.post(
+            "/api/requisition/supplier-orders/preview-from-pending-selection",
+            json={
+                "selections": [
+                    {
+                        "type": "order_item",
+                        "order_item_id": item_id,
+                        "supplier_name": "B1-SUPPLIER",
+                        "report_length_mm": 800,
+                        "report_width_mm": 600,
+                        "cutting_mode": "一开二",
+                    }
+                ]
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        option = preview.json()["supplier_groups"][0]["lines"][0][
+            "source_items"
+        ][0]["late_semi_inventory_options"][0]
+        assert option["remaining_requirement_quantity"] == 80
+        assert option["recommended_candidates"][0]["lot_id"] == lot_id
+        assert option["recommended_candidates"][0][
+            "stock_yield_per_sheet"
+        ] == 2
+        assert option["recommended_candidates"][0][
+            "deductible_requirement_quantity"
+        ] == 90
+        assert option["review_candidates"] == []
 
 
 def test_telescoping_cover_and_base_are_deducted_separately(b1_app) -> None:

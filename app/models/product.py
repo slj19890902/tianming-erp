@@ -50,6 +50,10 @@ class Product(Base):
             "default_cutting_mode IN ('一开一', '一开二', '一开三', '一开四', '一开五')",
             name="ck_products_default_cutting_mode",
         ),
+        CheckConstraint(
+            "combination_mode IN ('parent_priced_set', 'component_priced')",
+            name="ck_products_combination_mode",
+        ),
         CheckConstraint("version >= 1", name="ck_products_version"),
         Index("ix_products_customer_id", "customer_id"),
         Index("ix_products_material_id", "material_id"),
@@ -158,6 +162,12 @@ class Product(Base):
     is_composite: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
+        nullable=False,
+    )
+    combination_mode: Mapped[str] = mapped_column(
+        String(30),
+        default="parent_priced_set",
+        server_default="parent_priced_set",
         nullable=False,
     )
     is_internal_component: Mapped[bool] = mapped_column(

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
+from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -54,9 +57,10 @@ from app.models.stock_replenishment import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
-    InventoryReservation,
     InventoryLot,
+    InventoryReservation,
     OrderItemSemiRequirement,
+    SemiFinishedLotAllowedProduct,
     WarehouseLocation,
 )
 from app.services.history_orders import (
@@ -73,10 +77,14 @@ from app.services.historical_purchase_lookup import (
 )
 from app.services.stock_replenishment import (
     StockReplenishmentError,
+    finished_product_quantity_summary,
     next_replenishment_order_number,
+    product_replenishment_defaults,
+    product_replenishment_signature,
     replenishment_order_dict,
     stock_policy_dict,
     stock_replenishment_order,
+    theoretical_requisition_quantity,
     validate_stock_policy,
 )
 from app.services.flute_mapping import (
@@ -89,9 +97,13 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
+    component_inventory_coverage,
+    finished_inventory_candidates,
     has_unconsumed_inventory_reservations,
+    inventory_fifo_sort_key,
     normalize_material_code,
     release_active_finished_reservations_for_items,
+    reserve_finished_inventory,
 )
 from app.services.semi_finished_inventory import (
     SIGNATURE_OVERRIDE_WARNING,
@@ -103,8 +115,10 @@ from app.services.semi_finished_inventory import (
     release_active_semi_reservations_for_items,
     requirement_signature,
     reserve_semi_finished_inventory,
+    safe_physical_board_facts_match,
     save_order_item_semi_requirement,
     semi_finished_candidates_for_product,
+    semi_finished_inventory_candidates,
 )
 from app.services.composite_bom_execution import (
     CompositeBOMExecutionError,
@@ -121,6 +135,8 @@ from app.services.customer_material_candidates import (
 router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
+can_reserve = PermissionChecker("warehouse.reserve")
+_FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 CUTTING_MODE_FACTORS = {
     "一开一": 1,
     "一开二": 2,
@@ -477,6 +493,14 @@ class PendingSemiInventoryReservationPayload(BaseModel):
         return normalized
 
 
+class PendingCustomerBoardPreparationAutoCoverPayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=60)
+
+
+class PendingLateFinishedInventoryAutoReservePayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=60)
+
+
 class StockPolicyPayload(BaseModel):
     policy_name: str = Field(min_length=1, max_length=200)
     target_inventory_type: str
@@ -527,6 +551,11 @@ class StockPolicyPayload(BaseModel):
         if normalized not in {"whole", "cover", "base"}:
             raise ValueError("半成品组件仅允许 whole、cover 或 base")
         return normalized
+
+
+class FinishedStockPolicyQuickPayload(BaseModel):
+    warning_quantity: int = Field(ge=0)
+    target_quantity: int = Field(gt=0)
 
 
 class StockReplenishmentItemPayload(BaseModel):
@@ -605,6 +634,7 @@ class StockReplenishmentItemPayload(BaseModel):
 
 class StockReplenishmentCreatePayload(BaseModel):
     source_type: str = "manual_history"
+    idempotency_key: str | None = Field(default=None, max_length=80)
     supplier_name: str | None = Field(default=None, max_length=200)
     customer_id: int | None = None
     remark: str | None = None
@@ -618,6 +648,12 @@ class StockReplenishmentCreatePayload(BaseModel):
         if normalized not in {"stock_warning", "customer_request", "manual_history"}:
             raise ValueError("补库来源类型无效")
         return normalized
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
 
 
 class PendingSupplierOrderDraftItem(BaseModel):
@@ -770,42 +806,6 @@ def _bom_snapshots_for_order_item(
     ).all()
 
 
-def _bom_semi_reserved_piece_qty(
-    db: Session,
-    snapshot_id: int,
-) -> int:
-    """Read snapshot-linked semi-finished coverage without changing legacy services.
-
-    N039 uses the new snapshot foreign key where it exists.  The requirement
-    join keeps an already-reserved line visible while the dedicated execution
-    service is being integrated in a later N039 slice.
-    """
-    rows = db.scalars(
-        select(InventoryReservation)
-        .outerjoin(
-            OrderItemSemiRequirement,
-            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id,
-        )
-        .where(
-            InventoryReservation.reservation_type == "semi_order",
-            InventoryReservation.status != "cancelled",
-            or_(
-                InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
-                OrderItemSemiRequirement.sales_order_item_bom_component_id
-                == snapshot_id,
-            ),
-        )
-    ).all()
-    return sum(
-        max(
-            int(row.credited_requirement_quantity or 0)
-            - int(row.released_requirement_quantity or 0),
-            0,
-        )
-        for row in rows
-    )
-
-
 def _bom_snapshot_requirements(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
@@ -878,9 +878,14 @@ def _bom_snapshot_requirements(
         yield_per_sheet = int(snapshot.mold_max_yield_per_sheet)
     else:
         yield_per_sheet = 1
-    semi_reserved = _bom_semi_reserved_piece_qty(db, snapshot.id)
+    coverage = component_inventory_coverage(db, snapshot.id)
+    finished_reserved = coverage["finished_piece_quantity"]
+    semi_reserved = coverage["semi_piece_quantity"]
     required_piece_quantity = int(demand.required_piece_quantity)
-    remaining = max(required_piece_quantity - semi_reserved, 0)
+    inventory_covered = min(
+        coverage["total_piece_quantity"], required_piece_quantity
+    )
+    remaining = max(required_piece_quantity - inventory_covered, 0)
     net_sheets = (remaining + yield_per_sheet - 1) // yield_per_sheet
     requisition_qty = net_sheets + int(snapshot.spare_sheet_quantity or 0)
     return {
@@ -888,7 +893,9 @@ def _bom_snapshot_requirements(
         "effective_set_quantity": effective_sets,
         "quantity_per_set": quantity_per_set,
         "required_piece_quantity": required_piece_quantity,
+        "finished_component_reserved_piece_qty": finished_reserved,
         "semi_finished_reserved_piece_qty": semi_reserved,
+        "inventory_covered_piece_qty": inventory_covered,
         "remaining_required_piece_qty": remaining,
         "actual_yield_per_sheet": actual_yield_per_sheet,
         "yield_per_sheet": yield_per_sheet,
@@ -1263,7 +1270,11 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                 OrderItemSemiRequirement.component_type == component,
             )
         )
-        stock_yield = int(requirement.stock_yield_per_sheet or 1) if requirement else 1
+        stock_yield = (
+            int(requirement.stock_yield_per_sheet or 1)
+            if requirement
+            else _cutting_factor(entry.get("cutting_mode") or item.special_process)
+        )
         requirements = _current_requisition_requirements(
             db,
             item,
@@ -1338,6 +1349,282 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                     _semi_candidate_dict_for_requisition(row)
                     for row in review_candidates
                 ],
+            }
+        )
+    return options
+
+
+def _safe_late_finished_inventory_candidates(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> list[InventoryLot]:
+    """Return only exact customer-owned finished lots safe for one-click use."""
+
+    expected_product_code = (item.snapshot_product_code or "").strip()
+    if (
+        not expected_product_code
+        or item.product_id != product.id
+        or product.customer_id != order.customer_id
+    ):
+        return []
+    rows: list[InventoryLot] = []
+    for lot in finished_inventory_candidates(db, item.id):
+        detail = lot.finished_detail
+        if (
+            detail is None
+            or detail.is_general
+            or detail.owner_customer_id != order.customer_id
+            or detail.product_id != item.product_id
+            or (detail.inventory_code_snapshot or "").strip()
+            != expected_product_code
+        ):
+            continue
+        rows.append(lot)
+    rows.sort(key=inventory_fifo_sort_key)
+    return rows
+
+
+def _late_finished_inventory_preview(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> dict:
+    """Describe exact late finished stock without mutating inventory."""
+
+    active_semi_reservation = db.scalar(
+        select(InventoryReservation.id)
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .limit(1)
+    )
+    blocked_reason: str | None = None
+    if _bom_pending_component_requirements(db, item):
+        blocked_reason = "组合产品须按父件和组件分别处理库存"
+    elif active_semi_reservation is not None:
+        blocked_reason = "订单已有半成品或客户专用纸板备料预占"
+
+    candidates = (
+        []
+        if blocked_reason is not None
+        else _safe_late_finished_inventory_candidates(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+    )
+    requirements = _current_requisition_summary(db, item)
+    remaining_order_quantity = int(requirements["production_required_qty"])
+    available_quantity = sum(
+        max(int(lot.quantity_available or 0), 0) for lot in candidates
+    )
+    reservable_quantity = min(available_quantity, remaining_order_quantity)
+
+    location_map: dict[int | None, dict] = {}
+    lots: list[dict] = []
+    for lot in candidates:
+        location = lot.location
+        location_id = location.id if location is not None else None
+        quantity = max(int(lot.quantity_available or 0), 0)
+        location_row = location_map.setdefault(
+            location_id,
+            {
+                "location_id": location_id,
+                "location_code": (
+                    location.location_code if location is not None else "未设置"
+                ),
+                "location_name": (
+                    location.location_name if location is not None else "未设置库位"
+                ),
+                "available_quantity": 0,
+            },
+        )
+        location_row["available_quantity"] += quantity
+        lots.append(
+            {
+                "lot_id": lot.id,
+                "lot_number": lot.lot_number,
+                "version": lot.version,
+                "available_quantity": quantity,
+                "stock_date": lot.stock_date.isoformat() if lot.stock_date else None,
+                "location_id": location_id,
+                "location_code": location_row["location_code"],
+                "location_name": location_row["location_name"],
+            }
+        )
+
+    return {
+        "available_quantity": available_quantity,
+        "reservable_quantity": reservable_quantity,
+        "remaining_order_quantity": remaining_order_quantity,
+        "can_auto_reserve": (
+            blocked_reason is None and reservable_quantity > 0
+        ),
+        "blocked_reason": blocked_reason,
+        "locations": list(location_map.values()),
+        "lots": lots,
+    }
+
+
+def _require_late_finished_inventory_resolved(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+    message_prefix: str = "发现订单保存后新增的同客户同存货编码成品库存",
+) -> dict:
+    preview = _late_finished_inventory_preview(
+        db,
+        item=item,
+        order=order,
+        product=product,
+    )
+    if preview["can_auto_reserve"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{message_prefix}，当前可抵扣 "
+                f"{preview['reservable_quantity']} 个；"
+                "请返回待报料列表先点击“使用成品，剩余再报”后重试。"
+            ),
+        )
+    return preview
+
+
+def _safe_customer_board_preparation_options(
+    db: Session,
+    *,
+    item: OrderItem,
+    order: Order,
+    product: Product,
+) -> list[dict]:
+    """Find only exact customer-owned board-preparation lots safe for one-click use."""
+
+    expected_supplier = (
+        item.snapshot_supplier_name
+        or (product.material.supplier_name if product.material is not None else None)
+        or ""
+    ).strip()
+    expected_layer_count = int(item.layer_count or product.layer_count or 0)
+
+    def is_exact_physical_match(
+        candidate: SemiFinishedCandidate,
+        *,
+        component: str,
+    ) -> bool:
+        detail = candidate.lot.semi_finished_detail
+        if detail is None:
+            return False
+        crease_type, crease_left, crease_middle, crease_right = _component_crease(
+            item, component
+        )
+        return safe_physical_board_facts_match(
+            detail,
+            supplier_name=expected_supplier,
+            layer_count=expected_layer_count,
+            crease_type=crease_type,
+            crease_left_mm=crease_left,
+            crease_middle_mm=crease_middle,
+            crease_right_mm=crease_right,
+        )
+
+    options: list[dict] = []
+    for spec in _semi_component_specs_for_requisition(item, product):
+        component = str(spec["component_type"])
+        length = spec.get("board_length_mm")
+        width = spec.get("board_width_mm")
+        material_code = (item.snapshot_material or "").strip()
+        flute_type = (item.flute_type or "").strip().upper()
+        if not (length and width and material_code and flute_type):
+            continue
+        requirement = db.scalar(
+            select(OrderItemSemiRequirement).where(
+                OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
+                OrderItemSemiRequirement.component_type == component,
+            )
+        )
+        stock_yield = (
+            int(requirement.stock_yield_per_sheet or 1)
+            if requirement is not None
+            else _cutting_factor(item.special_process)
+        )
+        current = _current_requisition_requirements(
+            db,
+            item,
+            pieces_per_box=int(spec["pieces_per_box"]),
+            component_type=component,
+        )
+        remaining = int(current["remaining_required_piece_qty"])
+        if remaining <= 0:
+            continue
+        candidates = (
+            semi_finished_inventory_candidates(db, requirement.id)
+            if requirement is not None
+            else semi_finished_candidates_for_product(
+                db,
+                product_id=product.id,
+                customer_id=order.customer_id,
+                board_length_mm=int(length),
+                board_width_mm=int(width),
+                material_code=material_code,
+                flute_type=flute_type,
+                component_type=component,
+                pieces_per_box=int(spec["pieces_per_box"]),
+                stock_yield_per_sheet=stock_yield,
+            )
+        )
+        safe_candidates = [
+            row
+            for row in candidates
+            if (
+                row.lot.semi_finished_detail is not None
+                and row.lot.semi_finished_detail.owner_customer_id
+                == order.customer_id
+                and not row.signature_differences
+                and row.source in {"signature", "learned"}
+                and is_exact_physical_match(row, component=component)
+            )
+        ]
+        available_piece_quantity = min(
+            remaining,
+            sum(
+                int(row.deductible_requirement_quantity or 0)
+                for row in safe_candidates
+            ),
+        )
+        if available_piece_quantity <= 0:
+            continue
+        options.append(
+            {
+                "component_type": component,
+                "board_length_mm": int(length),
+                "board_width_mm": int(width),
+                "material_code": material_code,
+                "flute_type": flute_type,
+                "pieces_per_box": int(spec["pieces_per_box"]),
+                "stock_yield_per_sheet": stock_yield,
+                "required_piece_quantity": int(current["required_piece_qty"]),
+                "remaining_piece_quantity": remaining,
+                "available_piece_quantity": available_piece_quantity,
+                "available_sheet_quantity": (
+                    available_piece_quantity + stock_yield - 1
+                )
+                // stock_yield,
+                "requirement": requirement,
+                "candidates": safe_candidates,
             }
         )
     return options
@@ -2255,6 +2542,18 @@ def _pending_entry_dict(entry: dict) -> dict:
         ),
         "requisition_qty": entry["requisition_qty"],
         "remark": entry["remark"] or "",
+        "late_finished_inventory": entry.get(
+            "late_finished_inventory",
+            {
+                "available_quantity": 0,
+                "reservable_quantity": 0,
+                "remaining_order_quantity": entry["production_required_qty"],
+                "can_auto_reserve": False,
+                "blocked_reason": None,
+                "locations": [],
+                "lots": [],
+            },
+        ),
         "late_semi_inventory_options": entry.get(
             "late_semi_inventory_options", []
         ),
@@ -2449,6 +2748,12 @@ def _pending_selection_preview_groups(
             raise HTTPException(status_code=409, detail="同一订单明细不能重复加入报料草稿")
         seen_order_item_ids.add(entry["order_item"].id)
         entry["display_registry"] = registry
+        entry["late_finished_inventory"] = _late_finished_inventory_preview(
+            db,
+            item=entry["order_item"],
+            order=entry["order"],
+            product=entry["product"],
+        )
         entry["late_semi_inventory_options"] = _late_semi_inventory_options(
             db, entry
         )
@@ -2732,6 +3037,7 @@ def _draft_group_entries(
 def _draft_group_entries_by_purchase_lines(
     db: Session,
     payload: PendingSupplierOrderFinalizePayload,
+    user: User,
 ) -> tuple[dict[str, list[dict]], list[Requisition]]:
     grouped: dict[str, list[dict]] = {}
     touched_groups_by_id: dict[int, Requisition] = {}
@@ -2754,6 +3060,7 @@ def _draft_group_entries_by_purchase_lines(
                 item, order, customer, product = _ensure_pending_order_item_for_supplier_order(
                     db, source_payload.order_item_id
                 )
+                _require_order_item_customer_access(db, item, user)
                 req_item: RequisitionItem | None = None
                 merge_group: Requisition | None = None
                 if source_payload.source_type == "order_item":
@@ -2786,6 +3093,14 @@ def _draft_group_entries_by_purchase_lines(
                         "req_item": req_item,
                         "merge_group": merge_group,
                     }
+                )
+
+            for ref in source_refs:
+                _require_late_finished_inventory_resolved(
+                    db,
+                    item=ref["item"],
+                    order=ref["order"],
+                    product=ref["product"],
                 )
 
             current_requirements = [
@@ -3159,6 +3474,18 @@ def pending_requisitions(
         )
         if suggested_len is None or suggested_width is None:
             suggested_len, suggested_width = _suggested_dimensions(product)
+        late_finished_inventory = _late_finished_inventory_preview(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+        customer_board_preparation = _safe_customer_board_preparation_options(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
         items.append(
             {
                 "item_id": item.id,
@@ -3208,6 +3535,30 @@ def pending_requisitions(
                 "required_piece_qty": required_piece_qty,
                 "semi_finished_reserved_piece_qty": semi_finished_reserved_piece_qty,
                 "remaining_required_piece_qty": remaining_required_piece_qty,
+                "late_finished_inventory": late_finished_inventory,
+                "late_finished_inventory_available_qty": int(
+                    late_finished_inventory["available_quantity"]
+                ),
+                "late_finished_inventory_reservable_qty": int(
+                    late_finished_inventory["reservable_quantity"]
+                ),
+                "late_finished_inventory_locations": late_finished_inventory[
+                    "locations"
+                ],
+                "can_auto_use_late_finished_inventory": bool(
+                    late_finished_inventory["can_auto_reserve"]
+                ),
+                "customer_board_preparation_available_piece_qty": sum(
+                    int(row["available_piece_quantity"])
+                    for row in customer_board_preparation
+                ),
+                "customer_board_preparation_available_sheet_qty": sum(
+                    int(row["available_sheet_quantity"])
+                    for row in customer_board_preparation
+                ),
+                "can_auto_use_customer_board_preparation": bool(
+                    customer_board_preparation
+                ),
                 "component_requirements": requirements.get(
                     "component_requirements", []
                 ),
@@ -4320,6 +4671,27 @@ def list_requisition_items(
     }
 
 
+def _confirmed_composite_requisition_qty(
+    line: RequisitionLinePayload,
+    minimum_quantity: int,
+) -> int:
+    """Honor the reviewed draft quantity without allowing a hidden shortage."""
+    requested = (
+        minimum_quantity
+        if line.requisition_qty is None
+        else int(line.requisition_qty)
+    )
+    if requested < minimum_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"本次采购张数不能少于库存抵扣后的系统最低 "
+                f"{minimum_quantity} 张；如需减少，请先在报料明细中使用匹配库存"
+            ),
+        )
+    return requested
+
+
 @router.post("/batches", status_code=status.HTTP_201_CREATED)
 def create_batch(
     payload: RequisitionBatchCreate,
@@ -4344,14 +4716,21 @@ def create_batch(
 
         for order_item_id, lines in lines_by_order_item.items():
             row = db.execute(
-                select(OrderItem, Product)
+                select(OrderItem, Product, Order)
                 .join(Product, Product.id == OrderItem.product_id)
+                .join(Order, Order.id == OrderItem.order_id)
                 .where(OrderItem.id == order_item_id)
             ).one_or_none()
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
-            item, product = row
+            item, product, order = row
             _require_order_item_customer_access(db, item, user)
+            _require_late_finished_inventory_resolved(
+                db,
+                item=item,
+                order=order,
+                product=product,
+            )
             bom_snapshots = _bom_snapshots_for_order_item(db, item.id)
             if bom_snapshots:
                 if item.material_status == "received":
@@ -4423,13 +4802,20 @@ def create_batch(
                                 status_code=409,
                                 detail="该复合产品父件已由库存全额抵扣，无需报料",
                             )
+                        parent_minimum_qty = int(
+                            parent_requirements["requisition_qty"]
+                        )
+                        parent_confirmed_qty = (
+                            _confirmed_composite_requisition_qty(
+                                line,
+                                parent_minimum_qty,
+                            )
+                        )
                         batch_item = RequisitionItem(
                             requisition_id=batch.id,
                             order_item_id=item.id,
                             inventory_deducted_qty=0,
-                            requisition_qty=int(
-                                parent_requirements["requisition_qty"]
-                            ),
+                            requisition_qty=parent_confirmed_qty,
                             cardboard_len=line.cardboard_len,
                             cardboard_width=line.cardboard_width,
                             pieces_per_box=1,
@@ -4486,6 +4872,15 @@ def create_batch(
                             status_code=409,
                             detail="该复合产品组件已由半成品库存全额抵扣，无需报料",
                         )
+                    component_minimum_qty = int(
+                        requirements["requisition_qty"]
+                    )
+                    component_confirmed_qty = (
+                        _confirmed_composite_requisition_qty(
+                            line,
+                            component_minimum_qty,
+                        )
+                    )
                     cardboard_len = Decimal(
                         snapshot.snapshot_component_report_length_mm
                         or line.cardboard_len
@@ -4506,7 +4901,7 @@ def create_batch(
                         requisition_id=batch.id,
                         order_item_id=item.id,
                         inventory_deducted_qty=0,
-                        requisition_qty=int(requirements["requisition_qty"]),
+                        requisition_qty=component_confirmed_qty,
                         cardboard_len=cardboard_len,
                         cardboard_width=cardboard_width,
                         pieces_per_box=int(requirements["quantity_per_set"]),
@@ -4553,10 +4948,12 @@ def create_batch(
                                 requirements["spare_sheet_quantity"]
                             ),
                             calculated_purchase_quantity=Decimal(
-                                requirements["requisition_qty"]
+                                component_minimum_qty
                             ),
                             direction_note=(
-                                f"剩余需求片数：{requirements['remaining_required_piece_qty']}"
+                                f"剩余需求片数：{requirements['remaining_required_piece_qty']}；"
+                                f"系统最低报料：{component_minimum_qty}；"
+                                f"本次确认报料：{component_confirmed_qty}"
                             ),
                             calculation_rule_version="bom-demand-cutting-v2",
                         )
@@ -5037,10 +5434,26 @@ def void_composite_requisition_batch(
 
 def _stock_policy_query():
     return select(InventoryStockPolicy).options(
-        selectinload(InventoryStockPolicy.product),
+        selectinload(InventoryStockPolicy.product).selectinload(Product.material),
         selectinload(InventoryStockPolicy.customer),
         selectinload(InventoryStockPolicy.default_location),
     )
+
+
+def _active_finished_stock_policies(
+    db: Session,
+    *,
+    product_id: int,
+    exclude_policy_id: int | None = None,
+) -> list[InventoryStockPolicy]:
+    query = _stock_policy_query().where(
+        InventoryStockPolicy.target_inventory_type == "finished",
+        InventoryStockPolicy.product_id == product_id,
+        InventoryStockPolicy.active.is_(True),
+    )
+    if exclude_policy_id is not None:
+        query = query.where(InventoryStockPolicy.id != exclude_policy_id)
+    return db.scalars(query.order_by(InventoryStockPolicy.id)).all()
 
 
 def _stock_policy_customer_id(
@@ -5104,49 +5517,7 @@ def _stock_policy_summary(
     policy: InventoryStockPolicy,
     user: User,
 ) -> dict:
-    summary = stock_policy_dict(db, policy)
-    if has_unrestricted_customer_access(user, db):
-        return summary
-    customer_id = _stock_policy_customer_id(
-        db, policy, relationships_loaded=True
-    )
-    if customer_id is None:
-        return summary
-    if policy.target_inventory_type == "finished" and policy.product_id is not None:
-        available = int(
-            db.scalar(
-                select(func.coalesce(func.sum(InventoryLot.quantity_available), 0))
-                .join(
-                    FinishedGoodsInventoryDetail,
-                    FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
-                )
-                .join(
-                    WarehouseLocation,
-                    WarehouseLocation.id == InventoryLot.warehouse_location_id,
-                )
-                .where(
-                    InventoryLot.inventory_type == "finished",
-                    InventoryLot.status == "active",
-                    FinishedGoodsInventoryDetail.product_id == policy.product_id,
-                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
-                    FinishedGoodsInventoryDetail.is_general.is_(False),
-                    or_(
-                        WarehouseLocation.source_version.is_(None),
-                        WarehouseLocation.source_version != "V11",
-                    ),
-                )
-            )
-            or 0
-        )
-        summary["available_quantity"] = available
-        summary["warning_triggered"] = bool(
-            policy.active and available <= int(policy.warning_quantity or 0)
-        )
-        summary["suggested_replenishment_quantity"] = max(
-            int(policy.target_quantity or 0) - available,
-            0,
-        )
-    return summary
+    return stock_policy_dict(db, policy)
 
 
 def _stock_replenishment_item_customer_id(
@@ -5252,6 +5623,7 @@ def _apply_stock_policy_payload(
 @router.get("/stock-policies")
 def list_stock_policies(
     q: str | None = None,
+    product_id: int | None = None,
     target_inventory_type: str | None = None,
     warning_only: bool = False,
     include_inactive: bool = False,
@@ -5261,6 +5633,8 @@ def list_stock_policies(
     query = _apply_stock_policy_scope(_stock_policy_query(), _user, db)
     if not include_inactive:
         query = query.where(InventoryStockPolicy.active.is_(True))
+    if product_id is not None:
+        query = query.where(InventoryStockPolicy.product_id == product_id)
     if target_inventory_type:
         query = query.where(
             InventoryStockPolicy.target_inventory_type
@@ -5292,6 +5666,138 @@ def list_stock_policies(
         "items": items,
         "warning_count": sum(1 for item in items if item["warning_triggered"]),
     }
+
+
+def _finished_stock_policy_rows(
+    db: Session,
+    *,
+    product_id: int,
+    user: User,
+) -> tuple[Product, list[InventoryStockPolicy]]:
+    product = db.get(Product, product_id)
+    if (
+        product is None
+        or product.deleted_at is not None
+        or not product.is_active
+    ):
+        raise HTTPException(status_code=404, detail="常用箱不存在或已停用。")
+    require_customer_access(product.customer_id, user, db)
+    rows = _active_finished_stock_policies(db, product_id=product.id)
+    rows = [
+        row
+        for row in rows
+        if _stock_policy_customer_id(db, row, relationships_loaded=True)
+        == product.customer_id
+    ]
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="该常用箱存在多条启用中的库存预警，请先由管理员合并后再修改。",
+        )
+    return product, rows
+
+
+def _finished_stock_policy_quick_summary(
+    db: Session,
+    *,
+    product: Product,
+    policy: InventoryStockPolicy | None,
+) -> dict:
+    quantities = finished_product_quantity_summary(
+        db,
+        product_id=product.id,
+        customer_id=product.customer_id,
+    )
+    warning = int(policy.warning_quantity or 0) if policy else 0
+    target = int(policy.target_quantity or 0) if policy else 0
+    available = quantities["available_quantity"]
+    return {
+        "id": policy.id if policy else None,
+        "product_id": product.id,
+        "customer_id": product.customer_id,
+        "customer_name": product.customer.name if product.customer else None,
+        "product_code": product.product_code,
+        "product_name": product.product_name,
+        "warning_quantity": warning,
+        "target_quantity": target,
+        **quantities,
+        "warning_triggered": bool(policy and available < warning),
+        "suggested_replenishment_quantity": (
+            max(target - available, 0) if policy else 0
+        ),
+    }
+
+
+@router.get("/stock-policies/finished-products/{product_id}")
+def read_finished_stock_policy_quick(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product, rows = _finished_stock_policy_rows(
+        db,
+        product_id=product_id,
+        user=user,
+    )
+    return _finished_stock_policy_quick_summary(
+        db,
+        product=product,
+        policy=rows[0] if rows else None,
+    )
+
+
+@router.put("/stock-policies/finished-products/{product_id}")
+def save_finished_stock_policy_quick(
+    product_id: int,
+    payload: FinishedStockPolicyQuickPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    if payload.target_quantity < payload.warning_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail="建议补到数量不能小于库存下限。",
+        )
+    with _FINISHED_STOCK_POLICY_WRITE_LOCK:
+        product, rows = _finished_stock_policy_rows(
+            db,
+            product_id=product_id,
+            user=user,
+        )
+        policy = rows[0] if rows else InventoryStockPolicy(
+            policy_name=f"{product.product_code or product.product_name} 成品库存预警",
+            target_inventory_type="finished",
+            product_id=product.id,
+            customer_id=product.customer_id,
+            warning_quantity=payload.warning_quantity,
+            target_quantity=payload.target_quantity,
+            active=True,
+            created_by=user.id,
+        )
+        policy.warning_quantity = payload.warning_quantity
+        policy.target_quantity = payload.target_quantity
+        policy.customer_id = product.customer_id
+        policy.updated_by = user.id
+        try:
+            validate_stock_policy(db, policy)
+            if policy.id is None:
+                db.add(policy)
+            db.commit()
+            policy = db.scalar(
+                _stock_policy_query().where(InventoryStockPolicy.id == policy.id)
+            )
+            assert policy is not None
+            return _finished_stock_policy_quick_summary(
+                db,
+                product=product,
+                policy=policy,
+            )
+        except StockReplenishmentError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
 
 
 @router.get("/stock-replenishment/locations")
@@ -5413,31 +5919,52 @@ def create_stock_policy(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    row = InventoryStockPolicy(
-        policy_name=payload.policy_name,
-        target_inventory_type=payload.target_inventory_type,
-        target_quantity=payload.target_quantity,
-        warning_quantity=payload.warning_quantity,
-        created_by=user.id,
-        updated_by=user.id,
+    guard = (
+        _FINISHED_STOCK_POLICY_WRITE_LOCK
+        if payload.target_inventory_type == "finished"
+        else nullcontext()
     )
-    try:
-        _apply_stock_policy_payload(row, payload, user_id=user.id)
-        validate_stock_policy(db, row)
-        _require_stock_policy_customer_access(db, row, user)
-        db.add(row)
-        db.commit()
-        row = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == row.id))
-        assert row is not None
-        return _stock_policy_summary(db, row, user)
-    except HTTPException:
-        db.rollback()
-        raise
-    except (StockReplenishmentError, WarehouseInventoryError) as error:
-        db.rollback()
-        raise HTTPException(
-            status_code=getattr(error, "status_code", 400), detail=str(error)
-        ) from error
+    with guard:
+        existing_rows = (
+            _active_finished_stock_policies(db, product_id=payload.product_id)
+            if payload.target_inventory_type == "finished"
+            and payload.product_id is not None
+            and payload.active
+            else []
+        )
+        if len(existing_rows) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="该常用箱已存在多条启用中的库存预警，请联系管理员处理。",
+            )
+        row = existing_rows[0] if existing_rows else InventoryStockPolicy(
+            policy_name=payload.policy_name,
+            target_inventory_type=payload.target_inventory_type,
+            target_quantity=payload.target_quantity,
+            warning_quantity=payload.warning_quantity,
+            created_by=user.id,
+            updated_by=user.id,
+        )
+        try:
+            _apply_stock_policy_payload(row, payload, user_id=user.id)
+            validate_stock_policy(db, row)
+            _require_stock_policy_customer_access(db, row, user)
+            if row.id is None:
+                db.add(row)
+            db.commit()
+            row = db.scalar(
+                _stock_policy_query().where(InventoryStockPolicy.id == row.id)
+            )
+            assert row is not None
+            return _stock_policy_summary(db, row, user)
+        except HTTPException:
+            db.rollback()
+            raise
+        except (StockReplenishmentError, WarehouseInventoryError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 400), detail=str(error)
+            ) from error
 
 
 @router.put("/stock-policies/{policy_id}")
@@ -5450,23 +5977,46 @@ def update_stock_policy(
     row = db.get(InventoryStockPolicy, policy_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库存预警策略不存在。")
-    _require_stock_policy_customer_access(db, row, user)
-    try:
-        _apply_stock_policy_payload(row, payload, user_id=user.id)
-        validate_stock_policy(db, row)
+    guard = (
+        _FINISHED_STOCK_POLICY_WRITE_LOCK
+        if row.target_inventory_type == "finished"
+        or payload.target_inventory_type == "finished"
+        else nullcontext()
+    )
+    with guard:
         _require_stock_policy_customer_access(db, row, user)
-        db.commit()
-        row = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == policy_id))
-        assert row is not None
-        return _stock_policy_summary(db, row, user)
-    except HTTPException:
-        db.rollback()
-        raise
-    except (StockReplenishmentError, WarehouseInventoryError) as error:
-        db.rollback()
-        raise HTTPException(
-            status_code=getattr(error, "status_code", 400), detail=str(error)
-        ) from error
+        try:
+            _apply_stock_policy_payload(row, payload, user_id=user.id)
+            validate_stock_policy(db, row)
+            if (
+                row.active
+                and row.target_inventory_type == "finished"
+                and row.product_id is not None
+                and _active_finished_stock_policies(
+                    db,
+                    product_id=row.product_id,
+                    exclude_policy_id=row.id,
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="该常用箱已有启用中的库存预警，请直接修改原预警。",
+                )
+            _require_stock_policy_customer_access(db, row, user)
+            db.commit()
+            row = db.scalar(
+                _stock_policy_query().where(InventoryStockPolicy.id == policy_id)
+            )
+            assert row is not None
+            return _stock_policy_summary(db, row, user)
+        except HTTPException:
+            db.rollback()
+            raise
+        except (StockReplenishmentError, WarehouseInventoryError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 400), detail=str(error)
+            ) from error
 
 
 @router.get("/stock-policies/{policy_id}/replenishment-draft")
@@ -5480,33 +6030,272 @@ def stock_policy_replenishment_draft(
         raise HTTPException(status_code=404, detail="库存预警策略不存在。")
     _require_stock_policy_customer_access(db, policy, _user)
     summary = _stock_policy_summary(db, policy, _user)
+    product = policy.product
+    if product is None and policy.target_inventory_type == "semi_finished":
+        return {
+            "source_type": "stock_warning",
+            "supplier_name": policy.supplier_name,
+            "customer_id": policy.customer_id,
+            "stock_now": False,
+            "draft_ready": True,
+            "missing_fields": [],
+            "items": [
+                {
+                    "stock_policy_id": policy.id,
+                    "target_inventory_type": policy.target_inventory_type,
+                    "product_id": None,
+                    "customer_id": policy.customer_id,
+                    "product_code": None,
+                    "product_name": policy.policy_name,
+                    "material_id": None,
+                    "material_code": policy.material_code_snapshot,
+                    "material_supplier_name": policy.supplier_name,
+                    "layer_count": policy.layer_count,
+                    "flute_type": policy.flute_type,
+                    "report_length_mm": policy.report_length_mm,
+                    "report_width_mm": policy.report_width_mm,
+                    "crease_type": None,
+                    "crease_left_mm": None,
+                    "crease_middle_mm": None,
+                    "crease_right_mm": None,
+                    "sheet_type": policy.sheet_type,
+                    "component_type": policy.component_type,
+                    "pieces_per_box": policy.pieces_per_box,
+                    "stock_yield_per_sheet": policy.stock_yield_per_sheet,
+                    "quantity": summary["suggested_replenishment_quantity"],
+                    "location_id": policy.default_location_id,
+                    "remark": policy.remark,
+                    "cutting_mode": "一开一",
+                    "output_per_sheet": 1,
+                    "theoretical_requisition_quantity": summary[
+                        "suggested_replenishment_quantity"
+                    ],
+                    "draft_ready": True,
+                    "missing_fields": [],
+                }
+            ],
+            "compatible_products": [],
+            "policy_summary": summary,
+        }
+    if product is None or product.deleted_at is not None or not product.is_active:
+        raise HTTPException(status_code=409, detail="库存预警关联的常用箱不可用。")
+    defaults = product_replenishment_defaults(product)
+
+    def draft_item(
+        draft_policy: InventoryStockPolicy,
+        draft_summary: dict,
+        draft_product: Product,
+    ) -> dict:
+        product_defaults = product_replenishment_defaults(draft_product)
+        finished_quantity = int(
+            draft_summary.get(
+                "suggested_new_requisition_finished_quantity",
+                draft_summary["suggested_replenishment_quantity"],
+            )
+            or 0
+        )
+        crease_type = product_defaults["crease_type"]
+        sheet_type = (
+            "creased_sheet"
+            if crease_type == "压线"
+            else "net_sheet"
+            if crease_type == "净料"
+            else "raw_board"
+        )
+        theoretical_quantity = theoretical_requisition_quantity(
+            finished_quantity,
+            product_defaults["cutting_mode"],
+        )
+        return {
+            "stock_policy_id": draft_policy.id,
+            "target_inventory_type": "semi_finished",
+            "product_id": draft_product.id,
+            "customer_id": draft_product.customer_id,
+            "product_code": draft_product.product_code,
+            "product_name": draft_product.product_name,
+            "material_id": product_defaults["material_id"],
+            "material_code": (
+                draft_policy.material_code_snapshot
+                or product_defaults["material_code"]
+            ),
+            "material_supplier_name": (
+                product_defaults["material_supplier_name"]
+                or draft_policy.supplier_name
+            ),
+            "layer_count": (
+                draft_policy.layer_count or product_defaults["layer_count"]
+            ),
+            "flute_type": (
+                draft_policy.flute_type or product_defaults["flute_type"]
+            ),
+            "report_length_mm": (
+                draft_policy.report_length_mm
+                or product_defaults["report_length_mm"]
+            ),
+            "report_width_mm": (
+                draft_policy.report_width_mm
+                or product_defaults["report_width_mm"]
+            ),
+            "crease_type": crease_type,
+            "crease_left_mm": product_defaults["crease_left_mm"],
+            "crease_middle_mm": product_defaults["crease_middle_mm"],
+            "crease_right_mm": product_defaults["crease_right_mm"],
+            "sheet_type": sheet_type,
+            "component_type": draft_policy.component_type,
+            "pieces_per_box": product_defaults["pieces_per_box"],
+            "stock_yield_per_sheet": product_defaults["output_per_sheet"],
+            "quantity": theoretical_quantity,
+            "suggested_finished_quantity": finished_quantity,
+            "location_id": None,
+            "remark": draft_policy.remark,
+            "cutting_mode": product_defaults["cutting_mode"],
+            "output_per_sheet": product_defaults["output_per_sheet"],
+            "theoretical_requisition_quantity": theoretical_quantity,
+            "customer_board_preparation_available_sheet_quantity": int(
+                draft_summary.get(
+                    "customer_board_preparation_available_sheet_quantity",
+                    0,
+                )
+                or 0
+            ),
+            "incoming_board_preparation_sheet_quantity": int(
+                draft_summary.get(
+                    "incoming_board_preparation_sheet_quantity",
+                    0,
+                )
+                or 0
+            ),
+            "draft_ready": product_defaults["draft_ready"],
+            "missing_fields": product_defaults["missing_fields"],
+        }
+
+    primary_item = draft_item(policy, summary, product)
+    signature = product_replenishment_signature(product)
+    compatible_board_products = [
+        {
+            "product_id": product.id,
+            "product_code": product.product_code,
+            "product_name": product.product_name,
+        }
+    ]
+    compatible_products: list[dict] = []
+    if signature is not None:
+        candidates = db.scalars(
+            select(Product)
+            .options(
+                selectinload(Product.material),
+                selectinload(Product.customer),
+            )
+            .where(
+                Product.customer_id == product.customer_id,
+                Product.id != product.id,
+                Product.is_active.is_(True),
+                Product.deleted_at.is_(None),
+            )
+            .order_by(Product.product_code)
+        ).all()
+        for candidate in candidates:
+            if product_replenishment_signature(candidate) != signature:
+                continue
+            compatible_board_products.append(
+                {
+                    "product_id": candidate.id,
+                    "product_code": candidate.product_code,
+                    "product_name": candidate.product_name,
+                }
+            )
+            candidate_policies = _active_finished_stock_policies(
+                db,
+                product_id=candidate.id,
+            )
+            if len(candidate_policies) != 1:
+                continue
+            candidate_policy = candidate_policies[0]
+            if _stock_policy_customer_id(
+                db,
+                candidate_policy,
+                relationships_loaded=True,
+            ) != candidate.customer_id:
+                continue
+            candidate_summary = _stock_policy_summary(
+                db,
+                candidate_policy,
+                _user,
+            )
+            compatible_products.append(
+                {
+                    "policy_id": candidate_policy.id,
+                    "product_id": candidate.id,
+                    "product_code": candidate.product_code,
+                    "product_name": candidate.product_name,
+                    "available_quantity": candidate_summary[
+                        "available_quantity"
+                    ],
+                    "warning_quantity": candidate_summary["warning_quantity"],
+                    "target_quantity": candidate_summary["target_quantity"],
+                    "warning_triggered": candidate_summary[
+                        "warning_triggered"
+                    ],
+                    "suggested_replenishment_quantity": candidate_summary[
+                        "suggested_replenishment_quantity"
+                    ],
+                    "suggested_new_requisition_finished_quantity": (
+                        candidate_summary[
+                            "suggested_new_requisition_finished_quantity"
+                        ]
+                    ),
+                    "suggested_new_requisition_sheet_quantity": (
+                        candidate_summary[
+                            "suggested_new_requisition_sheet_quantity"
+                        ]
+                    ),
+                    "replenishment_state": candidate_summary[
+                        "replenishment_state"
+                    ],
+                    "draft_item": draft_item(
+                        candidate_policy,
+                        candidate_summary,
+                        candidate,
+                    ),
+                }
+            )
+    compatible_products.sort(
+        key=lambda item: (
+            not item["warning_triggered"],
+            item["product_code"] or "",
+        )
+    )
+    compatible_board_products.sort(
+        key=lambda item: item["product_code"] or ""
+    )
+    compatible_board_product_ids = [
+        item["product_id"] for item in compatible_board_products
+    ]
+    compatible_board_product_codes = [
+        item["product_code"] for item in compatible_board_products
+    ]
+    for draft in [
+        primary_item,
+        *[
+            item["draft_item"]
+            for item in compatible_products
+            if item.get("draft_item")
+        ],
+    ]:
+        draft["compatible_product_ids"] = compatible_board_product_ids
+        draft["compatible_product_codes"] = compatible_board_product_codes
     return {
         "source_type": "stock_warning",
-        "supplier_name": policy.supplier_name,
+        "supplier_name": (
+            defaults["material_supplier_name"] or policy.supplier_name
+        ),
         "customer_id": policy.customer_id,
         "stock_now": False,
-        "items": [
-            {
-                "stock_policy_id": policy.id,
-                "target_inventory_type": policy.target_inventory_type,
-                "product_id": policy.product_id,
-                "customer_id": policy.customer_id,
-                "product_code": summary["product_code"],
-                "product_name": summary["product_name"] or policy.policy_name,
-                "material_code": policy.material_code_snapshot,
-                "layer_count": policy.layer_count,
-                "flute_type": policy.flute_type,
-                "report_length_mm": policy.report_length_mm,
-                "report_width_mm": policy.report_width_mm,
-                "sheet_type": policy.sheet_type,
-                "component_type": policy.component_type,
-                "pieces_per_box": policy.pieces_per_box,
-                "stock_yield_per_sheet": policy.stock_yield_per_sheet,
-                "quantity": summary["suggested_replenishment_quantity"],
-                "location_id": policy.default_location_id,
-                "remark": policy.remark,
-            }
-        ],
+        "draft_ready": primary_item["draft_ready"],
+        "missing_fields": primary_item["missing_fields"],
+        "items": [primary_item],
+        "compatible_products": compatible_products,
+        "compatible_board_products": compatible_board_products,
         "policy_summary": summary,
     }
 
@@ -5519,6 +6308,8 @@ def _replenishment_order_query():
         ),
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.inventory_lot
+        ).selectinload(InventoryLot.allowed_products).selectinload(
+            SemiFinishedLotAllowedProduct.product
         ),
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.customer
@@ -5542,12 +6333,21 @@ def _coalesce(value, fallback):
 def _build_replenishment_item(
     db: Session,
     payload: StockReplenishmentItemPayload,
+    *,
+    source_type: str,
 ) -> StockReplenishmentOrderItem:
     policy = db.get(InventoryStockPolicy, payload.stock_policy_id) if payload.stock_policy_id else None
     if payload.stock_policy_id and policy is None:
         raise StockReplenishmentError("库存预警策略不存在。", 404)
     if policy and policy.target_inventory_type != payload.target_inventory_type:
-        raise StockReplenishmentError("补库明细类型与库存预警策略不一致。")
+        warning_finished_to_customer_board = (
+            source_type == "stock_warning"
+            and policy.target_inventory_type == "finished"
+            and payload.target_inventory_type == "semi_finished"
+            and policy.product_id is not None
+        )
+        if not warning_finished_to_customer_board:
+            raise StockReplenishmentError("补库明细类型与库存预警策略不一致。")
 
     product_id = _coalesce(payload.product_id, policy.product_id if policy else None)
     product = db.get(Product, product_id) if product_id else None
@@ -5663,7 +6463,130 @@ def create_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
-        items = [_build_replenishment_item(db, item) for item in payload.items]
+        if payload.source_type == "stock_warning" and payload.stock_now:
+            raise StockReplenishmentError(
+                "库存预警只能先生成报料草稿，不能保存后直接写入库存。"
+            )
+        stock_warning_order_number: str | None = None
+        if payload.source_type == "stock_warning":
+            if payload.idempotency_key is None:
+                raise StockReplenishmentError(
+                    "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
+                )
+            key_digest = hashlib.sha256(
+                payload.idempotency_key.encode("utf-8")
+            ).hexdigest()[:20].upper()
+            stock_warning_order_number = (
+                f"CBW-{beijing_today():%Y%m%d}-{key_digest}"
+            )
+            existing_order = db.scalar(
+                _replenishment_order_query().where(
+                    StockReplenishmentOrder.order_number
+                    == stock_warning_order_number
+                )
+            )
+            if existing_order is not None:
+                _require_stock_replenishment_order_access(
+                    db,
+                    existing_order,
+                    user,
+                    relationships_loaded=True,
+                )
+                return replenishment_order_dict(existing_order)
+        items = [
+            _build_replenishment_item(
+                db,
+                item,
+                source_type=payload.source_type,
+            )
+            for item in payload.items
+        ]
+        if payload.source_type == "stock_warning":
+            for item in items:
+                if (
+                    item.product_id is not None
+                    and item.target_inventory_type != "semi_finished"
+                ):
+                    raise StockReplenishmentError(
+                        "常用箱库存预警报料只能生成客户专用纸板备料，"
+                        "不能直接生成成品库存。"
+                    )
+                if not all(
+                    value not in (None, "")
+                    for value in (
+                        item.product_id,
+                        item.material_code_snapshot,
+                        item.layer_count,
+                        item.flute_type,
+                        item.report_length_mm,
+                        item.report_width_mm,
+                    )
+                ):
+                    raise StockReplenishmentError(
+                        f"“{item.product_name_snapshot}”的常用箱资料不完整，"
+                        "请先补全材质、层数、楞型和报料长宽。"
+                    )
+                if item.product_id is not None:
+                    product = db.scalar(
+                        select(Product)
+                        .options(selectinload(Product.material))
+                        .where(Product.id == item.product_id)
+                    )
+                    if product is None:
+                        raise StockReplenishmentError(
+                            "库存预警关联的常用箱不存在。"
+                        )
+                    defaults = product_replenishment_defaults(product)
+                    if not defaults["draft_ready"]:
+                        raise StockReplenishmentError(
+                            f"“{item.product_name_snapshot}”的常用箱资料不完整，"
+                            "请先补全后重新生成草稿。"
+                        )
+                    expected = {
+                        "customer_id": product.customer_id,
+                        "material_id": defaults["material_id"],
+                        "material_code": normalize_material_code(
+                            defaults["material_code"]
+                        ),
+                        "layer_count": defaults["layer_count"],
+                        "flute_type": defaults["flute_type"],
+                        "report_length_mm": defaults["report_length_mm"],
+                        "report_width_mm": defaults["report_width_mm"],
+                        "crease_type": defaults["crease_type"],
+                        "crease_left_mm": defaults["crease_left_mm"],
+                        "crease_middle_mm": defaults["crease_middle_mm"],
+                        "crease_right_mm": defaults["crease_right_mm"],
+                        "sheet_type": (
+                            "creased_sheet"
+                            if defaults["crease_type"] == "压线"
+                            else "net_sheet"
+                            if defaults["crease_type"] == "净料"
+                            else "raw_board"
+                        ),
+                        "pieces_per_box": defaults["pieces_per_box"],
+                        "stock_yield_per_sheet": defaults["output_per_sheet"],
+                    }
+                    actual = {
+                        "customer_id": item.customer_id,
+                        "material_id": item.material_id,
+                        "material_code": item.normalized_material_code,
+                        "layer_count": item.layer_count,
+                        "flute_type": item.flute_type,
+                        "report_length_mm": item.report_length_mm,
+                        "report_width_mm": item.report_width_mm,
+                        "crease_type": item.crease_type,
+                        "crease_left_mm": item.crease_left_mm,
+                        "crease_middle_mm": item.crease_middle_mm,
+                        "crease_right_mm": item.crease_right_mm,
+                        "sheet_type": item.sheet_type,
+                        "pieces_per_box": item.pieces_per_box,
+                        "stock_yield_per_sheet": item.stock_yield_per_sheet,
+                    }
+                    if actual != expected:
+                        raise StockReplenishmentError(
+                            f"“{item.product_name_snapshot}”的纸板备料参数"
+                            "必须与常用箱主数据一致，请刷新后重新生成草稿。"
+                        )
         material_suppliers = {
             material.supplier_name.strip()
             for item in items
@@ -5678,7 +6601,10 @@ def create_stock_replenishment_order(
             )
         derived_supplier = next(iter(material_suppliers), None)
         order = StockReplenishmentOrder(
-            order_number=next_replenishment_order_number(),
+            order_number=(
+                stock_warning_order_number
+                or next_replenishment_order_number()
+            ),
             supplier_name=derived_supplier
             or (payload.supplier_name or "").strip()
             or None,
@@ -6245,6 +7171,20 @@ def create_supplier_order_from_merge_group(
         if order_item.requisition_status != "未报料":
             raise HTTPException(status_code=409, detail="合并组中存在已报料明细，不能重复生成")
         _ensure_order_item_crease_width(order_item)
+        late_finished_inventory = _late_finished_inventory_preview(
+            db,
+            item=order_item,
+            order=order_row,
+            product=product,
+        )
+        if late_finished_inventory["can_auto_reserve"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "合并组中发现后来入库的同客户同存货编码成品库存，"
+                    "请先返回待报料列表点击“使用成品，剩余再报”后重试"
+                ),
+            )
         requirements = _current_requisition_requirements(
             db,
             order_item,
@@ -6816,7 +7756,7 @@ def reserve_semi_inventory_from_pending(
             for lot in inventory_lots
         ):
             raise HTTPException(status_code=403, detail="无客户库存访问权限")
-        inventory_lots.sort(key=lambda row: (row.stock_date, row.id))
+        inventory_lots.sort(key=inventory_fifo_sort_key)
         first_detail = inventory_lots[0].semi_finished_detail
         if first_detail is None:
             raise HTTPException(status_code=409, detail="所选批次不是半成品库存")
@@ -6936,6 +7876,395 @@ def reserve_semi_inventory_from_pending(
         raise
 
 
+def _late_finished_idempotent_replay(
+    db: Session,
+    *,
+    item_id: int,
+    operation_prefix: str,
+    user: User,
+) -> dict | None:
+    repeated = db.scalars(
+        select(InventoryReservation)
+        .where(
+            InventoryReservation.idempotency_key.like(
+                f"{operation_prefix}%"
+            )
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    if not repeated:
+        return None
+    if any(
+        row.order_item_id != item_id
+        or row.reservation_type != "finished_order"
+        for row in repeated
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该请求标识已用于其他库存预占",
+        )
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    _require_order_item_customer_access(db, item, user)
+    order = db.get(Order, item.order_id)
+    product = db.get(Product, item.product_id)
+    if order is None or product is None:
+        raise HTTPException(status_code=409, detail="订单或产品快照关联已失效")
+    updated = _current_requisition_summary(db, item)
+    current_preview = _late_finished_inventory_preview(
+        db,
+        item=item,
+        order=order,
+        product=product,
+    )
+    return {
+        "order_item_id": item.id,
+        "allocated_quantity": sum(
+            int(row.credited_requirement_quantity or 0)
+            for row in repeated
+        ),
+        "finished_inventory_reserved_qty": int(
+            updated["finished_inventory_reserved_qty"]
+        ),
+        "production_required_qty": int(
+            updated["production_required_qty"]
+        ),
+        "requisition_qty": int(updated["requisition_qty"]),
+        "fully_covered_by_finished_inventory": bool(
+            updated["fully_covered_by_finished_inventory"]
+        ),
+        "reservations": [
+            {
+                "reservation_id": row.id,
+                "inventory_lot_id": row.inventory_lot_id,
+                "allocated_quantity": int(
+                    row.credited_requirement_quantity or 0
+                ),
+            }
+            for row in repeated
+        ],
+        "late_finished_inventory": current_preview,
+        "idempotent_replay": True,
+        "message": "该成品库存预占已处理，本次未重复预占",
+    }
+
+
+@router.post("/pending/{item_id}/auto-use-finished-inventory")
+def auto_use_late_finished_inventory(
+    item_id: int,
+    payload: PendingLateFinishedInventoryAutoReservePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    """One-click FIFO reserve exact customer-owned finished stock."""
+
+    operation_prefix = (
+        "late-finished:"
+        f"{hashlib.sha256(payload.idempotency_key.encode('utf-8')).hexdigest()[:24]}:"
+    )
+    try:
+        replay = _late_finished_idempotent_replay(
+            db,
+            item_id=item_id,
+            operation_prefix=operation_prefix,
+            user=user,
+        )
+        if replay is not None:
+            return replay
+        item, order, _customer, product = _ensure_pending_order_item_for_supplier_order(
+            db, item_id
+        )
+        _require_order_item_customer_access(db, item, user)
+        if _bom_pending_component_requirements(db, item):
+            raise HTTPException(
+                status_code=409,
+                detail="组合产品请在展开的父件与组件明细中分别使用匹配库存",
+            )
+
+        repeated = db.scalars(
+            select(InventoryReservation)
+            .where(
+                InventoryReservation.idempotency_key.like(
+                    f"{operation_prefix}%"
+                )
+            )
+            .order_by(InventoryReservation.id)
+        ).all()
+        if repeated:
+            return _late_finished_idempotent_replay(
+                db,
+                item_id=item_id,
+                operation_prefix=operation_prefix,
+                user=user,
+            )
+
+        preview = _late_finished_inventory_preview(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+        if preview["blocked_reason"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{preview['blocked_reason']}，不能改用成品库存",
+            )
+        if not preview["can_auto_reserve"]:
+            raise HTTPException(
+                status_code=409,
+                detail="没有可安全自动匹配的同客户同存货编码成品库存，请刷新后重试",
+            )
+
+        remaining = int(preview["reservable_quantity"])
+        allocation_rows: list[dict] = []
+        for lot in _safe_late_finished_inventory_candidates(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        ):
+            if remaining <= 0:
+                break
+            quantity = min(max(int(lot.quantity_available or 0), 0), remaining)
+            if quantity <= 0:
+                continue
+            location = lot.location
+            reservation = reserve_finished_inventory(
+                db,
+                order_item_id=item.id,
+                inventory_lot_id=lot.id,
+                quantity=quantity,
+                expected_version=lot.version,
+                operator_id=user.id,
+                idempotency_key=f"{operation_prefix}{lot.id}",
+                warning_acknowledged_codes=[],
+            )
+            allocation_rows.append(
+                {
+                    "reservation_id": reservation.id,
+                    "inventory_lot_id": lot.id,
+                    "lot_number": lot.lot_number,
+                    "allocated_quantity": quantity,
+                    "location_id": location.id if location is not None else None,
+                    "location_code": (
+                        location.location_code if location is not None else "未设置"
+                    ),
+                    "location_name": (
+                        location.location_name
+                        if location is not None
+                        else "未设置库位"
+                    ),
+                }
+            )
+            remaining -= quantity
+
+        allocated_quantity = sum(
+            int(row["allocated_quantity"]) for row in allocation_rows
+        )
+        if allocated_quantity <= 0:
+            raise HTTPException(
+                status_code=409,
+                detail="成品库存已发生变化，请刷新后重试",
+            )
+        updated = _current_requisition_summary(db, item)
+        _audit(
+            db,
+            user=user,
+            action="AUTO_USE_LATE_FINISHED_INVENTORY",
+            entity_id=item.id,
+            details={
+                "order_item_id": item.id,
+                "inventory_lot_ids": [
+                    row["inventory_lot_id"] for row in allocation_rows
+                ],
+                "allocated_quantity": allocated_quantity,
+                "finished_inventory_reserved_qty": int(
+                    updated["finished_inventory_reserved_qty"]
+                ),
+                "production_required_qty": int(
+                    updated["production_required_qty"]
+                ),
+                "requisition_qty": int(updated["requisition_qty"]),
+            },
+            description="一键使用后来入库的客户专用成品，剩余数量再报料",
+        )
+        db.commit()
+        return {
+            "order_item_id": item.id,
+            "allocated_quantity": allocated_quantity,
+            "finished_inventory_reserved_qty": int(
+                updated["finished_inventory_reserved_qty"]
+            ),
+            "production_required_qty": int(
+                updated["production_required_qty"]
+            ),
+            "requisition_qty": int(updated["requisition_qty"]),
+            "fully_covered_by_finished_inventory": bool(
+                updated["fully_covered_by_finished_inventory"]
+            ),
+            "reservations": allocation_rows,
+            "late_finished_inventory": _late_finished_inventory_preview(
+                db,
+                item=item,
+                order=order,
+                product=product,
+            ),
+            "idempotent_replay": False,
+            "message": (
+                f"已按先进先出预占成品库存 {allocated_quantity} 个；"
+                f"剩余 {int(updated['production_required_qty'])} 个继续报料"
+            ),
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        replay = _late_finished_idempotent_replay(
+            db,
+            item_id=item_id,
+            operation_prefix=operation_prefix,
+            user=user,
+        )
+        if replay is not None:
+            return replay
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+    except HTTPException:
+        db.rollback()
+        raise
+
+
+@router.post("/pending/{item_id}/auto-use-customer-board-preparation")
+def auto_use_customer_board_preparation(
+    item_id: int,
+    payload: PendingCustomerBoardPreparationAutoCoverPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_reserve),
+) -> dict:
+    """One-click reserve exact customer board preparation and leave only the purchase gap."""
+
+    try:
+        item, order, _customer, product = _ensure_pending_order_item_for_supplier_order(
+            db, item_id
+        )
+        _require_order_item_customer_access(db, item, user)
+        if _bom_pending_component_requirements(db, item):
+            raise HTTPException(
+                status_code=409,
+                detail="组合产品请在展开的父件与组件明细中分别使用匹配库存",
+            )
+        options = _safe_customer_board_preparation_options(
+            db,
+            item=item,
+            order=order,
+            product=product,
+        )
+        allocated_piece_quantity = 0
+        allocated_sheet_quantity = 0
+        lot_ids: list[int] = []
+        for option in options:
+            requirement = option["requirement"]
+            if requirement is None:
+                requirement = save_order_item_semi_requirement(
+                    db,
+                    order_item_id=item.id,
+                    component_type=str(option["component_type"]),
+                    board_length_mm=int(option["board_length_mm"]),
+                    board_width_mm=int(option["board_width_mm"]),
+                    material_code=str(option["material_code"]),
+                    flute_type=str(option["flute_type"]),
+                    pieces_per_box=int(option["pieces_per_box"]),
+                    stock_yield_per_sheet=int(option["stock_yield_per_sheet"]),
+                    required_piece_quantity=int(
+                        option["required_piece_quantity"]
+                    ),
+                    operator_id=user.id,
+                )
+            candidates: list[SemiFinishedCandidate] = option["candidates"]
+            result = reserve_semi_finished_inventory(
+                db,
+                requirement_id=requirement.id,
+                requested_requirement_quantity=int(
+                    option["available_piece_quantity"]
+                ),
+                lots=[
+                    SemiFinishedLotVersion(
+                        lot_id=row.lot.id,
+                        expected_version=row.lot.version,
+                    )
+                    for row in candidates
+                ],
+                operator_id=user.id,
+                idempotency_key=(
+                    f"{payload.idempotency_key}:"
+                    f"{option['component_type']}"
+                ),
+                confirmed=True,
+                override=False,
+                warning_acknowledged_codes=[],
+            )
+            allocated_piece_quantity += int(
+                result.allocated_requirement_quantity
+            )
+            allocated_sheet_quantity += sum(
+                int(row.reserved_stock_quantity or 0)
+                for row in result.reservations
+            )
+            lot_ids.extend(int(row.inventory_lot_id) for row in result.reservations)
+
+        updated = _current_requisition_summary(db, item)
+        if allocated_piece_quantity > 0:
+            _audit(
+                db,
+                user=user,
+                action="AUTO_USE_CUSTOMER_BOARD_PREPARATION",
+                entity_id=item.id,
+                details={
+                    "order_item_id": item.id,
+                    "inventory_lot_ids": sorted(set(lot_ids)),
+                    "allocated_sheet_quantity": allocated_sheet_quantity,
+                    "allocated_piece_quantity": allocated_piece_quantity,
+                    "remaining_piece_quantity": int(
+                        updated["remaining_required_piece_qty"]
+                    ),
+                    "requisition_qty": int(updated["requisition_qty"]),
+                },
+                description="一键使用客户专用纸板备料并按差额报料",
+            )
+        db.commit()
+        if allocated_piece_quantity > 0:
+            message = (
+                f"已预占客户专用纸板备料 {allocated_sheet_quantity} 张，"
+                f"可生产 {allocated_piece_quantity} 个；"
+                f"本次只需再报 {int(updated['requisition_qty'])} 张"
+            )
+        else:
+            message = "没有找到可安全自动匹配的客户专用纸板备料，报料数量未变"
+        return {
+            "order_item_id": item.id,
+            "allocated_sheet_quantity": allocated_sheet_quantity,
+            "allocated_piece_quantity": allocated_piece_quantity,
+            "semi_finished_reserved_piece_qty": int(
+                updated["semi_finished_reserved_piece_qty"]
+            ),
+            "remaining_requirement_quantity": int(
+                updated["remaining_required_piece_qty"]
+            ),
+            "requisition_qty": int(updated["requisition_qty"]),
+            "message": message,
+        }
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
+    except HTTPException:
+        db.rollback()
+        raise
+
+
 @router.post("/supplier-orders/preview-from-pending-selection")
 def preview_supplier_orders_from_pending_selection(
     payload: PendingSupplierOrderCreatePayload,
@@ -6952,10 +8281,11 @@ def create_supplier_orders_from_pending_selection(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
-        grouped, touched_groups = _draft_group_entries_by_purchase_lines(db, payload)
-        for entries in grouped.values():
-            for entry in entries:
-                _require_order_item_customer_access(db, entry["order_item"], user)
+        grouped, touched_groups = _draft_group_entries_by_purchase_lines(
+            db,
+            payload,
+            user,
+        )
         created_orders: list[SupplierRequisitionOrder] = []
         for supplier_name, entries in grouped.items():
             created_orders.append(
@@ -7043,6 +8373,19 @@ def create_supplier_order(
             raise HTTPException(status_code=404, detail="订单明细不存在")
         if order_item is not None:
             _require_order_item_customer_access(db, order_item, user)
+            order = db.get(Order, order_item.order_id)
+            product = db.get(Product, order_item.product_id)
+            if order is None or product is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="订单或产品快照关联已失效，不能生成供应商报料单",
+                )
+            _require_late_finished_inventory_resolved(
+                db,
+                item=order_item,
+                order=order,
+                product=product,
+            )
         if order_item is None:
             pieces_per_box = max(int(member.pieces_per_box or 1), 1)
             production_required_qty = max(int(member.quantity or 0), 0)

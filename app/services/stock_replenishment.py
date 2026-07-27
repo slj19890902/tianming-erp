@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from math import ceil
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import (
     beijing_now_naive,
@@ -30,6 +31,10 @@ from app.services.warehouse_inventory import (
     manual_finished_in,
     manual_semi_finished_in,
     normalize_material_code,
+    replace_semi_finished_lot_allowed_products,
+)
+from app.services.semi_finished_inventory import (
+    safe_physical_board_facts_match,
 )
 
 
@@ -39,28 +44,253 @@ class StockReplenishmentError(ValueError):
         self.status_code = status_code
 
 
+STOCK_REPLENISHMENT_CUTTING_FACTORS = {
+    "一开一": 1,
+    "一开二": 2,
+    "一开三": 3,
+    "一开四": 4,
+    "一开五": 5,
+}
+
+
+def product_replenishment_defaults(product: Product) -> dict:
+    """Return common-box facts used to prepare a replenishment draft.
+
+    The product record remains the source of truth for material and cutting
+    facts.  A low-stock policy only owns the warning and target quantities.
+    """
+    material = product.material
+    material_code = (
+        material.code
+        if material is not None
+        else product.default_material_code or product.legacy_material_text
+    )
+    supplier_name = material.supplier_name if material is not None else None
+    layer_count = (
+        material.layer_count
+        if material is not None and material.layer_count is not None
+        else product.layer_count
+    )
+    flute_type = (
+        product.flute_type
+        or (material.flute_type if material is not None else None)
+    )
+    cutting_mode = (
+        product.default_cutting_mode
+        if product.default_cutting_mode in STOCK_REPLENISHMENT_CUTTING_FACTORS
+        else "一开一"
+    )
+    crease_aliases = {"净": "净料", "毛": "毛片"}
+    crease_type = crease_aliases.get(
+        str(product.crease_type or "").strip(),
+        str(product.crease_type or "").strip(),
+    ) or None
+    values = {
+        "material_id": product.material_id,
+        "material_code": material_code,
+        "material_supplier_name": supplier_name,
+        "layer_count": layer_count,
+        "flute_type": str(flute_type or "").strip().upper() or None,
+        "report_length_mm": product.report_length_mm,
+        "report_width_mm": product.report_width_mm,
+        "crease_type": crease_type,
+        "crease_left_mm": product.crease_left_mm,
+        "crease_middle_mm": product.crease_middle_mm,
+        "crease_right_mm": product.crease_right_mm,
+        "cutting_mode": cutting_mode,
+        "output_per_sheet": STOCK_REPLENISHMENT_CUTTING_FACTORS[cutting_mode],
+        "pieces_per_box": int(product.pieces_per_box or 1),
+    }
+    required = {
+        "material_code": "材质",
+        "layer_count": "层数",
+        "flute_type": "楞型",
+        "report_length_mm": "报料长",
+        "report_width_mm": "报料宽",
+    }
+    missing = [
+        label
+        for key, label in required.items()
+        if values.get(key) in (None, "")
+    ]
+    if crease_type == "压线" and any(
+        values.get(key) is None
+        for key in (
+            "crease_left_mm",
+            "crease_middle_mm",
+            "crease_right_mm",
+        )
+    ):
+        missing.append("压线尺寸")
+    values["draft_ready"] = not missing
+    values["missing_fields"] = missing
+    return values
+
+
+def product_replenishment_signature(product: Product) -> tuple | None:
+    """Build the physical paperboard signature used for optional grouping."""
+    defaults = product_replenishment_defaults(product)
+    if not defaults["draft_ready"]:
+        return None
+    crease_segments = (
+        defaults["crease_left_mm"],
+        defaults["crease_middle_mm"],
+        defaults["crease_right_mm"],
+    ) if defaults["crease_type"] == "压线" else (None, None, None)
+    return (
+        product.customer_id,
+        normalize_material_code(defaults["material_code"]),
+        defaults["material_supplier_name"] or "",
+        int(defaults["layer_count"]),
+        defaults["flute_type"],
+        int(defaults["report_length_mm"]),
+        int(defaults["report_width_mm"]),
+        defaults["crease_type"] or "",
+        *crease_segments,
+        int(defaults["output_per_sheet"]),
+        int(defaults["pieces_per_box"]),
+    )
+
+
+def theoretical_requisition_quantity(
+    finished_quantity: int,
+    cutting_mode: str | None,
+) -> int:
+    factor = STOCK_REPLENISHMENT_CUTTING_FACTORS.get(
+        str(cutting_mode or "").strip(),
+        1,
+    )
+    return ceil(max(int(finished_quantity or 0), 0) / factor)
+
+
+def compatible_customer_product_ids(
+    db: Session,
+    item: StockReplenishmentOrderItem,
+) -> list[int]:
+    """Return products that may use one customer-dedicated board lot.
+
+    A supplier-delivered board has not yet been printed, die-cut or glued.
+    It therefore belongs to the customer and physical board signature, not to
+    one finished product.  The existing lot-level hard bindings record every
+    compatible product without increasing finished-goods inventory.
+    """
+    if item.customer_id is None or item.product_id is None:
+        return []
+    primary = db.scalar(
+        select(Product)
+        .options(selectinload(Product.material))
+        .where(Product.id == item.product_id)
+    )
+    if primary is None or primary.deleted_at is not None or not primary.is_active:
+        return []
+    signature = product_replenishment_signature(primary)
+    if signature is None:
+        return [primary.id]
+    products = db.scalars(
+        select(Product)
+        .options(selectinload(Product.material))
+        .where(
+            Product.customer_id == item.customer_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+        .order_by(Product.product_code, Product.id)
+    ).all()
+    return [
+        product.id
+        for product in products
+        if product_replenishment_signature(product) == signature
+    ]
+
+
+def finished_product_quantity_summary(
+    db: Session,
+    *,
+    product_id: int,
+    customer_id: int,
+) -> dict[str, int]:
+    """Return the net allocatable finished-goods quantity for one product.
+
+    ``quantity_available`` is already reduced when stock is reserved.  The
+    warning calculation must therefore sum it directly instead of subtracting
+    reservations a second time.  Valid third-floor V11 locations are formal
+    inventory even while their placement status still needs attention.
+    """
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(InventoryLot.quantity_available), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            FinishedGoodsInventoryDetail.is_general.is_(True),
+                            InventoryLot.quantity_available,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(func.sum(InventoryLot.quantity_reserved), 0),
+        )
+        .select_from(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            FinishedGoodsInventoryDetail.product_id == product_id,
+            or_(
+                and_(
+                    FinishedGoodsInventoryDetail.is_general.is_(False),
+                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+                ),
+                FinishedGoodsInventoryDetail.is_general.is_(True),
+            ),
+            or_(
+                WarehouseLocation.source_version.is_(None),
+                WarehouseLocation.source_version != "V11",
+                and_(
+                    WarehouseLocation.source_version == "V11",
+                    WarehouseLocation.warehouse_floor == 3,
+                ),
+            ),
+        )
+    ).one()
+    available = int(row[0] or 0)
+    general_available = int(row[1] or 0)
+    reserved = int(row[2] or 0)
+    return {
+        "available_quantity": available,
+        "dedicated_available_quantity": max(available - general_available, 0),
+        "general_available_quantity": general_available,
+        "reserved_quantity": reserved,
+        "physical_unconsumed_quantity": available + reserved,
+    }
+
+
 def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:
     if policy.target_inventory_type == "finished":
         if policy.product_id is None:
             return 0
-        value = db.scalar(
-            select(func.coalesce(func.sum(InventoryLot.quantity_available), 0))
-            .join(
-                FinishedGoodsInventoryDetail,
-                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        customer_id = policy.customer_id
+        if customer_id is None:
+            customer_id = db.scalar(
+                select(Product.customer_id).where(Product.id == policy.product_id)
             )
-            .join(WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id)
-            .where(
-                InventoryLot.inventory_type == "finished",
-                InventoryLot.status == "active",
-                FinishedGoodsInventoryDetail.product_id == policy.product_id,
-                or_(
-                    WarehouseLocation.source_version.is_(None),
-                    WarehouseLocation.source_version != "V11",
-                ),
-            )
-        )
-        return int(value or 0)
+        if customer_id is None:
+            return 0
+        return finished_product_quantity_summary(
+            db,
+            product_id=policy.product_id,
+            customer_id=int(customer_id),
+        )["available_quantity"]
 
     if policy.target_inventory_type != "semi_finished":
         return 0
@@ -102,11 +332,239 @@ def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:
     return int(value or 0)
 
 
+def _replenishment_item_signature(
+    item: StockReplenishmentOrderItem,
+) -> tuple | None:
+    if (
+        item.customer_id is None
+        or item.layer_count is None
+        or not item.flute_type
+        or item.report_length_mm is None
+        or item.report_width_mm is None
+        or not item.material_code_snapshot
+    ):
+        return None
+    crease_type = str(item.crease_type or "").strip()
+    crease_segments = (
+        item.crease_left_mm,
+        item.crease_middle_mm,
+        item.crease_right_mm,
+    ) if crease_type == "压线" else (None, None, None)
+    return (
+        item.customer_id,
+        normalize_material_code(item.material_code_snapshot),
+        str(item.order.supplier_name or "").strip(),
+        int(item.layer_count),
+        str(item.flute_type).strip().upper(),
+        int(item.report_length_mm),
+        int(item.report_width_mm),
+        crease_type,
+        *crease_segments,
+        int(item.stock_yield_per_sheet or 1),
+        int(item.pieces_per_box or 1),
+    )
+
+
+def customer_board_preparation_coverage(
+    db: Session,
+    *,
+    product: Product,
+) -> dict[str, int]:
+    """Return available and already-ordered board sheets without calling them finished stock."""
+
+    defaults = product_replenishment_defaults(product)
+    available_sheets = 0
+    available_finished_capacity = 0
+    available_auto_cover_capacity = 0
+    if defaults["draft_ready"]:
+        from app.services.semi_finished_inventory import (
+            semi_finished_candidates_for_product,
+        )
+
+        candidates = semi_finished_candidates_for_product(
+            db,
+            product_id=product.id,
+            customer_id=product.customer_id,
+            board_length_mm=int(defaults["report_length_mm"]),
+            board_width_mm=int(defaults["report_width_mm"]),
+            material_code=str(defaults["material_code"]),
+            flute_type=str(defaults["flute_type"]),
+            component_type="whole",
+            pieces_per_box=int(defaults["pieces_per_box"]),
+            stock_yield_per_sheet=int(defaults["output_per_sheet"]),
+        )
+        for row in candidates:
+            detail = row.lot.semi_finished_detail
+            if (
+                detail is None
+                or detail.owner_customer_id != product.customer_id
+                or row.signature_differences
+                or row.source not in {"signature", "learned"}
+                or not safe_physical_board_facts_match(
+                    detail,
+                    supplier_name=defaults["material_supplier_name"],
+                    layer_count=defaults["layer_count"],
+                    crease_type=defaults["crease_type"],
+                    crease_left_mm=defaults["crease_left_mm"],
+                    crease_middle_mm=defaults["crease_middle_mm"],
+                    crease_right_mm=defaults["crease_right_mm"],
+                )
+            ):
+                continue
+            available_sheets += int(row.available_stock_quantity or 0)
+            capacity = int(row.deductible_requirement_quantity or 0)
+            available_finished_capacity += capacity
+            primary_product_id = None
+            if (
+                row.lot.source_ref_type == "stock_replenishment_item"
+                and row.lot.source_ref_id is not None
+            ):
+                source_item = db.get(
+                    StockReplenishmentOrderItem,
+                    row.lot.source_ref_id,
+                )
+                primary_product_id = (
+                    source_item.product_id if source_item is not None else None
+                )
+            allowed_product_ids = {
+                int(binding.product_id)
+                for binding in row.lot.allowed_products
+            }
+            if (
+                primary_product_id == product.id
+                or (
+                    primary_product_id is None
+                    and allowed_product_ids == {product.id}
+                )
+            ):
+                available_auto_cover_capacity += capacity
+
+    signature = product_replenishment_signature(product)
+    incoming_sheets = 0
+    incoming_finished_capacity = 0
+    incoming_auto_cover_capacity = 0
+    if signature is not None:
+        incoming_items = db.scalars(
+            select(StockReplenishmentOrderItem)
+            .join(
+                StockReplenishmentOrder,
+                StockReplenishmentOrder.id
+                == StockReplenishmentOrderItem.replenishment_order_id,
+            )
+            .where(
+                StockReplenishmentOrder.source_type == "stock_warning",
+                StockReplenishmentOrder.status.in_(
+                    ("confirmed", "partially_stocked")
+                ),
+                StockReplenishmentOrderItem.target_inventory_type
+                == "semi_finished",
+                StockReplenishmentOrderItem.quantity
+                > StockReplenishmentOrderItem.stocked_quantity,
+                StockReplenishmentOrderItem.customer_id
+                == product.customer_id,
+            )
+            .order_by(
+                StockReplenishmentOrder.created_at,
+                StockReplenishmentOrderItem.id,
+            )
+        ).all()
+        for item in incoming_items:
+            if _replenishment_item_signature(item) != signature:
+                continue
+            outstanding = max(
+                int(item.quantity or 0) - int(item.stocked_quantity or 0),
+                0,
+            )
+            incoming_sheets += outstanding
+            capacity = outstanding * int(item.stock_yield_per_sheet or 1)
+            incoming_finished_capacity += capacity
+            # One incoming quantity has one owning replenishment line.  A
+            # compatible-product binding permits future use, but must not make
+            # the same physical sheets cover every product's warning at once.
+            if item.product_id == product.id:
+                incoming_auto_cover_capacity += capacity
+    return {
+        "customer_board_preparation_available_sheet_quantity": available_sheets,
+        "customer_board_preparation_finished_capacity": (
+            available_finished_capacity
+        ),
+        "customer_board_preparation_auto_cover_capacity": (
+            available_auto_cover_capacity
+        ),
+        "incoming_board_preparation_sheet_quantity": incoming_sheets,
+        "incoming_board_preparation_finished_capacity": (
+            incoming_finished_capacity
+        ),
+        "incoming_board_preparation_auto_cover_capacity": (
+            incoming_auto_cover_capacity
+        ),
+    }
+
+
 def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
-    available = current_policy_quantity(db, policy)
+    finished_summary: dict[str, int] = {}
+    if (
+        policy.target_inventory_type == "finished"
+        and policy.product_id is not None
+        and policy.customer_id is not None
+    ):
+        finished_summary = finished_product_quantity_summary(
+            db,
+            product_id=policy.product_id,
+            customer_id=policy.customer_id,
+        )
+    available = (
+        finished_summary["available_quantity"]
+        if finished_summary
+        else current_policy_quantity(db, policy)
+    )
     target = int(policy.target_quantity or 0)
     warning = int(policy.warning_quantity or 0)
     location = policy.default_location
+    board_coverage = {
+        "customer_board_preparation_available_sheet_quantity": 0,
+        "customer_board_preparation_finished_capacity": 0,
+        "customer_board_preparation_auto_cover_capacity": 0,
+        "incoming_board_preparation_sheet_quantity": 0,
+        "incoming_board_preparation_finished_capacity": 0,
+        "incoming_board_preparation_auto_cover_capacity": 0,
+    }
+    if (
+        policy.target_inventory_type == "finished"
+        and policy.product is not None
+    ):
+        board_coverage = customer_board_preparation_coverage(
+            db,
+            product=policy.product,
+        )
+    suggested_finished_quantity = max(target - available, 0)
+    suggested_new_requisition_finished_quantity = max(
+        suggested_finished_quantity
+        - int(board_coverage["customer_board_preparation_auto_cover_capacity"])
+        - int(board_coverage["incoming_board_preparation_auto_cover_capacity"]),
+        0,
+    )
+    output_per_sheet = (
+        int(product_replenishment_defaults(policy.product)["output_per_sheet"])
+        if policy.product is not None
+        else 1
+    )
+    suggested_new_requisition_sheet_quantity = ceil(
+        suggested_new_requisition_finished_quantity
+        / max(output_per_sheet, 1)
+    )
+    replenishment_state = (
+        "purchase_needed"
+        if suggested_new_requisition_sheet_quantity > 0
+        else "board_preparation_ready"
+        if board_coverage[
+            "customer_board_preparation_available_sheet_quantity"
+        ]
+        > 0
+        else "already_ordered"
+        if board_coverage["incoming_board_preparation_sheet_quantity"] > 0
+        else "target_covered"
+    )
     return {
         "id": policy.id,
         "policy_name": policy.policy_name,
@@ -128,8 +586,26 @@ def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
         "warning_quantity": warning,
         "target_quantity": target,
         "available_quantity": available,
-        "warning_triggered": bool(policy.active and available <= warning),
-        "suggested_replenishment_quantity": max(target - available, 0),
+        "dedicated_available_quantity": finished_summary.get(
+            "dedicated_available_quantity"
+        ),
+        "general_available_quantity": finished_summary.get(
+            "general_available_quantity"
+        ),
+        "reserved_quantity": finished_summary.get("reserved_quantity"),
+        "physical_unconsumed_quantity": finished_summary.get(
+            "physical_unconsumed_quantity"
+        ),
+        "warning_triggered": bool(policy.active and available < warning),
+        "suggested_replenishment_quantity": suggested_finished_quantity,
+        **board_coverage,
+        "suggested_new_requisition_finished_quantity": (
+            suggested_new_requisition_finished_quantity
+        ),
+        "suggested_new_requisition_sheet_quantity": (
+            suggested_new_requisition_sheet_quantity
+        ),
+        "replenishment_state": replenishment_state,
         "default_location": (
             {
                 "id": location.id,
@@ -212,6 +688,19 @@ def next_replenishment_order_number() -> str:
 def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
     location = item.location
     lot = item.inventory_lot
+    allowed_products = (
+        [
+            {
+                "id": binding.product_id,
+                "product_code": binding.product.product_code,
+                "product_name": binding.product.product_name,
+            }
+            for binding in lot.allowed_products
+            if binding.product is not None
+        ]
+        if lot and lot.inventory_type == "semi_finished"
+        else []
+    )
     return {
         "id": item.id,
         "stock_policy_id": item.stock_policy_id,
@@ -250,6 +739,14 @@ def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
                 "id": lot.id,
                 "lot_number": lot.lot_number,
                 "quantity_available": lot.quantity_available,
+                "display_name": (
+                    "客户专用纸板备料"
+                    if lot.inventory_type == "semi_finished" and item.customer_id
+                    else "半成品片料"
+                    if lot.inventory_type == "semi_finished"
+                    else "成品库存"
+                ),
+                "allowed_products": allowed_products,
             }
             if lot
             else None
@@ -305,17 +802,34 @@ def stock_replenishment_order(
     for item in order.items:
         if item.stocked_quantity >= item.quantity:
             continue
+        if (
+            order.source_type == "stock_warning"
+            and item.target_inventory_type != "semi_finished"
+        ):
+            raise StockReplenishmentError(
+                "库存预警到料只能进入客户专用纸板备料，不能直接增加成品库存。"
+            )
         if item.location_id is None:
             raise StockReplenishmentError(
                 f"补库明细“{item.product_name_snapshot}”未选择入库库位。"
             )
         quantity = item.quantity - item.stocked_quantity
+        customer_board_preparation = (
+            order.source_type == "stock_warning"
+            and item.target_inventory_type == "semi_finished"
+            and item.customer_id is not None
+            and item.product_id is not None
+        )
         common = {
             "location_id": item.location_id,
             "quantity": quantity,
             "stock_date": beijing_today(),
             "source_type": "replenishment",
-            "remarks": f"补库单 {order.order_number}；{item.remark or ''}".strip("；"),
+            "remarks": (
+                f"补库单 {order.order_number}；"
+                f"{'客户专用纸板备料；' if customer_board_preparation else ''}"
+                f"{item.remark or ''}"
+            ).strip("；"),
             "operator_id": operator_id,
             "idempotency_key": f"stock-replenishment-item-{item.id}",
             "source_ref_type": "stock_replenishment_item",
@@ -363,8 +877,33 @@ def stock_replenishment_order(
                     crease_middle_mm=item.crease_middle_mm,
                     crease_right_mm=item.crease_right_mm,
                     cutting_note=item.remark,
+                    movement_reason=(
+                        "库存预警到料转客户专用纸板备料"
+                        if customer_board_preparation
+                        else "手工半成品入库"
+                    ),
                     **common,
                 )
+                if customer_board_preparation:
+                    if item.customer_id is None:
+                        raise StockReplenishmentError(
+                            "客户专用纸板备料必须明确归属客户。"
+                        )
+                    allowed_product_ids = compatible_customer_product_ids(
+                        db,
+                        item,
+                    )
+                    if not allowed_product_ids:
+                        raise StockReplenishmentError(
+                            "客户专用纸板备料没有可绑定的同规格成品款号。"
+                        )
+                    lot = replace_semi_finished_lot_allowed_products(
+                        db,
+                        inventory_lot_id=lot.id,
+                        product_ids=allowed_product_ids,
+                        expected_version=lot.version,
+                        operator_id=operator_id,
+                    )
             else:
                 raise StockReplenishmentError("补库目标类型无效。")
         except WarehouseInventoryError as error:

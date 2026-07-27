@@ -16,7 +16,11 @@
     .filters { position:sticky; top:57px; z-index:4; display:flex; gap:6px; overflow:auto; padding:5px 0 8px; scrollbar-width:none; } .filters::-webkit-scrollbar { display:none; } .filters button { flex:0 0 auto; min-width:62px; } .filters button.active { color:white; background:var(--green); }
     .customer { margin:12px 0 6px; font-size:15px; font-weight:800; } .card { margin-bottom:8px; padding:11px; background:#fffdf8; border:1px solid var(--line); border-left:5px solid var(--green); border-radius:11px; box-shadow:0 3px 12px #4b4b3518; } .card.partial { border-left-color:var(--orange); } .card.no_stock { border-left-color:var(--red); } .card.picked { opacity:.72; }
     .task-card { width:100%; margin-bottom:8px; padding:12px; text-align:left; background:#fffdf8; border-left:5px solid var(--green); } .task-card.exception { border-left-color:var(--orange); } .task-number { margin-top:4px; color:var(--muted); font-size:12px; font-weight:400; } .back-row { margin-bottom:8px; }
-    .name { font-size:19px; font-weight:800; line-height:1.3; } .spec { margin-top:3px; color:#385545; font-size:15px; } .code { margin-top:3px; color:#8b958e; font-size:11px; } .qty-row { display:grid; grid-template-columns:1fr 100px; gap:8px; align-items:center; margin-top:9px; } .qty-label { color:var(--muted); font-size:13px; } .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:9px; } .task-actions { display:flex; gap:8px; margin-top:12px; } .task-actions button { flex:1; }
+    .name { font-size:19px; font-weight:800; line-height:1.3; } .spec { margin-top:3px; color:#385545; font-size:15px; } .code { margin-top:3px; color:#8b958e; font-size:11px; } .pick-components { margin-top:8px; padding:7px 8px; border:1px solid #d5e1d7; border-radius:7px; background:#f5faf5; } .pick-components-title { color:#385545; font-size:12px; font-weight:800; } .pick-component-row { display:flex; justify-content:space-between; gap:8px; margin-top:3px; color:#385545; font-size:12px; } .pick-component-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .pick-component-quantity { flex:0 0 auto; color:#17211b; font-weight:800; } .qty-row { display:grid; grid-template-columns:1fr 100px; gap:8px; align-items:center; margin-top:9px; } .qty-label { color:var(--muted); font-size:13px; } .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:9px; } .task-actions { display:flex; gap:8px; margin-top:12px; } .task-actions button { flex:1; }
+    .normal-action { margin-bottom:10px; padding:12px; background:#e9f5ec; border:1px solid #bdd9c5; border-radius:11px; } .normal-action button { width:100%; min-height:52px; font-size:18px; } .normal-action p { margin:7px 0 0; color:#45604f; font-size:12px; text-align:center; }
+    .location-card { margin-bottom:9px; padding:12px; background:#fffdf8; border:1px solid var(--line); border-left:6px solid var(--green); border-radius:11px; box-shadow:0 3px 12px #4b4b3518; } .location-card.direct { border-left-color:#3974a7; } .location-card.relocation { border-left-color:var(--orange); } .location-card.attention { border-left-color:var(--red); background:#fff5f2; } .location-title { font-size:21px; font-weight:900; line-height:1.25; } .location-meta { margin-top:4px; color:var(--muted); font-size:12px; } .location-line { display:grid; grid-template-columns:1fr auto; gap:9px; align-items:center; padding:9px 0; border-top:1px dashed #ddd7ca; } .location-line:first-of-type { margin-top:8px; } .location-product { font-size:15px; font-weight:800; } .location-spec { margin-top:2px; color:var(--muted); font-size:12px; } .location-qty { color:#143d27; font-size:22px; font-weight:900; white-space:nowrap; }
+    .ready-banner { margin-bottom:10px; padding:13px; color:#145d36; background:#e1f4e8; border:1px solid #aad1b8; border-radius:10px; font-size:16px; font-weight:800; text-align:center; }
+    details.exception-tools { margin-top:12px; padding:0 10px 10px; background:#fffdf8; border:1px solid var(--line); border-radius:11px; } details.exception-tools > summary { padding:13px 2px; color:#6c4631; font-weight:800; cursor:pointer; } .exception-help { margin:0 0 8px; color:var(--muted); font-size:12px; }
     .error { color:var(--red); margin-top:8px; font-size:13px; } .toast { position:fixed; left:50%; bottom:20px; z-index:10; transform:translateX(-50%); padding:10px 15px; color:white; background:#17211be8; border-radius:10px; }
   </style>
 </head>
@@ -36,9 +40,16 @@
       <section id="taskChooser"></section>
       <section id="taskDetail" hidden>
         <div class="back-row"><button onclick="showTaskList()">返回待拿货任务</button></div>
-        <nav id="filters" class="filters" aria-label="拿货状态筛选"></nav>
-        <div id="groups"></div>
-        <div class="task-actions"><button class="primary" onclick="submitTask()">提交拿货结果</button><button onclick="loadTask()">刷新</button></div>
+        <div id="normalAction" class="normal-action"><button id="completePlannedButton" class="primary" onclick="completePlanned()">本单全部按计划拿齐</button><p>正常拿齐只点这一个按钮，不会自动发货。</p></div>
+        <div id="readyBanner" class="ready-banner" hidden>已拿齐，可回电脑发货打印</div>
+        <div id="locationGroups"></div>
+        <details id="exceptionTools" class="exception-tools">
+          <summary>有缺货或数量不一致时再登记</summary>
+          <p class="exception-help">只有实际少拿、没货或多拿时才需要操作下面明细。</p>
+          <nav id="filters" class="filters" aria-label="拿货状态筛选"></nav>
+          <div id="groups"></div>
+          <div class="task-actions"><button class="partial" onclick="submitTask()">提交异常结果</button><button onclick="loadTask()">刷新</button></div>
+        </details>
       </section>
       <div id="error" class="error"></div>
     </section>
@@ -54,7 +65,7 @@
     function normalize(body) { const source=body.task || body; return { ...source, items: body.items || source.items || [] }; }
     function filters() { return [["open","未完成",item=>statusOf(item)!=="picked"],["pending","待拿货",item=>statusOf(item)==="pending"],["partial","部分",item=>statusOf(item)==="partial"],["no_stock","没货",item=>statusOf(item)==="no_stock"],["picked","已拿货",item=>statusOf(item)==="picked"],["all","全部",()=>true]]; }
     function setFilter(key) { activeFilter=key; render(); }
-    function taskStatusLabel(value) { return ({pushed:"待拿货",driver_confirmed:"已确认",exception:"有异常",applied:"已应用",dispatched:"已发货"}[value] || value || "待拿货"); }
+    function taskStatusLabel(value) { return ({pushed:"待拿货",driver_confirmed:"可发货打印",exception:"有异常",applied:"可发货打印",dispatched:"已发货"}[value] || value || "待拿货"); }
     async function loadTaskList() {
       const body=await request("/api/delivery-picks"); const rows=(body.items || []).filter(row=>row.status!=="dispatched"); const groups=new Map();
       rows.forEach(row=>{ const customer=row.customer_name || "未指定客户"; if(!groups.has(customer)) groups.set(customer,[]); groups.get(customer).push(row); });
@@ -69,19 +80,38 @@
     async function showTaskList() { task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
     function render() {
       if(!task) return;
-      document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${task.status || "待拿货"}`;
+      document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${taskStatusLabel(task.status)}`;
+      const ready=["driver_confirmed","applied"].includes(task.status);
+      document.getElementById("normalAction").hidden=ready;
+      document.getElementById("readyBanner").hidden=!ready;
+      const completeButton=document.getElementById("completePlannedButton");
+      completeButton.disabled=task.status!=="pushed" || task.location_plan_complete===false;
+      document.getElementById("locationGroups").innerHTML=(task.location_groups || []).length ? (task.location_groups || []).map(renderLocationGroup).join("") : '<div class="message">当前没有可用的拿货位置计划，请刷新或登记异常。</div>';
       const rows=task.items || []; const defs=filters();
       document.getElementById("filters").innerHTML=defs.map(([key,label,predicate])=>`<button class="${activeFilter===key?"active":""}" onclick="setFilter('${key}')">${rows.filter(predicate).length} ${label}</button>`).join("");
       const predicate=defs.find(row=>row[0]===activeFilter)[2]; const visible=rows.filter(predicate); const groups=new Map();
       visible.forEach(item=>{ const customer=item.customer_name || task.customer_name || "未指定客户"; if(!groups.has(customer)) groups.set(customer,[]); groups.get(customer).push(item); });
       document.getElementById("groups").innerHTML=groups.size ? [...groups.entries()].map(([customer,items])=>`<section><div class="customer">${escapeHtml(customer)}</div>${items.map(renderItem).join("")}</section>`).join("") : '<div class="message">当前筛选没有待处理明细</div>';
+      if(task.has_exception || task.status==="exception") document.getElementById("exceptionTools").open=true;
+    }
+    function renderLocationGroup(group) {
+      const classes=["location-card"]; if(group.source_type==="production_direct") classes.push("direct"); if(group.needs_relocation) classes.push("relocation"); if(group.requires_attention) classes.push("attention");
+      const pallet=group.pallet_code ? `栈板 ${group.pallet_code}` : (group.source_type==="finished_inventory" ? "未绑定栈板" : "");
+      const lines=(group.lines || []).map(line=>`<div class="location-line"><div><div class="location-product">${escapeHtml([line.product_code || "-",line.product_name || "未命名产品"].join(" / "))}</div><div class="location-spec">${escapeHtml(line.specification || "-")}${line.lot_number ? ` · 批次 ${escapeHtml(line.lot_number)}` : ""}</div></div><div class="location-qty">${Number(line.pick_quantity || 0)} ${escapeHtml(line.unit || "个")}</div></div>`).join("");
+      return `<section class="${classes.join(" ")}"><div class="location-title">${escapeHtml(group.label || "拿货位置")}</div>${pallet ? `<div class="location-meta">${escapeHtml(pallet)}</div>` : ""}${lines}</section>`;
+    }
+    function renderPickComponents(item) {
+      const components=(item.component_lines || []).filter(component=>Number(component.planned_delivery_quantity ?? component.quantity ?? 0)>0);
+      if(!components.length) return "";
+      return `<section class="pick-components" aria-label="本次随货子件，只读展示"><div class="pick-components-title">本次随货子件（只读，不单独确认）</div>${components.map(component=>{ const quantity=Number(component.planned_delivery_quantity ?? component.quantity ?? 0); const label=[component.product_code || component.component_code || "-",component.product_name || component.component_name || "未命名组件"].join(" / "); return `<div class="pick-component-row"><span class="pick-component-name">${escapeHtml(label)}</span><span class="pick-component-quantity">${quantity}</span></div>`; }).join("")}</section>`;
     }
     function renderItem(item) {
       const status=statusOf(item); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0);
-      return `<article class="card ${escapeHtml(status)}" data-item-id="${item.id}"><div class="name">${escapeHtml(item.product_name || "未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification || "-")}</div><div class="code">存货编码：${escapeHtml(item.product_code || "-")}</div><div class="qty-row"><div class="qty-label">计划 ${planned} · 当前拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" /></div><div class="actions"><button class="primary" onclick="updateItem(${item.id},'picked')">已拿货</button><button class="partial" onclick="updateItem(${item.id},'partial')">部分拿货</button><button class="no-stock" onclick="updateItem(${item.id},'no_stock')">没货</button></div></article>`;
+      return `<article class="card ${escapeHtml(status)}" data-item-id="${item.id}"><div class="name">${escapeHtml(item.product_name || "未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification || "-")}</div><div class="code">存货编码：${escapeHtml(item.product_code || "-")}</div>${renderPickComponents(item)}<div class="qty-row"><div class="qty-label">计划 ${planned} · 当前拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" /></div><div class="actions"><button class="primary" onclick="updateItem(${item.id},'picked')">已拿货</button><button class="partial" onclick="updateItem(${item.id},'partial')">部分拿货</button><button class="no-stock" onclick="updateItem(${item.id},'no_stock')">没货</button></div></article>`;
     }
     async function updateItem(itemId,status) { const card=document.querySelector(`[data-item-id="${itemId}"]`); const item=task.items.find(row=>Number(row.id)===Number(itemId)); if(!item||!card) return; const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); let qty=Number(card.querySelector(".picked-qty").value); if(status==="picked" && (!Number.isFinite(qty)||qty<=0)) qty=planned; if(status==="no_stock") qty=0; if(status==="partial" && (!Number.isFinite(qty)||qty<=0||qty>=planned)) return toast("部分拿货数量必须大于0且小于计划数量"); if(!Number.isFinite(qty)||qty<0) return toast("请输入有效数量"); try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/items/${encodeURIComponent(itemId)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({pick_status:status,picked_quantity:qty})}); Object.assign(item,body.item || body); if(body.task) task={...task,...body.task,items:task.items}; render(); toast("拿货结果已保存"); } catch(error) { toast(error.message); } }
-    async function submitTask() { try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/submit`,{method:"POST"}); task=normalize(body); render(); toast("拿货结果已提交"); } catch(error) { document.getElementById("error").textContent=error.message; } }
+    async function completePlanned() { try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/complete-planned`,{method:"POST"}); task=normalize(body); render(); toast("本单已按计划拿齐，可发货打印"); } catch(error) { document.getElementById("error").textContent=error.message; toast(error.message); } }
+    async function submitTask() { try { const body=await request(`/api/delivery-picks/${encodeURIComponent(task.id)}/submit`,{method:"POST"}); task=normalize(body); render(); toast("异常结果已提交"); } catch(error) { document.getElementById("error").textContent=error.message; } }
     async function loadTask() { try { if(taskId) await selectTask(taskId); else await loadTaskList(); } catch(error) { document.getElementById("error").textContent=error.message; } }
     async function login(event) { event.preventDefault(); const error=document.getElementById("loginError"); error.textContent=""; try { await request("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value,remember_me:false})}); await boot(); } catch(exception) { error.textContent=exception.message; } }
     async function boot() { try { await request("/api/auth/me"); document.getElementById("loginBox").hidden=true; document.getElementById("app").hidden=false; if(!taskId) await loadTaskList(); else await selectTask(taskId); } catch(error) { if(/401|登录|Unauthorized/i.test(error.message)) { document.getElementById("loginBox").hidden=false; document.getElementById("app").hidden=true; } else { document.getElementById("error").textContent=error.message; document.getElementById("app").hidden=false; } } }

@@ -34,13 +34,18 @@ def _assert_database(database: Path, revision: str) -> None:
         ).fetchone()[0] == revision
 
 
-def test_ci65_is_the_only_head_and_descends_from_ch64(
+def test_ci65_descends_from_ch64_on_the_unique_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(monkeypatch, tmp_path / "lineage.sqlite3")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == [TARGET_REVISION]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert TARGET_REVISION in {
+        revision.revision
+        for revision in script.iterate_revisions(heads[0], "base")
+    }
     assert script.get_revision(TARGET_REVISION).down_revision == PREVIOUS_REVISION
 
 

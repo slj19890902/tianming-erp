@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.delivery import DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     InventoryLot,
@@ -28,7 +29,10 @@ from app.services.warehouse_inventory import (
     _movement,
     _number,
     active_finished_reserved_qty,
+    component_effective_required_piece_qty,
+    component_inventory_coverage,
     consume_finished_reservation,
+    inventory_fifo_order_columns,
     normalize_material_code,
     replace_semi_finished_lot_allowed_products,
     reverse_finished_consumption,
@@ -123,6 +127,7 @@ def save_order_item_semi_requirement(
     stock_yield_per_sheet: int,
     required_piece_quantity: int | None,
     operator_id: int | None,
+    sales_order_item_bom_component_id: int | None = None,
 ) -> OrderItemSemiRequirement:
     row = db.execute(
         select(OrderItem, Order)
@@ -132,7 +137,16 @@ def save_order_item_semi_requirement(
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
-    product = db.get(Product, item.product_id)
+    snapshot = (
+        db.get(SalesOrderItemBomComponent, sales_order_item_bom_component_id)
+        if sales_order_item_bom_component_id is not None
+        else None
+    )
+    if sales_order_item_bom_component_id is not None and (
+        snapshot is None or snapshot.sales_order_item_id != item.id
+    ):
+        raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+    product = db.get(Product, snapshot.component_product_id if snapshot else item.product_id)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("订单产品不存在", 404)
     if product.customer_id != order.customer_id:
@@ -152,12 +166,19 @@ def save_order_item_semi_requirement(
     material_snapshot = material_code.strip()
     normalized_material = normalize_material_code(material_snapshot)
     normalized_flute = _flute(flute_type)
-    existing = db.scalar(
-        select(OrderItemSemiRequirement).where(
-            OrderItemSemiRequirement.order_item_id == item.id,
+    existing_query = select(OrderItemSemiRequirement).where(
+        OrderItemSemiRequirement.order_item_id == item.id,
+    )
+    if snapshot is not None:
+        existing_query = existing_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id == snapshot.id
+        )
+    else:
+        existing_query = existing_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None),
             OrderItemSemiRequirement.component_type == component,
         )
-    )
+    existing = db.scalar(existing_query)
     values = {
         "customer_id": order.customer_id,
         "board_length_mm": board_length_mm,
@@ -168,6 +189,7 @@ def save_order_item_semi_requirement(
         "pieces_per_box": pieces_per_box,
         "stock_yield_per_sheet": stock_yield_per_sheet,
         "required_piece_quantity": required,
+        "sales_order_item_bom_component_id": snapshot.id if snapshot else None,
     }
     if existing is not None:
         unchanged = all(getattr(existing, name) == value for name, value in values.items())
@@ -280,6 +302,58 @@ def _signature_differences_from_signature(
     return tuple(name for name, expected, actual in pairs if expected != actual)
 
 
+def safe_physical_board_facts_match(
+    detail: SemiFinishedInventoryDetail,
+    *,
+    supplier_name: str | None,
+    layer_count: int | None,
+    crease_type: str | None,
+    crease_left_mm: int | None,
+    crease_middle_mm: int | None,
+    crease_right_mm: int | None,
+) -> bool:
+    """Fail closed for no-dialog customer board-preparation reservations."""
+
+    normalized_supplier = " ".join((supplier_name or "").strip().casefold().split())
+    actual_supplier = " ".join(
+        (detail.supplier_name or "").strip().casefold().split()
+    )
+    expected_layer = int(layer_count or 0)
+    if (
+        not normalized_supplier
+        or normalized_supplier != actual_supplier
+        or expected_layer <= 0
+        or int(detail.layer_count or 0) != expected_layer
+    ):
+        return False
+    normalized_crease = {
+        "净": "净料",
+        "毛": "毛片",
+    }.get((crease_type or "").strip(), (crease_type or "").strip())
+    expected_sheet_type = (
+        "creased_sheet"
+        if normalized_crease == "压线"
+        else "net_sheet"
+        if normalized_crease == "净料"
+        else "raw_board"
+    )
+    if (
+        detail.sheet_type != expected_sheet_type
+        or (detail.crease_type or "").strip() != normalized_crease
+    ):
+        return False
+    expected_segments = (
+        (crease_left_mm, crease_middle_mm, crease_right_mm)
+        if normalized_crease == "压线"
+        else (None, None, None)
+    )
+    return (
+        detail.crease_left_mm,
+        detail.crease_middle_mm,
+        detail.crease_right_mm,
+    ) == expected_segments
+
+
 def _physical_signature_differences(
     expected: SemiFinishedSignature,
     detail: SemiFinishedInventoryDetail,
@@ -293,7 +367,24 @@ def _physical_signature_differences(
 
 def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) -> int:
     item = db.get(OrderItem, requirement.order_item_id)
-    product = db.get(Product, item.product_id) if item is not None else None
+    snapshot = (
+        db.get(
+            SalesOrderItemBomComponent,
+            requirement.sales_order_item_bom_component_id,
+        )
+        if requirement.sales_order_item_bom_component_id is not None
+        else None
+    )
+    if requirement.sales_order_item_bom_component_id is not None and (
+        snapshot is None
+        or item is None
+        or snapshot.sales_order_item_id != item.id
+    ):
+        raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
+    product = db.get(
+        Product,
+        snapshot.component_product_id if snapshot is not None else item.product_id,
+    ) if item is not None else None
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("订单产品不存在", 404)
     if product.customer_id != requirement.customer_id:
@@ -497,7 +588,7 @@ def browse_semi_finished_inventory_for_product(
             ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
-        .order_by(InventoryLot.stock_date, InventoryLot.id)
+        .order_by(*inventory_fifo_order_columns())
     ).all()
     allowed_lot_ids = _allowed_lot_ids_for_product(db, product.id)
     candidates: list[SemiFinishedCandidate] = []
@@ -575,7 +666,7 @@ def _semi_finished_candidates_for_signature(
             ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
-        .order_by(InventoryLot.stock_date, InventoryLot.id)
+        .order_by(*inventory_fifo_order_columns())
     ).all()
     allowed_lot_ids = _allowed_lot_ids_for_product(db, product_id)
     candidates: list[SemiFinishedCandidate] = []
@@ -676,10 +767,7 @@ def browse_semi_finished_inventory(
             ),
             SemiFinishedInventoryDetail.component_type == requirement.component_type,
         )
-        .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
-        )
+        .order_by(*inventory_fifo_order_columns())
     ).all()
     product_id = _requirement_product_id(db, requirement)
     expected = requirement_signature(requirement)
@@ -1041,8 +1129,7 @@ def _finished_reservations_for_delivery(
             + InventoryReservation.released_stock_quantity,
         )
         .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()
@@ -1064,8 +1151,7 @@ def _semi_reservations_for_delivery(
             + InventoryReservation.released_stock_quantity,
         )
         .order_by(
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()
@@ -1587,19 +1673,35 @@ def reserve_semi_finished_inventory(
             raise WarehouseInventoryError(
                 "该订单明细已有生产完工事实，不能新增半成品预占", 409
             )
-        already_credited = active_semi_requirement_credited_quantity(
-            db, requirement.id
-        )
-        remaining_requirement = max(
-            requirement.required_piece_quantity - already_credited, 0
-        )
+        if requirement.sales_order_item_bom_component_id is not None:
+            snapshot = db.get(
+                SalesOrderItemBomComponent,
+                requirement.sales_order_item_bom_component_id,
+            )
+            if snapshot is None or snapshot.sales_order_item_id != item.id:
+                raise WarehouseInventoryError(
+                    "组件库存预占关联已失效，请刷新订单后重试", 409
+                )
+            coverage = component_inventory_coverage(db, snapshot.id)
+            remaining_requirement = max(
+                component_effective_required_piece_qty(db, snapshot)
+                - coverage["total_piece_quantity"],
+                0,
+            )
+        else:
+            already_credited = active_semi_requirement_credited_quantity(
+                db, requirement.id
+            )
+            remaining_requirement = max(
+                requirement.required_piece_quantity - already_credited, 0
+            )
         target = min(requested_requirement_quantity, remaining_requirement)
         if target <= 0:
             raise WarehouseInventoryError("该半成品需求已全部抵扣", 409)
         inventory_lots = db.scalars(
             select(InventoryLot)
             .where(InventoryLot.id.in_(expected_versions))
-            .order_by(InventoryLot.stock_date, InventoryLot.id)
+            .order_by(*inventory_fifo_order_columns())
         ).all()
         if len(inventory_lots) != len(expected_versions):
             raise WarehouseInventoryError("所选半成品库存批次不存在", 404)
@@ -1670,6 +1772,9 @@ def reserve_semi_finished_inventory(
                 ),
                 order_item_id=requirement.order_item_id,
                 semi_requirement_id=requirement.id,
+                sales_order_item_bom_component_id=(
+                    requirement.sales_order_item_bom_component_id
+                ),
                 match_rule_id=confirmation.rule.id,
                 reserved_stock_quantity=stock_quantity,
                 credited_requirement_quantity=credited,
@@ -1992,10 +2097,11 @@ def consume_semi_finished_reservation(
             or order_item.product_id is None
         ):
             raise WarehouseInventoryError("半成品预占关联数据不完整", 409)
+        requirement_product_id = _requirement_product_id(db, requirement)
         ensure_semi_finished_lot_eligibility(
             db,
             lot=lot,
-            product_id=order_item.product_id,
+            product_id=requirement_product_id,
             customer_id=order.customer_id,
             expected=requirement_signature(requirement),
         )

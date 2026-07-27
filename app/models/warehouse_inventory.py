@@ -341,6 +341,10 @@ class InventoryLot(Base):
             "source_type IN ('manual','production_surplus','purchase_surplus','stocktake','transfer','replenishment')",
             name="ck_inventory_lots_source_type",
         ),
+        CheckConstraint(
+            "stock_date_accuracy IN ('exact','estimated','unknown')",
+            name="ck_inventory_lots_stock_date_accuracy",
+        ),
         CheckConstraint("quantity_available >= 0", name="ck_inventory_lots_available"),
         CheckConstraint("quantity_reserved >= 0", name="ck_inventory_lots_reserved"),
         CheckConstraint("quantity_consumed >= 0", name="ck_inventory_lots_consumed"),
@@ -351,6 +355,20 @@ class InventoryLot(Base):
         Index("ix_inventory_lots_location_status", "warehouse_location_id", "status"),
         Index("ix_inventory_lots_stock_date", "stock_date"),
         Index("ix_inventory_lots_last_movement", "last_movement_at"),
+        Index(
+            "uq_inventory_lots_onboarding_line_source",
+            "source_ref_type",
+            "source_ref_id",
+            unique=True,
+            sqlite_where=text(
+                "source_ref_type = 'inventory_onboarding_line' "
+                "AND source_ref_id IS NOT NULL"
+            ),
+            postgresql_where=text(
+                "source_ref_type = 'inventory_onboarding_line' "
+                "AND source_ref_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -370,6 +388,10 @@ class InventoryLot(Base):
     source_ref_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source_ref_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stock_date: Mapped[date] = mapped_column(Date, nullable=False)
+    stock_date_accuracy: Mapped[str] = mapped_column(
+        String(20), default="exact", server_default="exact", nullable=False
+    )
+    stock_date_original_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_movement_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -563,10 +585,20 @@ class OrderItemSemiRequirement(Base):
             "required_piece_quantity > 0",
             name="ck_order_item_semi_requirements_quantity",
         ),
-        UniqueConstraint(
+        Index(
+            "uq_order_item_semi_requirements_regular_component",
             "order_item_id",
             "component_type",
-            name="uq_order_item_semi_requirements_item_component",
+            unique=True,
+            sqlite_where=text("sales_order_item_bom_component_id IS NULL"),
+            postgresql_where=text("sales_order_item_bom_component_id IS NULL"),
+        ),
+        Index(
+            "uq_order_item_semi_requirements_bom_component",
+            "sales_order_item_bom_component_id",
+            unique=True,
+            sqlite_where=text("sales_order_item_bom_component_id IS NOT NULL"),
+            postgresql_where=text("sales_order_item_bom_component_id IS NOT NULL"),
         ),
         Index(
             "ix_order_item_semi_requirements_signature",

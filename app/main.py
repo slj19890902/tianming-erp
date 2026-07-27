@@ -39,6 +39,7 @@ from app.api.production import router as production_router
 from app.api.system import router as system_router
 from app.api.warehouse import router as warehouse_router
 from app.api.stocktake import router as stocktake_router
+from app.api.inventory_onboarding import router as inventory_onboarding_router
 from app.api.tianhua_pre_delivery import (
     mobile_router as tianhua_mobile_router,
     router as tianhua_pre_delivery_router,
@@ -507,6 +508,15 @@ def create_app() -> FastAPI:
             stocktake_router,
             prefix="/api/warehouse",
             tags=["warehouse-stocktake"],
+        )
+    if not any(
+        route.path == "/api/warehouse/inventory-onboarding/batches"
+        for route in application.routes
+    ):
+        application.include_router(
+            inventory_onboarding_router,
+            prefix="/api/warehouse",
+            tags=["warehouse-inventory-onboarding"],
         )
 
     # create_app() reconfigures the legacy singleton.  TestClient builds and

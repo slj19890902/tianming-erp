@@ -115,6 +115,49 @@ class OrderItem(Base):
             "material_status IN ('pending', 'received')",
             name="ck_sales_order_items_material_status",
         ),
+        CheckConstraint(
+            "combination_mode_snapshot IS NULL OR "
+            "combination_mode_snapshot IN ('parent_priced_set', 'component_priced')",
+            name="ck_sales_order_items_combination_mode_snapshot",
+        ),
+        CheckConstraint(
+            "combination_role IN ('standalone', 'set_parent', 'priced_component')",
+            name="ck_sales_order_items_combination_role",
+        ),
+        CheckConstraint(
+            "combination_role <> 'priced_component' OR "
+            "(combination_mode_snapshot = 'component_priced' "
+            "AND combination_group_key IS NOT NULL "
+            "AND length(trim(combination_group_key)) > 0 "
+            "AND combination_parent_product_id IS NOT NULL "
+            "AND combination_parent_name_snapshot IS NOT NULL "
+            "AND length(trim(combination_parent_name_snapshot)) > 0 "
+            "AND combination_set_quantity_snapshot IS NOT NULL "
+            "AND combination_set_quantity_snapshot > 0 "
+            "AND combination_quantity_per_set_snapshot IS NOT NULL "
+            "AND combination_quantity_per_set_snapshot > 0)",
+            name="ck_sales_order_items_priced_component_source",
+        ),
+        CheckConstraint(
+            "combination_role <> 'standalone' OR "
+            "(combination_mode_snapshot IS NULL "
+            "AND combination_group_key IS NULL "
+            "AND combination_parent_product_id IS NULL "
+            "AND combination_parent_name_snapshot IS NULL "
+            "AND combination_set_quantity_snapshot IS NULL "
+            "AND combination_quantity_per_set_snapshot IS NULL)",
+            name="ck_sales_order_items_standalone_without_combination_source",
+        ),
+        CheckConstraint(
+            "combination_role <> 'set_parent' OR "
+            "(combination_mode_snapshot = 'parent_priced_set' "
+            "AND combination_group_key IS NULL "
+            "AND combination_parent_product_id IS NULL "
+            "AND combination_parent_name_snapshot IS NULL "
+            "AND combination_set_quantity_snapshot IS NULL "
+            "AND combination_quantity_per_set_snapshot IS NULL)",
+            name="ck_sales_order_items_set_parent_source",
+        ),
         Index("ix_sales_order_items_order_id", "order_id"),
         Index("ix_sales_order_items_product_id", "product_id"),
         Index("ux_sales_order_items_item_order_number", "item_order_number", unique=True),
@@ -239,6 +282,25 @@ class OrderItem(Base):
     snapshot_splice_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     snapshot_pieces_per_box: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snapshot_flap_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    combination_mode_snapshot: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    combination_role: Mapped[str] = mapped_column(
+        String(30), default="standalone", server_default="standalone", nullable=False
+    )
+    combination_group_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    combination_parent_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    combination_parent_name_snapshot: Mapped[str | None] = mapped_column(
+        String(250), nullable=True
+    )
+    combination_set_quantity_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    combination_quantity_per_set_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),
@@ -246,7 +308,7 @@ class OrderItem(Base):
     )
 
     order: Mapped["Order"] = relationship(back_populates="items")
-    product: Mapped["Product"] = relationship()
+    product: Mapped["Product"] = relationship(foreign_keys=[product_id])
 
 
 class OrderItemNumberSequence(Base):

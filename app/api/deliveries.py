@@ -34,6 +34,10 @@ from app.models.product import Product
 from app.models.product_bom import BomComponentDirectDeliveryAllocation
 from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
+from app.models.tianhua_pre_delivery import (
+    TianhuaPreDeliveryDraft,
+    TianhuaPreDeliveryDraftItem,
+)
 from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
@@ -55,6 +59,9 @@ from app.services.production_workflow import (
 from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     component_availability,
+    delivery_component_required_quantities,
+    delivered_component_quantities,
+    delivery_item_component_quantities,
     effective_component_demands,
     execute_delivery_component_consumption,
     is_composite_order_item,
@@ -70,6 +77,7 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    inventory_fifo_order_columns,
 )
 
 
@@ -91,6 +99,48 @@ def _print_product_code(value: str | None) -> str:
     if not text:
         return ""
     return re.split(r"\s*/\s*|\s+", text, maxsplit=1)[0]
+
+
+def _tianhua_internal_remarks_by_delivery_item(
+    db: Session,
+    delivery_item_ids: set[int] | list[int],
+) -> dict[int, set[str]]:
+    ids = {int(value) for value in delivery_item_ids if value}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(
+            TianhuaPreDeliveryDraftItem.delivery_item_id,
+            TianhuaPreDeliveryDraft.draft_number,
+        )
+        .join(
+            TianhuaPreDeliveryDraft,
+            TianhuaPreDeliveryDraft.id
+            == TianhuaPreDeliveryDraftItem.draft_id,
+        )
+        .where(TianhuaPreDeliveryDraftItem.delivery_item_id.in_(ids))
+    ).all()
+    internal_remarks: dict[int, set[str]] = {}
+    for delivery_item_id, draft_number in rows:
+        if delivery_item_id is None:
+            continue
+        internal_remarks.setdefault(int(delivery_item_id), set()).add(
+            f"来源：天华预送货草稿 {draft_number}"
+        )
+    return internal_remarks
+
+
+def _customer_visible_delivery_remark(
+    delivery_item_id: int,
+    remark: str | None,
+    internal_remarks: dict[int, set[str]],
+) -> str | None:
+    value = str(remark or "").strip()
+    if not value:
+        return None
+    if value in internal_remarks.get(int(delivery_item_id), set()):
+        return None
+    return value
 
 
 def _component_kind(name: str | None) -> str:
@@ -306,7 +356,435 @@ class DeliveryPickItemUpdate(BaseModel):
         return normalized
 
 
-def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
+def _pick_item_component_lines(
+    db: Session,
+    item: DeliveryPickTaskItem,
+) -> list[dict]:
+    """Return read-only parent-priced component goods for one pick row.
+
+    Pick tasks persist exactly one operable row per delivery item.  Components
+    deliberately remain derived display data: the driver still confirms only
+    the parent delivery quantity, while the later dispatch transaction applies
+    the existing component inventory gate and allocation facts.
+    """
+    delivery_item = (
+        db.get(DeliveryItem, item.delivery_item_id)
+        if item.delivery_item_id is not None
+        else None
+    )
+    if (
+        delivery_item is None
+        or delivery_item.order_item_id != item.order_item_id
+    ):
+        return []
+    order_item = db.get(OrderItem, item.order_item_id)
+    if order_item is None or not is_composite_order_item(db, order_item.id):
+        return []
+    return [
+        component
+        for component in _delivery_component_lines(
+            db,
+            order_item=order_item,
+            planned_delivery_quantity=int(item.original_quantity or 0),
+            delivery_item_id=delivery_item.id,
+            dispatched=False,
+        )
+        if int(component.get("planned_delivery_quantity") or 0) > 0
+    ]
+
+
+def _pick_source_location(
+    db: Session,
+    *,
+    source: dict,
+) -> dict:
+    lot = (
+        db.get(InventoryLot, int(source["lot_id"]))
+        if source.get("lot_id") is not None
+        else None
+    )
+    location = (
+        db.get(WarehouseLocation, lot.warehouse_location_id)
+        if lot is not None
+        else None
+    )
+    pallet_item = lot.pallet_item if lot is not None else None
+    pallet = pallet_item.pallet if pallet_item is not None else None
+    needs_relocation = bool(
+        (pallet is not None and pallet.needs_relocation)
+        or (location is not None and location.placement_status == "unplaced")
+    )
+    return {
+        "location_id": location.id if location else None,
+        "location_code": location.location_code if location else None,
+        "location_name": location.location_name if location else None,
+        "warehouse_floor": location.warehouse_floor if location else None,
+        "area_code": location.area_code if location else None,
+        "location_sort_order": int(location.sort_order or 0) if location else None,
+        "placement_status": location.placement_status if location else None,
+        "pallet_id": pallet.id if pallet else None,
+        "pallet_code": pallet.pallet_code if pallet else None,
+        "needs_relocation": needs_relocation,
+    }
+
+
+def _pick_parent_finished_sources(
+    db: Session,
+    *,
+    order_item: OrderItem,
+    planned_quantity: int,
+) -> list[dict]:
+    """Select unconsumed parent-product reservations for a composite delivery."""
+
+    remaining = max(int(planned_quantity or 0), 0)
+    if remaining <= 0:
+        return []
+    reservations = db.scalars(
+        select(InventoryReservation)
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .where(
+            InventoryReservation.order_item_id == order_item.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+        .order_by(*inventory_fifo_order_columns(), InventoryReservation.id)
+    ).all()
+    sources: list[dict] = []
+    for reservation in reservations:
+        available = max(
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0),
+            0,
+        )
+        picked = min(available, remaining)
+        if picked <= 0:
+            continue
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        sources.append(
+            {
+                "source_type": "finished",
+                "reservation_id": reservation.id,
+                "lot_id": lot.id if lot else None,
+                "lot_number": lot.lot_number if lot else None,
+                "component_snapshot_id": None,
+                "quantity_to_pick_stock": picked,
+                "quantity_to_pick_requirement": picked,
+            }
+        )
+        remaining -= picked
+        if remaining <= 0:
+            break
+    return sources
+
+
+def _pick_item_location_plan(
+    db: Session,
+    *,
+    item: DeliveryPickTaskItem,
+    component_lines: list[dict],
+) -> tuple[list[dict], bool]:
+    """Build a read-only loading plan from current inventory and production facts."""
+
+    order_item = db.get(OrderItem, item.order_item_id)
+    if order_item is None:
+        return [], False
+    planned_quantity = max(int(item.original_quantity or 0), 0)
+    raw_sources = _inventory_sources_for_order_item(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=planned_quantity,
+        delivery_item_id=item.delivery_item_id,
+        dispatched=False,
+    )
+    if component_lines:
+        raw_sources = [
+            *_pick_parent_finished_sources(
+                db,
+                order_item=order_item,
+                planned_quantity=planned_quantity,
+            ),
+            *raw_sources,
+        ]
+    component_by_snapshot = {
+        int(row["component_snapshot_id"]): row
+        for row in component_lines
+        if row.get("component_snapshot_id") is not None
+    }
+    lines: list[dict] = []
+    covered_by_component: dict[int, int] = {}
+    finished_covered = 0
+
+    for source in raw_sources:
+        source_type = str(source.get("source_type") or "")
+        # Semi-finished reservations are production inputs, not finished goods
+        # that a driver should load.  Their eventual finished output is listed
+        # below as a production-area direct pick.
+        if source_type == "semi_finished":
+            continue
+        stock_quantity = max(int(source.get("quantity_to_pick_stock") or 0), 0)
+        requirement_quantity = max(
+            int(source.get("quantity_to_pick_requirement") or 0),
+            0,
+        )
+        display_quantity = stock_quantity or requirement_quantity
+        if display_quantity <= 0:
+            continue
+        component_snapshot_id = source.get("component_snapshot_id")
+        component = (
+            component_by_snapshot.get(int(component_snapshot_id))
+            if component_snapshot_id is not None
+            else None
+        )
+        if component_snapshot_id is not None:
+            snapshot_id = int(component_snapshot_id)
+            covered_by_component[snapshot_id] = (
+                covered_by_component.get(snapshot_id, 0) + requirement_quantity
+            )
+        elif source_type == "finished":
+            finished_covered += requirement_quantity
+        location = _pick_source_location(db, source=source)
+        is_direct = source_type == "component_direct"
+        lines.append(
+            {
+                "pick_item_id": item.id,
+                "order_item_id": item.order_item_id,
+                "source_type": (
+                    "production_direct" if is_direct else "finished_inventory"
+                ),
+                "reservation_id": source.get("reservation_id"),
+                "lot_id": source.get("lot_id"),
+                "lot_number": source.get("lot_number"),
+                "component_snapshot_id": component_snapshot_id,
+                "product_code": (
+                    (component or {}).get("product_code")
+                    or source.get("component_code")
+                    or item.product_code_snapshot
+                ),
+                "product_name": (
+                    (component or {}).get("product_name")
+                    or source.get("component_name")
+                    or item.product_name_snapshot
+                ),
+                "specification": (
+                    (component or {}).get("specification")
+                    or item.specification_snapshot
+                ),
+                "pick_quantity": display_quantity,
+                "requirement_quantity": requirement_quantity,
+                "unit": "个",
+                "location_id": None if is_direct else location["location_id"],
+                "location_code": None if is_direct else location["location_code"],
+                "location_name": None if is_direct else location["location_name"],
+                "warehouse_floor": (
+                    None if is_direct else location["warehouse_floor"]
+                ),
+                "area_code": None if is_direct else location["area_code"],
+                "location_sort_order": (
+                    None if is_direct else location["location_sort_order"]
+                ),
+                "placement_status": (
+                    None if is_direct else location["placement_status"]
+                ),
+                "pallet_id": None if is_direct else location["pallet_id"],
+                "pallet_code": None if is_direct else location["pallet_code"],
+                "needs_relocation": (
+                    False if is_direct else location["needs_relocation"]
+                ),
+                "requires_attention": False,
+            }
+        )
+
+    if component_lines:
+        parent_direct_quantity = max(planned_quantity - finished_covered, 0)
+        if parent_direct_quantity > 0:
+            lines.append(
+                {
+                    "pick_item_id": item.id,
+                    "order_item_id": item.order_item_id,
+                    "source_type": "production_direct",
+                    "reservation_id": None,
+                    "lot_id": None,
+                    "lot_number": None,
+                    "component_snapshot_id": None,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "specification": item.specification_snapshot,
+                    "pick_quantity": parent_direct_quantity,
+                    "requirement_quantity": parent_direct_quantity,
+                    "unit": "个",
+                    "location_id": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_sort_order": None,
+                    "placement_status": None,
+                    "pallet_id": None,
+                    "pallet_code": None,
+                    "needs_relocation": False,
+                    "requires_attention": False,
+                }
+            )
+        for component in component_lines:
+            snapshot_id = int(component["component_snapshot_id"])
+            expected = max(
+                int(component.get("planned_delivery_quantity") or 0),
+                0,
+            )
+            missing = max(expected - covered_by_component.get(snapshot_id, 0), 0)
+            if missing <= 0:
+                continue
+            lines.append(
+                {
+                    "pick_item_id": item.id,
+                    "order_item_id": item.order_item_id,
+                    "source_type": "unassigned",
+                    "reservation_id": None,
+                    "lot_id": None,
+                    "lot_number": None,
+                    "component_snapshot_id": snapshot_id,
+                    "product_code": component.get("product_code"),
+                    "product_name": component.get("product_name"),
+                    "specification": component.get("specification"),
+                    "pick_quantity": missing,
+                    "requirement_quantity": missing,
+                    "unit": "个",
+                    "location_id": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_sort_order": None,
+                    "placement_status": None,
+                    "pallet_id": None,
+                    "pallet_code": None,
+                    "needs_relocation": False,
+                    "requires_attention": True,
+                }
+            )
+    else:
+        direct_quantity = max(planned_quantity - finished_covered, 0)
+        if direct_quantity > 0:
+            lines.append(
+                {
+                    "pick_item_id": item.id,
+                    "order_item_id": item.order_item_id,
+                    "source_type": "production_direct",
+                    "reservation_id": None,
+                    "lot_id": None,
+                    "lot_number": None,
+                    "component_snapshot_id": None,
+                    "product_code": item.product_code_snapshot,
+                    "product_name": item.product_name_snapshot,
+                    "specification": item.specification_snapshot,
+                    "pick_quantity": direct_quantity,
+                    "requirement_quantity": direct_quantity,
+                    "unit": "个",
+                    "location_id": None,
+                    "location_code": None,
+                    "location_name": None,
+                    "warehouse_floor": None,
+                    "area_code": None,
+                    "location_sort_order": None,
+                    "placement_status": None,
+                    "pallet_id": None,
+                    "pallet_code": None,
+                    "needs_relocation": False,
+                    "requires_attention": False,
+                }
+            )
+    return lines, not any(line["requires_attention"] for line in lines)
+
+
+def _pick_location_groups(item_responses: list[dict]) -> list[dict]:
+    groups: dict[tuple, dict] = {}
+    for item in item_responses:
+        for line in item.get("location_lines") or []:
+            source_type = str(line.get("source_type") or "")
+            if source_type == "production_direct":
+                priority = 1
+                group_key = ("production_direct",)
+                label = "生产区直接拿货"
+            elif source_type == "unassigned":
+                priority = 3
+                group_key = ("unassigned",)
+                label = "未分配拿货位置（请核对）"
+            else:
+                priority = 2 if line.get("needs_relocation") else 0
+                group_key = (
+                    "finished_inventory",
+                    line.get("location_id"),
+                    line.get("pallet_id"),
+                    bool(line.get("needs_relocation")),
+                )
+                floor = line.get("warehouse_floor")
+                prefix = f"{floor}楼" if floor is not None else "仓库"
+                area = line.get("area_code") or "未分区"
+                location = line.get("location_code") or "未标库位"
+                label = f"{prefix} · {area} · {location}"
+                if line.get("needs_relocation"):
+                    label += "（待归位）"
+            group = groups.setdefault(
+                group_key,
+                {
+                    "key": "|".join(str(part) for part in group_key),
+                    "priority": priority,
+                    "label": label,
+                    "source_type": source_type,
+                    "warehouse_floor": line.get("warehouse_floor"),
+                    "area_code": line.get("area_code"),
+                    "location_id": line.get("location_id"),
+                    "location_code": line.get("location_code"),
+                    "location_name": line.get("location_name"),
+                    "location_sort_order": line.get("location_sort_order"),
+                    "pallet_id": line.get("pallet_id"),
+                    "pallet_code": line.get("pallet_code"),
+                    "needs_relocation": bool(line.get("needs_relocation")),
+                    "requires_attention": bool(line.get("requires_attention")),
+                    "total_pick_quantity": 0,
+                    "lines": [],
+                },
+            )
+            group["total_pick_quantity"] += int(line.get("pick_quantity") or 0)
+            group["requires_attention"] = bool(
+                group["requires_attention"] or line.get("requires_attention")
+            )
+            group["lines"].append(line)
+
+    def sort_key(group: dict) -> tuple:
+        return (
+            int(group["priority"]),
+            int(group["warehouse_floor"] or 999),
+            str(group["area_code"] or ""),
+            int(group["location_sort_order"] or 0),
+            str(group["location_code"] or ""),
+            str(group["pallet_code"] or ""),
+        )
+
+    return sorted(groups.values(), key=sort_key)
+
+
+def _pick_item_response(
+    db: Session,
+    item: DeliveryPickTaskItem,
+    *,
+    include_location_plan: bool = True,
+) -> dict:
+    component_lines = _pick_item_component_lines(db, item)
+    location_lines, location_plan_complete = (
+        _pick_item_location_plan(
+            db,
+            item=item,
+            component_lines=component_lines,
+        )
+        if include_location_plan
+        else ([], True)
+    )
     return {
         "id": item.id,
         "delivery_item_id": item.delivery_item_id,
@@ -319,17 +797,37 @@ def _pick_item_response(item: DeliveryPickTaskItem) -> dict:
         "product_code": item.product_code_snapshot,
         "product_name": item.product_name_snapshot,
         "specification": item.specification_snapshot,
+        "is_composite_bom": bool(component_lines),
+        "component_lines": component_lines,
+        "location_lines": location_lines,
+        "location_plan_complete": location_plan_complete,
         "updated_at": utc_naive_to_api(item.updated_at) if item.updated_at else None,
     }
 
 
-def _pick_task_response(task: DeliveryPickTask) -> dict:
+def _pick_task_response(
+    db: Session,
+    task: DeliveryPickTask,
+    *,
+    include_location_plan: bool = True,
+) -> dict:
+    item_responses = [
+        _pick_item_response(
+            db,
+            item,
+            include_location_plan=include_location_plan,
+        )
+        for item in task.items
+    ]
+    location_groups = (
+        _pick_location_groups(item_responses) if include_location_plan else []
+    )
     exception_items = [
         {
-            **_pick_item_response(item),
+            **item_response,
             "customer_name": task.customer.name if task.customer else None,
         }
-        for item in task.items
+        for item, item_response in zip(task.items, item_responses, strict=True)
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
@@ -347,7 +845,13 @@ def _pick_task_response(task: DeliveryPickTask) -> dict:
         "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
         "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
         "dispatched_at": utc_naive_to_api(task.dispatched_at) if task.dispatched_at else None,
-        "items": [_pick_item_response(item) for item in task.items],
+        "items": item_responses,
+        "location_groups": location_groups,
+        "location_plan_complete": (
+            all(bool(item.get("location_plan_complete")) for item in item_responses)
+            if include_location_plan
+            else None
+        ),
     }
 
 
@@ -766,8 +1270,13 @@ def _composite_inventory_sources_for_order_item(
         return items
 
     delivery_sets = max(int(planned_delivery_quantity or 0), 0)
+    required_quantities = delivery_component_required_quantities(
+        db,
+        order_item_id=order_item.id,
+        delivery_sets=delivery_sets,
+    )
     for demand in demands:
-        required_pieces = delivery_sets * demand.quantity_per_set
+        required_pieces = required_quantities.get(demand.snapshot_id, 0)
         if required_pieces <= 0:
             continue
         remaining = required_pieces
@@ -783,7 +1292,10 @@ def _composite_inventory_sources_for_order_item(
                 > InventoryReservation.consumed_stock_quantity
                 + InventoryReservation.released_stock_quantity,
             )
-            .order_by(InventoryLot.stock_date, InventoryLot.id, InventoryReservation.id)
+            .order_by(
+                *inventory_fifo_order_columns(),
+                InventoryReservation.id,
+            )
         ).all()
         for reservation in reservations:
             available = max(
@@ -820,20 +1332,135 @@ def _composite_inventory_sources_for_order_item(
     return items
 
 
-def _delivery_kit_metadata(db: Session, order_item: OrderItem | None) -> dict:
+def _delivery_component_lines(
+    db: Session,
+    *,
+    order_item: OrderItem,
+    planned_delivery_quantity: int,
+    delivery_item_id: int | None = None,
+    dispatched: bool = False,
+) -> list[dict]:
+    demands = effective_component_demands(db, order_item.id)
+    if not demands:
+        return []
+    cumulative = delivered_component_quantities(db, order_item.id)
+    document_quantities = (
+        delivery_item_component_quantities(db, delivery_item_id)
+        if dispatched and delivery_item_id is not None
+        else delivery_component_required_quantities(
+            db,
+            order_item_id=order_item.id,
+            delivery_sets=max(int(planned_delivery_quantity or 0), 0),
+        )
+    )
+    return [
+        {
+            "line_type": "component",
+            "component_snapshot_id": demand.snapshot_id,
+            "component_product_id": demand.component_product_id,
+            "product_code": demand.component_code,
+            "product_name": demand.component_name,
+            "specification": demand.specification,
+            "unit": "PCS",
+            "quantity_per_set": demand.quantity_per_set,
+            "target_quantity": demand.required_piece_quantity,
+            "delivered_quantity": cumulative.get(demand.snapshot_id, 0),
+            "remaining_quantity": max(
+                demand.required_piece_quantity
+                - cumulative.get(demand.snapshot_id, 0),
+                0,
+            ),
+            "planned_delivery_quantity": document_quantities.get(
+                demand.snapshot_id,
+                0,
+            ),
+            "pricing_included": False,
+            "independent_return_receipt": False,
+            "independent_statement": False,
+        }
+        for demand in demands
+    ]
+
+
+def _actual_goods_lines(
+    *,
+    order_item_id: int,
+    product_code: str | None,
+    product_name: str | None,
+    specification: str | None,
+    parent_quantity: int,
+    component_lines: list[dict],
+) -> list[dict]:
+    lines = [
+        {
+            "line_type": "parent",
+            "order_item_id": order_item_id,
+            "component_snapshot_id": None,
+            "product_code": product_code,
+            "product_name": product_name,
+            "specification": specification,
+            "unit": "PCS",
+            "quantity": max(int(parent_quantity or 0), 0),
+            "pricing_included": True,
+            "independent_return_receipt": True,
+            "independent_statement": True,
+        }
+    ]
+    lines.extend(
+        {
+            "line_type": "component",
+            "order_item_id": order_item_id,
+            "component_snapshot_id": component["component_snapshot_id"],
+            "product_code": component["product_code"],
+            "product_name": component["product_name"],
+            "specification": component["specification"],
+            "unit": component["unit"],
+            "quantity": component["planned_delivery_quantity"],
+            "pricing_included": False,
+            "independent_return_receipt": False,
+            "independent_statement": False,
+        }
+        for component in component_lines
+        if int(component["planned_delivery_quantity"] or 0) > 0
+    )
+    return lines
+
+
+def _delivery_kit_metadata(
+    db: Session,
+    order_item: OrderItem | None,
+    *,
+    planned_delivery_quantity: int | None = None,
+    delivery_item_id: int | None = None,
+    dispatched: bool = False,
+) -> dict:
     if order_item is None or not is_composite_order_item(db, order_item.id):
         return {
             "is_composite_bom": False,
             "kit_availability": None,
             "available_sets": None,
             "missing_components": [],
+            "component_lines": [],
         }
     availability = kit_availability(db, order_item.id)
+    planned_quantity = (
+        int(availability.get("available_sets") or 0)
+        if planned_delivery_quantity is None
+        else max(int(planned_delivery_quantity or 0), 0)
+    )
+    component_lines = _delivery_component_lines(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=planned_quantity,
+        delivery_item_id=delivery_item_id,
+        dispatched=dispatched,
+    )
     return {
         "is_composite_bom": True,
         "kit_availability": availability,
         "available_sets": int(availability.get("available_sets") or 0),
         "missing_components": availability.get("missing_components") or [],
+        "component_lines": component_lines,
     }
 
 
@@ -868,8 +1495,7 @@ def _inventory_sources_for_order_item(
                 (InventoryReservation.reservation_type == "finished_order", 0),
                 else_=1,
             ),
-            InventoryLot.stock_date,
-            InventoryLot.id,
+            *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()
@@ -1064,9 +1690,77 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
     } if order_ids else {}
     pick_task = _delivery_pick_task(db, delivery_id)
     pick_by_delivery_item = {
-        item.delivery_item_id: _pick_item_response(item)
+        item.delivery_item_id: _pick_item_response(db, item)
         for item in (pick_task.items if pick_task else [])
     }
+    internal_remarks = _tianhua_internal_remarks_by_delivery_item(
+        db,
+        [
+            row._mapping["id"]
+            for row in items
+            if str(row._mapping["remarks"] or "").strip().startswith(
+                "来源：天华预送货草稿 "
+            )
+        ],
+    )
+    response_items: list[dict] = []
+    total_actual_goods_quantity = 0
+    for row in items:
+        mapping = row._mapping
+        order_item = db.get(OrderItem, mapping["order_item_id"])
+        kit_metadata = _delivery_kit_metadata(
+            db,
+            order_item,
+            planned_delivery_quantity=mapping["delivered_quantity"],
+            delivery_item_id=mapping["id"],
+            dispatched=delivery.status == "dispatched",
+        )
+        actual_goods_lines = _actual_goods_lines(
+            order_item_id=mapping["order_item_id"],
+            product_code=mapping["product_code"],
+            product_name=mapping["product_name"],
+            specification=mapping["specification"],
+            parent_quantity=mapping["delivered_quantity"],
+            component_lines=kit_metadata["component_lines"],
+        )
+        actual_goods_quantity = sum(
+            int(line["quantity"] or 0) for line in actual_goods_lines
+        )
+        total_actual_goods_quantity += actual_goods_quantity
+        response_items.append(
+            {
+                **dict(mapping),
+                "remarks": _customer_visible_delivery_remark(
+                    mapping["id"],
+                    mapping["remarks"],
+                    internal_remarks,
+                ),
+                "actual_delivery_quantity": mapping["delivered_quantity"],
+                "order_number": display_order_number(
+                    orders.get(mapping["order_id"]),
+                    registry,
+                )
+                if "order_id" in mapping
+                else mapping["order_number"],
+                "display_order_number": display_order_number(
+                    orders.get(mapping["order_id"]),
+                    registry,
+                )
+                if "order_id" in mapping
+                else mapping["order_number"],
+                **kit_metadata,
+                "actual_goods_lines": actual_goods_lines,
+                "actual_goods_quantity": actual_goods_quantity,
+                "inventory_sources": _inventory_sources_for_order_item(
+                    db,
+                    order_item=order_item,
+                    planned_delivery_quantity=mapping["delivered_quantity"],
+                    delivery_item_id=mapping["id"],
+                    dispatched=delivery.status == "dispatched",
+                ),
+                "pick_result": pick_by_delivery_item.get(mapping["id"]),
+            }
+        )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -1076,6 +1770,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "vehicle_number": delivery.vehicle_number,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
+        "total_actual_goods_quantity": total_actual_goods_quantity,
         "dispatched_at": (
             utc_naive_to_api(delivery.dispatched_at)
             if delivery.dispatched_at
@@ -1090,38 +1785,8 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
-        "pick_task": _pick_task_response(pick_task) if pick_task else None,
-        "items": [
-            {
-                **dict(row._mapping),
-                "actual_delivery_quantity": row._mapping["delivered_quantity"],
-                "order_number": display_order_number(
-                    orders.get(row._mapping["order_id"]),
-                    registry,
-                )
-                if "order_id" in row._mapping
-                else row._mapping["order_number"],
-                "display_order_number": display_order_number(
-                    orders.get(row._mapping["order_id"]),
-                    registry,
-                )
-                if "order_id" in row._mapping
-                else row._mapping["order_number"],
-                **_delivery_kit_metadata(
-                    db,
-                    db.get(OrderItem, row._mapping["order_item_id"]),
-                ),
-                "inventory_sources": _inventory_sources_for_order_item(
-                    db,
-                    order_item=db.get(OrderItem, row._mapping["order_item_id"]),
-                    planned_delivery_quantity=row._mapping["delivered_quantity"],
-                    delivery_item_id=row._mapping["id"],
-                    dispatched=delivery.status == "dispatched",
-                ),
-                "pick_result": pick_by_delivery_item.get(row._mapping["id"]),
-            }
-            for row in items
-        ],
+        "pick_task": _pick_task_response(db, pick_task) if pick_task else None,
+        "items": response_items,
     }
 
 
@@ -1237,7 +1902,7 @@ def create_or_rebuild_delivery_pick_task(
     try:
         task = _build_pick_task(db, delivery=delivery, user=user)
         db.commit()
-        return _pick_task_response(task)
+        return _pick_task_response(db, task)
     except HTTPException:
         db.rollback()
         raise
@@ -1262,7 +1927,12 @@ def list_delivery_pick_tasks(
             raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
         query = query.where(DeliveryPickTask.status == normalized_status)
     tasks = db.scalars(query).all()
-    return {"items": [_pick_task_response(task) for task in tasks]}
+    return {
+        "items": [
+            _pick_task_response(db, task, include_location_plan=False)
+            for task in tasks
+        ]
+    }
 
 
 @pick_router.get("/{task_id}")
@@ -1271,7 +1941,56 @@ def get_delivery_pick_task(
     db: Session = Depends(get_db),
     user: User = Depends(can_pick),
 ) -> dict:
-    return _pick_task_response(_pick_task_for_user(db, task_id, user))
+    return _pick_task_response(db, _pick_task_for_user(db, task_id, user))
+
+
+@pick_router.post("/{task_id}/complete-planned")
+def complete_delivery_pick_task_as_planned(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_pick),
+) -> dict:
+    """Confirm the normal path in one action without dispatching the delivery."""
+
+    task = _pick_task_for_user(db, task_id, user)
+    if task.status == "driver_confirmed" and all(
+        item.status == "picked"
+        and int(item.picked_quantity or 0) == int(item.original_quantity or 0)
+        for item in task.items
+    ):
+        return _pick_task_response(db, task)
+    if task.status != "pushed":
+        raise HTTPException(status_code=409, detail="当前拿货任务不能一键按计划拿齐")
+    response = _pick_task_response(db, task)
+    if not response["location_plan_complete"]:
+        raise HTTPException(
+            status_code=409,
+            detail="存在未分配拿货来源，请按实际情况登记部分拿货或没货",
+        )
+    if not task.items:
+        raise HTTPException(status_code=409, detail="拿货任务没有可确认明细")
+    for item in task.items:
+        item.status = "picked"
+        item.picked_quantity = int(item.original_quantity or 0)
+    task.status = "driver_confirmed"
+    task.submitted_by = user.id
+    task.submitted_at = _utc_now()
+    _write_audit(
+        db,
+        user=user,
+        action="COMPLETE_PICK_TASK_PLANNED",
+        resource="DeliveryPickTask",
+        entity_id=task.id,
+        details={
+            "delivery_id": task.delivery_id,
+            "item_count": len(task.items),
+            "location_group_count": len(response["location_groups"]),
+            "status": task.status,
+        },
+        description="本单全部按库位计划拿齐，进入可发货打印",
+    )
+    db.commit()
+    return _pick_task_response(db, task)
 
 
 @pick_router.put("/{task_id}/items/{item_id}")
@@ -1323,7 +2042,10 @@ def update_delivery_pick_task_item(
         description="更新送货拿货结果",
     )
     db.commit()
-    return {"task": _pick_task_response(task), "item": _pick_item_response(item)}
+    return {
+        "task": _pick_task_response(db, task),
+        "item": _pick_item_response(db, item),
+    }
 
 
 @pick_router.post("/{task_id}/submit")
@@ -1355,7 +2077,7 @@ def submit_delivery_pick_task(
         description="司机提交送货拿货结果",
     )
     db.commit()
-    return _pick_task_response(task)
+    return _pick_task_response(db, task)
 
 
 @pick_router.post("/{task_id}/apply")
@@ -2737,9 +3459,12 @@ def get_delivery_print_data(
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     rows = db.execute(
         select(
+            DeliveryItem.id.label("delivery_item_id"),
+            DeliveryItem.order_item_id,
             Order.customer_po,
             Product.product_code,
             OrderItem.snapshot_product_name.label("product_name"),
+            OrderItem.snapshot_spec.label("specification"),
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.over_delivery_quantity,
@@ -2751,6 +3476,69 @@ def get_delivery_print_data(
         .where(DeliveryItem.delivery_id == delivery_id)
         .order_by(DeliveryItem.id)
     ).all()
+    internal_remarks = _tianhua_internal_remarks_by_delivery_item(
+        db,
+        [
+            row.delivery_item_id
+            for row in rows
+            if str(row.remarks or "").strip().startswith(
+                "来源：天华预送货草稿 "
+            )
+        ],
+    )
+    print_items: list[dict] = []
+    actual_goods_items: list[dict] = []
+    for row in rows:
+        order_item = db.get(OrderItem, row.order_item_id)
+        kit_metadata = _delivery_kit_metadata(
+            db,
+            order_item,
+            planned_delivery_quantity=row.quantity,
+            delivery_item_id=row.delivery_item_id,
+            dispatched=delivery.status == "dispatched",
+        )
+        actual_goods_lines = _actual_goods_lines(
+            order_item_id=row.order_item_id,
+            product_code=_print_product_code(row.product_code),
+            product_name=row.product_name,
+            specification=row.specification,
+            parent_quantity=row.quantity,
+            component_lines=kit_metadata["component_lines"],
+        )
+        document_goods_lines = [
+            {
+                **line,
+                "delivery_item_id": row.delivery_item_id,
+                "customer_po": row.customer_po,
+                "product_code": _print_product_code(line["product_code"]),
+            }
+            for line in actual_goods_lines
+        ]
+        actual_goods_items.extend(document_goods_lines)
+        print_items.append(
+            {
+                "delivery_item_id": row.delivery_item_id,
+                "order_item_id": row.order_item_id,
+                "customer_po": row.customer_po,
+                "product_code": _print_product_code(row.product_code),
+                "product_name": row.product_name,
+                "specification": row.specification,
+                "unit": "PCS",
+                "quantity": row.quantity,
+                "ordered_quantity": row.ordered_quantity_snapshot,
+                "over_delivery_quantity": row.over_delivery_quantity,
+                "remarks": _customer_visible_delivery_remark(
+                    row.delivery_item_id,
+                    row.remarks,
+                    internal_remarks,
+                ),
+                "component_lines": kit_metadata["component_lines"],
+                "actual_goods_lines": document_goods_lines,
+                "actual_goods_quantity": sum(
+                    int(line["quantity"] or 0) for line in document_goods_lines
+                ),
+            }
+        )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -2758,6 +3546,10 @@ def get_delivery_print_data(
         "vehicle_number": delivery.vehicle_number,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
+        "total_actual_goods_quantity": sum(
+            int(line["quantity"] or 0) for line in actual_goods_items
+        ),
+        "actual_goods_items": actual_goods_items,
         "created_at": utc_naive_to_api(delivery.created_at),
         "customer": {
             "name": customer.name if customer else "",
@@ -2776,30 +3568,5 @@ def get_delivery_print_data(
             "contact_person": company.contact_person if company else None,
             "contact_phone": company.contact_phone if company else None,
         },
-        "items": [
-            {
-                "customer_po": row.customer_po,
-                "product_code": _print_product_code(row.product_code),
-                "product_name": row.product_name,
-                "unit": "PCS",
-                "quantity": row.quantity,
-                "ordered_quantity": row.ordered_quantity_snapshot,
-                "over_delivery_quantity": row.over_delivery_quantity,
-                "remarks": "；".join(
-                    part
-                    for part in (
-                        row.remarks,
-                        (
-                            f"订单{row.ordered_quantity_snapshot}/实送{row.quantity}/"
-                            f"超送{row.over_delivery_quantity}"
-                            if int(row.over_delivery_quantity or 0) > 0
-                            else None
-                        ),
-                    )
-                    if part
-                )
-                or None,
-            }
-            for row in rows
-        ],
+        "items": print_items,
     }

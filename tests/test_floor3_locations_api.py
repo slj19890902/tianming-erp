@@ -2066,6 +2066,7 @@ def test_floor3_promote_snapshot_to_finished_deletes_snapshot_and_is_replayable(
         after = client.get("/api/warehouse/finished/candidates", params={"order_item_id": 1})
         assert after.status_code == 200, after.text
         assert [row["lot_id"] for row in after.json()["items"]] == [lot["id"]]
+        assert after.json()["items"][0]["stock_date_accuracy"] == "exact"
 
         other_candidates = client.get(
             "/api/warehouse/finished/candidates",

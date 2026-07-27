@@ -269,7 +269,9 @@ def test_partial_and_no_stock_apply_only_changes_delivery_draft(pick_app) -> Non
         assert '"product_code": "PICK-002"' in (apply_log.details or "")
 
 
-def test_over_pick_requires_desktop_apply_then_dispatches(pick_app) -> None:
+def test_over_pick_applies_draft_but_dispatch_still_requires_physical_inventory(
+    pick_app,
+) -> None:
     from app.models.order import OrderItem
 
     app, factory, ids, _ = pick_app
@@ -290,10 +292,14 @@ def test_over_pick_requires_desktop_apply_then_dispatches(pick_app) -> None:
         assert client.put(f"/api/deliveries/{ids['delivery']}/dispatch").status_code == 409
         assert client.post(f"/api/delivery-picks/{task['id']}/apply").status_code == 200
         dispatched = client.put(f"/api/deliveries/{ids['delivery']}/dispatch")
-        assert dispatched.status_code == 200, dispatched.text
+        assert dispatched.status_code == 409, dispatched.text
+        assert "当前最多可送 100" in dispatched.json()["detail"]
 
     with factory() as db:
-        assert [db.get(OrderItem, item_id).delivered_quantity for item_id in ids["order_items"]] == [120, 50]
+        assert [
+            db.get(OrderItem, item_id).delivered_quantity
+            for item_id in ids["order_items"]
+        ] == [0, 0]
 
 
 def test_pushed_task_does_not_block_direct_dispatch(pick_app) -> None:
@@ -324,3 +330,159 @@ def test_editing_delivery_invalidates_old_pick_snapshot(pick_app) -> None:
         assert edited.status_code == 200, edited.text
         assert edited.json()["pick_task"] is None
         assert client.get("/api/delivery-picks").json()["items"] == []
+
+
+def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> None:
+    from app.models.delivery import Delivery, DeliveryPickTaskItem
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+    from app.models.warehouse_inventory import (
+        InventoryPallet,
+        InventoryPalletItem,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import manual_finished_in
+
+    app, factory, ids, operation_log = pick_app
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.username == "admin"))
+        order_items = [
+            db.get(OrderItem, item_id) for item_id in ids["order_items"]
+        ]
+        locations = [
+            WarehouseLocation(
+                location_code="B2-L01",
+                location_name="二楼B区01",
+                warehouse_type="finished",
+                warehouse_floor=2,
+                area_code="B2",
+                sort_order=10,
+                placement_status="placed",
+            ),
+            WarehouseLocation(
+                location_code="E1-L09",
+                location_name="三楼E1区09",
+                warehouse_type="finished",
+                warehouse_floor=3,
+                area_code="E1",
+                sort_order=20,
+                placement_status="placed",
+            ),
+        ]
+        db.add_all(locations)
+        db.flush()
+        lots = []
+        for index, (order_item, location, quantity) in enumerate(
+            zip(order_items, locations, (60, 50), strict=True),
+            start=1,
+        ):
+            lot = manual_finished_in(
+                db,
+                customer_id=ids["customer"],
+                product_id=order_item.product_id,
+                location_id=location.id,
+                quantity=quantity,
+                stock_date=date(2026, 7, 18),
+                source_type="manual",
+                remarks=None,
+                operator_id=admin.id,
+                idempotency_key=f"n083-lot-{index}",
+            )
+            lot.quantity_available -= quantity
+            lot.quantity_reserved += quantity
+            db.add(
+                InventoryReservation(
+                    reservation_number=f"RSV-N083-{index}",
+                    inventory_lot_id=lot.id,
+                    reservation_type="finished_order",
+                    order_id=ids["order"],
+                    order_item_id=order_item.id,
+                    reserved_stock_quantity=quantity,
+                    credited_requirement_quantity=quantity,
+                    status="active",
+                    reserved_by=admin.id,
+                    reservation_group_key=f"n083-group-{index}",
+                    idempotency_key=f"n083-reservation-{index}",
+                )
+            )
+            product = db.get(Product, order_item.product_id)
+            pallet = InventoryPallet(
+                pallet_code=f"PLT-N083-{index}",
+                location_id=location.id,
+                status="active",
+                is_current=True,
+                needs_relocation=index == 2,
+                created_by=admin.id,
+            )
+            db.add(pallet)
+            db.flush()
+            db.add(
+                InventoryPalletItem(
+                    pallet_id=pallet.id,
+                    inventory_lot_id=lot.id,
+                    customer_id=ids["customer"],
+                    product_id=product.id,
+                    inventory_code=product.product_code,
+                    product_name=product.product_name,
+                    item_type="finished",
+                    quantity=quantity,
+                    unit="boxes",
+                    match_status="matched",
+                    created_by=admin.id,
+                )
+            )
+            lots.append(lot)
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        task = _create_task(client, ids["delivery"])
+        groups = task["location_groups"]
+        assert [group["source_type"] for group in groups] == [
+            "finished_inventory",
+            "production_direct",
+            "finished_inventory",
+        ]
+        assert groups[0]["location_code"] == "B2-L01"
+        assert groups[0]["pallet_code"] == "PLT-N083-1"
+        assert groups[0]["lines"][0]["pick_quantity"] == 60
+        assert groups[1]["label"] == "生产区直接拿货"
+        assert groups[1]["lines"][0]["pick_quantity"] == 40
+        assert groups[2]["location_code"] == "E1-L09"
+        assert groups[2]["pallet_code"] == "PLT-N083-2"
+        assert groups[2]["needs_relocation"] is True
+        assert task["location_plan_complete"] is True
+
+        _login(client, "delivery_picker")
+        completed = client.post(
+            f"/api/delivery-picks/{task['id']}/complete-planned"
+        )
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["status"] == "driver_confirmed"
+        assert {
+            (row["pick_status"], row["picked_quantity"])
+            for row in completed.json()["items"]
+        } == {("picked", 100), ("picked", 50)}
+        repeated = client.post(
+            f"/api/delivery-picks/{task['id']}/complete-planned"
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["status"] == "driver_confirmed"
+
+    with factory() as db:
+        assert db.get(Delivery, ids["delivery"]).status == "pending"
+        saved = db.scalars(
+            select(DeliveryPickTaskItem).order_by(DeliveryPickTaskItem.id)
+        ).all()
+        assert [(row.status, row.picked_quantity) for row in saved] == [
+            ("picked", 100),
+            ("picked", 50),
+        ]
+        logs = db.scalars(
+            select(operation_log).where(
+                operation_log.action == "COMPLETE_PICK_TASK_PLANNED"
+            )
+        ).all()
+        assert len(logs) == 1

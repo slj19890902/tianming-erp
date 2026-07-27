@@ -19,7 +19,11 @@ def test_historical_search_uses_new_read_only_source_endpoint() -> None:
 
 def test_replenishment_form_keeps_stock_now_explicit_and_location_visible() -> None:
     assert "保存后立即进入仓库可用库存" in INDEX
-    assert "如果纸板尚未实际到仓，请取消勾选" in INDEX
+    assert "当前只是库存补库报料草稿" in INDEX
+    assert "到料后进入客户专用纸板备料" in INDEX
+    assert "本次报料张数（可多报）" in INDEX
+    assert "stockWarningExtraSheets(line)" in INDEX
+    assert "stockReplenishmentForm.stock_now = false" in INDEX
     assert "stockLocationsForType(line.target_inventory_type)" in INDEX
     assert "location_id:this.defaultStockLocation" in INDEX
 

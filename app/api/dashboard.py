@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.orm import Session, with_loader_criteria
+from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
 from app.api.deps import (
     PermissionChecker,
@@ -25,11 +25,18 @@ from app.models.finance import (
     StatementItem,
 )
 from app.models.order import Order, OrderItem
+from app.models.product import Product
 from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
+from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
 from app.services.inventory_insights import build_inventory_insights
+from app.services.stock_replenishment import (
+    product_replenishment_defaults,
+    product_replenishment_signature,
+    stock_policy_dict,
+)
 
 
 router = APIRouter()
@@ -217,6 +224,119 @@ def _todo_sort_key(todo: dict) -> tuple:
     )
 
 
+def _common_box_low_stock_warnings(
+    db: Session,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    query = (
+        select(InventoryStockPolicy)
+        .join(Product, Product.id == InventoryStockPolicy.product_id)
+        .options(
+            selectinload(InventoryStockPolicy.product).selectinload(
+                Product.material
+            ),
+            selectinload(InventoryStockPolicy.customer),
+            selectinload(InventoryStockPolicy.default_location),
+        )
+        .where(
+            InventoryStockPolicy.active.is_(True),
+            InventoryStockPolicy.target_inventory_type == "finished",
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            Product.customer_id == InventoryStockPolicy.customer_id,
+        )
+        .order_by(InventoryStockPolicy.id)
+    )
+    if visible_customer_ids is not None:
+        query = query.where(Product.customer_id.in_(visible_customer_ids))
+    warnings = []
+    for policy in db.scalars(query).all():
+        item = stock_policy_dict(db, policy)
+        if not item["warning_triggered"]:
+            continue
+        product = policy.product
+        if product is None:
+            continue
+        defaults = product_replenishment_defaults(product)
+        signature = product_replenishment_signature(product)
+        warnings.append(
+            {
+                "policy_id": item["id"],
+                "product_id": item["product_id"],
+                "customer_id": item["customer_id"],
+                "customer_name": item["customer_name"],
+                "product_code": item["product_code"],
+                "product_name": item["product_name"],
+                "available_quantity": item["available_quantity"],
+                "warning_quantity": item["warning_quantity"],
+                "target_quantity": item["target_quantity"],
+                "suggested_replenishment_quantity": item[
+                    "suggested_replenishment_quantity"
+                ],
+                "customer_board_preparation_available_sheet_quantity": item[
+                    "customer_board_preparation_available_sheet_quantity"
+                ],
+                "customer_board_preparation_finished_capacity": item[
+                    "customer_board_preparation_finished_capacity"
+                ],
+                "customer_board_preparation_auto_cover_capacity": item[
+                    "customer_board_preparation_auto_cover_capacity"
+                ],
+                "incoming_board_preparation_sheet_quantity": item[
+                    "incoming_board_preparation_sheet_quantity"
+                ],
+                "incoming_board_preparation_finished_capacity": item[
+                    "incoming_board_preparation_finished_capacity"
+                ],
+                "incoming_board_preparation_auto_cover_capacity": item[
+                    "incoming_board_preparation_auto_cover_capacity"
+                ],
+                "suggested_new_requisition_finished_quantity": item[
+                    "suggested_new_requisition_finished_quantity"
+                ],
+                "suggested_new_requisition_sheet_quantity": item[
+                    "suggested_new_requisition_sheet_quantity"
+                ],
+                "replenishment_state": item["replenishment_state"],
+                "material_code": defaults["material_code"],
+                "supplier_name": defaults["material_supplier_name"],
+                "layer_count": defaults["layer_count"],
+                "flute_type": defaults["flute_type"],
+                "report_length_mm": defaults["report_length_mm"],
+                "report_width_mm": defaults["report_width_mm"],
+                "crease_type": defaults["crease_type"],
+                "cutting_mode": defaults["cutting_mode"],
+                "output_per_sheet": defaults["output_per_sheet"],
+                "theoretical_requisition_quantity": (
+                    item["suggested_new_requisition_sheet_quantity"]
+                ),
+                "draft_ready": defaults["draft_ready"],
+                "missing_fields": defaults["missing_fields"],
+                "_replenishment_signature": signature,
+            }
+        )
+    signature_counts: dict[tuple, int] = {}
+    for item in warnings:
+        signature = item["_replenishment_signature"]
+        if signature is not None:
+            signature_counts[signature] = signature_counts.get(signature, 0) + 1
+    for item in warnings:
+        signature = item.pop("_replenishment_signature")
+        item["same_spec_warning_count"] = (
+            max(signature_counts.get(signature, 0) - 1, 0)
+            if signature is not None
+            else 0
+        )
+    return sorted(
+        warnings,
+        key=lambda item: (
+            -(item["warning_quantity"] - item["available_quantity"]),
+            item["customer_name"] or "",
+            item["product_code"] or "",
+        ),
+    )
+
+
 @router.get("/kpi")
 def dashboard_kpi(
     db: Session = Depends(get_db),
@@ -351,6 +471,7 @@ def dashboard_overview(
     can_view_orders = has_permission(user, "orders.view")
     can_view_requisition = has_permission(user, "requisition.view")
     can_view_incoming = has_permission(user, "incoming.view")
+    can_view_warehouse = has_permission(user, "warehouse.view")
     can_view_deliveries = has_permission(user, "deliveries.view")
     can_view_finance = has_permission(user, "finance.view")
     db = _CustomerScopedSession(db, visible_customer_ids)
@@ -981,10 +1102,18 @@ def dashboard_overview(
                 ),
             }
         )
-    return {
+    result = {
         "cards": cards,
         "todos": todos,
         "remaining_todo_count": remaining_todo_count,
         "summary": summary,
         "month": month,
     }
+    if can_view_requisition and can_view_warehouse:
+        low_stock_warnings = _common_box_low_stock_warnings(
+            raw_db,
+            visible_customer_ids,
+        )
+        if low_stock_warnings:
+            result["low_stock_warnings"] = low_stock_warnings
+    return result

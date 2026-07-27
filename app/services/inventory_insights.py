@@ -38,8 +38,10 @@ def _money(value: Decimal | None) -> str | None:
     return str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _age_days(lot: InventoryLot, as_of: date) -> int:
-    """Keep inventory age tied to the original stock date, never movements."""
+def _age_days(lot: InventoryLot, as_of: date) -> int | None:
+    """Keep age tied to stock date and never invent precision for unknown dates."""
+    if (getattr(lot, "stock_date_accuracy", "exact") or "unknown") == "unknown":
+        return None
     return max((as_of - lot.stock_date).days, 0)
 
 
@@ -220,6 +222,16 @@ def build_inventory_insights(
     cost_ready_lots = 0
     estimate_source_lots = defaultdict(int)
     estimated_value = Decimal("0")
+    exact_stock_date_lots = 0
+    estimated_stock_date_lots = 0
+    unknown_stock_date_lots = 0
+    bucket_map["unknown"] = {
+        "key": "unknown",
+        "label": "入库日期不明",
+        "lots": 0,
+        "finished_available": 0,
+        "semi_finished_available": 0,
+    }
 
     for lot in lots:
         metrics = by_type[lot.inventory_type]
@@ -229,8 +241,21 @@ def build_inventory_insights(
         metrics["damaged"] += lot.quantity_damaged
         metrics["scrapped"] += lot.quantity_scrapped
 
+        date_accuracy = (
+            getattr(lot, "stock_date_accuracy", "exact") or "unknown"
+        )
+        if date_accuracy == "exact":
+            exact_stock_date_lots += 1
+        elif date_accuracy == "estimated":
+            estimated_stock_date_lots += 1
+        else:
+            unknown_stock_date_lots += 1
+
         days = _age_days(lot, as_of)
-        bucket_key, _bucket_label = _age_bucket(days)
+        if days is None:
+            bucket_key = "unknown"
+        else:
+            bucket_key, _bucket_label = _age_bucket(days)
         bucket = bucket_map[bucket_key]
         bucket["lots"] += 1
         bucket[f"{lot.inventory_type}_available"] += lot.quantity_available
@@ -370,7 +395,15 @@ def build_inventory_insights(
                         estimated_unit_cost = candidate
                         estimated_cost_status = "estimated_product_cost"
 
-        if days > 730:
+        if days is None:
+            reasons.append(
+                {
+                    "code": "stock_date_unknown",
+                    "text": "入库日期不明，不能按精确库龄判断；请在盘点复核时补充日期依据。",
+                }
+            )
+            priority = min(priority, 2)
+        elif days > 730:
             reasons.append({"code": "age_cleanup", "text": "库龄超过 2 年，列入清理候选。"})
             priority = min(priority, 0)
         elif days > 548:
@@ -382,6 +415,13 @@ def build_inventory_insights(
         elif days > 180:
             reasons.append({"code": "age_slow", "text": "库龄超过 180 天，属于慢动库存。"})
             priority = min(priority, 3)
+        if date_accuracy == "estimated":
+            reasons.append(
+                {
+                    "code": "stock_date_estimated",
+                    "text": "入库日期为估算值，库龄仅供参考。",
+                }
+            )
 
         if lot.location is None or not lot.location.is_active:
             reasons.append({"code": "location_unavailable", "text": "库位缺失或已停用，需要现场核对。"})
@@ -405,7 +445,15 @@ def build_inventory_insights(
                     "quantity_available": lot.quantity_available,
                     "unit": lot.unit,
                     "age_days": days,
-                    "age_basis": "stock_date",
+                    "age_basis": (
+                        "stock_date_unknown"
+                        if days is None
+                        else (
+                            "stock_date_estimated"
+                            if date_accuracy == "estimated"
+                            else "stock_date"
+                        )
+                    ),
                     "last_movement_at": utc_naive_to_api(lot.last_movement_at)
                     if lot.last_movement_at is not None
                     else None,
@@ -426,7 +474,14 @@ def build_inventory_insights(
                 }
             )
 
-    actions.sort(key=lambda row: (row["priority"], -row["age_days"], row["lot_id"]))
+    actions.sort(
+        key=lambda row: (
+            row["priority"],
+            row["age_days"] is None,
+            -(row["age_days"] or 0),
+            row["lot_id"],
+        )
+    )
     action_item_count = len(actions)
     high_priority_action_item_count = sum(
         1
@@ -463,6 +518,9 @@ def build_inventory_insights(
         },
         "data_quality": {
             "active_location_lots": active_location_lots,
+            "exact_stock_date_lots": exact_stock_date_lots,
+            "estimated_stock_date_lots": estimated_stock_date_lots,
+            "unknown_stock_date_lots": unknown_stock_date_lots,
             "cost_ready_lots": cost_ready_lots,
             "missing_cost_lots": missing_cost_lots,
             "cost_coverage_percent": round(cost_ready_lots * 100 / available_lots, 1) if available_lots else None,

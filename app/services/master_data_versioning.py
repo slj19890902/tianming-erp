@@ -114,6 +114,7 @@ _PRODUCT_FIELDS = (
     "pieces_per_box",
     "default_cutting_mode",
     "flap_mm",
+    "combination_mode",
     "is_active",
 ) + tuple(
     field

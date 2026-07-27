@@ -324,7 +324,7 @@ def test_historical_replenishment_can_stock_one_traceable_semi_finished_lot(
         assert lot.quantity_available == 30
 
 
-def test_finished_replenishment_uses_product_and_finished_location(
+def test_stock_warning_finished_replenishment_cannot_write_inventory_directly(
     stock_replenishment_app,
 ) -> None:
     app, _session_factory = stock_replenishment_app
@@ -359,11 +359,8 @@ def test_finished_replenishment_uses_product_and_finished_location(
                 ],
             },
         )
-        assert order_response.status_code == 201, order_response.text
-        item = order_response.json()["items"][0]
-        assert item["target_inventory_type"] == "finished"
-        assert item["product_code"] == "21301010"
-        assert item["inventory_lot"]["quantity_available"] == 12
+        assert order_response.status_code == 400, order_response.text
+        assert "不能保存后直接写入库存" in order_response.text
 
 
 def test_common_box_and_material_master_prefill_traceable_semi_stock(

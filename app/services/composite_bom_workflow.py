@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from math import floor
+from math import ceil, floor
 from typing import Iterable
 
 from sqlalchemy import func, select
@@ -345,6 +345,14 @@ def ensure_component_production_tasks(
     demands = effective_component_demands(db, order_item_id)
     tasks: list[ProductionTask] = []
     for demand in demands:
+        snapshot = db.get(SalesOrderItemBomComponent, demand.snapshot_id)
+        if snapshot is None:
+            raise CompositeBomWorkflowError("订单组件快照不存在")
+        from app.services.production_workflow import cutting_output_factor
+
+        output_factor = cutting_output_factor(
+            snapshot.snapshot_component_default_cutting_mode
+        )
         task = db.scalar(
             select(ProductionTask).where(
                 ProductionTask.sales_order_item_bom_component_id == demand.snapshot_id
@@ -357,6 +365,9 @@ def ensure_component_production_tasks(
                 status="waiting_material",
                 planned_quantity=0,
                 finished_coverage_snapshot=0,
+                material_received_quantity=0,
+                material_input_quantity=0,
+                output_factor=output_factor,
                 readiness_basis=None,
                 version=1,
             )
@@ -367,8 +378,16 @@ def ensure_component_production_tasks(
             tasks.append(task)
             continue
         ready = item.material_status == "received"
-        task.planned_quantity = demand.required_piece_quantity if ready else 0
-        task.finished_coverage_snapshot = component_available_quantity(db, demand.snapshot_id)
+        coverage = component_available_quantity(db, demand.snapshot_id)
+        planned_quantity = max(demand.required_piece_quantity - coverage, 0)
+        input_quantity = (
+            ceil(planned_quantity / max(output_factor, 1)) if ready else 0
+        )
+        task.planned_quantity = planned_quantity if ready else 0
+        task.finished_coverage_snapshot = coverage
+        task.material_received_quantity = input_quantity
+        task.material_input_quantity = input_quantity
+        task.output_factor = output_factor
         task.status = "pending" if ready and demand.required_piece_quantity else "waiting_material"
         task.readiness_basis = "component_material_received" if ready else None
         task.version = max(int(task.version or 0), 1) + 1
@@ -458,43 +477,208 @@ def component_available_quantity(db: Session, snapshot_id: int) -> int:
     return component_availability(db, snapshot_id).available_quantity
 
 
+def _delivered_component_quantity(db: Session, snapshot_id: int) -> int:
+    """Return the active delivered-piece fact for one order BOM snapshot."""
+    direct_quantity = db.scalar(
+        select(
+            func.coalesce(
+                func.sum(
+                    BomComponentDirectDeliveryAllocation.consumed_quantity
+                    - BomComponentDirectDeliveryAllocation.reversed_quantity
+                ),
+                0,
+            )
+        ).where(
+            BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id
+            == snapshot_id,
+            BomComponentDirectDeliveryAllocation.status.in_(
+                ACTIVE_RESERVATION_STATUSES
+            ),
+        )
+    )
+    stock_quantity = db.scalar(
+        select(
+            func.coalesce(
+                func.sum(
+                    DeliveryInventoryAllocation.credited_requirement_quantity
+                    - DeliveryInventoryAllocation.reversed_requirement_quantity
+                ),
+                0,
+            )
+        )
+        .join(
+            InventoryReservation,
+            InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+        )
+        .where(
+            InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+            DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+        )
+    )
+    return int(direct_quantity or 0) + int(stock_quantity or 0)
+
+
+def delivered_component_quantities(
+    db: Session,
+    order_item_id: int,
+) -> dict[int, int]:
+    """Return cumulative active delivered pieces for every component snapshot."""
+    return {
+        demand.snapshot_id: _delivered_component_quantity(db, demand.snapshot_id)
+        for demand in effective_component_demands(db, order_item_id)
+    }
+
+
+def delivery_item_component_quantities(
+    db: Session,
+    delivery_item_id: int,
+) -> dict[int, int]:
+    """Return actual active component pieces attached to one delivery line."""
+    result: dict[int, int] = {}
+    direct_rows = db.execute(
+        select(
+            BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id,
+            func.coalesce(
+                func.sum(
+                    BomComponentDirectDeliveryAllocation.consumed_quantity
+                    - BomComponentDirectDeliveryAllocation.reversed_quantity
+                ),
+                0,
+            ),
+        )
+        .where(
+            BomComponentDirectDeliveryAllocation.delivery_item_id == delivery_item_id,
+            BomComponentDirectDeliveryAllocation.status.in_(
+                ACTIVE_RESERVATION_STATUSES
+            ),
+        )
+        .group_by(
+            BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id
+        )
+    ).all()
+    for snapshot_id, quantity in direct_rows:
+        result[int(snapshot_id)] = result.get(int(snapshot_id), 0) + int(
+            quantity or 0
+        )
+    stock_rows = db.execute(
+        select(
+            InventoryReservation.sales_order_item_bom_component_id,
+            func.coalesce(
+                func.sum(
+                    DeliveryInventoryAllocation.credited_requirement_quantity
+                    - DeliveryInventoryAllocation.reversed_requirement_quantity
+                ),
+                0,
+            ),
+        )
+        .join(
+            InventoryReservation,
+            InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+        )
+        .where(
+            DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
+            InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
+        )
+        .group_by(InventoryReservation.sales_order_item_bom_component_id)
+    ).all()
+    for snapshot_id, quantity in stock_rows:
+        result[int(snapshot_id)] = result.get(int(snapshot_id), 0) + int(
+            quantity or 0
+        )
+    return result
+
+
+def delivery_component_required_quantities(
+    db: Session,
+    *,
+    order_item_id: int,
+    delivery_sets: int,
+) -> dict[int, int]:
+    """Calculate this dispatch's pieces, capped by each order-specific demand.
+
+    A unified-price composite order is still dispatched as one parent order
+    line.  Its component demand may be lower than the parent quantity, so the
+    cumulative component consumption must stop at the immutable snapshot plus
+    append-only order adjustments instead of blindly multiplying every
+    dispatch by the template quantity-per-set.
+    """
+    sets = _as_integer(delivery_sets, field="送货套数")
+    if sets < 0:
+        raise CompositeBomWorkflowError("送货套数不能小于0")
+    item = db.get(OrderItem, order_item_id)
+    delivered_before = max(int(item.delivered_quantity or 0), 0) if item else 0
+    delivered_after = delivered_before + sets
+    result: dict[int, int] = {}
+    for demand in effective_component_demands(db, order_item_id):
+        consumed = _delivered_component_quantity(db, demand.snapshot_id)
+        target_after_dispatch = min(
+            delivered_after * demand.quantity_per_set,
+            demand.required_piece_quantity,
+        )
+        result[demand.snapshot_id] = max(target_after_dispatch - consumed, 0)
+    return result
+
+
 def kit_availability(db: Session, order_item_id: int) -> dict:
-    """Return delivery capacity in sets; optional components are informational."""
+    """Return parent delivery capacity while respecting component piece targets."""
     demands = effective_component_demands(db, order_item_id)
     if not demands:
         return {"applicable": False, "available_sets": 0, "missing_components": [], "components": []}
     item = db.get(OrderItem, order_item_id)
-    required_rows: list[ComponentAvailability] = []
+    demand_by_snapshot = {demand.snapshot_id: demand for demand in demands}
     component_rows = [component_availability(db, demand.snapshot_id) for demand in demands]
-    for row in component_rows:
-        if row.is_required:
-            required_rows.append(row)
-    if not required_rows:
-        available_sets = max((d.effective_sets for d in demands), default=0)
-    else:
-        available_sets = min(row.available_quantity // row.quantity_per_set for row in required_rows)
-    effective_sets = max((d.effective_sets for d in demands), default=0)
+    effective_sets = (
+        max(int(item.quantity or 0), 0)
+        if item is not None
+        else max((d.effective_sets for d in demands), default=0)
+    )
     delivered = int(item.delivered_quantity or 0) if item is not None else 0
     remaining_order_sets = max(effective_sets - delivered, 0)
-    available_sets = min(available_sets, remaining_order_sets)
-    missing = [
-        {
-            "snapshot_id": row.snapshot_id,
-            "component_code": row.component_code,
-            "component_name": row.component_name,
-            "required_quantity": row.quantity_per_set,
-            "available_quantity": row.available_quantity,
-            "shortage_quantity": max(row.quantity_per_set - row.available_quantity, 0),
-        }
-        for row in required_rows
-        if row.available_quantity < row.quantity_per_set
-    ]
+    available_sets = remaining_order_sets
+    missing: list[dict] = []
+    components: list[dict] = []
+    for row in component_rows:
+        demand = demand_by_snapshot[row.snapshot_id]
+        consumed = _delivered_component_quantity(db, row.snapshot_id)
+        remaining_target = max(demand.required_piece_quantity - consumed, 0)
+        shortage = max(remaining_target - row.available_quantity, 0)
+        component_payload = asdict(row)
+        component_payload.update(
+            {
+                "target_quantity": demand.required_piece_quantity,
+                "delivered_quantity": consumed,
+                "remaining_quantity": remaining_target,
+                "delivered_piece_quantity": consumed,
+                "remaining_required_piece_quantity": remaining_target,
+            }
+        )
+        components.append(component_payload)
+        if not row.is_required:
+            continue
+        total_coverable = consumed + row.available_quantity
+        if total_coverable < demand.required_piece_quantity:
+            component_sets = max(
+                total_coverable // row.quantity_per_set - delivered,
+                0,
+            )
+            available_sets = min(available_sets, component_sets)
+            missing.append(
+                {
+                    "snapshot_id": row.snapshot_id,
+                    "component_code": row.component_code,
+                    "component_name": row.component_name,
+                    "required_quantity": remaining_target,
+                    "available_quantity": row.available_quantity,
+                    "shortage_quantity": shortage,
+                }
+            )
     return {
         "applicable": True,
         "effective_sets": effective_sets,
         "delivered_sets": delivered,
         "available_sets": available_sets,
-        "components": [asdict(row) for row in component_rows],
+        "components": components,
         "missing_components": missing,
     }
 
@@ -513,11 +697,18 @@ def build_delivery_component_consumption_plan(
     demands = effective_component_demands(db, delivery_item.order_item_id)
     if not demands:
         return []
+    required_quantities = delivery_component_required_quantities(
+        db,
+        order_item_id=delivery_item.order_item_id,
+        delivery_sets=sets,
+    )
 
     plan: list[ComponentConsumption] = []
     shortages: list[str] = []
     for demand in demands:
-        needed = sets * demand.quantity_per_set
+        needed = required_quantities.get(demand.snapshot_id, 0)
+        if needed <= 0:
+            continue
         parts: list[ConsumptionPart] = []
         remaining = needed
         for reservation in _stock_reservations(db, demand.snapshot_id):
@@ -599,17 +790,43 @@ def execute_delivery_component_consumption(
         for component in plan:
             for part in component.parts:
                 if part.source == "direct":
-                    db.add(
-                        BomComponentDirectDeliveryAllocation(
-                            delivery_item_id=delivery_item_id,
-                            production_completion_id=part.source_id,
-                            sales_order_item_bom_component_id=part.snapshot_id,
-                            consumed_quantity=part.quantity,
-                            reversed_quantity=0,
-                            status="active",
-                            created_by=operator_id,
+                    existing = db.scalar(
+                        select(BomComponentDirectDeliveryAllocation).where(
+                            BomComponentDirectDeliveryAllocation.delivery_item_id
+                            == delivery_item_id,
+                            BomComponentDirectDeliveryAllocation.production_completion_id
+                            == part.source_id,
                         )
                     )
+                    if existing is None:
+                        db.add(
+                            BomComponentDirectDeliveryAllocation(
+                                delivery_item_id=delivery_item_id,
+                                production_completion_id=part.source_id,
+                                sales_order_item_bom_component_id=part.snapshot_id,
+                                consumed_quantity=part.quantity,
+                                reversed_quantity=0,
+                                status="active",
+                                created_by=operator_id,
+                            )
+                        )
+                    else:
+                        if (
+                            existing.sales_order_item_bom_component_id
+                            != part.snapshot_id
+                            or existing.status != "reversed"
+                            or int(existing.reversed_quantity or 0)
+                            != int(existing.consumed_quantity or 0)
+                        ):
+                            raise CompositeBomWorkflowError(
+                                "组件直接送货分配已变化，请刷新后重试"
+                            )
+                        existing.consumed_quantity = part.quantity
+                        existing.reversed_quantity = 0
+                        existing.status = "active"
+                        existing.created_by = operator_id
+                        existing.reversed_by = None
+                        existing.reversed_at = None
                     continue
 
                 reservation = db.get(InventoryReservation, part.source_id)

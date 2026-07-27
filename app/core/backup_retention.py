@@ -16,6 +16,9 @@ PROTECTED_KEYWORDS_CASE_INSENSITIVE = (
     "tianhua_batch",
     "tianhua_sales_apply",
     "legacy_refresh",
+    "before_release",
+    "pre_rollback",
+    "rollback_site_backup",
 )
 
 

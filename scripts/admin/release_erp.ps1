@@ -21,6 +21,10 @@ param(
     [string]$ExpectedCodeSha,
 
     [Parameter(Mandatory = $true, ParameterSetName = "Prepare")]
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$PreviousCodeSha,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "Prepare")]
     [string]$ExpectedRevision,
 
     [Parameter(Mandatory = $true, ParameterSetName = "Apply")]
@@ -47,12 +51,15 @@ $formalDatabasePath = [System.IO.Path]::GetFullPath(
 $backupDir = Join-Path $projectRoot "data\backups"
 $rehearsalDir = Join-Path $projectRoot "data\release_rehearsals"
 $reportDir = Join-Path $projectRoot "docs\migration_reports"
+$releaseStateDir = Join-Path $projectRoot "data\release_state"
+$latestReleasePointer = Join-Path $releaseStateDir "latest_completed_release.json"
 $logDir = Join-Path $projectRoot "logs"
 $releaseLog = Join-Path $logDir "erp_release.log"
 $releaseHelper = Join-Path $PSScriptRoot "release_erp.py"
 $ErpPort = $null
 $python = $null
 $expectedBasePython = $null
+$serviceStartedByRelease = $false
 
 function Write-Log([string]$Message, [string]$Level = "INFO") {
     $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
@@ -224,7 +231,7 @@ function Initialize-ReleaseRuntime {
     if (-not (Test-Path -LiteralPath $releaseHelper -PathType Leaf)) {
         throw "发布门禁脚本不存在：$releaseHelper"
     }
-    New-Item -ItemType Directory -Path $logDir, $backupDir, $rehearsalDir, $reportDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $logDir, $backupDir, $rehearsalDir, $reportDir, $releaseStateDir -Force | Out-Null
 
     $runtimeConfig = @(
         & $script:python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(s.bind_host); print(s.database_path)" 2>&1
@@ -268,7 +275,10 @@ function Initialize-ReleaseRuntime {
     }
 }
 
-function Assert-ApprovedCheckout([string]$ApprovedSha) {
+function Assert-ApprovedCheckout(
+    [string]$ApprovedSha,
+    [string]$PreviousOfficialSha = ""
+) {
     Push-Location $projectRoot
     try {
         $branch = (git branch --show-current).Trim()
@@ -282,6 +292,15 @@ function Assert-ApprovedCheckout([string]$ApprovedSha) {
         $dirty = git status --porcelain
         if ($LASTEXITCODE -ne 0 -or $dirty) {
             throw "正式发布工作区必须干净。"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($PreviousOfficialSha)) {
+            $remoteFormalSha = (git rev-parse origin/factory-current-baseline).Trim()
+            if ($LASTEXITCODE -ne 0 -or $remoteFormalSha -ne $PreviousOfficialSha) {
+                throw (
+                    "更新前 SHA 必须是尚未推进的远端正式基线：" +
+                    "remote=$remoteFormalSha expected=$PreviousOfficialSha"
+                )
+            }
         }
     } finally {
         Pop-Location
@@ -304,7 +323,8 @@ try {
     if ($PSCmdlet.ParameterSetName -eq "Help") {
         throw (
             "旧的一键更新已停用。先运行 release_erp.ps1 -Prepare " +
-            "-ExpectedCodeSha <40位SHA> -ExpectedRevision <revision>；" +
+            "-PreviousCodeSha <更新前40位SHA> -ExpectedCodeSha <目标40位SHA> " +
+            "-ExpectedRevision <revision>；" +
             "人工核对报告后，再运行 -Apply -PlanPath <报告> -ApprovalToken <口令>。"
         )
     }
@@ -313,7 +333,9 @@ try {
     Write-Log "========== ERP P0-A 发布门禁开始 =========="
 
     if ($Prepare) {
-        Assert-ApprovedCheckout -ApprovedSha $ExpectedCodeSha
+        Assert-ApprovedCheckout `
+            -ApprovedSha $ExpectedCodeSha `
+            -PreviousOfficialSha $PreviousCodeSha
         Write-Log "已确认生产配置、正式路径和代码 SHA；准备停服。"
         Stop-ErpService
 
@@ -325,6 +347,7 @@ try {
             "--backup-dir", $backupDir,
             "--rehearsal-dir", $rehearsalDir,
             "--report", $reportPath,
+            "--previous-code-sha", $PreviousCodeSha,
             "--expected-code-sha", $ExpectedCodeSha,
             "--expected-revision", $ExpectedRevision
         )
@@ -343,7 +366,9 @@ try {
         throw "发布计划不存在：$resolvedPlanPath"
     }
     $planBeforeApply = Get-Content -LiteralPath $resolvedPlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    Assert-ApprovedCheckout -ApprovedSha $planBeforeApply.code_sha
+    Assert-ApprovedCheckout `
+        -ApprovedSha $planBeforeApply.code_sha `
+        -PreviousOfficialSha $planBeforeApply.previous_code_sha
     if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals(
         [System.IO.Path]::GetFullPath($planBeforeApply.source.path),
         $formalDatabasePath
@@ -362,12 +387,26 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "数据库已完成迁移，但 ERP 启动失败；保持现场并查看日志。"
     }
-    Invoke-ReleaseHelper -Arguments @("mark-started", "--plan", $resolvedPlanPath) | Out-Null
+    $serviceStartedByRelease = $true
+    Invoke-ReleaseHelper -Arguments @(
+        "mark-started",
+        "--plan", $resolvedPlanPath,
+        "--latest-pointer", $latestReleasePointer
+    ) | Out-Null
     Write-Log "========== ERP 发布完成，服务健康检查通过 =========="
     Write-Log "发布报告：$resolvedPlanPath"
+    Write-Log "最近已完成发布指针：$latestReleasePointer"
     exit 0
 } catch {
     Write-Log $_.Exception.Message "ERROR"
+    if ($serviceStartedByRelease) {
+        try {
+            Write-Log "发布完成证据校验失败，重新停止刚启动的 ERP。" "ERROR"
+            Stop-ErpService
+        } catch {
+            Write-Log ("重新停服失败：" + $_.Exception.Message) "ERROR"
+        }
+    }
     Write-Host "发布流程已停止；不得跳过失败步骤或手工继续迁移。"
     exit 1
 }

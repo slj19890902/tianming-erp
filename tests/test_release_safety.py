@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from scripts.admin import release_erp
+from scripts.admin import release_erp, release_state_common
+from scripts.admin.release_state_common import ReleaseStateError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _fixed_release_evidence_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        release_state_common,
+        "_release_evidence_key",
+        lambda _root: b"test-release-evidence-key".ljust(32, b"!"),
+    )
 
 
 def _database(path: Path, revision: str) -> Path:
@@ -82,6 +93,17 @@ def test_two_phase_release_requires_bound_token_and_unchanged_source(
         "code_revision",
         lambda _root=PROJECT_ROOT: expected_revision,
     )
+    monkeypatch.setattr(release_erp, "assert_ancestor", lambda *_args: None)
+    monkeypatch.setattr(
+        release_erp,
+        "code_revision_at",
+        lambda *_args: old_revision,
+    )
+    monkeypatch.setattr(
+        release_erp,
+        "runtime_config_fingerprint",
+        lambda *_args: {"sha256": "stable-config"},
+    )
 
     def fake_migrate(path: Path, revision: str, _root: Path = PROJECT_ROOT) -> None:
         with sqlite3.connect(path) as connection:
@@ -95,6 +117,7 @@ def test_two_phase_release_requires_bound_token_and_unchanged_source(
         backup_dir=tmp_path / "backups",
         rehearsal_dir=tmp_path / "rehearsals",
         report_path=report,
+        previous_code_sha="c" * 40,
         expected_code_sha=expected_sha,
         expected_revision=expected_revision,
         project_root=PROJECT_ROOT,
@@ -107,6 +130,9 @@ def test_two_phase_release_requires_bound_token_and_unchanged_source(
     assert plan["rehearsal"]["revision"] == expected_revision
     assert plan["source"]["core_counts"] == plan["rehearsal"]["core_counts"]
     assert report.is_file()
+    stored_plan = json.loads(report.read_text(encoding="utf-8"))
+    assert "approval_token" not in stored_plan
+    assert stored_plan["approval_token_sha256"]
 
     with pytest.raises(release_erp.ReleaseGateError, match="人工授权口令不匹配"):
         release_erp.apply_release(
@@ -122,9 +148,63 @@ def test_two_phase_release_requires_bound_token_and_unchanged_source(
         project_root=PROJECT_ROOT,
     )
     assert applied["status"] == "applied_pending_service_start"
+    assert applied["applied"]["logical_fingerprint"]["table_count"] > 0
     assert release_erp.inspect_database(database)["revision"] == expected_revision
-    completed = release_erp.mark_service_started(report)
+    pointer = tmp_path / "release_state" / "latest.json"
+    completed = release_erp.mark_service_started(
+        report,
+        pointer,
+        PROJECT_ROOT,
+    )
     assert completed["status"] == "completed"
+    assert pointer.is_file()
+    assert completed["completed_database"]["logical_fingerprint"]["table_count"] > 0
+
+
+def test_mark_started_rejects_database_write_after_stopped_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    revision = "same_revision"
+    expected_sha = "f" * 40
+    database = _database(tmp_path / "formal.sqlite3", revision)
+    applied = release_erp.inspect_database(database)
+    applied["logical_fingerprint"] = release_erp.sqlite_logical_fingerprint(database)
+    report = tmp_path / "release.json"
+    release_erp._write_signed_plan(
+        report,
+        {
+            "schema_version": 3,
+            "status": "applied_pending_service_start",
+            "previous_code_sha": "e" * 40,
+            "previous_code_revision": revision,
+            "code_sha": expected_sha,
+            "expected_revision": revision,
+            "prepared_runtime_config": {"sha256": "stable-config"},
+            "source": {"path": str(database.resolve())},
+            "applied": applied,
+        },
+        project_root=PROJECT_ROOT,
+        purpose="release-plan-v3",
+    )
+    monkeypatch.setattr(release_erp, "git_sha", lambda *_args: expected_sha)
+    monkeypatch.setattr(release_erp, "code_revision", lambda *_args: revision)
+    monkeypatch.setattr(
+        release_erp,
+        "runtime_config_fingerprint",
+        lambda *_args: {"sha256": "stable-config"},
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE customers SET name = '启动窗口写入' WHERE id = 1")
+        connection.commit()
+
+    pointer = tmp_path / "latest.json"
+    with pytest.raises(release_erp.ReleaseGateError, match="数据库已经发生变化"):
+        release_erp.mark_service_started(report, pointer, PROJECT_ROOT)
+    assert not pointer.exists()
+    assert json.loads(report.read_text(encoding="utf-8"))["status"] == (
+        "applied_pending_service_start"
+    )
 
 
 def test_apply_refuses_if_database_changed_after_prepare(
@@ -136,6 +216,13 @@ def test_apply_refuses_if_database_changed_after_prepare(
     database = _database(tmp_path / "formal.sqlite3", revision)
     monkeypatch.setattr(release_erp, "git_sha", lambda _root=PROJECT_ROOT: expected_sha)
     monkeypatch.setattr(release_erp, "code_revision", lambda _root=PROJECT_ROOT: revision)
+    monkeypatch.setattr(release_erp, "assert_ancestor", lambda *_args: None)
+    monkeypatch.setattr(release_erp, "code_revision_at", lambda *_args: revision)
+    monkeypatch.setattr(
+        release_erp,
+        "runtime_config_fingerprint",
+        lambda *_args: {"sha256": "stable-config"},
+    )
     monkeypatch.setattr(release_erp, "_run_migration", lambda *_args, **_kwargs: None)
     report = tmp_path / "release.json"
     plan = release_erp.prepare_release(
@@ -143,6 +230,7 @@ def test_apply_refuses_if_database_changed_after_prepare(
         backup_dir=tmp_path / "backups",
         rehearsal_dir=tmp_path / "rehearsals",
         report_path=report,
+        previous_code_sha="c" * 40,
         expected_code_sha=expected_sha,
         expected_revision=revision,
         project_root=PROJECT_ROOT,
@@ -157,6 +245,54 @@ def test_apply_refuses_if_database_changed_after_prepare(
             approval_token=plan["approval_token"],
             project_root=PROJECT_ROOT,
         )
+
+
+def test_prepare_rejects_invalid_previous_code_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path / "formal.sqlite3", "database_revision")
+    expected_sha = "d" * 40
+    previous_sha = "e" * 40
+    monkeypatch.setattr(release_erp, "git_sha", lambda *_args: expected_sha)
+    monkeypatch.setattr(release_erp, "code_revision", lambda *_args: "target_revision")
+    monkeypatch.setattr(
+        release_erp,
+        "assert_ancestor",
+        lambda *_args: (_ for _ in ()).throw(ReleaseStateError("不是目标代码的祖先")),
+    )
+
+    with pytest.raises(release_erp.ReleaseGateError, match="不是目标代码的祖先"):
+        release_erp.prepare_release(
+            database=database,
+            backup_dir=tmp_path / "backups",
+            rehearsal_dir=tmp_path / "rehearsals",
+            report_path=tmp_path / "release.json",
+            previous_code_sha=previous_sha,
+            expected_code_sha=expected_sha,
+            expected_revision="target_revision",
+            project_root=PROJECT_ROOT,
+        )
+    assert not (tmp_path / "backups").exists()
+
+    monkeypatch.setattr(release_erp, "assert_ancestor", lambda *_args: None)
+    monkeypatch.setattr(
+        release_erp,
+        "code_revision_at",
+        lambda *_args: "other_revision",
+    )
+    with pytest.raises(release_erp.ReleaseGateError, match="更新前代码与正式数据库不配对"):
+        release_erp.prepare_release(
+            database=database,
+            backup_dir=tmp_path / "backups",
+            rehearsal_dir=tmp_path / "rehearsals",
+            report_path=tmp_path / "release.json",
+            previous_code_sha=previous_sha,
+            expected_code_sha=expected_sha,
+            expected_revision="target_revision",
+            project_root=PROJECT_ROOT,
+        )
+    assert not (tmp_path / "backups").exists()
 
 
 def test_uat_launcher_isolated_from_factory_database_and_port() -> None:

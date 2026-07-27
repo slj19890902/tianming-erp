@@ -44,6 +44,9 @@ def test_backup_retention_protects_all_required_keywords(tmp_path: Path) -> None
         "carton_erp_before_tianhua_batch_2_apply_20260620_074551.sqlite3",
         "carton_erp_before_tianhua_sales_apply_20260619_202543.sqlite3",
         "carton_erp_before_legacy_refresh_apply_20260619_090705.sqlite3",
+        "carton_erp_before_release_20260727_120000.sqlite3",
+        "carton_erp_pre_rollback_20260727_120100.sqlite3",
+        "carton_erp_rollback_site_backup_20260727_120200.sqlite3",
     ):
         path = tmp_path / filename
         _make_backup_file(path)

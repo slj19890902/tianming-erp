@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -167,6 +168,32 @@ def test_restore_api_restores_data_and_writes_audit(system_api_app) -> None:
     assert action == ("RESTORE_DATABASE",)
 
 
+def test_restore_api_is_disabled_in_production(
+    system_api_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import system as system_api
+
+    app, _, _ = system_api_app
+    test_settings = system_api.load_settings()
+    monkeypatch.setattr(
+        system_api,
+        "load_settings",
+        lambda: replace(test_settings, environment="production"),
+    )
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.post(
+            "/api/system/backups/restore",
+            json={"filename": "does-not-matter.sqlite3"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "正式环境禁止在网页内恢复数据库，请使用离线发布回退门禁"
+    )
+
+
 @pytest.mark.parametrize(
     "filename",
     ["../outside.sqlite3", r"C:\outside.sqlite3", "backup.txt"],
@@ -323,6 +350,36 @@ def test_cleanup_bulk_deletes_old_backups_and_logs_audit(system_api_app) -> None
             "SELECT action FROM operation_logs WHERE action='CLEANUP_BACKUPS' ORDER BY id DESC LIMIT 1"
         ).fetchone()
     assert action == ("CLEANUP_BACKUPS",)
+
+
+def test_release_backup_is_protected_even_when_older_than_latest_five(
+    system_api_app,
+) -> None:
+    import os
+
+    app, _, backup_dir = system_api_app
+    release_backup = backup_dir / "carton_erp_before_release_20260727_120000.sqlite3"
+    release_backup.parent.mkdir(parents=True, exist_ok=True)
+    _write_marker(release_backup, "release-evidence")
+    os.utime(release_backup, (10, 10))
+    _plant_fake_backups(backup_dir, 6)
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        listed = client.get("/api/system/backups").json()
+        release_item = next(
+            item
+            for item in listed["items"]
+            if item["filename"] == release_backup.name
+        )
+        denied = client.delete(f"/api/system/backups/{release_backup.name}")
+        cleaned = client.post("/api/system/backups/cleanup")
+
+    assert release_item["is_protected"] is True
+    assert denied.status_code == 409
+    assert cleaned.status_code == 200
+    assert release_backup.is_file()
+    assert release_backup.name not in cleaned.json()["deleted"]
 
 
 def test_delete_backup_writes_audit_log(system_api_app) -> None:

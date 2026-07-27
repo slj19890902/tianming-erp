@@ -1,5 +1,50 @@
 # Codex 项目交接
 
+## 2026-07-27 P0-5A 发布回退证据与离线故障检查（人工验收通过）
+
+- 本轮从工厂已发布正式基线
+  `origin/factory-current-baseline@9a1fdd9eea90fc9833651937fddf8c468f2e1091`
+  建立独立 worktree
+  `D:\tm-worktrees\erp-p0-5-release-rollback-safety-20260727`
+  和分支 `codex/p0-5-release-rollback-safety-20260727`。没有修改正式目录原有
+  `AGENTS.md`、`docs/CODEX_HANDOFF.md` 本机改动，没有连接或写入正式数据库，
+  也没有修改 `origin/main`。
+- P0-5 分为两步。本候选只完成 P0-5A：发布报告升级为签名 schema v3，记录真正的
+  上一远端正式 SHA、目标 SHA、两端 Alembic head、更新前备份、配置/依赖指纹；
+  报告和最近发布指针均使用从现有会话密钥域隔离派生的 HMAC-SHA256 签名，先
+  验签再读取授权口令或回退资格；文件被手工改写、签名密钥轮换或缺失时均阻断。
+  配置指纹同时覆盖当前 Python 环境实际安装包版本及安装记录，不只核对
+  requirements 声明文件；
+  停服迁移完成后计算全部应用表逻辑指纹，健康启动后只核对数据库未变化，再原子
+  更新 `data\release_state\latest_completed_release.json`。启动窗口出现写入或
+  完成证据失败时，发布脚本会重新停止刚启动的 ERP。
+- 全表逻辑指纹可发现 INSERT、UPDATE、DELETE 和“行数不变但内容变化”，并纳入
+  `sqlite_sequence`；日常故障检查先用 SQLite Backup API 分页创建系统临时
+  一致性副本，再在副本执行长时间哈希，避免锁住工厂正式库。
+- 新增 `scripts\windows\erp_fault_check.bat` 和只读
+  `scripts\admin\rollback_erp.ps1/.py`。默认界面只显示短程序编号、服务状态、
+  数据状态、备份状态和明确下一步；无原因、口令、SHA 或 revision 输入。技术
+  详情只在显式 `-TechnicalDetails` 时显示。桌面快捷方式安装器会额外创建
+  “天明ERP故障检查”，但不会创建更新或恢复按钮。
+- 只读判断只分为“具备完整回退申请条件”和“当前不能安全回退”。数据库只要发生
+  变化，即使 revision 相同也一律阻断；P0-5A 不接受发布报告内可被手工填写的
+  “兼容”声明。仅代码回退必须等 P0-5B 建立绑定当前数据指纹、可验签且不可伪造
+  的隔离兼容证据链后再评估。
+- production 环境网页 `/api/system/backups/restore` 已 fail-closed 禁用；
+  test/UAT 底层恢复测试仍可隔离执行。发布前备份、回退前现场备份统一纳入自动
+  清理、网页批量清理和单文件删除保护，不再只依赖“最新 5 份”。
+- 本轮没有新增 migration，Alembic 唯一 head 仍为 `cr74v8x9z63`。发布/回退、
+  备份、系统 API 和启动脚本定向回归 `57 passed`；Python 编译、三份
+  PowerShell 5.1 语法、两个 Python CLI 直接执行和 `git diff --check` 通过。
+  全量回归运行到 `102 passed` 后遇到基线既有的 N031
+  `auth_version` downgrade fail-closed 测试环境授权缺失，和本轮改动无关。
+- 老板已于 2026-07-27 完成人工 UAT：无业务写入时显示“具备完整回退申请
+  条件”；数据库内容变化但行数不变时、签名报告被修改时、更新前备份损坏时和
+  运行配置变化时均按预期阻断。老板随后明确确认 P0-5A 整体验收通过并授权提交、
+  推送独立 `codex/` 候选分支。本授权不包含更新
+  `origin/factory-current-baseline`、`origin/main`、部署工厂系统或执行回退。
+  P0-5B 实际回退执行器仍须独立开发、隔离演练和再次授权。
+
 ## 2026-07-27 全部已验收候选统一发布集成
 
 - 唯一远端正式基线：

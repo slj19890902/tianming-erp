@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -13,6 +14,27 @@ from typing import Any
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+if __package__:
+    from scripts.admin.release_state_common import (
+        ReleaseStateError,
+        assert_ancestor,
+        code_revision_at,
+        runtime_config_fingerprint,
+        sign_evidence,
+        sqlite_logical_fingerprint,
+        verify_evidence,
+    )
+else:
+    from release_state_common import (  # type: ignore[no-redef]
+        ReleaseStateError,
+        assert_ancestor,
+        code_revision_at,
+        runtime_config_fingerprint,
+        sign_evidence,
+        sqlite_logical_fingerprint,
+        verify_evidence,
+    )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -235,24 +257,12 @@ def check_startup(database: Path, project_root: Path = PROJECT_ROOT) -> dict[str
     }
 
 
-def _approval_token(plan: dict[str, Any]) -> str:
-    material = json.dumps(
-        {
-            "code_sha": plan["code_sha"],
-            "expected_revision": plan["expected_revision"],
-            "database_path": plan["source"]["path"],
-            "source_sha256": plan["source"]["sha256"],
-            "source_wal": plan["source"]["wal"],
-            "backup_path": plan["backup"]["path"],
-            "backup_sha256": plan["backup"]["sha256"],
-            "rehearsal_path": plan["rehearsal"]["path"],
-            "rehearsal_sha256": plan["rehearsal"]["sha256"],
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return "APPLY-" + hashlib.sha256(material).hexdigest()[:20].upper()
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _new_approval_token() -> str:
+    return "APPLY-" + secrets.token_hex(12).upper()
 
 
 def _write_plan(path: Path, payload: dict[str, Any]) -> None:
@@ -266,12 +276,45 @@ def _write_plan(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _write_signed_plan(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    project_root: Path,
+    purpose: str,
+) -> dict[str, Any]:
+    signed = sign_evidence(
+        payload,
+        project_root=project_root,
+        purpose=purpose,
+    )
+    _write_plan(path, signed)
+    return signed
+
+
+def _verify_plan(
+    payload: dict[str, Any],
+    *,
+    project_root: Path,
+    purpose: str,
+) -> None:
+    try:
+        verify_evidence(
+            payload,
+            project_root=project_root,
+            purpose=purpose,
+        )
+    except ReleaseStateError as error:
+        raise ReleaseGateError(str(error)) from error
+
+
 def prepare_release(
     *,
     database: Path,
     backup_dir: Path,
     rehearsal_dir: Path,
     report_path: Path,
+    previous_code_sha: str,
     expected_code_sha: str,
     expected_revision: str,
     project_root: Path = PROJECT_ROOT,
@@ -287,10 +330,24 @@ def prepare_release(
             f"代码 Alembic head 不匹配：actual={actual_revision}，"
             f"expected={expected_revision}"
         )
+    if previous_code_sha == expected_code_sha:
+        raise ReleaseGateError("更新前代码 SHA 不能与目标代码 SHA 相同")
+    try:
+        assert_ancestor(project_root, previous_code_sha, expected_code_sha)
+        previous_revision = code_revision_at(project_root, previous_code_sha)
+    except ReleaseStateError as error:
+        raise ReleaseGateError(str(error)) from error
 
     source = inspect_database(database)
     assert_healthy(source, label="正式数据库预检")
     assert_business_smoke(source, label="正式数据库预检")
+    if source["revision"] != previous_revision:
+        raise ReleaseGateError(
+            "更新前代码与正式数据库不配对："
+            f"previous_code_head={previous_revision}，"
+            f"database_current={source['revision']}"
+        )
+    prepared_runtime_config = runtime_config_fingerprint(project_root)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     stem = database.resolve().stem
     suffix = database.resolve().suffix or ".sqlite3"
@@ -311,20 +368,29 @@ def prepare_release(
         raise ReleaseGateError("隔离迁移改变了核心业务表计数，禁止进入正式授权阶段")
 
     plan: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 3,
         "status": "awaiting_human_approval",
         "prepared_at": utc_now(),
+        "previous_code_sha": previous_code_sha,
+        "previous_code_revision": previous_revision,
         "code_sha": actual_sha,
         "expected_revision": expected_revision,
+        "prepared_runtime_config": prepared_runtime_config,
         "source": source,
         "backup": backup,
         "rehearsal_before": rehearsal_before,
         "rehearsal": rehearsal,
         "report_path": str(report_path.resolve()),
     }
-    plan["approval_token"] = _approval_token(plan)
-    _write_plan(report_path, plan)
-    return plan
+    approval_token = _new_approval_token()
+    plan["approval_token_sha256"] = _token_hash(approval_token)
+    plan = _write_signed_plan(
+        report_path,
+        plan,
+        project_root=project_root,
+        purpose="release-plan-v3",
+    )
+    return {**plan, "approval_token": approval_token}
 
 
 def apply_release(
@@ -335,14 +401,25 @@ def apply_release(
 ) -> dict[str, Any]:
     plan_path = plan_path.resolve()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    _verify_plan(
+        plan,
+        project_root=project_root,
+        purpose="release-plan-v3",
+    )
     if plan.get("status") != "awaiting_human_approval":
         raise ReleaseGateError(f"发布计划状态不可执行：{plan.get('status')}")
-    if approval_token != plan.get("approval_token"):
+    expected_token_hash = str(plan.get("approval_token_sha256") or "")
+    if (
+        not expected_token_hash
+        or not secrets.compare_digest(_token_hash(approval_token), expected_token_hash)
+    ):
         raise ReleaseGateError("人工授权口令不匹配，禁止写入正式数据库")
     if git_sha(project_root) != plan["code_sha"]:
         raise ReleaseGateError("准备与应用阶段之间代码 SHA 已变化")
     if code_revision(project_root) != plan["expected_revision"]:
         raise ReleaseGateError("准备与应用阶段之间 Alembic head 已变化")
+    if runtime_config_fingerprint(project_root) != plan["prepared_runtime_config"]:
+        raise ReleaseGateError("准备与应用阶段之间运行配置或依赖指纹已变化")
 
     database = Path(plan["source"]["path"])
     current = inspect_database(database)
@@ -360,28 +437,95 @@ def apply_release(
         assert_business_smoke(applied, label="正式迁移后数据库")
         if applied["core_counts"] != plan["source"]["core_counts"]:
             raise ReleaseGateError("正式迁移改变了核心业务表计数，禁止自动启动")
+        applied["logical_fingerprint"] = sqlite_logical_fingerprint(database)
     except Exception as error:
         plan["status"] = "apply_failed_service_must_remain_stopped"
         plan["failed_at"] = utc_now()
         plan["error"] = str(error)
-        _write_plan(plan_path, plan)
+        _write_signed_plan(
+            plan_path,
+            plan,
+            project_root=project_root,
+            purpose="release-plan-v3",
+        )
         raise
 
     plan["status"] = "applied_pending_service_start"
     plan["applied_at"] = utc_now()
     plan["applied"] = applied
-    _write_plan(plan_path, plan)
+    plan = _write_signed_plan(
+        plan_path,
+        plan,
+        project_root=project_root,
+        purpose="release-plan-v3",
+    )
     return plan
 
 
-def mark_service_started(plan_path: Path) -> dict[str, Any]:
+def mark_service_started(
+    plan_path: Path,
+    latest_pointer_path: Path,
+    project_root: Path = PROJECT_ROOT,
+) -> dict[str, Any]:
     plan_path = plan_path.resolve()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    _verify_plan(
+        plan,
+        project_root=project_root,
+        purpose="release-plan-v3",
+    )
     if plan.get("status") != "applied_pending_service_start":
         raise ReleaseGateError(f"发布计划尚不可标记启动：{plan.get('status')}")
+    if git_sha(project_root) != plan["code_sha"]:
+        raise ReleaseGateError("健康启动后的代码 SHA 与发布计划不一致")
+    if code_revision(project_root) != plan["expected_revision"]:
+        raise ReleaseGateError("健康启动后的代码 Alembic head 与发布计划不一致")
+    startup_verified_database = inspect_database(Path(plan["source"]["path"]))
+    assert_healthy(startup_verified_database, label="健康启动后的正式数据库")
+    assert_revision(
+        startup_verified_database,
+        plan["expected_revision"],
+        label="健康启动后的正式数据库",
+    )
+    assert_business_smoke(startup_verified_database, label="健康启动后的正式数据库")
+    applied_database = plan.get("applied") or {}
+    for key in ("path", "size", "sha256", "wal", "revision", "core_counts"):
+        if startup_verified_database.get(key) != applied_database.get(key):
+            raise ReleaseGateError(
+                "ERP 启动到发布完成记录之间数据库已经发生变化："
+                f"{key}"
+            )
+    if not (applied_database.get("logical_fingerprint") or {}).get("sha256"):
+        raise ReleaseGateError("停服迁移阶段缺少全表逻辑指纹，禁止完成发布")
+    completed_runtime_config = runtime_config_fingerprint(project_root)
+    if completed_runtime_config != plan["prepared_runtime_config"]:
+        raise ReleaseGateError("发布准备到健康启动之间运行配置或依赖指纹已变化")
     plan["status"] = "completed"
     plan["service_started_at"] = utc_now()
-    _write_plan(plan_path, plan)
+    plan["completed_database"] = applied_database
+    plan["startup_verified_database"] = startup_verified_database
+    plan["completed_runtime_config"] = completed_runtime_config
+    plan = _write_signed_plan(
+        plan_path,
+        plan,
+        project_root=project_root,
+        purpose="release-plan-v3",
+    )
+    pointer = {
+        "schema_version": 2,
+        "release_plan_path": str(plan_path),
+        "release_plan_sha256": sha256_file(plan_path),
+        "completed_at": plan["service_started_at"],
+        "code_sha": plan["code_sha"],
+        "previous_code_sha": plan["previous_code_sha"],
+    }
+    _write_signed_plan(
+        latest_pointer_path,
+        pointer,
+        project_root=project_root,
+        purpose="release-pointer-v2",
+    )
+    plan["latest_pointer_path"] = str(latest_pointer_path.resolve())
     return plan
 
 
@@ -397,6 +541,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--backup-dir", type=Path, required=True)
     prepare.add_argument("--rehearsal-dir", type=Path, required=True)
     prepare.add_argument("--report", type=Path, required=True)
+    prepare.add_argument("--previous-code-sha", required=True)
     prepare.add_argument("--expected-code-sha", required=True)
     prepare.add_argument("--expected-revision", required=True)
 
@@ -406,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     started = subparsers.add_parser("mark-started", help="健康启动后完成发布报告")
     started.add_argument("--plan", type=Path, required=True)
+    started.add_argument("--latest-pointer", type=Path, required=True)
     return parser
 
 
@@ -420,6 +566,7 @@ def main() -> int:
                 backup_dir=args.backup_dir,
                 rehearsal_dir=args.rehearsal_dir,
                 report_path=args.report,
+                previous_code_sha=args.previous_code_sha,
                 expected_code_sha=args.expected_code_sha,
                 expected_revision=args.expected_revision,
             )
@@ -429,7 +576,10 @@ def main() -> int:
                 approval_token=args.approval_token,
             )
         else:
-            result = mark_service_started(args.plan)
+            result = mark_service_started(
+                args.plan,
+                args.latest_pointer,
+            )
     except Exception as error:
         print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False), file=sys.stderr)
         return 1

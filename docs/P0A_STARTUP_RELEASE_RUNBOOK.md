@@ -74,19 +74,29 @@ ERP_SECRET_KEY_FILE=data/session_secret.key
 
 ```powershell
 .\scripts\admin\release_erp.ps1 -Prepare `
+  -PreviousCodeSha "<更新前正式版本40位SHA>" `
   -ExpectedCodeSha "<已批准的40位SHA>" `
   -ExpectedRevision "<已批准的Alembic revision>"
 ```
 
-Prepare 固定执行：生产配置与路径核验 → SHA/revision 核验 → 精确识别并停止 ERP → SQLite Backup API 备份 → 备份哈希、完整性、外键、revision、核心表计数核验 → 从备份创建隔离演练副本 → 隔离副本精确迁移到指定 revision → 再次核验。
+Prepare 固定执行：生产配置与路径核验 → 验证更新前 SHA 是目标 SHA 的祖先 → 验证
+更新前代码唯一 Alembic head 与正式库 current 完全一致 → 精确识别并停止 ERP →
+SQLite Backup API 备份 → 备份哈希、完整性、外键、revision、核心表计数核验 →
+从备份创建隔离演练副本 → 隔离副本精确迁移到指定 revision → 再次核验。
 
 报告写入 `docs\migration_reports\release_runtime_*.json`，备份写入 `data\backups`，演练副本写入 `data\release_rehearsals`。这些运行产物不进入 Git。Prepare 完成后正式库尚未迁移，ERP 保持停服，并打印与本次证据绑定的授权口令。
+
+P0-5A 起报告升级为签名 schema v3，额外记录更新前/目标代码 SHA、更新前/目标
+Alembic head、脱敏配置与依赖指纹。授权口令使用随机值，报告只保存口令哈希，
+不保存可重放的明文口令。
 
 ### 5.2 人工复核
 
 至少核对：
 
 - `code_sha` 和 `expected_revision` 是本次批准值；
+- `previous_code_sha` 是更新前正式版本，且 `previous_code_revision` 等于迁移前
+  正式库 revision；
 - 正式库路径正确；
 - source、backup、rehearsal 的 `integrity_check=ok`、外键异常 0；
 - backup/rehearsal 路径及 SHA-256 已记录；
@@ -103,7 +113,17 @@ Prepare 固定执行：生产配置与路径核验 → SHA/revision 核验 → �
   -ApprovalToken "<Prepare 输出的 APPLY-... 口令>"
 ```
 
-Apply 会再次确认服务已停止、代码 SHA/head 未变化、正式库路径/hash/revision/核心表计数未变化，然后才精确迁移到报告中的 revision。迁移、完整性、外键、revision、计数和普通启动健康检查全部通过后才启动服务并把报告标为 `completed`。
+Apply 会再次确认服务已停止、代码 SHA/head 未变化、正式库路径/hash/revision/核心表计数未变化，然后才精确迁移到报告中的 revision。迁移、完整性、外键、revision 和计数通过后，在仍停服时计算全应用表逻辑指纹。服务健康启动后再次确认数据库文件/WAL 与停服现场完全一致，才把报告标为 `completed`；如果启动窗口出现任何变化或证据写入失败，会重新停止刚启动的 ERP。
+
+发布完成后原子更新：
+
+```text
+data\release_state\latest_completed_release.json
+```
+
+逻辑指纹按稳定顺序覆盖全部应用表内容，能识别订单数量或库位 UPDATE，也不会因
+单纯 WAL checkpoint 误判为业务变化。它的基准时点固定在启动前，不能把启动后的
+业务写入重新吸收到“无变化”基线。
 
 ## 6. 失败与恢复原则
 
@@ -111,3 +131,34 @@ Apply 会再次确认服务已停止、代码 SHA/head 未变化、正式库路�
 - 保留报告、正式库现场、已验证备份和演练副本，不覆盖或删除。
 - 不通过修改 `alembic_version`、替换原始 BAK、跳过外键/完整性检查来“继续”。
 - 是否恢复备份、重新发布或修复代码必须作为独立人工决策；执行恢复时继续遵守停服、现场备份、哈希、完整性、revision 和健康检查门禁。
+
+## 7. P0-5A 离线故障检查
+
+完成至少一次签名 schema v3 正式发布后，可在 ERP 网页无法打开时双击：
+
+```text
+scripts\windows\erp_fault_check.bat
+```
+
+也可在 PowerShell 运行：
+
+```powershell
+.\scripts\admin\rollback_erp.ps1
+```
+
+该入口严格只读：不停止 ERP、不切换 Git、不迁移或恢复数据库。它只会显示：
+
+- 当前/上一代码版本；
+- 发布完成后数据库是否变化及变化表；
+- 更新前备份是否仍可验证；
+- `具备完整回退申请条件` 或 `当前不能安全回退`。
+
+发布报告和最近发布指针都必须先通过本机受保护会话密钥派生的 HMAC 签名验证。
+手工修改报告后重算普通文件哈希不能恢复可信状态；会话密钥缺失或轮换时也会
+fail-closed，要求转人工离线核验。运行配置指纹同时覆盖当前 Python 环境实际安装
+包版本与安装记录，不只检查 requirements 文件。
+
+P0-5A 不执行真正回退。数据库只要发生变化，即使 revision 相同也一律保持阻断，
+不会接受发布报告内可被手工填写的“兼容”声明。仅代码回退必须等 P0-5B 建立绑定
+当前数据指纹、可验签且不可伪造的隔离兼容证据链后再评估。正式环境网页
+`/api/system/backups/restore` 已禁用，不能绕过离线门禁在线覆盖数据库。

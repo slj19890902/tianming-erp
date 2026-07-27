@@ -60,6 +60,24 @@ def test_p5_large_mode_has_zoom_safe_responsive_shell() -> None:
     assert ".ui-large .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }" in INDEX
 
 
+def test_p5_large_mode_keeps_delivery_and_production_history_columns_readable() -> None:
+    for marker in (
+        '<data-panel class="delivery-list-panel" :empty="!deliveries.length">',
+        '<table class="delivery-list-table">',
+        'class="toolbar-group delivery-list-actions"',
+        ".ui-large .delivery-list-panel .table-wrap {",
+        ".ui-large .delivery-list-table { min-width: 1480px; }",
+        ".ui-large .delivery-list-actions { min-width: 300px; white-space: normal; }",
+        '<th class="production-history-time">完工时间</th>',
+        '<td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td>',
+        ".ui-large .production-history-time { width: 176px; white-space: nowrap; }",
+        '<th class="production-history-actions">操作</th>',
+        '<td class="production-history-actions"><div class="toolbar-group">',
+        ".ui-large .production-history-actions { width: 280px; white-space: normal; }",
+    ):
+        assert marker in INDEX
+
+
 def test_p5_boss_dashboard_uses_only_the_six_business_cards_in_fixed_order() -> None:
     match = re.search(
         r"const bossOverviewCardOrder = Object\.freeze\(\[(.*?)\]\);",

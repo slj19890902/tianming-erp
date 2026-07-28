@@ -950,18 +950,66 @@ def test_manual_pdf_customer_product_and_quantity_confirmation_allows_save_and_l
 ) -> None:
     from sqlalchemy import select
 
+    from app.api.deps import get_db
     from app.models.audit import OperationLog
+    from app.models.material import Material
+    from app.models.order import OrderItem
+    from app.models.product import Product
 
     app = _order_import_app(tmp_path)
+    dependency = app.dependency_overrides[get_db]
+    db_generator = dependency()
+    db = next(db_generator)
+    current_material = Material(
+        code="P1-CURRENT-3B",
+        paper_composition="A=B",
+        supplier_name="P1 Supplier",
+        layer_count=3,
+        flute_type="B",
+    )
+    pdf_candidate = Material(
+        code="P1-PDF-3B",
+        paper_composition="B=C",
+        supplier_name="PDF Supplier",
+        layer_count=3,
+        flute_type="B",
+    )
+    db.add_all([current_material, pdf_candidate])
+    db.flush()
+    product = db.get(Product, 1)
+    assert product is not None
+    product.material_id = current_material.id
+    product.layer_count = 3
+    product.flute_type = "B"
+    db.commit()
+    current_material_id = current_material.id
+    pdf_candidate_id = pdf_candidate.id
+    db_generator.close()
     token = _signed_pdf_preview_token(app)
+    payload = _pdf_order_payload(confirmed=True, token=token)
+    payload["items"][0].update(
+        {
+            "material_id": pdf_candidate_id,
+            "material": "PDF-RAW-9CCC9",
+            "original_material_code": "PDF-RAW-9CCC9",
+        }
+    )
     with TestClient(app) as client:
         client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
         response = client.post(
             "/api/orders",
-            json=_pdf_order_payload(confirmed=True, token=token),
+            json=payload,
         )
 
     assert response.status_code == 201, response.text
+    saved_item = _database_scalar(
+        app,
+        select(OrderItem).order_by(OrderItem.id.desc()),
+    )
+    assert saved_item is not None
+    assert saved_item.material_id == current_material_id
+    assert saved_item.snapshot_material == "P1-CURRENT-3B"
+    assert saved_item.snapshot_original_material_code == "PDF-RAW-9CCC9"
     log = _database_scalar(
         app,
         select(OperationLog).where(OperationLog.action == "PDF_SAFETY_OVERRIDE"),

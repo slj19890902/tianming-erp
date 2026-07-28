@@ -442,6 +442,31 @@
       .status.pink-purple { background: #fae8ff; color: #a21caf; }
       .row-voided { opacity: 0.5; text-decoration: line-through; }
       .status.blue { background: var(--blue-soft); color: var(--primary-dark); }
+      .pdf-match-sequence-column,
+      .pdf-match-sequence-cell { width: 9em; min-width: 9em; max-width: 9em; }
+      .pdf-match-status-line {
+        display: block;
+        width: max-content;
+        max-width: 100%;
+        margin-top: 3px;
+      }
+      .pdf-match-code-column,
+      .pdf-match-code-cell { width: 18ch; min-width: 18ch; max-width: 18ch; }
+      .pdf-match-code-value {
+        display: block;
+        max-width: 18ch;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+        white-space: normal;
+      }
+      .pdf-material-evidence {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.35;
+        white-space: normal;
+        word-break: break-all;
+      }
 
       /* Dashboard cards */
       .cards { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 14px; }
@@ -3164,8 +3189,8 @@
                 <div v-if="draft.items?.length" style="overflow-x:auto">
                 <table class="line-items" style="min-width:560px">
                   <thead><tr>
-                    <th style="min-width:60px">序号</th>
-                    <th style="min-width:120px">存货编码</th>
+                    <th class="pdf-match-sequence-column">序号</th>
+                    <th class="pdf-match-code-column">存货编码</th>
                     <th v-if="draft._show_advanced_details" style="min-width:180px">产品名称</th>
                     <th v-if="draft._show_advanced_details" style="min-width:160px">材质 + 楞型</th>
                     <th v-if="draft._show_advanced_details" style="min-width:80px">规格</th>
@@ -3180,27 +3205,27 @@
                     <!-- 主行 -->
                     <tr :class="{'is-new-product-row': item.is_new_product}">
                       <!-- 序号 + 常用箱资料状态 -->
-                      <td style="padding:4px 6px;font-size:12px;vertical-align:top">
+                      <td class="pdf-match-sequence-cell" style="padding:4px 6px;font-size:12px;vertical-align:top">
                         <div class="muted" style="font-size:11px">{{ item.line_no }}</div>
-                        <span v-if="item.merge_status==='merged'" class="status green" style="font-size:11px;display:inline-block;margin-top:2px">已合并</span>
-                        <span v-else-if="item.merge_status==='conflict'" class="status orange" style="font-size:11px;display:inline-block;margin-top:2px" :title="(item.merge_conflict_reasons||[]).join('；')">同编码差异</span>
+                        <span v-if="item.merge_status==='merged'" class="status green pdf-match-status-line" style="font-size:11px">已合并</span>
+                        <span v-else-if="item.merge_status==='conflict'" class="status orange pdf-match-status-line" style="font-size:11px" :title="(item.merge_conflict_reasons||[]).join('；')">同编码差异</span>
                         <template v-else-if="item.matched_product_id && !item.is_new_product">
-                          <span class="status green" style="font-size:11px;display:inline-block;margin-top:2px">已匹配常用箱</span>
-                          <span :class="['status',commonBoxReadiness(item).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(item)" style="font-size:11px;display:inline-block;margin-top:2px">{{ commonBoxReadiness(item).ready ? '资料已完善' : '待完善' }}</span>
+                          <span class="status green pdf-match-status-line" style="font-size:11px">已匹配常用箱</span>
+                          <span :class="['status','pdf-match-status-line',commonBoxReadiness(item).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(item)" style="font-size:11px">{{ commonBoxReadiness(item).ready ? '资料已完善' : '待完善' }}</span>
                         </template>
-                        <span v-else-if="item.product_candidates&&item.product_candidates.length>1" class="status orange" style="font-size:11px;display:inline-block;margin-top:2px">多候选</span>
-                        <span v-else-if="item.is_new_product" class="status blue" style="font-size:11px;display:inline-block;margin-top:2px">新产品</span>
-                        <span v-else class="status red" style="font-size:11px;display:inline-block;margin-top:2px">未匹配</span>
+                        <span v-else-if="item.product_candidates&&item.product_candidates.length>1" class="status orange pdf-match-status-line" style="font-size:11px">多候选</span>
+                        <span v-else-if="item.is_new_product" class="status blue pdf-match-status-line" style="font-size:11px">新产品</span>
+                        <span v-else class="status red pdf-match-status-line" style="font-size:11px">未匹配</span>
                         <!-- 合并明细来源 -->
                         <div v-if="item.merge_status==='merged' && item.merged_sources" style="font-size:10px;color:#6b7280;margin-top:2px">
                           <div v-for="src in item.merged_sources" :key="src.line_no">{{ src.page ? `第${src.page}页` : '' }}行{{ src.line_no }}×{{ src.quantity }}</div>
                         </div>
                       </td>
                       <!-- 默认只显示存货编码；名称属于高级主档详情。 -->
-                      <td style="padding:4px 6px;vertical-align:top">
+                      <td class="pdf-match-code-cell" style="padding:4px 6px;vertical-align:top">
                         <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
                           <input v-if="item.is_new_product" class="input compact-input" style="width:110px" v-model.trim="item.raw_product_code" placeholder="存货编码" @input="invalidateImportDraftConfirmation(draft)" />
-                          <span v-else class="sys-num" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
+                          <span v-else class="sys-num pdf-match-code-value" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
                         </div>
                         <!-- 无匹配时允许新建 -->
                         <label v-if="!item.matched_product_id" style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px;cursor:pointer">
@@ -3209,7 +3234,7 @@
                       </td>
                       <td v-if="draft._show_advanced_details" style="padding:4px 6px;vertical-align:top;font-size:13px">
                         <div v-if="item.matched_product_id && !item.is_new_product">
-                          {{ item.product_name || item.raw_product_name || "-" }}
+                          {{ pdfCommonBoxProductName(item) }}
                           <div class="toolbar-group" style="justify-content:flex-start;margin-top:4px">
                             <span v-if="item.product_manual_modified" class="muted" style="font-size:11px">已人工编辑（版本事实）</span>
                             <button v-if="canEditProducts" class="btn small" type="button" @click="openCommonBoxEditorFromPdf(draftIndex,item)">编辑常用箱</button>
@@ -3223,6 +3248,7 @@
                       <td v-if="draft._show_advanced_details" style="font-size:12px;padding:4px 6px;vertical-align:top;white-space:normal;word-break:break-all;max-width:170px">
                         <span v-if="item.matched_product_id && !item.is_new_product">
                           {{ pdfItemMaterialText(item) }}
+                          <div v-if="pdfOriginalMaterialText(item)" class="pdf-material-evidence">PDF识别材质：{{ pdfOriginalMaterialText(item) }}（仅保留证据）</div>
                         </span>
                         <span v-else class="muted">-</span>
                       </td>
@@ -3260,17 +3286,7 @@
                         </label>
                       </td>
                       <td style="padding:4px 6px;vertical-align:top;font-size:11px;white-space:normal">
-                        <div v-if="pdfMaterialDifference(item)" class="status orange" style="display:block;line-height:1.5">PDF材质与常用箱不同，请核对。</div>
-                        <div v-if="pdfMaterialDifference(item)" style="margin-top:4px">
-                          <search-select v-model="item._actual_material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="选择实际材质" :disabled="isImportDraftLocked(draft)"></search-select>
-                          <div class="toolbar-group" style="justify-content:flex-start;margin-top:4px">
-                            <button class="btn small" type="button" :disabled="!item._actual_material_id" @click="usePdfActualMaterialForOrder(draft,item)">仅本订单使用</button>
-                            <button v-if="canEditProducts" class="btn small" type="button" @click="openCommonBoxEditorFromPdf(draftIndex,item)">更新常用箱</button>
-                          </div>
-                          <span v-if="!item._material_difference_acknowledged" class="danger-text">未核对，不能确认草稿</span>
-                          <span v-else class="status green">已按本订单实际材质核对</span>
-                        </div>
-                        <div v-else-if="!commonBoxReadiness(item).ready && item.matched_product_id" class="status orange" :title="commonBoxReadinessTitle(item)">待完善</div>
+                        <div v-if="!commonBoxReadiness(item).ready && item.matched_product_id" class="status orange" :title="commonBoxReadinessTitle(item)">待完善</div>
                       </td>
                       <!-- 操作 -->
                       <td style="padding:4px 6px;vertical-align:top">
@@ -3716,7 +3732,8 @@
                 </table>
               </div>
               <div v-if="orderItemForm.product_id" class="panel" style="margin-top:10px;padding:10px">
-                <label class="remember-line"><input type="checkbox" v-model="orderItemForm.sync_product" /> 同步更新关联常用箱资料</label>
+                <div class="muted">修改材质并保存时会自动同步关联常用箱；其他资料需要同步时再勾选。</div>
+                <label class="remember-line"><input type="checkbox" v-model="orderItemForm.sync_product" /> 同步本页其他常用箱资料</label>
                 <div v-if="orderItemForm.sync_product" class="field" style="margin-top:8px"><label>同步原因 *</label><input class="input" v-model.trim="orderItemForm.product_change_reason" placeholder="例如：订单确认后同步最新材质和报料尺寸" /></div>
                 <div v-if="orderItemForm._product_error" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ orderItemForm._product_error }}</div>
                 <div v-if="orderItemForm._product_warnings?.length" class="status orange" style="display:block;white-space:normal;margin-top:8px">
@@ -3884,8 +3901,7 @@
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
                 <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
-                <label class="remember-line"><input type="checkbox" v-model="requisitionMaterialForm.sync_product" /> 同步回订单关联的常用箱，避免下次报料恢复旧材质</label>
-                <div v-if="requisitionMaterialForm.sync_product" class="field wide"><label>同步原因 *</label><input class="input" v-model.trim="requisitionMaterialForm.product_change_reason" placeholder="例如：报料确认后同步最新材质和楞型" /></div>
+                <div v-if="requisitionMaterialForm.product_id" class="muted">保存后自动同步订单关联的常用箱，避免下次报料恢复旧材质。</div>
                 <div v-if="requisitionMaterialForm._product_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm._product_error }}</div>
                 <div v-if="requisitionMaterialForm._product_warnings?.length" class="status orange" style="display:block;white-space:normal">
                   <div v-for="warning in requisitionMaterialForm._product_warnings" :key="warning.code || warning.message">{{ masterWarningText(warning) }}</div>
@@ -6229,12 +6245,15 @@
           pdfDraftColumnCount(draft) {
             return draft?._show_advanced_details ? 10 : 5;
           },
-          pdfMaterialDifference(item) {
-            return item?.standard_match?.material_differs === true;
-          },
           normalizedMaterialCode(value) {
             const firstToken = String(value || "").trim().split(/[\s|｜,，;；]/, 1)[0] || "";
             return (firstToken.split(/[/-]/, 1)[0] || "").trim().toUpperCase();
+          },
+          pdfCommonBoxProductName(item) {
+            return String(item?.product_name || "").trim() || "未维护";
+          },
+          pdfOriginalMaterialText(item) {
+            return String(item?.standard_match?.pdf_material_code || item?.raw_material || "").trim();
           },
           refreshPdfMaterialComparison(item, product) {
             const prior = item.standard_match || {};
@@ -6247,31 +6266,8 @@
               product_id:item.matched_product_id,
               standard_material_label:standardCode || prior.standard_material_label || "",
               material_comparison: comparable ? (this.normalizedMaterialCode(pdfCode) === this.normalizedMaterialCode(standardCode) ? "same" : "different") : "not_compared",
-              material_differs: comparable && this.normalizedMaterialCode(pdfCode) !== this.normalizedMaterialCode(standardCode),
+              material_evidence_only:true,
             };
-            item._material_difference_acknowledged = !item.standard_match.material_differs;
-            item._actual_material_id = item.matched_material_id || null;
-          },
-          usePdfActualMaterialForOrder(draft, item) {
-            if (this.isImportDraftLocked(draft)) return;
-            const materialId = Number(item?._actual_material_id || 0);
-            const material = this.allMaterials.find(row => Number(row.id) === materialId);
-            if (!material) { this.showToast("请选择有效的实际材质", true); return; }
-            // This is deliberately a draft-only decision: no product write API,
-            // no inventory reservation and no silent change to the common box.
-            item.matched_material_id = material.id;
-            item.material_id = material.id;
-            item.material = material.code || "";
-            item.material_base_code = String(material.code || "").split("-")[0];
-            item.material_supplier_name = material.supplier_name || "";
-            item.material_weight_structure = material.basis_weight_description || "";
-            item.layer_count = material.layer_count || item.layer_count || null;
-            item.flute_type = material.flute_type || item.flute_type || null;
-            item._material_difference_acknowledged = true;
-            item._material_decision = "order_only";
-            this.invalidateImportDraftConfirmation(draft);
-            this.recalculateImportCost(item);
-            this.refreshOrderLineInventory(item, draft?.matched_customer_id);
           },
           _findMaterial(id) {
             const src = this.allMaterials.length ? this.allMaterials : this.materials;
@@ -10866,12 +10862,13 @@
               original_material_confidence: "",
               supplier_name: row.snapshot_supplier_name || "",
               material_id: row.material_id || null,
+              _original_material_id: row.material_id || null,
               layer_count: row.layer_count || null,
               flute_type: row.flute_type || null,
               product_id: row.product_id || null,
               product_version: productVersion,
-              sync_product: false,
-              product_change_reason: "",
+              sync_product: !!row.product_id,
+              product_change_reason: "报料人工修改材质并同步常用箱",
               product_confirmation_token: null,
               _product_warnings: [],
               _product_confirmed: false,
@@ -10881,7 +10878,7 @@
               candidate_error: "",
               candidate_id: null,
               source_type: "manual",
-              source_reference: null,
+              source_reference: row.item_order_number || row.order_number || null,
               selection_reason: "",
               selection_history: [],
               history_loading: false,
@@ -11846,7 +11843,7 @@
                 _correction_form:null,
                 _save_status:"idle",
                 _save_message:"",
-                items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState(), _actual_material_id:item.matched_material_id || null, _material_difference_acknowledged:item.standard_match?.material_differs !== true}))
+                items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))
               }));
               await Promise.all(this.orderImportDrafts.map(draft => Promise.all((draft.items || []).filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id)))));
               this.orderImportBatch.status = "recognized";
@@ -11929,7 +11926,6 @@
               if (item.unit_price === "" || item.unit_price === null || item.unit_price === undefined) reasons.push(`${line}缺少客户单价。`);
               if (item.is_new_product && (!String(item.raw_product_code || "").trim() || !String(item.raw_product_name || "").trim())) reasons.push(`${line}新产品缺少存货编码或名称。`);
                if (!item.is_new_product && !item.matched_product_id) reasons.push(`${line}未匹配到常用箱。`);
-               if (this.pdfMaterialDifference(item) && !item._material_difference_acknowledged) reasons.push(`${line}PDF材质与常用箱不同，必须选择实际材质并确认仅本订单使用，或更新常用箱后重新识别。`);
             });
             return reasons;
           },
@@ -12032,7 +12028,7 @@
                _correction_form:null,
                _save_status:"idle",
                _save_message:"",
-               items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState(), _actual_material_id:item.matched_material_id || null, _material_difference_acknowledged:item.standard_match?.material_differs !== true}))
+               items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))
              };
             await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
@@ -12043,14 +12039,13 @@
             if (candidate) {
               item.match_status = "matched";
               item.manual_product_selected = true;
-              item._material_difference_acknowledged = !this.pdfMaterialDifference(item);
               item.product_manual_modified = !!candidate.manual_modified;
               item.matched_material_id = candidate.material_id || null;
               if (!item.unit_price && candidate.sale_unit_price !== null) item.unit_price = candidate.sale_unit_price;
               // 切换候选后重新拉取常用箱详情（名称/规格/材质/生产说明）
               try {
                 const { data } = await axios.get(`/api/master/products/${item.matched_product_id}`);
-                item.product_name = data.product_name || item.raw_product_name || "";
+                item.product_name = data.product_name || "";
                 item.specification = data.length_mm ? `${Math.round(data.length_mm)}×${Math.round(data.width_mm)}×${Math.round(data.height_mm)}` : (item.raw_spec_model || "");
                 item.layer_count = data.layer_count || null;
                 item.flute_type = data.flute_type || null;
@@ -12162,6 +12157,7 @@
                 product_name: (!item.is_new_product && item.product_name) ? item.product_name : (item.raw_product_name || ""),
                 material_id: item.matched_material_id || null,
                 material: item.material_base_code || (item.material_candidates || []).find(r => r.id === item.matched_material_id)?.code || "",
+                original_material_code: item.standard_match?.pdf_material_code || item.raw_material || null,
                 // 规格以常用箱为准
                 specification: (!item.is_new_product && item.specification) ? item.specification : (item.raw_spec_model || ""),
                 production_notes: item.production_notes || "",
@@ -12251,6 +12247,7 @@
                         product_id: item.is_new_product ? null : (item.matched_product_id || null),
                         is_new_product: !!item.is_new_product,
                         material_id: item.matched_material_id || null,
+                        original_material_code: item.standard_match?.pdf_material_code || item.raw_material || null,
                         product_code: item.normalized_product_code || item.product_code || item.raw_product_code || null,
                         product_name: (useStd && item.product_name) ? item.product_name : (item.raw_product_name || null),
                         material: matCode,
@@ -12546,7 +12543,9 @@
               product_code: item.product_code,
               product_name: item.product_name,
               material_id: item.material_id || null,
+              _original_material_id: item.material_id || null,
               material: item.material,
+              original_material_code: item.original_material_code || null,
               specification: item.specification,
               production_notes: item.production_notes || null,
               quantity: item.quantity,
@@ -14135,15 +14134,18 @@
                 payload.material_id = this.orderItemForm.material_id || null;
                 payload.layer_count = this.orderItemForm.layer_count || null;
                 payload.flute_type = this.orderItemForm.flute_type || null;
-                payload.sync_product = !!this.orderItemForm.product_id && !!this.orderItemForm.sync_product;
+                const materialChanged = Number(this.orderItemForm.material_id || 0) !== Number(this.orderItemForm._original_material_id || 0);
+                payload.sync_product = !!this.orderItemForm.product_id && (materialChanged || !!this.orderItemForm.sync_product);
                 if (payload.sync_product) {
                   if (!this.orderItemForm.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开明细");
-                  if (!String(this.orderItemForm.product_change_reason || "").trim()) throw new Error("同步常用箱必须填写原因");
+                  const syncReason = String(this.orderItemForm.product_change_reason || "").trim() || (materialChanged ? "订单人工修改材质并同步常用箱" : "");
+                  if (!syncReason) throw new Error("同步本页其他常用箱资料时必须填写原因");
                   if (this.orderItemForm.product_confirmation_token && !this.orderItemForm._product_confirmed) throw new Error("请先勾选已核对异常修改");
                   payload.product_expected_version = Number(this.orderItemForm.product_version);
-                  payload.product_change_reason = String(this.orderItemForm.product_change_reason).trim();
+                  payload.product_change_reason = syncReason;
                   payload.product_confirmation_token = this.orderItemForm._product_confirmed ? this.orderItemForm.product_confirmation_token : null;
                 }
+                delete payload._original_material_id;
                 delete payload.product_version;
                 delete payload._product_warnings;
                 delete payload._product_confirmed;
@@ -14156,17 +14158,17 @@
                 const form = this.requisitionMaterialForm;
                 if (!form.material_id) throw new Error("请选择材质代码");
                 if (!form.flute_type) throw new Error("请选择楞型");
-                if (form.sync_product && !form.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开");
-                if (form.sync_product && !String(form.product_change_reason || "").trim()) throw new Error("同步常用箱必须填写原因");
-                if (form.sync_product && form.product_confirmation_token && !form._product_confirmed) throw new Error("请先勾选已核对异常修改");
+                const syncProduct = !!form.product_id;
+                if (syncProduct && !form.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开");
+                if (syncProduct && form.product_confirmation_token && !form._product_confirmed) throw new Error("请先勾选已核对异常修改");
                 const { data } = await axios.put(`/api/requisition/pending/${form.item_id}/material`, {
                   material_id:form.material_id,
                   layer_count:form.layer_count || null,
                   flute_type:form.flute_type || null,
-                  sync_product:!!form.sync_product,
-                  product_expected_version:form.sync_product ? Number(form.product_version) : null,
-                  product_change_reason:form.sync_product ? String(form.product_change_reason || "").trim() : null,
-                  product_confirmation_token:form.sync_product && form._product_confirmed ? form.product_confirmation_token : null,
+                  sync_product:syncProduct,
+                  product_expected_version:syncProduct ? Number(form.product_version) : null,
+                  product_change_reason:syncProduct ? "报料人工修改材质并同步常用箱" : null,
+                  product_confirmation_token:syncProduct && form._product_confirmed ? form.product_confirmation_token : null,
                   candidate_id:form.candidate_id || null,
                   source_type:form.source_type || "manual",
                   source_reference:form.source_reference || null,

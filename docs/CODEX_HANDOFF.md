@@ -2722,3 +2722,36 @@ legacy_ruida_* 原始层
   正式发布预计需要重启 ERP，不需要迁移；本次授权不包含更新
   `origin/factory-current-baseline`、修改 `origin/main` 或发布工厂，工厂端仍需
   另行取得正式发布授权并执行备份、快进和重启门禁。
+
+## 95. 2026-07-28 P1-01 PDF 材质主数据优先与高级匹配详情候选
+
+- 最初从 `origin/factory-current-baseline@40d6394cbce2e2b6e7be6ffed51999b502e3c713`
+  建立独立 worktree
+  `D:\tm-worktrees\erp-p1-01-pdf-material-masterdata-20260728` 和分支
+  `codex/p1-01-pdf-material-masterdata-20260728`。老板验收通过并授权提交、推送后，
+  已先 fetch 并将候选无冲突重接到最新正式远端基线
+  `origin/factory-current-baseline@0378730dc7bf909638c73bb4200c22250d8188d1`；
+  正式基线新增的送货作废修复和迁移 `cu77v8x9z66` 均保留。
+- 已按 2026-07-27 A 级规则替代旧 P0-2 材质差异交互：已匹配常用箱时以常用箱当前
+  材质作为订单和后续报料的默认业务材质；PDF 原材质只保留为
+  `snapshot_original_material_code` 和高级详情证据，不再报异常、不阻断确认、
+  不提供“仅本订单使用”，也不自动修改常用箱。
+- 高级详情压缩序号、资料状态和存货编码列，分开显示常用箱产品名称、PDF 识别名称、
+  常用箱材质和“PDF识别材质（仅保留证据）”。常用箱产品名称为空时显示“未维护”，
+  不用 PDF 名称冒充主数据。
+- 订单明细或待报料中人工保存新材质时，自动同步关联常用箱当前材质/供应商；保留
+  `products.edit`、版本号和异常确认门禁。主数据版本和操作日志包含来源明细号及
+  修改前后材质/供应商；相同值重复保存不追加重复历史，旧订单和旧报料快照不回写。
+- 本任务无 migration；重接后 Alembic 单一 head 为 `cu77v8x9z66`，其
+  `down_revision` 为 `cr74v8x9z63`，没有制造双头。重接前完整相关回归
+  `138 passed`，Python 编译、整页 JavaScript、`git diff --check` 均通过。
+- 隔离 UAT 使用
+  `D:\tm-uat\p1-01-pdf-material-masterdata-20260728\carton_erp_uat.sqlite3`；
+  来源副本复制 SHA-256 为
+  `CCE64D51D1A985D57995C4419224314E357A4D5004E0D24C4351BE894E91BCDD`。
+  UAT 后 revision=`cr74v8x9z63`、`integrity_check=ok`、外键异常 0，订单数未变化。
+- 原始 `PO2026070806.pdf` 浏览器真实识别 7 行；默认简洁页和高级详情均符合新口径，
+  Console 无 error/warn。老板已于 2026-07-28 确认人工验收通过并授权提交、推送
+  当前独立候选分支；本次授权不包含修改 `origin/factory-current-baseline`、
+  `origin/main` 或发布工厂。正式发布需要重启 ERP；本任务自身不新增迁移，但工厂
+  若尚未应用正式基线已有的 `cu77v8x9z66`，仍须按正式发布门禁迁移。

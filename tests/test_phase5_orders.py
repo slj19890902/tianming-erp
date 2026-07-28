@@ -832,6 +832,89 @@ def test_order_item_edit_syncs_common_box_fields_in_same_save(order_api_app) -> 
         assert product.remark == "订单编辑同步"
 
 
+def test_order_material_change_automatically_syncs_common_box_and_records_source(
+    order_api_app,
+) -> None:
+    import json
+
+    from sqlalchemy import select
+
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.material import Material
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        material = Material(
+            code="P1-ORDER-5AB",
+            paper_composition="A=A",
+            supplier_name="P1 Order Supplier",
+            layer_count=5,
+            flute_type="AB",
+        )
+        session.add(material)
+        session.commit()
+        material_id = material.id
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=_payload()).json()
+        item = created["items"][0]
+        edit_body = {
+            "quantity": item["quantity"],
+            "unit_price": str(item["unit_price"]),
+            "product_code": item["snapshot_product_code"],
+            "product_name": item["snapshot_product_name"],
+            "material": "P1-ORDER-5AB",
+            "material_id": material_id,
+            "layer_count": 5,
+            "flute_type": "AB",
+            "specification": item["snapshot_spec"],
+            "sync_product": False,
+            "product_expected_version": 1,
+        }
+        preview = client.put(f"/api/orders/items/{item['id']}", json=edit_body)
+        assert preview.status_code == 409, preview.text
+        token = preview.json()["detail"]["confirmation_token"]
+        edited = client.put(
+            f"/api/orders/items/{item['id']}",
+            json={**edit_body, "product_confirmation_token": token},
+        )
+        assert edited.status_code == 200, edited.text
+
+    with session_factory() as session:
+        saved_item = session.get(OrderItem, item["id"])
+        product = session.get(Product, item["product_id"])
+        version = session.scalar(
+            select(MasterDataObjectVersion)
+            .where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id == product.id,
+            )
+            .order_by(MasterDataObjectVersion.version.desc())
+        )
+        log = session.scalar(
+            select(OperationLog)
+            .where(
+                OperationLog.entity_type == "order_item",
+                OperationLog.entity_id == saved_item.id,
+                OperationLog.action == "UPDATE",
+            )
+            .order_by(OperationLog.id.desc())
+        )
+        assert saved_item.material_id == material_id
+        assert saved_item.snapshot_supplier_name == "P1 Order Supplier"
+        assert product.material_id == material_id
+        assert version is not None
+        assert saved_item.item_order_number in version.source
+        details = json.loads(log.details)
+        assert details["before"]["supplier_name"] != "P1 Order Supplier"
+        assert details["after"]["supplier_name"] == "P1 Order Supplier"
+        assert details["after"]["sync_product"] is True
+
+
 def test_legacy_crease_mismatch_allows_unrelated_edit_without_overwriting_product(
     order_api_app,
 ) -> None:

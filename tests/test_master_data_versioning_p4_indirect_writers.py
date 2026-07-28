@@ -239,7 +239,9 @@ def test_order_sync_requires_permission_version_and_reason(db: Session) -> None:
     assert "product_change_reason" in str(missing_reason.value.detail)
 
 
-def test_requisition_sync_requires_permission_version_and_reason(db: Session) -> None:
+def test_requisition_sync_requires_permission_and_version_but_supplies_default_reason(
+    db: Session,
+) -> None:
     from app.api.requisition import PendingMaterialUpdate, update_pending_material
 
     admin, limited, material, _product_row, item = _order_item_graph(db)
@@ -271,15 +273,14 @@ def test_requisition_sync_requires_permission_version_and_reason(db: Session) ->
     assert missing_version.value.status_code == 400
     assert "product_expected_version" in str(missing_version.value.detail)
 
-    with pytest.raises(HTTPException) as missing_reason:
-        update_pending_material(
-            item.id,
-            payload(product_expected_version=1, product_change_reason=""),
-            db=db,
-            user=admin,
-        )
-    assert missing_reason.value.status_code == 400
-    assert "product_change_reason" in str(missing_reason.value.detail)
+    updated = update_pending_material(
+        item.id,
+        payload(product_expected_version=1, product_change_reason=""),
+        db=db,
+        user=admin,
+    )
+    assert updated["selection_history_id"] is not None
+    assert updated["material_id"] == material.id
 
 
 def test_quotation_convert_to_product_records_v1(db: Session) -> None:

@@ -354,6 +354,7 @@ class OrderItemCreate(BaseModel):
     product_code: str | None = None
     product_name: str | None = None
     material: str | None = None
+    original_material_code: str | None = Field(default=None, max_length=250)
     specification: str | None = None
     customer_model: str | None = None  # v0.19.1: TH型号 / 客户型号
     production_notes: str | None = None  # v0.19.2-A: 生产/印刷/打勾/摆放/日文警示等行级说明
@@ -4061,10 +4062,19 @@ def _create_order_impl(
                         "请先在常用箱中确认报料宽和压线尺寸后再下单"
                     ),
                 )
+            is_pdf_matched_product = bool(
+                payload.pdf_import_confirmation is not None
+                and item_payload.product_id is not None
+                and not item_payload.is_new_product
+            )
             selected_material_id = (
-                item_payload.material_id
-                if item_payload.material_id is not None
-                else product.material_id
+                product.material_id
+                if is_pdf_matched_product
+                else (
+                    item_payload.material_id
+                    if item_payload.material_id is not None
+                    else product.material_id
+                )
             )
             selected_material = (
                 db.get(Material, selected_material_id)
@@ -4227,12 +4237,29 @@ def _create_order_impl(
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
             initial_material_code = (
-                (item_payload.material or "").strip()
-                or (
+                (
                     selected_material.code
                     if selected_material is not None
-                    else product.legacy_material_text
+                    else ((item_payload.material or "").strip() or product.legacy_material_text)
                 )
+                if is_pdf_matched_product
+                else (
+                    (item_payload.material or "").strip()
+                    or (
+                        selected_material.code
+                        if selected_material is not None
+                        else product.legacy_material_text
+                    )
+                )
+            )
+            original_material_code = (
+                (item_payload.original_material_code or "").strip()
+                or (
+                    (item_payload.material or "").strip()
+                    if payload.pdf_import_confirmation is not None
+                    else ""
+                )
+                or initial_material_code
             )
             item = OrderItem(
                 order_id=order.id,
@@ -4256,7 +4283,7 @@ def _create_order_impl(
                     (item_payload.specification or "").strip() or _snapshot_spec(product)
                 ),
                 snapshot_material=initial_material_code,
-                snapshot_original_material_code=initial_material_code,
+                snapshot_original_material_code=original_material_code,
                 snapshot_customer_model=(
                     (item_payload.customer_model or "").strip() or None
                 ),  # v0.19.1: TH型号 / 客户型号
@@ -4719,8 +4746,18 @@ def update_order_item(
     require_customer_access(
         order_for_scope.customer_id, current_user=user, db=db
     )
+    if payload.sync_product and not item.product_id:
+        raise HTTPException(status_code=409, detail="当前订单明细未关联常用箱")
+    material_changed = bool(
+        item.product_id
+        and payload.material_id is not None
+        and payload.material_id != item.material_id
+    )
+    effective_sync_product = bool(
+        item.product_id and (payload.sync_product or material_changed)
+    )
     product_change_reason: str | None = None
-    if payload.sync_product:
+    if effective_sync_product:
         if not has_permission(user, "products.edit"):
             _require_product_drawing_edit(user)
         if payload.product_expected_version is None:
@@ -4728,7 +4765,10 @@ def update_order_item(
                 status_code=400,
                 detail="同步常用箱必须提供 product_expected_version",
             )
-        product_change_reason = (payload.product_change_reason or "").strip()
+        product_change_reason = (
+            (payload.product_change_reason or "").strip()
+            or ("订单人工修改材质并同步常用箱" if material_changed else "")
+        )
         if not product_change_reason:
             raise HTTPException(
                 status_code=400,
@@ -4866,7 +4906,7 @@ def update_order_item(
     product_to_sync: Product | None = None
     prospective_product_layer: int | None = None
     prospective_product_flute: str | None = None
-    if payload.sync_product and item.product_id:
+    if effective_sync_product and item.product_id:
         product_to_sync = db.get(Product, item.product_id)
         if product_to_sync is None:
             raise HTTPException(status_code=409, detail="关联常用箱不存在，订单明细未保存")
@@ -5029,6 +5069,8 @@ def update_order_item(
         "product_code": item.snapshot_product_code,
         "product_name": item.snapshot_product_name,
         "material": item.snapshot_material,
+        "material_id": item.material_id,
+        "supplier_name": item.snapshot_supplier_name,
         "specification": item.snapshot_spec,
     }
     quantity_delta = int(payload.quantity) - int(item.quantity or 0)
@@ -5085,7 +5127,11 @@ def update_order_item(
     )
     item.snapshot_product_code = payload.product_code.strip()
     item.snapshot_product_name = payload.product_name.strip()
-    item.snapshot_material = (payload.material or "").strip() or None
+    item.snapshot_material = (
+        selected_material.code
+        if selected_material is not None
+        else ((payload.material or "").strip() or None)
+    )
     item.snapshot_spec = (payload.specification or "").strip() or None
     if payload.production_notes is not None:
         item.snapshot_production_notes = (
@@ -5187,7 +5233,10 @@ def update_order_item(
             expected_version=payload.product_expected_version,
             user=user,
             reason=product_change_reason,
-            source="orders.update-item.sync-product",
+            source=(
+                "orders.update-item.sync-product:"
+                f"{item.item_order_number or item.id}"
+            ),
             confirmation_token=payload.product_confirmation_token,
         )
     db.flush()
@@ -5206,7 +5255,17 @@ def update_order_item(
             action="UPDATE",
             resource="OrderItem",
             details=json.dumps(
-                {"before": before, "after": payload.model_dump()},
+                {
+                    "before": before,
+                    "after": {
+                        **payload.model_dump(),
+                        "material": item.snapshot_material,
+                        "material_id": item.material_id,
+                        "supplier_name": item.snapshot_supplier_name,
+                        "sync_product": effective_sync_product,
+                    },
+                    "source_reference": item.item_order_number or str(item.id),
+                },
                 ensure_ascii=False,
                 default=str,
             ),

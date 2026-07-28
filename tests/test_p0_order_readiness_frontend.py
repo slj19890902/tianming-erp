@@ -21,7 +21,8 @@ def test_common_box_readiness_replaces_manual_edit_as_business_status() -> None:
 
 def test_pdf_default_is_compact_and_technical_match_details_stay_advanced() -> None:
     block = _pdf_block()
-    assert '<th style="min-width:60px">序号</th>' in block
+    assert '<th class="pdf-match-sequence-column">序号</th>' in block
+    assert '<th class="pdf-match-code-column">存货编码</th>' in block
     assert "存货编码" in block
     assert "数量与库存" in block
     assert "异常" in block
@@ -35,23 +36,23 @@ def test_pdf_default_is_compact_and_technical_match_details_stay_advanced() -> N
     header = block[block.index("<thead>") : block.index("</thead>")]
     row = block[block.index("<!-- 主行 -->") : block.index("<!-- 操作 -->")]
     assert header.index("客户单价") < header.index("图纸") < header.index("异常")
-    assert row.index("<!-- 客户单价") < row.index("<!-- 图纸 -->") < row.index("PDF材质与常用箱不同")
+    assert row.index("<!-- 客户单价") < row.index("<!-- 图纸 -->")
+    assert "pdfCommonBoxProductName(item)" in row
+    assert "PDF识别材质：" in row
+    assert "仅保留证据" in row
 
 
-def test_pdf_material_difference_requires_a_draft_only_choice_without_size_warning() -> None:
-    assert "pdfMaterialDifference(item)" in INDEX
-    assert "PDF材质与常用箱不同，请核对。" in INDEX
-    assert "仅本订单使用" in INDEX
-    assert "更新常用箱" in INDEX
-    assert "_material_difference_acknowledged" in INDEX
+def test_pdf_material_is_evidence_only_and_never_blocks_the_draft() -> None:
+    assert "pdfMaterialDifference(item)" not in INDEX
+    assert "PDF材质与常用箱不同，请核对。" not in INDEX
+    assert "usePdfActualMaterialForOrder" not in INDEX
+    assert "_material_difference_acknowledged" not in INDEX
     reason_start = INDEX.index("importDraftBlockReasons(draft) {")
     reasons = INDEX[reason_start : INDEX.index("return reasons;", reason_start)]
-    assert "必须选择实际材质并确认仅本订单使用" in reasons
-    helper = INDEX[INDEX.index("usePdfActualMaterialForOrder(draft, item)") : INDEX.index("_findMaterial(id)")]
-    for field in ("item.material_id = material.id;", "item.material = material.code", "item.material_supplier_name", "item.layer_count", "item.flute_type"):
-        assert field in helper
-    assert "syncProductFieldsVersioned" not in helper
-    assert "/api/warehouse/" not in helper
+    assert "PDF材质与常用箱不同" not in reasons
+    comparison = INDEX[INDEX.index("refreshPdfMaterialComparison(item, product)") : INDEX.index("_findMaterial(id)")]
+    assert "material_evidence_only:true" in comparison
+    assert "material_differs" not in comparison
     assert "size_differs" not in _pdf_block()
     normalized = INDEX[INDEX.index("normalizedMaterialCode(value)") : INDEX.index("refreshPdfMaterialComparison(item, product)")]
     assert "split(/[/-]/, 1)" in normalized

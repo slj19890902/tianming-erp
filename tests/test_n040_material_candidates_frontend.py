@@ -67,7 +67,7 @@ def test_common_box_material_context_stacks_on_narrow_screens() -> None:
     assert ".product-material-controls { grid-template-columns: 1fr; }" in narrow_rules
 
 
-def test_pending_material_candidate_keeps_manual_confirmation_and_string_reference() -> None:
+def test_pending_material_candidate_keeps_confirmation_and_auto_sync_reference() -> None:
     source = _source()
     assert 'axios.get(`/api/requisition/pending/${itemId}/material-candidates`)' in source
     assert 'axios.get(`/api/requisition/pending/${itemId}/material-history`)' in source
@@ -78,6 +78,7 @@ def test_pending_material_candidate_keeps_manual_confirmation_and_string_referen
         'form.source_reference = String(candidate.source_reference || '
         'candidate.reference_id || form.candidate_id || "") || null;'
     ) in source
-    assert 'sync_product: false' in source
-    assert "同步回订单关联的常用箱" in source
+    assert "sync_product: !!row.product_id" in source
+    assert "保存后自动同步订单关联的常用箱" in source
+    assert "报料人工修改材质并同步常用箱" in source
     assert '<span v-if="canViewCosts">参考价：' in source

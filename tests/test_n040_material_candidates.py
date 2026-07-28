@@ -334,19 +334,39 @@ def _choose_material(
     source_type: str = "manual",
     source_reference: str = "N040 manual confirmation",
     selection_reason: str = "operator chose verified supplier material",
-    sync_product: bool = False,
+    sync_product: bool = True,
 ) -> dict:
+    context_response = client.get(
+        f"/api/requisition/pending/{item_id}/material-candidates"
+    )
+    assert context_response.status_code == 200, context_response.text
+    context = context_response.json()
+    payload = {
+        "material_id": material_id,
+        "candidate_id": candidate_id,
+        "source_type": source_type,
+        "source_reference": source_reference,
+        "selection_reason": selection_reason,
+        "sync_product": sync_product,
+        "product_expected_version": (
+            context.get("product_version") if sync_product else None
+        ),
+        "product_change_reason": (
+            "报料人工修改材质并同步常用箱" if sync_product else None
+        ),
+    }
     response = client.put(
         f"/api/requisition/pending/{item_id}/material",
-        json={
-            "material_id": material_id,
-            "candidate_id": candidate_id,
-            "source_type": source_type,
-            "source_reference": source_reference,
-            "selection_reason": selection_reason,
-            "sync_product": sync_product,
-        },
+        json=payload,
     )
+    if response.status_code == 409:
+        detail = response.json().get("detail") or {}
+        if detail.get("code") == "MASTER_CHANGE_CONFIRMATION_REQUIRED":
+            payload["product_confirmation_token"] = detail["confirmation_token"]
+            response = client.put(
+                f"/api/requisition/pending/{item_id}/material",
+                json=payload,
+            )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -484,7 +504,7 @@ def test_history_count_then_recent_use_controls_explainable_candidate_order(
             assert row["recommendation_reason"]
 
 
-def test_manual_selection_preserves_original_snapshot_appends_immutable_history_and_does_not_sync_product_by_default(
+def test_manual_selection_preserves_original_snapshot_appends_history_and_syncs_product(
     n040_app: tuple[FastAPI, dict[str, int], object],
 ) -> None:
     app, ids, factory = n040_app
@@ -529,6 +549,17 @@ def test_manual_selection_preserves_original_snapshot_appends_immutable_history_
             source_reference="later supplier confirmation",
             selection_reason="Supplier A unavailable",
         )
+        repeated = _choose_material(
+            client,
+            ids["first_item"],
+            candidate_id=candidate_b,
+            material_id=ids["supplier_b_material"],
+            source_type="manual",
+            source_reference="later supplier confirmation",
+            selection_reason="Supplier A unavailable",
+        )
+        assert repeated["selection_history_id"] is None
+        assert repeated["message"] == "材质未变化，无需重复保存"
         history_response = client.get(
             f"/api/requisition/pending/{ids['first_item']}/material-history"
         )
@@ -544,7 +575,7 @@ def test_manual_selection_preserves_original_snapshot_appends_immutable_history_
         assert history[0]["source_type"] == "manual"
         assert history[0]["source_reference"] == "phone confirmation 2026-07-19"
         assert history[0]["selection_reason"] == "customer-approved Supplier A stock"
-        assert history[0]["sync_product"] is False
+        assert history[0]["sync_product"] is True
         assert history[0]["selected_by_name"] == "N040 Admin"
         assert history[1]["candidate_id"] == candidate_b
         assert history[1]["selected_material_id"] == ids["supplier_b_material"]
@@ -558,7 +589,7 @@ def test_manual_selection_preserves_original_snapshot_appends_immutable_history_
         assert item is not None and product is not None
         assert item.snapshot_original_material_code == "9CCC9"
         assert item.snapshot_material == "N040-B-3B"
-        assert product.material_id == ids["initial_material"]
+        assert product.material_id == ids["supplier_b_material"]
         assert product.layer_count == 3
         assert product.flute_type == "B"
 

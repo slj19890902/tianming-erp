@@ -2709,7 +2709,8 @@ def _apply_standard_product(item: dict, product: Product) -> None:
         "pdf_material_code": pdf_material_code or item.get("raw_material"),
         "standard_material_label": _material_label(material),
         "material_comparison": material_comparison_state,
-        "material_differs": material_comparison_state == "different",
+        # PDF 材质只作为来源证据，不参与订单业务材质选择，也不阻断确认。
+        "material_evidence_only": True,
         "readiness": product_readiness(product),
         "manual_modified": bool(product.manual_modified),
     }

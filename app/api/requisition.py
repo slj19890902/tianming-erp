@@ -3637,6 +3637,7 @@ def pending_material_candidates(
         else item.snapshot_material
     )
     normalized_original = normalize_material_candidate_key(original_code)
+    product = db.get(Product, item.product_id) if item.product_id else None
     if not normalized_original:
         return {
             "item_id": item.id,
@@ -3644,6 +3645,8 @@ def pending_material_candidates(
             "customer_name": customer.name,
             "original_material_code": None,
             "original_material_confidence": "unknown",
+            "product_id": item.product_id,
+            "product_version": product.version if product is not None else None,
             "candidates": [],
         }
 
@@ -3744,6 +3747,8 @@ def pending_material_candidates(
         "original_material_confidence": "frozen" if original_is_frozen else "legacy_fallback",
         "current_material_id": item.material_id,
         "current_material_code": item.snapshot_material,
+        "product_id": item.product_id,
+        "product_version": product.version if product is not None else None,
         "candidates": rows,
     }
 
@@ -4454,23 +4459,8 @@ def update_pending_material(
         raise HTTPException(status_code=409, detail="已生成报料单的明细不能更换供应商或材质")
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细不能更换供应商或材质")
-    product_change_reason: str | None = None
-    if payload.sync_product:
-        if not has_permission(user, "products.edit"):
-            raise HTTPException(status_code=403, detail="缺少 products.edit 权限")
-        if not item.product_id:
-            raise HTTPException(status_code=409, detail="当前报料明细未关联常用箱")
-        if payload.product_expected_version is None:
-            raise HTTPException(
-                status_code=400,
-                detail="同步常用箱必须提供 product_expected_version",
-            )
-        product_change_reason = (payload.product_change_reason or "").strip()
-        if not product_change_reason:
-            raise HTTPException(
-                status_code=400,
-                detail="同步常用箱必须填写 product_change_reason",
-            )
+    if payload.sync_product and not item.product_id:
+        raise HTTPException(status_code=409, detail="当前报料明细未关联常用箱")
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
@@ -4513,19 +4503,31 @@ def update_pending_material(
         )
     if flute_error:
         raise HTTPException(status_code=400, detail=flute_error)
-    before = {
-        "material_id": item.material_id,
-        "supplier_name": item.snapshot_supplier_name,
-        "layer_count": item.layer_count,
-        "flute_type": item.flute_type,
-    }
-    item.material_id = material.id
-    item.snapshot_material = material.code
-    item.snapshot_supplier_name = material.supplier_name
-    item.snapshot_weight = material.basis_weight_description
-    item.layer_count = layer_count
-    item.flute_type = flute_type
-    if payload.sync_product and item.product_id:
+    order_values_changed = any(
+        (
+            material.id != item.material_id,
+            material.code != item.snapshot_material,
+            material.supplier_name != item.snapshot_supplier_name,
+            material.basis_weight_description != item.snapshot_weight,
+            layer_count != item.layer_count,
+            (flute_type or "").strip().upper()
+            != (item.flute_type or "").strip().upper(),
+        )
+    )
+    effective_sync_product = bool(
+        item.product_id and (payload.sync_product or order_values_changed)
+    )
+    product: Product | None = None
+    product_updates: dict[str, object] = {}
+    product_change_reason: str | None = None
+    if effective_sync_product:
+        if not has_permission(user, "products.edit"):
+            raise HTTPException(status_code=403, detail="缺少 products.edit 权限")
+        if payload.product_expected_version is None:
+            raise HTTPException(
+                status_code=400,
+                detail="同步常用箱必须提供 product_expected_version",
+            )
         product = db.get(Product, item.product_id)
         if product is None:
             raise HTTPException(status_code=409, detail="关联常用箱不存在，报料明细未保存")
@@ -4538,6 +4540,41 @@ def update_pending_material(
             }.items()
             if getattr(product, field_name) != value
         }
+        product_change_reason = (
+            (payload.product_change_reason or "").strip()
+            or "报料人工修改材质并同步常用箱"
+        )
+    source_reference = (
+        (payload.source_reference or "").strip()
+        or item.item_order_number
+        or f"order-item:{item.id}"
+    )
+    if not order_values_changed and not product_updates:
+        return {
+            "item_id": item.id,
+            "material_id": material.id,
+            "material_code": material.code,
+            "supplier_name": material.supplier_name,
+            "layer_count": layer_count,
+            "flute_type": flute_type,
+            "selection_history_id": None,
+            "original_material_code": original_code or None,
+            "original_material_confidence": original_confidence,
+            "message": "材质未变化，无需重复保存",
+        }
+    before = {
+        "material_id": item.material_id,
+        "supplier_name": item.snapshot_supplier_name,
+        "layer_count": item.layer_count,
+        "flute_type": item.flute_type,
+    }
+    item.material_id = material.id
+    item.snapshot_material = material.code
+    item.snapshot_supplier_name = material.supplier_name
+    item.snapshot_weight = material.basis_weight_description
+    item.layer_count = layer_count
+    item.flute_type = flute_type
+    if product is not None:
         from app.services.master_data_versioning import apply_versioned_update
 
         apply_versioned_update(
@@ -4548,7 +4585,7 @@ def update_pending_material(
             expected_version=payload.product_expected_version,
             user=user,
             reason=product_change_reason,
-            source="requisition.pending-material.sync-product",
+            source=f"requisition.pending-material.sync-product:{source_reference}",
             confirmation_token=payload.product_confirmation_token,
         )
     source_type = str(payload.source_type or "").strip() or (
@@ -4568,9 +4605,9 @@ def update_pending_material(
         layer_count_snapshot=layer_count,
         flute_type_snapshot=flute_type,
         source_type=source_type,
-        source_reference=(payload.source_reference or "").strip() or None,
+        source_reference=source_reference,
         selection_reason=(payload.selection_reason or "").strip() or None,
-        sync_product=payload.sync_product,
+        sync_product=effective_sync_product,
         selected_by=user.id,
         selected_at=utc_now_naive(),
     )
@@ -4587,9 +4624,10 @@ def update_pending_material(
                 "supplier_name": material.supplier_name,
                 "layer_count": layer_count,
                 "flute_type": flute_type,
-                "sync_product": payload.sync_product,
+                "sync_product": effective_sync_product,
                 "candidate_id": candidate.id if candidate is not None else None,
                 "source_type": source_type,
+                "source_reference": source_reference,
             },
         },
         description="更换未报料明细供应商和材质",

@@ -1083,10 +1083,11 @@ def test_production_completion_blocks_meaning_changes_and_dangerous_lifecycle(
             "/api/orders/group-delete",
             json={"order_ids": [order_id], "confirm": True},
         )
-        allowed = client.put(
+        manual_pending_delivery = client.put(
             f"/api/orders/{order_id}/status",
             json={"status": "pending_delivery", "remark": "保持下游状态"},
         )
+        detail = client.get(f"/api/orders/{order_id}")
 
     protected = [
         changed_quantity,
@@ -1100,7 +1101,10 @@ def test_production_completion_blocks_meaning_changes_and_dangerous_lifecycle(
     ]
     assert all(response.status_code == 409 for response in protected)
     assert all("生产" in response.json()["detail"] for response in protected)
-    assert allowed.status_code == 200, allowed.text
+    assert manual_pending_delivery.status_code == 409, manual_pending_delivery.text
+    assert "真实业务单据自动判断" in manual_pending_delivery.json()["detail"]
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["business_status"] == "pending_delivery"
 
 
 def test_material_revert_blocks_completion_but_unfinished_task_returns_to_waiting(

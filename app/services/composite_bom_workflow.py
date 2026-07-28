@@ -435,6 +435,7 @@ def _direct_completion_rows(db: Session, snapshot_id: int):
         )
         .where(
             ProductionTask.sales_order_item_bom_component_id == snapshot_id,
+            ProductionCompletion.status == "posted",
             ProductionCompletion.initial_disposition == DIRECT_DISPOSITION,
             ProductionStockTransfer.id.is_(None),
         )

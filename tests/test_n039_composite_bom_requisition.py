@@ -1202,6 +1202,99 @@ def test_component_finished_release_invalidates_task_and_stale_completion(
         assert component_task.status == "waiting_material"
 
 
+def test_reversed_component_direct_completion_can_be_completed_again(
+    composite_requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.services.composite_bom_workflow import component_available_quantity
+    from app.services.production_workflow import create_or_refresh_production_task
+
+    app, session_factory = composite_requisition_app
+    with session_factory() as db:
+        item = db.get(OrderItem, 1)
+        assert item is not None
+        item.material_status = "received"
+        create_or_refresh_production_task(db, item.id)
+        component_task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.sales_order_item_bom_component_id == 1
+            )
+        )
+        assert component_task is not None
+        assert component_task.status == "pending"
+        assert component_task.planned_quantity == 20
+        assert component_task.finished_coverage_snapshot == 0
+        db.commit()
+        task_id = component_task.id
+        first_version = component_task.version
+
+    with TestClient(app) as client:
+        _login(client)
+        first = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "n039-component-direct-before-reversal",
+                "items": [
+                    {
+                        "task_id": task_id,
+                        "expected_version": first_version,
+                        "disposition": "direct",
+                        "material_input_quantity": 20,
+                        "actual_output_quantity": 20,
+                        "defective_quantity": 0,
+                    }
+                ],
+            },
+        )
+        assert first.status_code == 200, first.text
+        first_completion_id = first.json()["items"][0]["id"]
+        reverted = client.post(
+            f"/api/production/completions/{first_completion_id}/revert",
+            json={"reason": "组件直接完工操作失误，退回重新确认"},
+        )
+        assert reverted.status_code == 200, reverted.text
+
+        with session_factory() as db:
+            component_task = db.get(ProductionTask, task_id)
+            original = db.get(ProductionCompletion, first_completion_id)
+            assert component_task is not None and original is not None
+            assert original.status == "reversed"
+            assert component_task.status == "pending"
+            assert component_task.finished_coverage_snapshot == 0
+            assert component_available_quantity(db, 1) == 0
+            second_version = component_task.version
+
+        second = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "n039-component-direct-after-reversal",
+                "items": [
+                    {
+                        "task_id": task_id,
+                        "expected_version": second_version,
+                        "disposition": "direct",
+                        "material_input_quantity": 20,
+                        "actual_output_quantity": 20,
+                        "defective_quantity": 0,
+                    }
+                ],
+            },
+        )
+        assert second.status_code == 200, second.text
+
+    with session_factory() as db:
+        component_task = db.get(ProductionTask, task_id)
+        completions = db.scalars(
+            select(ProductionCompletion)
+            .where(ProductionCompletion.task_id == task_id)
+            .order_by(ProductionCompletion.id)
+        ).all()
+        assert [row.status for row in completions] == ["reversed", "posted"]
+        assert component_task is not None and component_task.status == "completed"
+        assert component_available_quantity(db, 1) == 20
+
+
 def test_component_finished_stock_reduces_only_component_requisition(
     composite_requisition_app,
 ) -> None:

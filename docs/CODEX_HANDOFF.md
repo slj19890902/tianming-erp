@@ -2722,3 +2722,111 @@ legacy_ruida_* 原始层
   正式发布预计需要重启 ERP，不需要迁移；本次授权不包含更新
   `origin/factory-current-baseline`、修改 `origin/main` 或发布工厂，工厂端仍需
   另行取得正式发布授权并执行备份、快进和重启门禁。
+
+## 95. 2026-07-28 P1-11B 生产任务预占来源只读领料卡候选
+
+- 独立 worktree：
+  `D:\tm-worktrees\erp-p1-11b-production-pick-card-20260728`；分支：
+  `codex/p1-11b-production-pick-card-20260728`；唯一基线：
+  `origin/factory-current-baseline@0378730dc7bf909638c73bb4200c22250d8188d1`。
+  当前未提交、未推送、未更新正式基线或 `origin/main`。
+- 生产任务接口按当前列表一次批量读取有效 `semi_order` 预占及其 lot、正式
+  半成品明细和库位，在内存中按 `order_item_id + bom_component_id` 分组，
+  继续使用 FIFO/批次 ID 稳定排序；不再为每条生产任务单独查询来源。
+- 新的 `material_pick_sources` 只读 DTO 返回预占、批次/版本、库位、组件类型、
+  片料长宽、楞型、剩余张数、需求余额、每张产出、预计覆盖、库存范围、状态和
+  警告码。生产接口不返回材质代码、供应商、价格或成本；客户范围受限账号只看
+  自己客户的来源。旧 `customer_board_preparation_sources` 保留兼容投影。
+- lot、正式明细或库位缺失时来源标记 `invalid`，不会显示“原料已齐”；部分覆盖
+  显示仍缺数量，已释放、已消费、已取消或余额为 0 的预占不返回。普通任务和
+  组合 BOM 组件严格按组件键隔离。
+- 生产确认页新增独立“本单领料”列，默认显示前两个批次，可展开其余批次；
+  四态为“原料已齐 / 部分材料 / 预占来源失效 / 尚无原料指派”。大字模式改为
+  严格两层任务卡；1920×1080 下管理员首屏完整显示 5 条任务，无页面级横向
+  溢出。现有实际投入、合格、损耗、完工去向、批量入库及完工核销代码未改变。
+- 自动验证：
+  - 新增后端来源定向测试 `4 passed`，覆盖客户范围、单次批量 SQL、敏感字段
+    隔离、失效关闭、普通/组件隔离、FIFO 稳定排序及已释放/耗尽来源过滤；
+  - 生产、组合 BOM、低库存和前端相关回归 `75 passed, 1 deselected`；
+  - 前端契约、旧低库存兼容及整页 JavaScript `6 passed`；
+  - Python compileall、`git diff --check` 通过；Alembic 单一 head
+    `cu77v8x9z66`，无 `alembic/versions` 差异、无迁移。
+- 唯一 deselected 用例是正式基线已有的
+  `test_component_completion_is_task_scoped_and_transfer_uses_component_product`
+  中文错误提示正则不匹配；已在完全干净的
+  `0378730dc7bf909638c73bb4200c22250d8188d1` 单独复跑并得到同样失败。本任务
+  没有修改该完工逻辑或越界修测试。
+- 匿名结构化 UAT：
+  `D:\tm-uat\p1-11b-production-pick-card-20260728\carton_erp_uat.sqlite3`；
+  浏览器证据副本：
+  `D:\tm-uat\p1-11b-production-pick-card-20260728\carton_erp_after_browser_uat.sqlite3`，
+  大小 `1699840` 字节，SHA-256
+  `188B7D076E55187DFA6F8C1D0E0D3B338F09DA5B4005C540AFBC2281D137EFD8`，
+  revision=`cu77v8x9z66`、`integrity_check=ok`、外键异常 0、正式完工记录 0。
+- 隔离服务位于 `http://127.0.0.1:18176/production`，管理员验收账号
+  `p111b_uat / 123456`；范围受限账号 `p111b_scoped / 123456`。匿名数据覆盖
+  三批齐套、部分覆盖、来源失效、已释放后未指派、组合组件和范围外客户。
+  浏览器已确认前两批/展开第三批、四态、组合组件、范围隔离和 1920×1080
+  大字布局，Console 无 error/warn。该结构化 fixture 不代表真实工厂库存 UAT。
+- 当前状态：候选待老板人工验收。P1-11C 的逐批实际耗用、未用整张释放、损耗
+  和余料处理以及 P1-11D 的推荐算法/MOQ 均未开发。
+
+## 96. 2026-07-28 P1-11B 与 P1-11C 联合候选
+
+- 在 P1-11B 尚未提交的领料卡候选上继续开发 P1-11C，因此当前为联合候选。
+  worktree：
+  `D:\tm-worktrees\erp-p1-11c-material-usage-20260728`；分支：
+  `codex/p1-11c-material-usage-20260728`；基线：
+  `origin/factory-current-baseline@0378730dc7bf909638c73bb4200c22250d8188d1`。
+  当前未提交、未推送、未合并或发布。
+- 新增逐批完工用料事实
+  `production_completion_material_usages`。完工请求按 reservation/lot/版本提交
+  指派、实际投入、完整退回、损耗、余片、原因和退回确认；有预占时禁止回退为
+  FIFO 猜批次。数据库约束数量守恒、movement 关联和需求抵扣上限，触发器禁止
+  物理删除或改写已入账事实，仅允许带撤销审计的 `posted → reversed`。
+- 正常齐套自动使用计划投入，只有真实差异才要求额外输入；完整未裁切整张需要
+  `warehouse.execute` 明确确认后释放，损耗和余片不会自动变成可用整张库存。
+  普通任务及组合 BOM 各组件独立满足需求，部分材料不能误完成整张任务。
+- 撤销完工按原 usage、movement 和结果 lot 版本精确反向；后续库存事实已变化
+  时失败关闭。幂等重放返回原结果，同键不同内容拒绝。
+- 前端“核对用料”每个批次固定两层。按老板最新确认，生产待确认主表在标准和
+  1920×1080 大字模式均为固定表格布局，每条任务内容最多两行，不允许页面或
+  表格横向滚动。浏览器实测大字任务行约 70px、紧凑内容约 43px，无超过两行
+  节点；弹窗每批约 79px，两层约 20px/36px，无横向滚动。
+- migration：
+  `cv78v8x9z67` 线性接续 `cu77v8x9z66`，Alembic 只有一个 head。
+  隔离副本完成
+  `cu77 → cv78 → cu77 → cv78`，每阶段
+  `integrity_check=ok`、外键异常 0；最终副本 SHA-256
+  `E7EFC57C38E164C1B05BBDF7BC5BE21D626A1BBE96A20267DDB365A9D0363239`。
+  有 usage 事实时 downgrade 已验证失败关闭且事实、revision 和触发器均保留。
+- 自动验证：
+  P1-11C 聚焦 `13 passed, 32 deselected`，独立迁移 `2 passed`，生产/组合
+  BOM/预占/送货消费联合回归 `96 passed, 1 failed`，最终两行与无横移前端
+  复核 `8 passed`；compileall、JavaScript、`git diff --check` 通过。唯一联合
+  回归失败和另一条旧 migration metadata 失败均为正式基线已有的过期断言，
+  本轮未篡改业务或迁移历史来迎合。
+- 隔离 UAT：
+  `http://127.0.0.1:18177/production`，账号
+  `p111b_uat / 123456`，数据库
+  `D:\tm-uat\p1-11c-material-usage-20260728\carton_erp_p1_11c_browser_uat_v2.sqlite3`。
+  浏览器已确认标准/大字无横移、主表两行、弹窗每批两层、Console 无
+  error/warn；匿名齐套任务形成 1 个 posted completion、3 个 usage 和 3 条
+  指定批次消费流水。所有写入仅在家庭隔离 UAT 副本。
+- NAS 回执：
+  `04_开发记录\任务回执\2026-07-28_家庭_P1-11B与P1-11C联合候选待人工验收.md`。
+  老板已确认原功能人工验收通过并授权提交、推送独立候选分支。
+- 老板随后明确指出当前尚未建立原料仓，因此最终交付改为“代码预留、默认关闭”：
+  - 默认不配置 `ERP_PRODUCTION_MATERIAL_USAGE_ENABLED`；
+  - 生产任务接口返回 `material_usage_enabled=false`，不查询领料来源；
+  - 页面隐藏“本单领料”“核对用料”和逐批用料弹窗；
+  - 绕过页面提交 `material_usages` 返回 409；
+  - 原有自动 FIFO 完工与半成品预占核销继续工作，不创建 usage 事实；
+  - 只有将来原料仓建立并显式配置
+    `ERP_PRODUCTION_MATERIAL_USAGE_ENABLED=1` 后才启用，届时必须重新验收。
+- 关闭态及显式启用态最终复核 `47 passed`；受影响启用态用例 `7 passed`。
+  1920×1080 浏览器确认标准模式行高 76px、大字模式 69px，均无横向滚动，
+  页面无领料/核对用料文字，Console 无 error/warn。
+- 新增老板确认回执：
+  `04_开发记录\任务回执\2026-07-28_老板确认_P1-11B与P1-11C验收通过但暂缓启用.md`。
+  能力台账仅标记为“已开发验收、默认关闭、未上线使用”。

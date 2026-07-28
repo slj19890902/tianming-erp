@@ -20,7 +20,11 @@ from app.api.deps import (
 )
 from app.models.order import Order, OrderItem
 from app.models.audit import OperationLog
-from app.models.production import ProductionCompletion, ProductionTask
+from app.models.production import (
+    ProductionCompletion,
+    ProductionCompletionMaterialUsage,
+    ProductionTask,
+)
 from app.models.user import User
 from app.services.production_workflow import (
     COMPLETED,
@@ -28,6 +32,7 @@ from app.services.production_workflow import (
     PENDING,
     WAITING_MATERIAL,
     CompletionCommand,
+    MaterialUsageCommand,
     ProductionWorkflowError,
     StockTransferCommand,
     batch_customer_ids,
@@ -36,6 +41,7 @@ from app.services.production_workflow import (
     list_production_completions,
     list_production_tasks,
     list_temporary_locations,
+    production_material_usage_enabled,
     reverse_production_completion,
     transfer_direct_completion_to_stock,
 )
@@ -46,6 +52,49 @@ router = APIRouter()
 can_read = PermissionChecker("orders.view")
 can_complete = PermissionChecker("orders.status")
 admin_only = RoleChecker(["admin"])
+
+
+class MaterialUsageItem(BaseModel):
+    reservation_id: int = Field(gt=0)
+    inventory_lot_id: int = Field(gt=0)
+    expected_lot_version: int = Field(gt=0)
+    assigned_stock_quantity: int = Field(gt=0)
+    actual_consumed_stock_quantity: int = Field(ge=0)
+    returned_intact_stock_quantity: int = Field(default=0, ge=0)
+    damaged_stock_quantity: int = Field(default=0, ge=0)
+    offcut_stock_quantity: int = Field(default=0, ge=0)
+    variance_reason_code: Literal[
+        "intact_return", "damaged", "offcut", "mixed"
+    ] | None = None
+    variance_reason_text: str | None = Field(default=None, max_length=500)
+    return_confirmed: bool = False
+
+    @field_validator("variance_reason_text")
+    @classmethod
+    def trim_variance_text(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_conservation(self):
+        classified = (
+            self.actual_consumed_stock_quantity
+            + self.returned_intact_stock_quantity
+            + self.damaged_stock_quantity
+            + self.offcut_stock_quantity
+        )
+        if classified != self.assigned_stock_quantity:
+            raise ValueError("逐批用料必须满足指派=投入+完整退回+损耗+余片")
+        if (
+            self.actual_consumed_stock_quantity != self.assigned_stock_quantity
+            and self.variance_reason_code is None
+        ):
+            raise ValueError("逐批用料存在差异时必须选择原因")
+        if self.returned_intact_stock_quantity > 0 and not self.return_confirmed:
+            raise ValueError("完整未裁切纸板退回必须明确确认")
+        if self.returned_intact_stock_quantity == 0 and self.return_confirmed:
+            raise ValueError("没有完整退回数量时不能勾选退回确认")
+        return self
 
 
 class CompletionBatchItem(BaseModel):
@@ -61,6 +110,7 @@ class CompletionBatchItem(BaseModel):
     pallet_id: int | None = Field(default=None, gt=0)
     pallet_code: str | None = Field(default=None, max_length=100)
     remarks: str | None = Field(default=None, max_length=1000)
+    material_usages: list[MaterialUsageItem] = Field(default_factory=list)
 
     @field_validator("pallet_code", "remarks")
     @classmethod
@@ -76,6 +126,9 @@ class CompletionBatchItem(BaseModel):
             value is not None for value in (self.pallet_id, self.pallet_code)
         ):
             raise ValueError("未选择库存库位时不能填写栈板")
+        usage_ids = [usage.reservation_id for usage in self.material_usages]
+        if len(set(usage_ids)) != len(usage_ids):
+            raise ValueError("同一原料预占不能重复提交")
         return self
 
 
@@ -170,6 +223,7 @@ def get_production_tasks(
     db: Session = Depends(get_db),
 ) -> dict:
     return {
+        "material_usage_enabled": production_material_usage_enabled(),
         "items": list_production_tasks(
             db,
             allowed_customer_ids=_allowed_customer_ids(user, db),
@@ -208,6 +262,14 @@ def post_completion_batch(
     task_ids = [item.task_id for item in payload.items]
     try:
         _require_task_customer_access(db, task_ids=task_ids, user=user)
+        if (
+            any(item.material_usages for item in payload.items)
+            and not production_material_usage_enabled()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="原料仓尚未启用，逐批领料与耗用功能当前处于隐藏状态",
+            )
         if any(item.disposition == "stock" for item in payload.items) and not has_permission(
             user, "warehouse.execute"
         ):
@@ -216,6 +278,15 @@ def post_completion_batch(
             user, "warehouse.execute"
         ):
             raise HTTPException(status_code=403, detail="余货入库需要仓库执行权限")
+        if any(
+            usage.returned_intact_stock_quantity > 0
+            for item in payload.items
+            for usage in item.material_usages
+        ) and not has_permission(user, "warehouse.execute"):
+            raise HTTPException(
+                status_code=403,
+                detail="退回完整未裁切纸板需要仓库执行权限",
+            )
         if any(item.completion_type == "supplemental" for item in payload.items):
             if user.role != "admin":
                 raise HTTPException(status_code=403, detail="补充生产确认仅限管理员")
@@ -236,6 +307,26 @@ def post_completion_batch(
                     pallet_id=item.pallet_id,
                     pallet_code=item.pallet_code,
                     remarks=item.remarks,
+                    material_usages=tuple(
+                        MaterialUsageCommand(
+                            reservation_id=usage.reservation_id,
+                            inventory_lot_id=usage.inventory_lot_id,
+                            expected_lot_version=usage.expected_lot_version,
+                            assigned_stock_quantity=usage.assigned_stock_quantity,
+                            actual_consumed_stock_quantity=(
+                                usage.actual_consumed_stock_quantity
+                            ),
+                            returned_intact_stock_quantity=(
+                                usage.returned_intact_stock_quantity
+                            ),
+                            damaged_stock_quantity=usage.damaged_stock_quantity,
+                            offcut_stock_quantity=usage.offcut_stock_quantity,
+                            variance_reason_code=usage.variance_reason_code,
+                            variance_reason_text=usage.variance_reason_text,
+                            return_confirmed=usage.return_confirmed,
+                        )
+                        for usage in item.material_usages
+                    ),
                 )
                 for item in payload.items
             ],
@@ -246,6 +337,14 @@ def post_completion_batch(
             require_customer_access(customer_id, current_user=user, db=db)
         if not result.replayed:
             for completion in result.completions:
+                material_usages = db.scalars(
+                    select(ProductionCompletionMaterialUsage)
+                    .where(
+                        ProductionCompletionMaterialUsage.completion_id
+                        == completion.id
+                    )
+                    .order_by(ProductionCompletionMaterialUsage.reservation_id)
+                ).all()
                 db.add(
                     OperationLog(
                         user_id=user.id,
@@ -267,6 +366,25 @@ def post_completion_batch(
                                 "order_reserved_quantity": completion.order_reserved_quantity,
                                 "stock_quantity": completion.stock_quantity,
                                 "surplus_finished_quantity": completion.surplus_finished_quantity,
+                                "material_usages": [
+                                    {
+                                        "reservation_id": usage.reservation_id,
+                                        "inventory_lot_id": usage.inventory_lot_id,
+                                        "actual_consumed_stock_quantity": (
+                                            usage.actual_consumed_stock_quantity
+                                        ),
+                                        "returned_intact_stock_quantity": (
+                                            usage.returned_intact_stock_quantity
+                                        ),
+                                        "damaged_stock_quantity": (
+                                            usage.damaged_stock_quantity
+                                        ),
+                                        "offcut_stock_quantity": (
+                                            usage.offcut_stock_quantity
+                                        ),
+                                    }
+                                    for usage in material_usages
+                                ],
                             },
                             ensure_ascii=False,
                         ),

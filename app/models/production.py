@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -268,6 +269,200 @@ class ProductionCompletion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
+
+
+class ProductionCompletionMaterialUsage(Base):
+    """Immutable per-reservation material facts captured at production completion."""
+
+    __tablename__ = "production_completion_material_usages"
+    __table_args__ = (
+        UniqueConstraint(
+            "completion_id",
+            "reservation_id",
+            name="uq_production_completion_material_usages_completion_reservation",
+        ),
+        UniqueConstraint(
+            "consume_movement_id",
+            name="uq_production_completion_material_usages_consume_movement",
+        ),
+        UniqueConstraint(
+            "release_movement_id",
+            name="uq_production_completion_material_usages_release_movement",
+        ),
+        Index(
+            "ix_production_completion_material_usages_task",
+            "task_id",
+            "status",
+        ),
+        Index(
+            "ix_production_completion_material_usages_reservation",
+            "reservation_id",
+            "status",
+        ),
+        Index(
+            "ix_production_completion_material_usages_lot",
+            "inventory_lot_id",
+            "status",
+        ),
+        CheckConstraint(
+            "assigned_stock_quantity > 0 "
+            "AND actual_consumed_stock_quantity >= 0 "
+            "AND returned_intact_stock_quantity >= 0 "
+            "AND damaged_stock_quantity >= 0 "
+            "AND offcut_stock_quantity >= 0 "
+            "AND remaining_reserved_stock_quantity >= 0",
+            name="ck_production_completion_material_usages_nonnegative",
+        ),
+        CheckConstraint(
+            "assigned_stock_quantity = actual_consumed_stock_quantity "
+            "+ returned_intact_stock_quantity + damaged_stock_quantity "
+            "+ offcut_stock_quantity + remaining_reserved_stock_quantity",
+            name="ck_production_completion_material_usages_conservation",
+        ),
+        CheckConstraint(
+            "remaining_reserved_stock_quantity = 0",
+            name="ck_production_completion_material_usages_no_remaining",
+        ),
+        CheckConstraint(
+            "expected_lot_version >= 1 "
+            "AND result_lot_version > expected_lot_version "
+            "AND credited_requirement_quantity >= 0 "
+            "AND credited_requirement_quantity <= assigned_stock_quantity * yield_factor "
+            "AND actual_credited_requirement_quantity >= 0 "
+            "AND actual_credited_requirement_quantity <= credited_requirement_quantity "
+            "AND actual_credited_requirement_quantity "
+            "<= actual_consumed_stock_quantity * yield_factor "
+            "AND yield_factor >= 1",
+            name="ck_production_completion_material_usages_credits",
+        ),
+        CheckConstraint(
+            "actual_consumed_stock_quantity = assigned_stock_quantity "
+            "OR variance_reason_code IN ('intact_return','damaged','offcut','mixed')",
+            name="ck_production_completion_material_usages_variance_reason",
+        ),
+        CheckConstraint(
+            "((actual_consumed_stock_quantity + damaged_stock_quantity "
+            "+ offcut_stock_quantity = 0 AND consume_movement_id IS NULL) "
+            "OR (actual_consumed_stock_quantity + damaged_stock_quantity "
+            "+ offcut_stock_quantity > 0 AND consume_movement_id IS NOT NULL)) "
+            "AND ((returned_intact_stock_quantity = 0 AND release_movement_id IS NULL) "
+            "OR (returned_intact_stock_quantity > 0 AND release_movement_id IS NOT NULL))",
+            name="ck_production_completion_material_usages_movements",
+        ),
+        CheckConstraint(
+            "status IN ('posted','reversed')",
+            name="ck_production_completion_material_usages_status",
+        ),
+        CheckConstraint(
+            "return_status IN ('not_applicable','released','reversed')",
+            name="ck_production_completion_material_usages_return_status",
+        ),
+        CheckConstraint(
+            "(returned_intact_stock_quantity = 0 "
+            "AND return_confirmed IS FALSE "
+            "AND return_status = 'not_applicable' "
+            "AND return_confirmed_by IS NULL "
+            "AND return_confirmed_at IS NULL) "
+            "OR (returned_intact_stock_quantity > 0 "
+            "AND return_confirmed IS TRUE "
+            "AND return_status IN ('released','reversed') "
+            "AND return_confirmed_by IS NOT NULL "
+            "AND return_confirmed_at IS NOT NULL)",
+            name="ck_production_completion_material_usages_return_confirmation",
+        ),
+        CheckConstraint(
+            "(status = 'posted' AND reversed_at IS NULL "
+            "AND reversed_by IS NULL AND reversal_reason IS NULL) "
+            "OR (status = 'reversed' AND reversed_at IS NOT NULL "
+            "AND reversal_reason IS NOT NULL)",
+            name="ck_production_completion_material_usages_reversal",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    completion_id: Mapped[int] = mapped_column(
+        ForeignKey("production_completions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("production_tasks.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    reservation_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_reservations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    inventory_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    expected_lot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    result_lot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    assigned_stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    actual_consumed_stock_quantity: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    returned_intact_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    damaged_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    offcut_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    remaining_reserved_stock_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    credited_requirement_quantity: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    actual_credited_requirement_quantity: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    yield_factor: Mapped[int] = mapped_column(Integer, nullable=False)
+    variance_reason_code: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    variance_reason_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    return_confirmed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    return_confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    return_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    return_status: Mapped[str] = mapped_column(
+        String(30), default="not_applicable", server_default="not_applicable", nullable=False
+    )
+    consume_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    release_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="posted", server_default="posted", nullable=False
+    )
+    operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reversed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reversal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ProductionStockTransfer(Base):

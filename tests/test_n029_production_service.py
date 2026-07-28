@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.auth import router as auth_router
@@ -24,9 +24,11 @@ from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import (
     ProductionCompletion,
     ProductionCompletionBatch,
+    ProductionCompletionMaterialUsage,
     ProductionStockTransfer,
     ProductionTask,
 )
@@ -50,6 +52,7 @@ from app.services.production_workflow import (
     completion_batch_request_hash,
     create_or_refresh_production_task,
     list_production_completions,
+    list_production_tasks,
     normalized_completion_output,
     production_input_quantity,
     production_output_quantity,
@@ -670,6 +673,7 @@ def production_app(tmp_path: Path):
             "customer_a": customer_a.id,
             "customer_b": customer_b.id,
             "product_a": product_a.id,
+            "product_a3": product_a3.id,
             "regular": regular.id,
             "semi_location": semi_location.id,
             "temp1": temp1.id,
@@ -728,6 +732,915 @@ def _complete(
             ],
         },
     )
+
+
+def _material_usage_payload(
+    factory,
+    ids: dict,
+    key: str,
+    *,
+    actual: int,
+    returned: int = 0,
+    damaged: int = 0,
+    offcut: int = 0,
+    reason: str | None = None,
+) -> dict:
+    with factory() as db:
+        reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id
+                == ids["cases"][key]["item"],
+                InventoryReservation.reservation_type == "semi_order",
+                InventoryReservation.status.notin_(
+                    ("cancelled", "released", "consumed")
+                ),
+            )
+        )
+        assert reservation is not None
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        assert lot is not None
+        assigned = (
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0)
+        )
+        return {
+            "reservation_id": reservation.id,
+            "inventory_lot_id": lot.id,
+            "expected_lot_version": int(lot.version),
+            "assigned_stock_quantity": assigned,
+            "actual_consumed_stock_quantity": actual,
+            "returned_intact_stock_quantity": returned,
+            "damaged_stock_quantity": damaged,
+            "offcut_stock_quantity": offcut,
+            "variance_reason_code": reason,
+            "return_confirmed": returned > 0,
+        }
+
+
+def _set_material_reservation_quantity(
+    factory,
+    ids: dict,
+    key: str,
+    quantity: int,
+) -> None:
+    with factory() as db:
+        reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id
+                == ids["cases"][key]["item"],
+                InventoryReservation.reservation_type == "semi_order",
+                InventoryReservation.status.notin_(
+                    ("cancelled", "released", "consumed")
+                ),
+            )
+        )
+        assert reservation is not None
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        assert lot is not None
+        reservation.reserved_stock_quantity = quantity
+        reservation.credited_requirement_quantity = quantity
+        lot.quantity_reserved = quantity
+        db.commit()
+
+
+def _complete_with_material_usage(
+    client: TestClient,
+    ids: dict,
+    key: str,
+    *,
+    idempotency_key: str,
+    usage: dict,
+    material_input_quantity: int,
+    actual_output_quantity: int,
+    defective_quantity: int,
+    expected_version: int = 1,
+    disposition: str = "direct",
+    location_id: int | None = None,
+):
+    return client.post(
+        "/api/production/completion-batches",
+        json={
+            "idempotency_key": idempotency_key,
+            "items": [
+                {
+                    "task_id": ids["cases"][key]["task"],
+                    "expected_version": expected_version,
+                    "disposition": disposition,
+                    "material_input_quantity": material_input_quantity,
+                    "actual_output_quantity": actual_output_quantity,
+                    "defective_quantity": defective_quantity,
+                    "direct_delivery_quantity": (
+                        actual_output_quantity if disposition == "direct" else 0
+                    ),
+                    "location_id": location_id,
+                    "material_usages": [usage],
+                }
+            ],
+        },
+    )
+
+
+@pytest.fixture
+def enabled_production_material_usage(monkeypatch):
+    monkeypatch.setenv("ERP_PRODUCTION_MATERIAL_USAGE_ENABLED", "1")
+
+
+def test_material_usage_feature_is_disabled_by_default_and_legacy_flow_stays_active(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=5,
+    )
+    with TestClient(app) as client:
+        _login(client)
+        tasks = client.get("/api/production/tasks", params={"status": "pending"})
+        hidden_write = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-hidden-rejected",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
+        )
+        legacy = _complete(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-hidden-legacy-flow",
+        )
+
+    assert tasks.status_code == 200
+    assert tasks.json()["material_usage_enabled"] is False
+    direct_task = next(
+        row
+        for row in tasks.json()["items"]
+        if row["id"] == ids["cases"]["direct"]["task"]
+    )
+    assert direct_task["material_usage_feature_enabled"] is False
+    assert direct_task["material_pick_sources"] == []
+    assert hidden_write.status_code == 409
+    assert "隐藏状态" in hidden_write.json()["detail"]
+    assert legacy.status_code == 200, legacy.text
+    with factory() as db:
+        assert db.scalar(select(ProductionCompletionMaterialUsage.id)) is None
+
+
+def test_completion_records_explicit_material_usage_and_reversal_is_exact(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    _set_material_reservation_quantity(factory, ids, "direct", 6)
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=5,
+        returned=1,
+        reason="intact_return",
+    )
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-return-one",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
+        )
+        assert completed.status_code == 200, completed.text
+        completion_row = completed.json()["items"][0]
+        assert completion_row["material_usage_protocol"] == "per_reservation"
+        assert completion_row["material_usages"][0][
+            "returned_intact_stock_quantity"
+        ] == 1
+        assert completion_row["material_usages"][0][
+            "result_lot_version"
+        ] > completion_row["material_usages"][0]["expected_lot_version"]
+        reversed_response = client.post(
+            f"/api/production/completions/{completion_row['id']}/revert",
+            json={"reason": "P1-11C撤销核对"},
+        )
+        assert reversed_response.status_code == 200, reversed_response.text
+
+    with factory() as db:
+        reservation = db.get(
+            InventoryReservation, usage_payload["reservation_id"]
+        )
+        lot = db.get(InventoryLot, usage_payload["inventory_lot_id"])
+        usage = db.scalar(
+            select(ProductionCompletionMaterialUsage).where(
+                ProductionCompletionMaterialUsage.completion_id
+                == completion_row["id"]
+            )
+        )
+        assert (
+            reservation.consumed_stock_quantity,
+            reservation.released_stock_quantity,
+            reservation.consumed_requirement_quantity,
+            reservation.released_requirement_quantity,
+            reservation.status,
+        ) == (0, 0, 0, 0, "active")
+        assert (
+            lot.quantity_available,
+            lot.quantity_reserved,
+            lot.quantity_consumed,
+        ) == (0, 6, 0)
+        assert usage.status == "reversed"
+        assert usage.return_status == "reversed"
+        assert usage.consume_movement_id is not None
+        assert usage.release_movement_id is not None
+
+
+def test_material_usage_return_requires_warehouse_permission_and_rolls_back(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=4,
+        returned=1,
+        reason="intact_return",
+    )
+    with TestClient(app) as client:
+        _login(client, "n029-direct-only")
+        response = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-return-without-permission",
+            usage=usage_payload,
+            material_input_quantity=4,
+            actual_output_quantity=4,
+            defective_quantity=0,
+        )
+    assert response.status_code == 403
+    assert "仓库执行权限" in response.json()["detail"]
+    with factory() as db:
+        reservation = db.get(
+            InventoryReservation, usage_payload["reservation_id"]
+        )
+        lot = db.get(InventoryLot, usage_payload["inventory_lot_id"])
+        assert (
+            reservation.consumed_stock_quantity,
+            reservation.released_stock_quantity,
+        ) == (0, 0)
+        assert (lot.quantity_available, lot.quantity_reserved) == (0, 5)
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        assert db.scalar(select(ProductionCompletionMaterialUsage.id)) is None
+
+
+def test_material_usage_is_required_for_reserved_task_and_rolls_back(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        response = _complete(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-required",
+        )
+    assert response.status_code == 409
+    assert "逐批用料" in response.json()["detail"]
+    with factory() as db:
+        reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id
+                == ids["cases"]["direct"]["item"],
+                InventoryReservation.reservation_type == "semi_order",
+            )
+        )
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        assert (
+            reservation.consumed_stock_quantity,
+            reservation.released_stock_quantity,
+        ) == (0, 0)
+        assert (lot.quantity_available, lot.quantity_reserved) == (0, 5)
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        assert db.scalar(select(ProductionCompletionMaterialUsage.id)) is None
+
+
+def test_partial_material_cannot_complete_entire_task(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=4,
+        returned=1,
+        reason="intact_return",
+    )
+    with TestClient(app) as client:
+        _login(client)
+        response = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-partial-blocked",
+            usage=usage_payload,
+            material_input_quantity=4,
+            actual_output_quantity=4,
+            defective_quantity=0,
+        )
+    assert response.status_code == 409
+    assert "不能整项确认完工" in response.json()["detail"]
+    with factory() as db:
+        reservation = db.get(
+            InventoryReservation, usage_payload["reservation_id"]
+        )
+        lot = db.get(InventoryLot, usage_payload["inventory_lot_id"])
+        assert (
+            reservation.consumed_stock_quantity,
+            reservation.released_stock_quantity,
+        ) == (0, 0)
+        assert (lot.quantity_available, lot.quantity_reserved) == (0, 5)
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        assert db.scalar(select(ProductionCompletionMaterialUsage.id)) is None
+
+
+def test_material_usage_damage_and_offcut_are_consumed_without_inventory_return(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    _set_material_reservation_quantity(factory, ids, "direct", 7)
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=5,
+        damaged=1,
+        offcut=1,
+        reason="mixed",
+    )
+    with TestClient(app) as client:
+        _login(client)
+        response = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-damage-offcut",
+            usage=usage_payload,
+            material_input_quantity=7,
+            actual_output_quantity=5,
+            defective_quantity=2,
+        )
+    assert response.status_code == 200, response.text
+    with factory() as db:
+        reservation = db.get(
+            InventoryReservation, usage_payload["reservation_id"]
+        )
+        lot = db.get(InventoryLot, usage_payload["inventory_lot_id"])
+        usage = db.scalar(select(ProductionCompletionMaterialUsage))
+        consume = db.get(InventoryMovement, usage.consume_movement_id)
+        assert (
+            lot.quantity_available,
+            lot.quantity_reserved,
+            lot.quantity_consumed,
+        ) == (0, 0, 7)
+        assert (
+            reservation.consumed_stock_quantity,
+            reservation.consumed_requirement_quantity,
+            reservation.released_requirement_quantity,
+        ) == (7, 5, 2)
+        assert usage.damaged_stock_quantity == 1
+        assert usage.offcut_stock_quantity == 1
+        assert usage.release_movement_id is None
+        assert consume.quantity == 7
+
+
+def test_material_usage_reversal_rejects_later_lot_version_change(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    _set_material_reservation_quantity(factory, ids, "direct", 6)
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=5,
+        returned=1,
+        reason="intact_return",
+    )
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-version-guard",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
+        )
+        assert completed.status_code == 200, completed.text
+        completion_id = completed.json()["items"][0]["id"]
+        with factory() as db:
+            lot = db.get(InventoryLot, usage_payload["inventory_lot_id"])
+            lot.version += 1
+            db.commit()
+        reversed_response = client.post(
+            f"/api/production/completions/{completion_id}/revert",
+            json={"reason": "后续版本变化后禁止撤销"},
+        )
+    assert reversed_response.status_code == 409
+    assert "后续变化" in reversed_response.json()["detail"]
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        usage = db.scalar(
+            select(ProductionCompletionMaterialUsage).where(
+                ProductionCompletionMaterialUsage.completion_id
+                == completion_id
+            )
+        )
+        assert completion.status == "posted"
+        assert usage.status == "posted"
+
+
+def test_material_usage_is_part_of_completion_idempotency_hash(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory,
+        ids,
+        "direct",
+        actual=5,
+    )
+    with TestClient(app) as client:
+        _login(client)
+        first = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-idempotency",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
+        )
+        replay = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-idempotency",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
+        )
+        changed_usage = dict(
+            usage_payload,
+            actual_consumed_stock_quantity=4,
+            returned_intact_stock_quantity=1,
+            variance_reason_code="intact_return",
+            return_confirmed=True,
+        )
+        conflict = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="usage-idempotency",
+            usage=changed_usage,
+            material_input_quantity=4,
+            actual_output_quantity=4,
+            defective_quantity=0,
+        )
+    assert first.status_code == replay.status_code == 200
+    assert replay.json()["replayed"] is True
+    assert replay.json()["items"][0]["id"] == first.json()["items"][0]["id"]
+    assert conflict.status_code == 409
+    assert "幂等" in conflict.json()["detail"]
+    with factory() as db:
+        assert db.scalar(
+            select(func.count(ProductionCompletionMaterialUsage.id))
+        ) == 1
+
+
+def test_material_usage_validates_each_required_component_independently(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    case = ids["cases"]["missing"]
+    with factory() as db:
+        order = db.get(Order, case["order"])
+        item = db.get(OrderItem, case["item"])
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a3"])
+        semi_location = db.get(WarehouseLocation, ids["semi_location"])
+        assert all((order, item, customer, product, semi_location))
+        cover_reservation = db.scalar(
+            select(InventoryReservation)
+            .join(
+                OrderItemSemiRequirement,
+                OrderItemSemiRequirement.id
+                == InventoryReservation.semi_requirement_id,
+            )
+            .where(
+                InventoryReservation.order_item_id == item.id,
+                OrderItemSemiRequirement.component_type == "cover",
+            )
+        )
+        assert cover_reservation is not None
+        cover_lot = db.get(InventoryLot, cover_reservation.inventory_lot_id)
+        cover_reservation.reserved_stock_quantity = 1
+        cover_reservation.credited_requirement_quantity = 1
+        cover_lot.quantity_reserved = 1
+        base_requirement = db.scalar(
+            select(OrderItemSemiRequirement).where(
+                OrderItemSemiRequirement.order_item_id == item.id,
+                OrderItemSemiRequirement.component_type == "base",
+            )
+        )
+        assert base_requirement is not None
+        _semi_reserved(
+            db,
+            key="imbalanced-base",
+            order=order,
+            item=item,
+            customer=customer,
+            product=product,
+            location=semi_location,
+            credit=7,
+            component="base",
+            requirement=base_requirement,
+        )
+        db.commit()
+
+    with factory() as db:
+        reservations = list(
+            db.scalars(
+                select(InventoryReservation)
+                .where(
+                    InventoryReservation.order_item_id == case["item"],
+                    InventoryReservation.reservation_type == "semi_order",
+                )
+                .order_by(InventoryReservation.id)
+            ).all()
+        )
+        usages = []
+        for reservation in reservations:
+            lot = db.get(InventoryLot, reservation.inventory_lot_id)
+            assigned = int(reservation.reserved_stock_quantity or 0)
+            usages.append(
+                {
+                    "reservation_id": reservation.id,
+                    "inventory_lot_id": lot.id,
+                    "expected_lot_version": int(lot.version),
+                    "assigned_stock_quantity": assigned,
+                    "actual_consumed_stock_quantity": assigned,
+                    "returned_intact_stock_quantity": 0,
+                    "damaged_stock_quantity": 0,
+                    "offcut_stock_quantity": 0,
+                    "variance_reason_code": None,
+                    "return_confirmed": False,
+                }
+            )
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "usage-component-imbalance",
+                "items": [
+                    {
+                        "task_id": case["task"],
+                        "expected_version": 1,
+                        "disposition": "direct",
+                        "material_input_quantity": 8,
+                        "actual_output_quantity": 4,
+                        "defective_quantity": 4,
+                        "direct_delivery_quantity": 4,
+                        "material_usages": usages,
+                    }
+                ],
+            },
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"].startswith("cover")
+    with factory() as db:
+        for reservation in db.scalars(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id == case["item"],
+                InventoryReservation.reservation_type == "semi_order",
+            )
+        ):
+            assert reservation.consumed_stock_quantity == 0
+            assert reservation.released_stock_quantity == 0
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        assert db.scalar(select(ProductionCompletionMaterialUsage.id)) is None
+
+
+def test_production_pick_sources_are_batched_scoped_and_material_safe(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    app, factory, ids = production_app
+    engine = factory.kw["bind"]
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(str(statement))
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        with TestClient(app) as client:
+            _login(client, "n029-viewer")
+            response = client.get("/api/production/tasks", params={"status": "pending"})
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+
+    assert response.status_code == 200, response.text
+    rows = response.json()["items"]
+    assert rows
+    assert {row["customer_id"] for row in rows} == {ids["customer_a"]}
+
+    direct = next(
+        row for row in rows if row["id"] == ids["cases"]["direct"]["task"]
+    )
+    assert direct["material_pick_status"] == "ready"
+    assert direct["material_pick_missing_quantity"] == 0
+    assert direct["material_pick_assigned_sheet_quantity"] == 5
+    assert direct["material_pick_estimated_output_quantity"] == 5
+    assert len(direct["material_pick_sources"]) == 1
+    source = direct["material_pick_sources"][0]
+    assert source == {
+        "reservation_id": source["reservation_id"],
+        "inventory_lot_id": source["inventory_lot_id"],
+        "lot_number": "SF-direct",
+        "lot_version": 2,
+        "source_ref_type": None,
+        "source_ref_id": None,
+        "location_id": ids["semi_location"],
+        "location_code": "SEMI-N029",
+        "location_name": "半成品位",
+        "component_type": "whole",
+        "board_length_mm": 800,
+        "board_width_mm": 600,
+        "flute_type": "A",
+        "remaining_sheet_quantity": 5,
+        "remaining_requirement_quantity": 5,
+        "stock_yield_per_sheet": 1,
+        "estimated_output_quantity": 5,
+        "inventory_scope": "customer_dedicated",
+        "source_status": "ready",
+        "warning_codes": [],
+        "display_name": "客户专用纸板备料",
+        "planned_input_quantity": 5,
+    }
+    assert {
+        "material_code",
+        "normalized_material_code",
+        "supplier_name",
+        "estimated_unit_cost",
+        "price",
+    }.isdisjoint(source)
+
+    partial = next(
+        row for row in rows if row["id"] == ids["cases"]["partial"]["task"]
+    )
+    assert partial["material_pick_status"] == "partial"
+    assert partial["material_pick_estimated_output_quantity"] == 2
+    assert partial["material_pick_missing_quantity"] == 3
+
+    source_queries = [
+        statement
+        for statement in statements
+        if "inventory_reservations" in statement
+        and "semi_finished_inventory_details" in statement
+        and "warehouse_locations" in statement
+    ]
+    assert len(source_queries) == 1
+
+
+def test_invalid_production_pick_source_fails_closed_without_sensitive_fields(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id
+                == ids["cases"]["direct"]["item"],
+                InventoryReservation.reservation_type == "semi_order",
+            )
+        )
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        db.delete(lot.semi_finished_detail)
+        db.flush()
+
+        rows = list_production_tasks(
+            db,
+            allowed_customer_ids={ids["customer_a"]},
+            status="pending",
+        )
+        direct = next(
+            row for row in rows if row["id"] == ids["cases"]["direct"]["task"]
+        )
+
+    assert direct["material_pick_status"] == "invalid"
+    assert direct["customer_board_preparation_sources"] == []
+    source = direct["material_pick_sources"][0]
+    assert source["source_status"] == "invalid"
+    assert "MATERIAL_SOURCE_DETAIL_MISSING" in source["warning_codes"]
+    assert source["board_length_mm"] is None
+    assert source["flute_type"] is None
+    assert "material_code" not in source
+    assert "supplier_name" not in source
+
+
+def test_component_pick_source_does_not_leak_into_parent_task(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        order = db.get(Order, ids["cases"]["direct"]["order"])
+        item = db.get(OrderItem, ids["cases"]["direct"]["item"])
+        product = db.get(Product, ids["product_a"])
+        customer = db.get(Customer, ids["customer_a"])
+        location = db.get(WarehouseLocation, ids["semi_location"])
+        snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=item.id,
+            component_product_id=product.id,
+            parent_product_version=1,
+            component_product_version=1,
+            snapshot_schema_version=2,
+            order_set_quantity=5,
+            quantity_per_set=Decimal("1"),
+            required_piece_quantity=Decimal("5"),
+            display_order=1,
+            internal_component_code="N029-PICK-S01",
+            is_die_cut=False,
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code="N029-PICK-COMP",
+            snapshot_component_product_name="N029领料组件",
+            snapshot_component_spec="800×600",
+            snapshot_component_material="K=A",
+            snapshot_component_flute_type="A",
+            snapshot_component_box_category="normal",
+            snapshot_component_default_cutting_mode="一开一",
+        )
+        db.add(snapshot)
+        db.flush()
+        component_task = ProductionTask(
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=snapshot.id,
+            status="pending",
+            planned_quantity=5,
+            finished_coverage_snapshot=0,
+            readiness_basis="semi_finished_inventory",
+            ready_at=_now(),
+            version=1,
+        )
+        db.add(component_task)
+        component_reservation, component_lot, _requirement = _semi_reserved(
+            db,
+            key="direct-component",
+            order=order,
+            item=item,
+            customer=customer,
+            product=product,
+            location=location,
+            credit=5,
+            component="cover",
+        )
+        component_reservation.sales_order_item_bom_component_id = snapshot.id
+        db.flush()
+
+        rows = list_production_tasks(
+            db,
+            allowed_customer_ids={ids["customer_a"]},
+            status="pending",
+        )
+        parent = next(
+            row for row in rows if row["id"] == ids["cases"]["direct"]["task"]
+        )
+        component = next(row for row in rows if row["id"] == component_task.id)
+
+    assert [row["lot_number"] for row in parent["material_pick_sources"]] == [
+        "SF-direct"
+    ]
+    assert [row["inventory_lot_id"] for row in component["material_pick_sources"]] == [
+        component_lot.id
+    ]
+    assert component["material_pick_sources"][0]["component_type"] == "cover"
+
+
+def test_production_pick_sources_are_fifo_stable_and_ignore_closed_balances(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        order = db.get(Order, ids["cases"]["direct"]["order"])
+        item = db.get(OrderItem, ids["cases"]["direct"]["item"])
+        product = db.get(Product, ids["product_a"])
+        customer = db.get(Customer, ids["customer_a"])
+        location = db.get(WarehouseLocation, ids["semi_location"])
+        first_reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id == item.id,
+                InventoryReservation.reservation_type == "semi_order",
+            )
+        )
+        requirement = db.get(
+            OrderItemSemiRequirement,
+            first_reservation.semi_requirement_id,
+        )
+        second_reservation, second_lot, _requirement = _semi_reserved(
+            db,
+            key="direct-second",
+            order=order,
+            item=item,
+            customer=customer,
+            product=product,
+            location=location,
+            credit=2,
+            requirement=requirement,
+        )
+        second_lot.semi_finished_detail.owner_customer_id = None
+        db.flush()
+
+        first_rows = list_production_tasks(
+            db,
+            allowed_customer_ids={ids["customer_a"]},
+            status="pending",
+        )
+        direct = next(
+            row for row in first_rows if row["id"] == ids["cases"]["direct"]["task"]
+        )
+        assert [source["lot_number"] for source in direct["material_pick_sources"]] == [
+            "SF-direct",
+            "SF-direct-second",
+        ]
+        assert direct["material_pick_sources"][1]["inventory_scope"] == "general"
+        assert direct["material_pick_sources"][1]["display_name"] == "通用原料片料"
+
+        second_reservation.status = "released"
+        second_reservation.released_stock_quantity = 2
+        second_reservation.released_requirement_quantity = 2
+        db.flush()
+        released_rows = list_production_tasks(
+            db,
+            allowed_customer_ids={ids["customer_a"]},
+            status="pending",
+        )
+        direct = next(
+            row
+            for row in released_rows
+            if row["id"] == ids["cases"]["direct"]["task"]
+        )
+        assert [source["lot_number"] for source in direct["material_pick_sources"]] == [
+            "SF-direct"
+        ]
+
+        first_reservation.consumed_stock_quantity = (
+            first_reservation.reserved_stock_quantity
+        )
+        first_reservation.consumed_requirement_quantity = (
+            first_reservation.credited_requirement_quantity
+        )
+        db.flush()
+        exhausted_rows = list_production_tasks(
+            db,
+            allowed_customer_ids={ids["customer_a"]},
+            status="pending",
+        )
+        direct = next(
+            row
+            for row in exhausted_rows
+            if row["id"] == ids["cases"]["direct"]["task"]
+        )
+        assert direct["material_pick_sources"] == []
+        assert direct["material_pick_status"] == "unassigned"
 
 
 def test_double_splice_sixty_pieces_complete_and_deliver_as_thirty_boxes(
@@ -854,15 +1767,25 @@ def _delivery_item(db: Session, *, item_id: int, customer_id: int, quantity: int
     return row
 
 
-def test_admin_can_revert_stock_completion_and_complete_again(production_app) -> None:
+def test_admin_can_revert_stock_completion_and_complete_again(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
     app, factory, ids = production_app
+    first_usage = _material_usage_payload(
+        factory, ids, "stock", actual=6
+    )
     with TestClient(app) as client:
         _login(client)
-        completed = _complete(
+        completed = _complete_with_material_usage(
             client,
             ids,
             "stock",
             idempotency_key="stock-reversal-first",
+            usage=first_usage,
+            material_input_quantity=6,
+            actual_output_quantity=6,
+            defective_quantity=0,
             disposition="stock",
             location_id=ids["temp1"],
         )
@@ -878,11 +1801,18 @@ def test_admin_can_revert_stock_completion_and_complete_again(production_app) ->
             reverted_order = db.get(Order, ids["cases"]["stock"]["order"])
             assert (reverted_task.status, reverted_task.version) == ("pending", 3)
             assert reverted_order.status == "pending_production"
-        recompleted = _complete(
+        second_usage = _material_usage_payload(
+            factory, ids, "stock", actual=6
+        )
+        recompleted = _complete_with_material_usage(
             client,
             ids,
             "stock",
             idempotency_key="stock-reversal-second",
+            usage=second_usage,
+            material_input_quantity=6,
+            actual_output_quantity=6,
+            defective_quantity=0,
             disposition="stock",
             expected_version=3,
             location_id=ids["temp1"],
@@ -921,15 +1851,23 @@ def test_admin_can_revert_stock_completion_and_complete_again(production_app) ->
 
 def test_production_reversal_is_admin_only_and_downstream_change_is_atomic(
     production_app,
+    enabled_production_material_usage,
 ) -> None:
     app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory, ids, "stock", actual=6
+    )
     with TestClient(app) as client:
         _login(client)
-        completed = _complete(
+        completed = _complete_with_material_usage(
             client,
             ids,
             "stock",
             idempotency_key="stock-reversal-blocked",
+            usage=usage_payload,
+            material_input_quantity=6,
+            actual_output_quantity=6,
+            defective_quantity=0,
             disposition="stock",
             location_id=ids["temp1"],
         )
@@ -1012,12 +1950,25 @@ def test_task_refresh_tracks_finished_coverage_and_release(production_app) -> No
         assert order.status == "pending_production"
 
 
-def test_direct_completion_consumes_semi_once_and_delivery_skips_it(production_app) -> None:
+def test_direct_completion_consumes_semi_once_and_delivery_skips_it(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
     app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory, ids, "direct", actual=5
+    )
     with TestClient(app) as client:
         _login(client)
-        response = _complete(
-            client, ids, "direct", idempotency_key="direct-once"
+        response = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="direct-once",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
         )
     assert response.status_code == 200, response.text
     with factory() as db:
@@ -1056,15 +2007,23 @@ def test_direct_completion_consumes_semi_once_and_delivery_skips_it(production_a
 
 def test_stock_completion_reserves_finished_without_double_ready_or_semi_consume(
     production_app,
+    enabled_production_material_usage,
 ) -> None:
     app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory, ids, "stock", actual=6
+    )
     with TestClient(app) as client:
         _login(client)
-        response = _complete(
+        response = _complete_with_material_usage(
             client,
             ids,
             "stock",
             idempotency_key="stock-once",
+            usage=usage_payload,
+            material_input_quantity=6,
+            actual_output_quantity=6,
+            defective_quantity=0,
             disposition="stock",
             location_id=ids["temp1"],
         )
@@ -1498,15 +2457,23 @@ def test_direct_transfer_preserves_completion_and_production_reservation_cannot_
 
 def test_completion_blocks_late_normal_finished_inventory_reservation(
     production_app,
+    enabled_production_material_usage,
 ) -> None:
     app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory, ids, "stock", actual=6
+    )
     with TestClient(app) as client:
         _login(client)
-        completed = _complete(
+        completed = _complete_with_material_usage(
             client,
             ids,
             "stock",
             idempotency_key="semi-complete-before-finished-reserve",
+            usage=usage_payload,
+            material_input_quantity=6,
+            actual_output_quantity=6,
+            defective_quantity=0,
             disposition="direct",
         )
     assert completed.status_code == 200, completed.text
@@ -1586,8 +2553,9 @@ def test_terminal_or_force_closed_direct_completion_cannot_transfer_to_stock(
         ) is None
 
 
-def test_semi_basis_requires_every_component_but_material_receipt_allows_partial(
+def test_missing_component_and_partial_material_cannot_complete_whole_task(
     production_app,
+    enabled_production_material_usage,
 ) -> None:
     app, factory, ids = production_app
     with TestClient(app) as client:
@@ -1599,7 +2567,7 @@ def test_semi_basis_requires_every_component_but_material_receipt_allows_partial
             client, ids, "partial", idempotency_key="partial-material"
         )
     assert missing.status_code == 409
-    assert partial.status_code == 200, partial.text
+    assert partial.status_code == 409
     with factory() as db:
         missing_case = ids["cases"]["missing"]
         assert db.get(ProductionTask, missing_case["task"]).status == "pending"
@@ -1622,20 +2590,38 @@ def test_semi_basis_requires_every_component_but_material_receipt_allows_partial
                 InventoryReservation.reservation_type == "semi_order",
             )
         )
-        assert db.get(ProductionTask, partial_case["task"]).status == "completed"
-        assert partial_reservation.consumed_requirement_quantity == 2
+        assert db.get(ProductionTask, partial_case["task"]).status == "pending"
+        assert partial_reservation.consumed_requirement_quantity == 0
+        assert db.scalar(
+            select(ProductionCompletion.id).where(
+                ProductionCompletion.order_item_id == partial_case["item"]
+            )
+        ) is None
 
 
-def test_cannot_add_semi_reservation_after_completion(production_app) -> None:
+def test_cannot_add_semi_reservation_after_completion(
+    production_app,
+    enabled_production_material_usage,
+) -> None:
     app, factory, ids = production_app
+    usage_payload = _material_usage_payload(
+        factory, ids, "direct", actual=5
+    )
     with TestClient(app) as client:
         _login(client)
-        completed = _complete(
-            client, ids, "partial", idempotency_key="reserve-after-completion"
+        completed = _complete_with_material_usage(
+            client,
+            ids,
+            "direct",
+            idempotency_key="reserve-after-completion",
+            usage=usage_payload,
+            material_input_quantity=5,
+            actual_output_quantity=5,
+            defective_quantity=0,
         )
     assert completed.status_code == 200, completed.text
     with factory() as db:
-        item_id = ids["cases"]["partial"]["item"]
+        item_id = ids["cases"]["direct"]["item"]
         requirement = db.scalar(
             select(OrderItemSemiRequirement).where(
                 OrderItemSemiRequirement.order_item_id == item_id

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
 from math import ceil
+import os
 from typing import Literal, Sequence
 
 from sqlalchemy import func, or_, select, update
@@ -23,6 +24,7 @@ from app.models.product_bom import (
 from app.models.production import (
     ProductionCompletion,
     ProductionCompletionBatch,
+    ProductionCompletionMaterialUsage,
     ProductionStockTransfer,
     ProductionTask,
 )
@@ -35,6 +37,7 @@ from app.models.warehouse_inventory import (
     InventoryPalletItem,
     InventoryReservation,
     OrderItemSemiRequirement,
+    SemiFinishedInventoryDetail,
     WarehouseLocation,
 )
 from app.services.composite_bom_workflow import (
@@ -49,6 +52,10 @@ from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
 )
+from app.services.semi_finished_inventory import (
+    ensure_semi_finished_lot_eligibility,
+    requirement_signature,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -62,6 +69,18 @@ from app.services.warehouse_inventory import _balances, _movement
 
 Disposition = Literal["direct", "stock"]
 CompletionType = Literal["primary", "supplemental"]
+MaterialVarianceReason = Literal["intact_return", "damaged", "offcut", "mixed"]
+
+
+def production_material_usage_enabled() -> bool:
+    """Keep P1-11B/C dormant until the raw-material warehouse is in service."""
+
+    return os.getenv("ERP_PRODUCTION_MATERIAL_USAGE_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 WAITING_MATERIAL = "waiting_material"
 PENDING = "pending"
@@ -87,6 +106,21 @@ class ProductionWorkflowError(ValueError):
 
 
 @dataclass(frozen=True)
+class MaterialUsageCommand:
+    reservation_id: int
+    inventory_lot_id: int
+    expected_lot_version: int
+    assigned_stock_quantity: int
+    actual_consumed_stock_quantity: int
+    returned_intact_stock_quantity: int = 0
+    damaged_stock_quantity: int = 0
+    offcut_stock_quantity: int = 0
+    variance_reason_code: MaterialVarianceReason | None = None
+    variance_reason_text: str | None = None
+    return_confirmed: bool = False
+
+
+@dataclass(frozen=True)
 class CompletionCommand:
     task_id: int
     expected_version: int
@@ -100,6 +134,7 @@ class CompletionCommand:
     pallet_id: int | None = None
     pallet_code: str | None = None
     remarks: str | None = None
+    material_usages: tuple[MaterialUsageCommand, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -272,6 +307,18 @@ def completion_batch_request_hash(
         item = asdict(command)
         item["remarks"] = _normalized_text(command.remarks)
         item["pallet_code"] = _normalized_text(command.pallet_code)
+        item["material_usages"] = [
+            {
+                **asdict(usage),
+                "variance_reason_text": _normalized_text(
+                    usage.variance_reason_text
+                ),
+            }
+            for usage in sorted(
+                command.material_usages,
+                key=lambda row: row.reservation_id,
+            )
+        ]
         items.append(item)
     return _canonical_hash(
         {"idempotency_key": idempotency_key.strip(), "items": items}
@@ -1207,6 +1254,563 @@ def _validate_commands(commands: Sequence[CompletionCommand]) -> None:
             raise ProductionWorkflowError("直接送货完工不能填写库存货位或栈板")
         if command.disposition == "stock" and command.location_id is None:
             raise ProductionWorkflowError("库存完工必须选择三楼成品库位")
+        usage_ids = [usage.reservation_id for usage in command.material_usages]
+        if len(set(usage_ids)) != len(usage_ids):
+            raise ProductionWorkflowError("同一原料预占不能在完工用料中重复提交")
+        for usage in command.material_usages:
+            if (
+                usage.reservation_id <= 0
+                or usage.inventory_lot_id <= 0
+                or usage.expected_lot_version <= 0
+                or usage.assigned_stock_quantity <= 0
+            ):
+                raise ProductionWorkflowError("逐批用料的预占、批次或版本无效")
+            quantities = (
+                usage.actual_consumed_stock_quantity,
+                usage.returned_intact_stock_quantity,
+                usage.damaged_stock_quantity,
+                usage.offcut_stock_quantity,
+            )
+            if any(quantity < 0 for quantity in quantities):
+                raise ProductionWorkflowError("逐批用料数量不能小于0")
+            if sum(quantities) != usage.assigned_stock_quantity:
+                raise ProductionWorkflowError(
+                    "逐批用料必须满足指派=投入+完整退回+损耗+余片"
+                )
+            has_variance = (
+                usage.actual_consumed_stock_quantity
+                != usage.assigned_stock_quantity
+            )
+            if has_variance and usage.variance_reason_code not in {
+                "intact_return",
+                "damaged",
+                "offcut",
+                "mixed",
+            }:
+                raise ProductionWorkflowError("逐批用料存在差异时必须选择原因")
+            if usage.returned_intact_stock_quantity > 0 and not usage.return_confirmed:
+                raise ProductionWorkflowError("完整未裁切纸板退回必须明确确认")
+            if usage.returned_intact_stock_quantity == 0 and usage.return_confirmed:
+                raise ProductionWorkflowError("没有完整退回数量时不能勾选退回确认")
+            if usage.damaged_stock_quantity > 0 and usage.variance_reason_code not in {
+                "damaged",
+                "mixed",
+            }:
+                raise ProductionWorkflowError("存在损耗时必须选择损耗原因")
+            if usage.offcut_stock_quantity > 0 and usage.variance_reason_code not in {
+                "offcut",
+                "mixed",
+            }:
+                raise ProductionWorkflowError("存在裁切余片时必须选择余片处理")
+
+
+@dataclass(frozen=True)
+class _PreparedMaterialUsage:
+    command: MaterialUsageCommand
+    semi_requirement_id: int
+    component_type: str
+    credited_requirement_quantity: int
+    actual_credited_requirement_quantity: int
+    released_requirement_quantity: int
+    yield_factor: int
+
+
+def _usage_reservation_status(reservation: InventoryReservation) -> str:
+    consumed = int(reservation.consumed_stock_quantity or 0)
+    released = int(reservation.released_stock_quantity or 0)
+    total = int(reservation.reserved_stock_quantity or 0)
+    remaining = total - consumed - released
+    if remaining > 0:
+        return "active" if consumed == 0 and released == 0 else "partial"
+    if consumed == total:
+        return "consumed"
+    if released == total:
+        return "released"
+    return "partial"
+
+
+def _task_material_reservations(
+    db: Session,
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+) -> list[InventoryReservation]:
+    query = (
+        select(InventoryReservation)
+        .join(
+            InventoryLot,
+            InventoryLot.id == InventoryReservation.inventory_lot_id,
+        )
+        .where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status.notin_(
+                ("cancelled", "released", "consumed")
+            ),
+            InventoryReservation.reserved_stock_quantity
+            > InventoryReservation.consumed_stock_quantity
+            + InventoryReservation.released_stock_quantity,
+        )
+    )
+    if task.sales_order_item_bom_component_id is None:
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id.is_(None)
+        )
+    else:
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id
+            == task.sales_order_item_bom_component_id
+        )
+    return list(
+        db.scalars(
+            query.order_by(
+                *inventory_fifo_order_columns(),
+                InventoryReservation.id,
+            )
+        ).all()
+    )
+
+
+def _prepare_completion_material_usages(
+    db: Session,
+    *,
+    command: CompletionCommand,
+    task: ProductionTask,
+    item: OrderItem,
+    order: Order,
+    material_input_quantity: int,
+    actual_output_quantity: int,
+    factor: int,
+    pieces_per_box: int,
+) -> tuple[_PreparedMaterialUsage, ...]:
+    if not production_material_usage_enabled():
+        if command.material_usages:
+            raise ProductionWorkflowError(
+                "原料仓尚未启用，逐批领料与耗用功能当前处于隐藏状态",
+                409,
+            )
+        return ()
+
+    reservations = _task_material_reservations(db, task=task, item=item)
+    require_full = task.readiness_basis in {
+        "semi_finished_inventory",
+        "component_semi_finished_inventory",
+    }
+    requirement_query = select(OrderItemSemiRequirement).where(
+        OrderItemSemiRequirement.order_item_id == item.id
+    )
+    if task.sales_order_item_bom_component_id is None:
+        requirement_query = requirement_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id.is_(None)
+        )
+    else:
+        requirement_query = requirement_query.where(
+            OrderItemSemiRequirement.sales_order_item_bom_component_id
+            == task.sales_order_item_bom_component_id
+        )
+    requirements = list(db.scalars(requirement_query).all())
+    requirements_by_id = {row.id: row for row in requirements}
+    product = db.get(Product, item.product_id)
+    box_style = str(product.box_style or "") if product is not None else ""
+    expected_components = (
+        {"cover", "base"}
+        if task.sales_order_item_bom_component_id is None
+        and ("天地盖" in box_style or "A3" in box_style.upper())
+        else {"whole"}
+    )
+    requirement_by_component = {row.component_type: row for row in requirements}
+    if require_full:
+        missing_requirements = expected_components - set(
+            requirement_by_component
+        )
+        if missing_requirements:
+            raise ProductionWorkflowError(
+                "半成品齐套任务缺少"
+                + "、".join(sorted(missing_requirements))
+                + "组件需求，无法完成生产完工",
+                409,
+            )
+        reserved_requirement_ids = {
+            int(row.semi_requirement_id)
+            for row in reservations
+            if row.semi_requirement_id is not None
+        }
+        missing_reservations = [
+            component
+            for component, requirement in requirement_by_component.items()
+            if component in expected_components
+            and requirement.id not in reserved_requirement_ids
+        ]
+        if missing_reservations:
+            raise ProductionWorkflowError(
+                "半成品齐套任务缺少"
+                + "、".join(sorted(missing_reservations))
+                + "组件预占，无法完成生产完工",
+                409,
+            )
+    if not reservations:
+        if command.material_usages:
+            raise ProductionWorkflowError("当前生产任务没有可用的原料预占", 409)
+        return ()
+
+    command_usages = tuple(command.material_usages)
+    if not command_usages:
+        raise ProductionWorkflowError(
+            "当前任务存在原料预占，必须提交页面显示的逐批用料明细",
+            409,
+        )
+
+    by_id = {row.id: row for row in reservations}
+    submitted_ids = {usage.reservation_id for usage in command_usages}
+    if submitted_ids != set(by_id):
+        raise ProductionWorkflowError(
+            "逐批用料必须完整覆盖当前任务的全部有效原料预占",
+            409,
+        )
+
+    prepared: list[_PreparedMaterialUsage] = []
+    total_physical_input = 0
+    total_normal_input = 0
+    available_credit_by_requirement: dict[int, int] = {}
+    actual_credit_by_requirement: dict[int, int] = {}
+    for usage in sorted(command_usages, key=lambda row: row.reservation_id):
+        reservation = by_id[usage.reservation_id]
+        if reservation.inventory_lot_id != usage.inventory_lot_id:
+            raise ProductionWorkflowError("原料预占与库存批次不一致", 409)
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if lot is None:
+            raise ProductionWorkflowError("原料库存批次不存在", 409)
+        detail = lot.semi_finished_detail
+        location = lot.location
+        if (
+            lot.inventory_type != "semi_finished"
+            or lot.status != "active"
+            or detail is None
+            or location is None
+            or not bool(location.is_active)
+        ):
+            raise ProductionWorkflowError("原料预占来源已失效，请仓库重新指派", 409)
+        requirement = requirements_by_id.get(int(reservation.semi_requirement_id or 0))
+        if (
+            requirement is None
+            or requirement.order_item_id != item.id
+            or requirement.sales_order_item_bom_component_id
+            != task.sales_order_item_bom_component_id
+            or reservation.order_id != order.id
+            or reservation.sales_order_item_bom_component_id
+            != task.sales_order_item_bom_component_id
+        ):
+            raise ProductionWorkflowError(
+                "原料预占与当前订单半成品需求不一致，请仓库重新指派",
+                409,
+            )
+        if requirement.sales_order_item_bom_component_id is not None:
+            snapshot = db.get(
+                SalesOrderItemBomComponent,
+                requirement.sales_order_item_bom_component_id,
+            )
+            if (
+                snapshot is None
+                or snapshot.sales_order_item_id != item.id
+                or snapshot.id != task.sales_order_item_bom_component_id
+            ):
+                raise ProductionWorkflowError("组件原料预占不属于当前生产任务", 409)
+            requirement_product_id = snapshot.component_product_id
+        else:
+            if task.sales_order_item_bom_component_id is not None:
+                raise ProductionWorkflowError("父件原料预占不能用于组件生产任务", 409)
+            requirement_product_id = item.product_id
+        try:
+            ensure_semi_finished_lot_eligibility(
+                db,
+                lot=lot,
+                product_id=requirement_product_id,
+                customer_id=order.customer_id,
+                expected=requirement_signature(requirement),
+            )
+        except WarehouseInventoryError as exc:
+            raise ProductionWorkflowError(str(exc), exc.status_code) from exc
+        if int(lot.version) != usage.expected_lot_version:
+            raise ProductionWorkflowError("原料库存版本已变化，请刷新后重试", 409)
+        remaining_stock = (
+            int(reservation.reserved_stock_quantity or 0)
+            - int(reservation.consumed_stock_quantity or 0)
+            - int(reservation.released_stock_quantity or 0)
+        )
+        if remaining_stock != usage.assigned_stock_quantity:
+            raise ProductionWorkflowError("原料指派数量已变化，请刷新后重试", 409)
+        current_credit = max(
+            int(reservation.credited_requirement_quantity or 0)
+            - int(reservation.consumed_requirement_quantity or 0)
+            - int(reservation.released_requirement_quantity or 0),
+            0,
+        )
+        yield_factor = max(int(reservation.yield_factor or 1), 1)
+        actual_credit = min(
+            current_credit,
+            int(usage.actual_consumed_stock_quantity) * yield_factor,
+        )
+        if current_credit <= 0 or actual_credit < 0:
+            raise ProductionWorkflowError("原料预占需求余额异常，请仓库重新指派", 409)
+        total_consumed = (
+            int(usage.actual_consumed_stock_quantity)
+            + int(usage.damaged_stock_quantity)
+            + int(usage.offcut_stock_quantity)
+        )
+        total_physical_input += total_consumed
+        total_normal_input += int(usage.actual_consumed_stock_quantity)
+        available_credit_by_requirement[requirement.id] = (
+            available_credit_by_requirement.get(requirement.id, 0) + current_credit
+        )
+        actual_credit_by_requirement[requirement.id] = (
+            actual_credit_by_requirement.get(requirement.id, 0) + actual_credit
+        )
+        prepared.append(
+            _PreparedMaterialUsage(
+                command=usage,
+                semi_requirement_id=requirement.id,
+                component_type=requirement.component_type,
+                credited_requirement_quantity=current_credit,
+                actual_credited_requirement_quantity=actual_credit,
+                released_requirement_quantity=current_credit - actual_credit,
+                yield_factor=yield_factor,
+            )
+        )
+
+    if total_physical_input != material_input_quantity:
+        raise ProductionWorkflowError(
+            "任务实际投入必须等于各批投入、损耗与余片之和",
+            409,
+        )
+    if command.completion_type == "primary":
+        physical_output_limit = production_output_quantity(
+            total_physical_input,
+            factor,
+            pieces_per_box,
+        )
+        if physical_output_limit < int(task.planned_quantity or 0):
+            raise ProductionWorkflowError(
+                "本次实际投入不足以覆盖整项生产任务，不能整项确认完工",
+                409,
+            )
+        for requirement_id in sorted(available_credit_by_requirement):
+            requirement = requirements_by_id[requirement_id]
+            target_credit = int(task.planned_quantity or 0) * max(
+                int(requirement.pieces_per_box or 1),
+                1,
+            )
+            if available_credit_by_requirement[requirement_id] < target_credit:
+                raise ProductionWorkflowError(
+                    f"{requirement.component_type}原料指派不足，不能整项确认完工",
+                    409,
+                )
+            if actual_credit_by_requirement[requirement_id] < target_credit:
+                raise ProductionWorkflowError(
+                    f"{requirement.component_type}实际有效投入不足，不能整项确认完工",
+                    409,
+                )
+    if actual_credit_by_requirement:
+        normal_output_limit = min(
+            actual_credit_by_requirement[requirement_id]
+            // max(int(requirements_by_id[requirement_id].pieces_per_box or 1), 1)
+            for requirement_id in actual_credit_by_requirement
+        )
+    else:
+        normal_output_limit = production_output_quantity(
+            total_normal_input,
+            factor,
+            pieces_per_box,
+        )
+    if actual_output_quantity > normal_output_limit:
+        raise ProductionWorkflowError(
+            f"实际合格产量不能超过有效投入可产数量 {normal_output_limit}",
+            409,
+        )
+    return tuple(prepared)
+
+
+def _apply_completion_material_usage(
+    db: Session,
+    *,
+    completion: ProductionCompletion,
+    task: ProductionTask,
+    item: OrderItem,
+    prepared: _PreparedMaterialUsage,
+    operator_id: int | None,
+    expected_current_lot_version: int,
+    result_lot_version: int,
+) -> ProductionCompletionMaterialUsage:
+    usage = prepared.command
+    reservation = db.get(InventoryReservation, usage.reservation_id)
+    lot = db.get(InventoryLot, usage.inventory_lot_id)
+    if reservation is None or lot is None:
+        raise ProductionWorkflowError("原料预占或库存批次已不存在", 409)
+    if int(lot.version) != expected_current_lot_version:
+        raise ProductionWorkflowError("原料库存版本已变化，请刷新后重试", 409)
+    remaining_stock = (
+        int(reservation.reserved_stock_quantity or 0)
+        - int(reservation.consumed_stock_quantity or 0)
+        - int(reservation.released_stock_quantity or 0)
+    )
+    if remaining_stock != usage.assigned_stock_quantity:
+        raise ProductionWorkflowError("原料指派数量已变化，请刷新后重试", 409)
+
+    total_consumed = (
+        int(usage.actual_consumed_stock_quantity)
+        + int(usage.damaged_stock_quantity)
+        + int(usage.offcut_stock_quantity)
+    )
+    current_version = int(lot.version)
+    consume_movement = None
+    release_movement = None
+    if total_consumed > 0:
+        before = _balances(lot)
+        updated = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == current_version,
+                InventoryLot.quantity_reserved >= total_consumed,
+            )
+            .values(
+                quantity_reserved=InventoryLot.quantity_reserved - total_consumed,
+                quantity_consumed=InventoryLot.quantity_consumed + total_consumed,
+                version=InventoryLot.version + 1,
+                last_movement_at=utc_now_naive(),
+            )
+        )
+        if updated.rowcount != 1:
+            raise ProductionWorkflowError("原料库存已被其他操作修改，请刷新后重试", 409)
+        reservation.consumed_stock_quantity = int(
+            reservation.consumed_stock_quantity or 0
+        ) + total_consumed
+        reservation.consumed_requirement_quantity = int(
+            reservation.consumed_requirement_quantity or 0
+        ) + prepared.actual_credited_requirement_quantity
+        db.flush()
+        db.expire(lot)
+        lot = db.get(InventoryLot, usage.inventory_lot_id)
+        assert lot is not None
+        current_version = int(lot.version)
+        consume_movement = _movement(
+            db,
+            lot=lot,
+            movement_type="consume",
+            quantity=total_consumed,
+            before=before,
+            operator_id=operator_id,
+            reason="生产完工逐批实际耗用",
+            remarks=json.dumps(
+                {
+                    "actual": usage.actual_consumed_stock_quantity,
+                    "damaged": usage.damaged_stock_quantity,
+                    "offcut": usage.offcut_stock_quantity,
+                },
+                ensure_ascii=False,
+            ),
+            idempotency_key=_stable_key(
+                "production-completion",
+                completion.id,
+                "usage-consume",
+                reservation.id,
+            ),
+            reservation_id=reservation.id,
+            related_order_id=reservation.order_id,
+            related_order_item_id=item.id,
+        )
+        db.flush()
+
+    returned = int(usage.returned_intact_stock_quantity)
+    if returned > 0:
+        before = _balances(lot)
+        updated = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == current_version,
+                InventoryLot.quantity_reserved >= returned,
+            )
+            .values(
+                quantity_available=InventoryLot.quantity_available + returned,
+                quantity_reserved=InventoryLot.quantity_reserved - returned,
+                version=InventoryLot.version + 1,
+                last_movement_at=utc_now_naive(),
+            )
+        )
+        if updated.rowcount != 1:
+            raise ProductionWorkflowError("原料库存已被其他操作修改，请刷新后重试", 409)
+        reservation.released_stock_quantity = int(
+            reservation.released_stock_quantity or 0
+        ) + returned
+        db.flush()
+        db.expire(lot)
+        lot = db.get(InventoryLot, usage.inventory_lot_id)
+        assert lot is not None
+        release_movement = _movement(
+            db,
+            lot=lot,
+            movement_type="release_reserve",
+            quantity=returned,
+            before=before,
+            operator_id=operator_id,
+            reason="生产完工退回完整未裁切纸板",
+            idempotency_key=_stable_key(
+                "production-completion",
+                completion.id,
+                "usage-release",
+                reservation.id,
+            ),
+            reservation_id=reservation.id,
+            related_order_id=reservation.order_id,
+            related_order_item_id=item.id,
+        )
+        db.flush()
+
+    reservation.released_requirement_quantity = int(
+        reservation.released_requirement_quantity or 0
+    ) + prepared.released_requirement_quantity
+    reservation.consumed_by = operator_id if total_consumed > 0 else reservation.consumed_by
+    reservation.consumed_at = (
+        utc_now_naive() if total_consumed > 0 else reservation.consumed_at
+    )
+    reservation.released_by = operator_id if returned > 0 else reservation.released_by
+    reservation.released_at = utc_now_naive() if returned > 0 else reservation.released_at
+    reservation.release_reason = (
+        "生产完工退回完整未裁切纸板" if returned > 0 else reservation.release_reason
+    )
+    reservation.status = _usage_reservation_status(reservation)
+    now = utc_now_naive()
+    row = ProductionCompletionMaterialUsage(
+        completion_id=completion.id,
+        task_id=task.id,
+        order_item_id=item.id,
+        reservation_id=reservation.id,
+        inventory_lot_id=lot.id,
+        expected_lot_version=usage.expected_lot_version,
+        result_lot_version=result_lot_version,
+        assigned_stock_quantity=usage.assigned_stock_quantity,
+        actual_consumed_stock_quantity=usage.actual_consumed_stock_quantity,
+        returned_intact_stock_quantity=returned,
+        damaged_stock_quantity=usage.damaged_stock_quantity,
+        offcut_stock_quantity=usage.offcut_stock_quantity,
+        remaining_reserved_stock_quantity=0,
+        credited_requirement_quantity=prepared.credited_requirement_quantity,
+        actual_credited_requirement_quantity=prepared.actual_credited_requirement_quantity,
+        yield_factor=prepared.yield_factor,
+        variance_reason_code=usage.variance_reason_code,
+        variance_reason_text=_normalized_text(usage.variance_reason_text),
+        return_confirmed=bool(returned),
+        return_confirmed_by=operator_id if returned else None,
+        return_confirmed_at=now if returned else None,
+        return_status="released" if returned else "not_applicable",
+        consume_movement_id=(consume_movement.id if consume_movement else None),
+        release_movement_id=(release_movement.id if release_movement else None),
+        status="posted",
+        operator_id=operator_id,
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def _replay_completion_batch(
@@ -1284,7 +1888,7 @@ def complete_production_batch(
     if len({order.customer_id for _, _, order in rows}) != 1:
         raise ProductionWorkflowError("一个完工批次只能包含同一客户的生产任务", 409)
 
-    prepared: dict[int, dict[str, int | str]] = {}
+    prepared: dict[int, dict[str, object]] = {}
     for command in commands:
         task, item, order = by_task[command.task_id]
         is_component_task = task.sales_order_item_bom_component_id is not None
@@ -1373,6 +1977,18 @@ def complete_production_batch(
             or 0
         )
         available_input = max(allowed_input_now - prior_input, 0)
+        if command.material_usages:
+            # P1-11C keeps the order demand as the production target while
+            # allowing the warehouse to issue extra reserved sheets for
+            # documented damage, offcuts, or intact return.  The reservation
+            # and lot checks below still reject any fabricated assignment.
+            available_input = max(
+                available_input,
+                sum(
+                    int(usage.assigned_stock_quantity)
+                    for usage in command.material_usages
+                ),
+            )
         material_input = int(
             command.material_input_quantity
             if command.material_input_quantity is not None
@@ -1413,6 +2029,17 @@ def complete_production_batch(
                 "实际合格产量与次品/损耗之和必须等于理论产量",
                 409,
             )
+        prepared_material_usages = _prepare_completion_material_usages(
+            db,
+            command=command,
+            task=task,
+            item=item,
+            order=order,
+            material_input_quantity=material_input,
+            actual_output_quantity=actual_output,
+            factor=factor,
+            pieces_per_box=pieces_per_box,
+        )
         coverage_target_quantity = int(item.quantity or 0)
         if is_component_task:
             component_demand = next(
@@ -1502,6 +2129,7 @@ def complete_production_batch(
             "stock": stock_quantity,
             "stored_disposition": stored_disposition,
             "expected_status": expected_task_status,
+            "material_usages": prepared_material_usages,
         }
 
     now = utc_now_naive()
@@ -1530,6 +2158,7 @@ def complete_production_batch(
 
     completions: list[ProductionCompletion] = []
     affected_order_ids: set[int] = set()
+    applied_lot_versions: dict[int, int] = {}
     for command in sorted(commands, key=lambda row: row.task_id):
         task, item, order = by_task[command.task_id]
         facts = prepared[task.id]
@@ -1572,17 +2201,59 @@ def complete_production_batch(
                 idempotency_prefix=_stable_key("production-completion", completion.id),
             )
             completion.inventory_lot_id = lot.id
-        _consume_completion_semi_reservations(
-            db,
-            completion=completion,
-            task=task,
-            item=item,
-            # Consume the paper that was actually put into production.  Using
-            # only qualified output would leave defective sheets falsely
-            # available in inventory.
-            planned_quantity=int(facts["planned"]),
-            operator_id=operator_id,
-        )
+        prepared_usages = tuple(facts["material_usages"])
+        if prepared_usages:
+            result_versions_by_lot: dict[int, int] = {}
+            for prepared_usage in prepared_usages:
+                usage_command = prepared_usage.command
+                lot_id = usage_command.inventory_lot_id
+                if lot_id not in result_versions_by_lot:
+                    result_versions_by_lot[lot_id] = applied_lot_versions.get(
+                        lot_id,
+                        usage_command.expected_lot_version,
+                    )
+                total_consumed = (
+                    usage_command.actual_consumed_stock_quantity
+                    + usage_command.damaged_stock_quantity
+                    + usage_command.offcut_stock_quantity
+                )
+                result_versions_by_lot[lot_id] += int(total_consumed > 0) + int(
+                    usage_command.returned_intact_stock_quantity > 0
+                )
+            for prepared_usage in prepared_usages:
+                usage_command = prepared_usage.command
+                _apply_completion_material_usage(
+                    db,
+                    completion=completion,
+                    task=task,
+                    item=item,
+                    prepared=prepared_usage,
+                    operator_id=operator_id,
+                    expected_current_lot_version=applied_lot_versions.get(
+                        usage_command.inventory_lot_id,
+                        usage_command.expected_lot_version,
+                    ),
+                    result_lot_version=result_versions_by_lot[
+                        usage_command.inventory_lot_id
+                    ],
+                )
+                refreshed_usage_lot = db.get(
+                    InventoryLot, usage_command.inventory_lot_id
+                )
+                assert refreshed_usage_lot is not None
+                applied_lot_versions[usage_command.inventory_lot_id] = int(
+                    refreshed_usage_lot.version
+                )
+        else:
+            _consume_completion_semi_reservations(
+                db,
+                completion=completion,
+                task=task,
+                item=item,
+                # Legacy incoming-receipt tasks have no inventory reservation.
+                planned_quantity=int(facts["planned"]),
+                operator_id=operator_id,
+            )
         result = db.execute(
             update(ProductionTask)
             .where(
@@ -1734,6 +2405,286 @@ def transfer_direct_completion_to_stock(
     db.add(transfer)
     db.flush()
     return StockTransferResult(transfer, False)
+
+
+def _reverse_completion_material_usages(
+    db: Session,
+    *,
+    completion: ProductionCompletion,
+    operator_id: int | None,
+    reason: str,
+) -> tuple[int, ...] | None:
+    usages = list(
+        db.scalars(
+            select(ProductionCompletionMaterialUsage)
+            .where(
+                ProductionCompletionMaterialUsage.completion_id == completion.id,
+                ProductionCompletionMaterialUsage.status == "posted",
+            )
+            .order_by(ProductionCompletionMaterialUsage.reservation_id.desc())
+        ).all()
+    )
+    if not usages:
+        return None
+
+    expected_versions_by_lot: dict[int, int] = {}
+    for usage in usages:
+        expected_result_version = int(usage.result_lot_version or 0)
+        previous_version = expected_versions_by_lot.setdefault(
+            usage.inventory_lot_id,
+            expected_result_version,
+        )
+        if previous_version != expected_result_version:
+            raise ProductionWorkflowError(
+                "同一批次的生产完工用料版本快照不一致，不能撤销",
+                409,
+            )
+    for lot_id, expected_result_version in expected_versions_by_lot.items():
+        lot = db.get(InventoryLot, lot_id)
+        if lot is None or int(lot.version) != expected_result_version:
+            raise ProductionWorkflowError(
+                "逐批用料完成后库存批次已发生后续变化，不能撤销",
+                409,
+            )
+    original_movement_ids = [
+        int(movement_id)
+        for usage in usages
+        for movement_id in (
+            usage.consume_movement_id,
+            usage.release_movement_id,
+        )
+        if movement_id is not None
+    ]
+    if original_movement_ids:
+        existing_reversal_id = db.scalar(
+            select(InventoryMovement.id)
+            .where(
+                InventoryMovement.reversal_of_movement_id.in_(
+                    original_movement_ids
+                )
+            )
+            .limit(1)
+        )
+        if existing_reversal_id is not None:
+            raise ProductionWorkflowError(
+                "逐批用料流水已经存在反向记录，不能重复撤销",
+                409,
+            )
+
+    prepared: list[
+        tuple[
+            ProductionCompletionMaterialUsage,
+            InventoryReservation,
+            InventoryLot,
+            InventoryMovement | None,
+            InventoryMovement | None,
+        ]
+    ] = []
+    for usage in usages:
+        reservation = db.get(InventoryReservation, usage.reservation_id)
+        lot = db.get(InventoryLot, usage.inventory_lot_id)
+        if reservation is None or lot is None:
+            raise ProductionWorkflowError(
+                "生产完工逐批用料关联的预占或库存已不存在，不能撤销",
+                409,
+            )
+        total_consumed = (
+            int(usage.actual_consumed_stock_quantity or 0)
+            + int(usage.damaged_stock_quantity or 0)
+            + int(usage.offcut_stock_quantity or 0)
+        )
+        returned = int(usage.returned_intact_stock_quantity or 0)
+        released_credit = (
+            int(usage.credited_requirement_quantity or 0)
+            - int(usage.actual_credited_requirement_quantity or 0)
+        )
+        if (
+            int(lot.quantity_consumed or 0) < total_consumed
+            or int(lot.quantity_available or 0) < returned
+            or int(reservation.consumed_stock_quantity or 0) < total_consumed
+            or int(reservation.released_stock_quantity or 0) < returned
+            or int(reservation.consumed_requirement_quantity or 0)
+            < int(usage.actual_credited_requirement_quantity or 0)
+            or int(reservation.released_requirement_quantity or 0)
+            < released_credit
+        ):
+            raise ProductionWorkflowError(
+                "逐批用料在完工后已被其他业务使用或数量发生变化，不能撤销",
+                409,
+            )
+        consume_movement = (
+            db.get(InventoryMovement, usage.consume_movement_id)
+            if usage.consume_movement_id is not None
+            else None
+        )
+        release_movement = (
+            db.get(InventoryMovement, usage.release_movement_id)
+            if usage.release_movement_id is not None
+            else None
+        )
+        if total_consumed > 0 and (
+            consume_movement is None
+            or consume_movement.movement_type != "consume"
+            or consume_movement.reservation_id != reservation.id
+            or int(consume_movement.quantity or 0) != total_consumed
+        ):
+            raise ProductionWorkflowError("逐批用料消耗流水不完整，不能撤销", 409)
+        if returned > 0 and (
+            release_movement is None
+            or release_movement.movement_type != "release_reserve"
+            or release_movement.reservation_id != reservation.id
+            or int(release_movement.quantity or 0) != returned
+        ):
+            raise ProductionWorkflowError("完整张退回流水不完整，不能撤销", 409)
+        prepared.append(
+            (
+                usage,
+                reservation,
+                lot,
+                consume_movement,
+                release_movement,
+            )
+        )
+
+    reversed_movement_ids: list[int] = []
+    now = utc_now_naive()
+    for usage, reservation, lot, consume_movement, release_movement in prepared:
+        returned = int(usage.returned_intact_stock_quantity or 0)
+        released_credit = (
+            int(usage.credited_requirement_quantity or 0)
+            - int(usage.actual_credited_requirement_quantity or 0)
+        )
+        if returned > 0:
+            before = _balances(lot)
+            updated = db.execute(
+                update(InventoryLot)
+                .where(
+                    InventoryLot.id == lot.id,
+                    InventoryLot.version == lot.version,
+                    InventoryLot.quantity_available >= returned,
+                )
+                .values(
+                    quantity_available=InventoryLot.quantity_available - returned,
+                    quantity_reserved=InventoryLot.quantity_reserved + returned,
+                    version=InventoryLot.version + 1,
+                    last_movement_at=now,
+                )
+            )
+            if updated.rowcount != 1:
+                raise ProductionWorkflowError(
+                    "退回完整张已被后续业务使用，不能撤销生产确认",
+                    409,
+                )
+            reservation.released_stock_quantity -= returned
+            reservation.released_requirement_quantity -= released_credit
+            db.flush()
+            db.expire(lot)
+            lot = db.get(InventoryLot, usage.inventory_lot_id)
+            assert lot is not None
+            reverse_release = _movement(
+                db,
+                lot=lot,
+                movement_type="reserve",
+                quantity=returned,
+                before=before,
+                operator_id=operator_id,
+                reason=f"撤销生产完工完整张退回：{reason}",
+                idempotency_key=_stable_key(
+                    "production-completion-reversal",
+                    completion.id,
+                    "usage-release",
+                    reservation.id,
+                ),
+                reservation_id=reservation.id,
+                related_order_id=reservation.order_id,
+                related_order_item_id=completion.order_item_id,
+                reversal_of_movement_id=(
+                    release_movement.id if release_movement else None
+                ),
+            )
+            db.flush()
+            reversed_movement_ids.append(reverse_release.id)
+
+        total_consumed = (
+            int(usage.actual_consumed_stock_quantity or 0)
+            + int(usage.damaged_stock_quantity or 0)
+            + int(usage.offcut_stock_quantity or 0)
+        )
+        if total_consumed > 0:
+            before = _balances(lot)
+            updated = db.execute(
+                update(InventoryLot)
+                .where(
+                    InventoryLot.id == lot.id,
+                    InventoryLot.version == lot.version,
+                    InventoryLot.quantity_consumed >= total_consumed,
+                )
+                .values(
+                    quantity_reserved=InventoryLot.quantity_reserved
+                    + total_consumed,
+                    quantity_consumed=InventoryLot.quantity_consumed
+                    - total_consumed,
+                    version=InventoryLot.version + 1,
+                    last_movement_at=now,
+                )
+            )
+            if updated.rowcount != 1:
+                raise ProductionWorkflowError(
+                    "逐批用料消耗数量已变化，不能撤销生产确认",
+                    409,
+                )
+            reservation.consumed_stock_quantity -= total_consumed
+            reservation.consumed_requirement_quantity -= int(
+                usage.actual_credited_requirement_quantity or 0
+            )
+            if returned == 0:
+                reservation.released_requirement_quantity -= released_credit
+            db.flush()
+            db.expire(lot)
+            lot = db.get(InventoryLot, usage.inventory_lot_id)
+            assert lot is not None
+            reverse_consume = _movement(
+                db,
+                lot=lot,
+                movement_type="reverse_consume",
+                quantity=total_consumed,
+                before=before,
+                operator_id=operator_id,
+                reason=f"撤销生产完工逐批用料：{reason}",
+                idempotency_key=_stable_key(
+                    "production-completion-reversal",
+                    completion.id,
+                    "usage-consume",
+                    reservation.id,
+                ),
+                reservation_id=reservation.id,
+                related_order_id=reservation.order_id,
+                related_order_item_id=completion.order_item_id,
+                reversal_of_movement_id=(
+                    consume_movement.id if consume_movement else None
+                ),
+            )
+            db.flush()
+            reversed_movement_ids.append(reverse_consume.id)
+        elif returned == 0 and released_credit > 0:
+            reservation.released_requirement_quantity -= released_credit
+
+        reservation.status = _usage_reservation_status(reservation)
+        if int(reservation.consumed_stock_quantity or 0) == 0:
+            reservation.consumed_by = None
+            reservation.consumed_at = None
+        if int(reservation.released_stock_quantity or 0) == 0:
+            reservation.released_by = None
+            reservation.released_at = None
+            reservation.release_reason = None
+        usage.status = "reversed"
+        usage.reversed_at = now
+        usage.reversed_by = operator_id
+        usage.reversal_reason = reason
+        if returned > 0:
+            usage.return_status = "reversed"
+    db.flush()
+    return tuple(reversed_movement_ids)
 
 
 def _reverse_completion_semi_consumption(
@@ -1993,10 +2944,20 @@ def reverse_production_completion(
             operator_id=operator_id,
             reason=normalized_reason,
         )
-    reversed_semi_ids = _reverse_completion_semi_consumption(
+    reversed_usage_ids = _reverse_completion_material_usages(
         db,
         completion=completion,
         operator_id=operator_id,
+        reason=normalized_reason,
+    )
+    reversed_semi_ids = (
+        reversed_usage_ids
+        if reversed_usage_ids is not None
+        else _reverse_completion_semi_consumption(
+            db,
+            completion=completion,
+            operator_id=operator_id,
+        )
     )
     now = utc_now_naive()
     if transfer is not None:
@@ -2131,48 +3092,91 @@ def _task_product_snapshot(
     }
 
 
-def _active_customer_board_preparation_sources(
+def _production_material_source_key(
+    *,
+    order_item_id: int,
+    bom_component_id: int | None,
+) -> tuple[int, int | None]:
+    return int(order_item_id), (
+        int(bom_component_id) if bom_component_id is not None else None
+    )
+
+
+def _reservation_warning_codes(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return [str(value)]
+    if isinstance(parsed, list):
+        return [str(code) for code in parsed if str(code).strip()]
+    return [str(value)]
+
+
+def _batch_active_material_pick_sources(
     db: Session,
     *,
-    task: ProductionTask,
-    item: OrderItem,
-) -> list[dict]:
+    task_rows: Sequence[tuple[ProductionTask, OrderItem, Order]],
+) -> dict[tuple[int, int | None], list[dict]]:
+    expected_customers = {
+        _production_material_source_key(
+            order_item_id=item.id,
+            bom_component_id=task.sales_order_item_bom_component_id,
+        ): int(order.customer_id)
+        for task, item, order in task_rows
+    }
+    if not expected_customers:
+        return {}
+    order_item_ids = sorted({key[0] for key in expected_customers})
     query = (
-        select(InventoryReservation, InventoryLot)
-        .join(
+        select(
+            InventoryReservation,
+            InventoryLot,
+            SemiFinishedInventoryDetail,
+            WarehouseLocation,
+        )
+        .outerjoin(
             InventoryLot,
             InventoryLot.id == InventoryReservation.inventory_lot_id,
         )
+        .outerjoin(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .outerjoin(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
         .where(
-            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.order_item_id.in_(order_item_ids),
             InventoryReservation.reservation_type == "semi_order",
             InventoryReservation.status.notin_(("cancelled", "released", "consumed")),
             InventoryReservation.reserved_stock_quantity
             > InventoryReservation.consumed_stock_quantity
             + InventoryReservation.released_stock_quantity,
-            InventoryLot.inventory_type == "semi_finished",
         )
     )
-    if task.sales_order_item_bom_component_id is None:
-        query = query.where(
-            InventoryReservation.sales_order_item_bom_component_id.is_(None)
-        )
-    else:
-        query = query.where(
-            InventoryReservation.sales_order_item_bom_component_id
-            == task.sales_order_item_bom_component_id
-        )
     rows = db.execute(
         query.order_by(
+            InventoryReservation.order_item_id,
+            InventoryReservation.sales_order_item_bom_component_id,
             *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
     ).all()
-    result: list[dict] = []
-    for reservation, lot in rows:
-        detail = lot.semi_finished_detail
-        location = lot.location
-        if detail is None or detail.owner_customer_id is None:
+    result: dict[tuple[int, int | None], list[dict]] = {
+        key: [] for key in expected_customers
+    }
+    for reservation, lot, detail, location in rows:
+        if reservation.order_item_id is None:
+            continue
+        key = _production_material_source_key(
+            order_item_id=reservation.order_item_id,
+            bom_component_id=reservation.sales_order_item_bom_component_id,
+        )
+        expected_customer_id = expected_customers.get(key)
+        if expected_customer_id is None:
             continue
         remaining_sheets = max(
             int(reservation.reserved_stock_quantity or 0)
@@ -2186,26 +3190,117 @@ def _active_customer_board_preparation_sources(
             - int(reservation.released_requirement_quantity or 0),
             0,
         )
-        if remaining_sheets <= 0 or remaining_pieces <= 0:
+        if remaining_sheets <= 0:
             continue
-        result.append(
+        structural_warnings: list[str] = []
+        if lot is None:
+            structural_warnings.append("MATERIAL_SOURCE_LOT_MISSING")
+        else:
+            if lot.inventory_type != "semi_finished":
+                structural_warnings.append("MATERIAL_SOURCE_TYPE_INVALID")
+            if lot.status != "active":
+                structural_warnings.append("MATERIAL_SOURCE_LOT_INACTIVE")
+        if detail is None:
+            structural_warnings.append("MATERIAL_SOURCE_DETAIL_MISSING")
+        elif (
+            detail.owner_customer_id is not None
+            and int(detail.owner_customer_id) != expected_customer_id
+        ):
+            structural_warnings.append("MATERIAL_SOURCE_CUSTOMER_SCOPE_MISMATCH")
+        if location is None or not bool(location.is_active):
+            structural_warnings.append("MATERIAL_SOURCE_LOCATION_INVALID")
+        warning_codes = list(
+            dict.fromkeys(
+                [
+                    *_reservation_warning_codes(reservation.warning_codes),
+                    *structural_warnings,
+                ]
+            )
+        )
+        stock_yield = max(
+            int(
+                (detail.stock_yield_per_sheet if detail is not None else None)
+                or reservation.yield_factor
+                or 1
+            ),
+            1,
+        )
+        maximum_output = remaining_sheets * stock_yield
+        estimated_output = (
+            min(remaining_pieces, maximum_output)
+            if remaining_pieces > 0
+            else maximum_output
+        )
+        inventory_scope = (
+            "general"
+            if detail is not None and detail.owner_customer_id is None
+            else "customer_dedicated"
+        )
+        result[key].append(
             {
                 "reservation_id": reservation.id,
-                "inventory_lot_id": lot.id,
-                "lot_number": lot.lot_number,
-                "source_ref_type": lot.source_ref_type,
-                "source_ref_id": lot.source_ref_id,
-                "location_code": location.location_code,
-                "location_name": location.location_name,
-                "remaining_sheet_quantity": remaining_sheets,
-                "remaining_product_quantity": remaining_pieces,
-                "stock_yield_per_sheet": int(
-                    detail.stock_yield_per_sheet or reservation.yield_factor or 1
+                "inventory_lot_id": lot.id if lot is not None else None,
+                "lot_number": lot.lot_number if lot is not None else None,
+                "lot_version": int(lot.version) if lot is not None else None,
+                "source_ref_type": lot.source_ref_type if lot is not None else None,
+                "source_ref_id": lot.source_ref_id if lot is not None else None,
+                "location_id": location.id if location is not None else None,
+                "location_code": (
+                    location.location_code if location is not None else None
                 ),
-                "display_name": "客户专用纸板备料",
+                "location_name": (
+                    location.location_name if location is not None else None
+                ),
+                "component_type": (
+                    detail.component_type if detail is not None else None
+                ),
+                "board_length_mm": (
+                    int(detail.board_length_mm) if detail is not None else None
+                ),
+                "board_width_mm": (
+                    int(detail.board_width_mm) if detail is not None else None
+                ),
+                "flute_type": detail.flute_type if detail is not None else None,
+                "remaining_sheet_quantity": remaining_sheets,
+                "remaining_requirement_quantity": remaining_pieces,
+                "stock_yield_per_sheet": stock_yield,
+                "estimated_output_quantity": estimated_output,
+                "inventory_scope": inventory_scope,
+                "source_status": "invalid" if structural_warnings else "ready",
+                "warning_codes": warning_codes,
+                "display_name": (
+                    "通用原料片料"
+                    if inventory_scope == "general"
+                    else "客户专用纸板备料"
+                ),
             }
         )
     return result
+
+
+def _legacy_customer_board_preparation_sources(
+    sources: Sequence[dict],
+) -> list[dict]:
+    return [
+        {
+            "reservation_id": source["reservation_id"],
+            "inventory_lot_id": source["inventory_lot_id"],
+            "lot_number": source["lot_number"],
+            "source_ref_type": source["source_ref_type"],
+            "source_ref_id": source["source_ref_id"],
+            "location_code": source["location_code"],
+            "location_name": source["location_name"],
+            "remaining_sheet_quantity": source["remaining_sheet_quantity"],
+            "remaining_product_quantity": source[
+                "remaining_requirement_quantity"
+            ],
+            "stock_yield_per_sheet": source["stock_yield_per_sheet"],
+            "display_name": source["display_name"],
+        }
+        for source in sources
+        if source["inventory_scope"] == "customer_dedicated"
+        and source["source_status"] == "ready"
+    ]
 
 
 def list_production_tasks(
@@ -2221,8 +3316,25 @@ def list_production_tasks(
     if status:
         query = query.where(ProductionTask.status == status)
     rows = db.execute(query.order_by(Order.delivery_date, Order.id, OrderItem.id)).all()
+    material_usage_feature_enabled = production_material_usage_enabled()
+    material_sources_by_key = (
+        _batch_active_material_pick_sources(
+            db,
+            task_rows=[
+                (task, item, order)
+                for task, item, order, _customer, _product in rows
+            ],
+        )
+        if material_usage_feature_enabled
+        else {}
+    )
     result: list[dict] = []
     for task, item, order, customer, product in rows:
+        material_source_key = _production_material_source_key(
+            order_item_id=item.id,
+            bom_component_id=task.sales_order_item_bom_component_id,
+        )
+        material_pick_sources = material_sources_by_key.get(material_source_key, [])
         is_component_task = task.sales_order_item_bom_component_id is not None
         component_demand = None
         if is_component_task:
@@ -2280,7 +3392,54 @@ def list_production_tasks(
             allowed_input_now,
             int(task.material_input_quantity or 0),
         )
+        if material_input <= 0 and material_pick_sources:
+            material_input = production_input_quantity(
+                max(int(task.planned_quantity or 0), 0),
+                factor,
+                pieces_per_box,
+            )
         available_input = max(material_input - posted_input, 0)
+        remaining_planned_input = available_input
+        for source in material_pick_sources:
+            planned_input = 0
+            if source["source_status"] == "ready" and remaining_planned_input > 0:
+                planned_input = min(
+                    int(source["remaining_sheet_quantity"] or 0),
+                    remaining_planned_input,
+                )
+                remaining_planned_input -= planned_input
+            source["planned_input_quantity"] = planned_input
+        remaining_material_target = max(
+            target_quantity
+            - int(task.finished_coverage_snapshot or 0)
+            - posted_output,
+            0,
+        )
+        valid_material_output = sum(
+            int(source["estimated_output_quantity"] or 0)
+            for source in material_pick_sources
+            if source["source_status"] == "ready"
+        )
+        invalid_material_sources = [
+            source
+            for source in material_pick_sources
+            if source["source_status"] == "invalid"
+        ]
+        if invalid_material_sources:
+            material_pick_status = "invalid"
+        elif not material_pick_sources:
+            material_pick_status = "unassigned"
+        elif valid_material_output < remaining_material_target:
+            material_pick_status = "partial"
+        else:
+            material_pick_status = "ready"
+        material_pick_warning_codes = list(
+            dict.fromkeys(
+                code
+                for source in material_pick_sources
+                for code in source["warning_codes"]
+            )
+        )
         result.append({
             "id": task.id,
             "order_item_id": item.id,
@@ -2335,12 +3494,22 @@ def list_production_tasks(
             "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
             "version": int(task.version),
             "production_ready_quantity": production_ready_quantity(db, item),
+            "material_usage_feature_enabled": material_usage_feature_enabled,
+            "material_pick_sources": material_pick_sources,
+            "material_pick_status": material_pick_status,
+            "material_pick_assigned_sheet_quantity": sum(
+                int(source["remaining_sheet_quantity"] or 0)
+                for source in material_pick_sources
+                if source["source_status"] == "ready"
+            ),
+            "material_pick_estimated_output_quantity": valid_material_output,
+            "material_pick_missing_quantity": max(
+                remaining_material_target - valid_material_output,
+                0,
+            ),
+            "material_pick_warning_codes": material_pick_warning_codes,
             "customer_board_preparation_sources": (
-                _active_customer_board_preparation_sources(
-                    db,
-                    task=task,
-                    item=item,
-                )
+                _legacy_customer_board_preparation_sources(material_pick_sources)
             ),
         })
     return result
@@ -2396,6 +3565,26 @@ def list_production_completions(
         db,
         [item.id for _completion, _task, item, *_rest in rows],
     )
+    material_usages_by_completion: dict[
+        int, list[ProductionCompletionMaterialUsage]
+    ] = {}
+    if rows:
+        usage_rows = db.scalars(
+            select(ProductionCompletionMaterialUsage)
+            .where(
+                ProductionCompletionMaterialUsage.completion_id.in_(
+                    [completion.id for completion, *_rest in rows]
+                )
+            )
+            .order_by(
+                ProductionCompletionMaterialUsage.completion_id,
+                ProductionCompletionMaterialUsage.reservation_id,
+            )
+        ).all()
+        for usage in usage_rows:
+            material_usages_by_completion.setdefault(
+                usage.completion_id, []
+            ).append(usage)
     result: list[dict] = []
     for completion, task, item, order, customer, product, user, transfer in rows:
         received_now, allowed_input_now = _material_quantity_facts(db, item)
@@ -2497,6 +3686,43 @@ def list_production_completions(
                     else None
                 ),
                 "reversal_reason": completion.reversal_reason,
+                "material_usage_protocol": (
+                    "per_reservation"
+                    if material_usages_by_completion.get(completion.id)
+                    else "legacy_fifo"
+                ),
+                "material_usages": [
+                    {
+                        "id": usage.id,
+                        "reservation_id": usage.reservation_id,
+                        "inventory_lot_id": usage.inventory_lot_id,
+                        "expected_lot_version": usage.expected_lot_version,
+                        "result_lot_version": usage.result_lot_version,
+                        "assigned_stock_quantity": usage.assigned_stock_quantity,
+                        "actual_consumed_stock_quantity": (
+                            usage.actual_consumed_stock_quantity
+                        ),
+                        "returned_intact_stock_quantity": (
+                            usage.returned_intact_stock_quantity
+                        ),
+                        "damaged_stock_quantity": usage.damaged_stock_quantity,
+                        "offcut_stock_quantity": usage.offcut_stock_quantity,
+                        "credited_requirement_quantity": (
+                            usage.credited_requirement_quantity
+                        ),
+                        "actual_credited_requirement_quantity": (
+                            usage.actual_credited_requirement_quantity
+                        ),
+                        "yield_factor": usage.yield_factor,
+                        "variance_reason_code": usage.variance_reason_code,
+                        "variance_reason_text": usage.variance_reason_text,
+                        "return_status": usage.return_status,
+                        "status": usage.status,
+                    }
+                    for usage in material_usages_by_completion.get(
+                        completion.id, []
+                    )
+                ],
                 "stock_transfer_id": transfer.id if transfer is not None else None,
                 "can_transfer_to_stock": (
                     completion.initial_disposition == "direct"

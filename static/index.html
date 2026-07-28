@@ -179,6 +179,40 @@
       .ui-large .production-history-time { width: 176px; white-space: nowrap; }
       .ui-large .production-history-actions { width: 280px; white-space: normal; }
       .ui-large .production-history-actions .toolbar-group { min-width: 0; flex-wrap: wrap; }
+      .ui-large .production-table { display: block; table-layout: auto !important; }
+      .ui-large .production-table thead { display: none; }
+      .ui-large .production-table tbody { display: grid; grid-template-columns: 1fr; gap: 14px; }
+      .ui-large .production-table tr {
+        display: grid;
+        grid-template-columns: 54px minmax(180px, 1fr) minmax(190px, 1.15fr) minmax(170px, .9fr) minmax(220px, 1.2fr);
+        align-content: start; min-width: 0; overflow: hidden;
+        border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+      }
+      .ui-large .production-table td {
+        display: block; min-width: 0; border-bottom: 1px solid var(--line);
+        overflow-wrap: anywhere;
+      }
+      .ui-large .production-can-execute > td:nth-child(1) { grid-column: 1; grid-row: 1 / span 2; }
+      .ui-large .production-can-execute > td:nth-child(2),
+      .ui-large .production-read-only > td:nth-child(1) { grid-column: 2; grid-row: 1; }
+      .ui-large .production-can-execute > td:nth-child(3),
+      .ui-large .production-read-only > td:nth-child(2) { grid-column: 3; grid-row: 1; }
+      .ui-large .production-can-execute > td:nth-child(5),
+      .ui-large .production-read-only > td:nth-child(4) { grid-column: 4; grid-row: 1; }
+      .ui-large .production-can-execute > td:nth-child(8) { grid-column: 5; grid-row: 1; }
+      .ui-large .production-pick-cell { grid-column: 2 / span 2; grid-row: 2; }
+      .ui-large .production-can-execute > td:nth-child(6),
+      .ui-large .production-read-only > td:nth-child(5) { grid-column: 4; grid-row: 2; }
+      .ui-large .production-can-execute > td:nth-child(7),
+      .ui-large .production-read-only > td:nth-child(6) { grid-column: 5; grid-row: 2; }
+      .ui-large .production-pick-cell,
+      .ui-large .production-can-execute > td:nth-child(6),
+      .ui-large .production-can-execute > td:nth-child(7),
+      .ui-large .production-read-only > td:nth-child(5),
+      .ui-large .production-read-only > td:nth-child(6) { border-bottom: 0; }
+      .ui-large .production-table td.production-pick-cell { display: block; }
+      .ui-large .production-pick-summary { margin: 0; font-size: 15px; }
+      .ui-large .production-pick-detail-line { font-size: 15px; }
 
       @media (max-width: 1400px) {
         .ui-large .topbar { height: auto; min-height: 76px; padding: 10px 18px; flex-wrap: wrap; gap: 10px 16px; }
@@ -207,6 +241,23 @@
         .ui-large .menu-item { width: 100%; min-width: 0; }
         .ui-large .main { padding: 20px 18px 32px; }
         .ui-large .page-head { align-items: flex-start; flex-wrap: wrap; gap: 10px 16px; }
+        .ui-large .production-table tr {
+          grid-template-columns: 54px repeat(2, minmax(0, 1fr));
+        }
+        .ui-large .production-can-execute > td:nth-child(1) { grid-column: 1; grid-row: 1 / span 4; }
+        .ui-large .production-can-execute > td:nth-child(2),
+        .ui-large .production-read-only > td:nth-child(1) { grid-column: 2; grid-row: 1; }
+        .ui-large .production-can-execute > td:nth-child(3),
+        .ui-large .production-read-only > td:nth-child(2) { grid-column: 3; grid-row: 1; }
+        .ui-large .production-can-execute > td:nth-child(5),
+        .ui-large .production-read-only > td:nth-child(4) { grid-column: 2; grid-row: 2; }
+        .ui-large .production-can-execute > td:nth-child(8) { grid-column: 3; grid-row: 2; }
+        .ui-large .production-pick-cell { grid-column: 2 / span 2; grid-row: 3; }
+        .ui-large .production-can-execute > td:nth-child(6),
+        .ui-large .production-read-only > td:nth-child(5) { grid-column: 2; grid-row: 4; }
+        .ui-large .production-can-execute > td:nth-child(7),
+        .ui-large .production-read-only > td:nth-child(6) { grid-column: 3; grid-row: 4; }
+        .ui-large .production-table td.production-pick-cell { display: block; }
       }
       @media (max-width: 760px) {
         .ui-large .topbar { padding: 10px 12px; }
@@ -1077,9 +1128,130 @@
         display: grid; grid-template-columns: minmax(92px, .7fr) minmax(130px, 1.3fr);
         gap: 5px; width: 100%;
       }
+      .production-destination-cell .production-location-picker {
+        grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 3px;
+      }
+      .production-destination-cell .production-location-picker .select {
+        width: 100%; min-width: 0; height: 30px; padding: 3px 5px;
+      }
+      .production-pick-cell { vertical-align: top; }
+      .production-pending-panel,
+      .production-pending-panel .table-wrap {
+        width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;
+      }
+      .production-pending-panel .production-table {
+        width: 100%; max-width: 100%; min-width: 0; table-layout: fixed;
+      }
+      .production-pending-panel .production-table th,
+      .production-pending-panel .production-table td {
+        min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      }
+      .production-compact-two-lines {
+        display: -webkit-box; min-width: 0; max-height: 3em; overflow: hidden;
+        -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+        line-height: 1.5; white-space: normal; overflow-wrap: anywhere;
+      }
+      .production-compact-line {
+        display: flex; align-items: center; gap: 4px 7px; min-width: 0;
+        overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+      }
+      .production-pick-summary {
+        display: inline-flex; align-items: center; min-height: 24px;
+        max-width: 100%; padding: 2px 8px; border-radius: 999px;
+        font-size: 12px; font-weight: 700;
+        overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+      }
+      .production-pick-summary.ready { background: var(--green-bg); color: var(--green); }
+      .production-pick-summary.partial { background: var(--orange-bg); color: var(--orange); }
+      .production-pick-summary.invalid { background: var(--red-bg); color: var(--red); }
+      .production-pick-summary.unassigned { background: #ededf0; color: var(--muted); }
+      .production-pick-detail-line {
+        display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: 3px;
+        overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+      }
+      .production-pick-detail-text {
+        min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+      }
+      .production-pick-review {
+        flex: 0 0 auto; padding: 1px 5px; border: 0; background: none;
+        color: var(--primary); font-size: 12px; font-weight: 700;
+      }
+      /* P1-11C: production stays a compact two-line table at 1920px even
+         when the operator uses large type.  Do not turn each task into a
+         multi-row card and do not require sideways scrolling. */
+      .ui-large .production-pending-panel .production-table {
+        display: table; width: 100%; table-layout: fixed !important;
+      }
+      .ui-large .production-pending-panel .production-table thead {
+        display: table-header-group;
+      }
+      .ui-large .production-pending-panel .production-table tbody {
+        display: table-row-group;
+      }
+      .ui-large .production-pending-panel .production-table tr {
+        display: table-row; min-width: 0; overflow: visible;
+        border: 0; border-radius: 0; background: transparent;
+      }
+      .ui-large .production-pending-panel .production-table th,
+      .ui-large .production-pending-panel .production-table td,
+      .ui-large .production-pending-panel .production-table td.production-pick-cell {
+        display: table-cell; min-height: 0; padding: 7px 6px;
+        font-size: 16px; line-height: 1.35; vertical-align: middle;
+        overflow: hidden; overflow-wrap: anywhere;
+      }
+      .ui-large .production-pending-panel .production-compact-two-lines {
+        max-height: 2.7em; line-height: 1.35;
+      }
+      .ui-large .production-pending-panel .production-pick-summary,
+      .ui-large .production-pending-panel .production-pick-detail-line {
+        font-size: 13px;
+      }
+      .ui-large .production-pending-panel .input,
+      .ui-large .production-pending-panel .select {
+        min-height: 32px; height: 32px; padding: 3px 5px; font-size: 15px;
+      }
+      .ui-large .production-pending-panel .status {
+        padding: 2px 6px; font-size: 13px;
+      }
+      .production-material-usage-backdrop { z-index: 95; }
+      .production-material-usage-modal {
+        width: min(1180px, calc(100vw - 48px)); max-width: calc(100vw - 48px);
+        max-height: 90vh; overflow: hidden;
+      }
+      .production-material-usage-body {
+        display: grid; gap: 8px; max-height: calc(90vh - 126px);
+        overflow-y: auto; overflow-x: hidden; padding: 14px 16px;
+      }
+      .production-material-usage-card {
+        min-width: 0; padding: 8px 10px; border: 1px solid var(--line);
+        border-radius: 9px; background: #fafafa; overflow: hidden;
+      }
+      .production-material-usage-line {
+        display: grid; min-width: 0; align-items: center; gap: 6px 8px;
+      }
+      .production-material-usage-line.meta {
+        grid-template-columns: minmax(120px,.8fr) minmax(150px,1fr) minmax(130px,.9fr) minmax(78px,.55fr) minmax(86px,.55fr);
+        margin-bottom: 6px;
+      }
+      .production-material-usage-line.edit {
+        grid-template-columns: repeat(4, minmax(104px,.8fr)) minmax(116px,.9fr) minmax(142px,1fr);
+      }
+      .production-material-usage-line > * { min-width: 0; }
+      .production-material-usage-field {
+        display: grid; grid-template-columns: auto minmax(54px,1fr);
+        align-items: center; gap: 4px; min-width: 0; white-space: nowrap;
+      }
+      .production-material-usage-field .input { width: 100%; min-width: 0; height: 32px; }
+      .production-material-return-confirm {
+        display: flex; align-items: center; gap: 5px; min-width: 0;
+        line-height: 1.25; white-space: normal;
+      }
+      .production-material-usage-error { margin: 0; }
       @media(max-width:900px) {
         .warehouse-shell-frame { height: calc(100vh - 188px); min-height: 520px; }
         .production-location-picker { grid-template-columns: 1fr; }
+        .production-material-usage-line.meta,
+        .production-material-usage-line.edit { grid-template-columns: repeat(2, minmax(0,1fr)); }
       }
     </style>
   </head>
@@ -2055,17 +2227,21 @@
                 <button class="btn" :disabled="productionBusy" @click="loadProduction">刷新</button>
               </div>
               <div v-if="productionTab==='pending'" class="status blue" style="display:block;margin:8px 0">直接待送：选择后立即完成。全部入库：选好库位，再点顶部“批量确认入库”。</div>
-              <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length">
-                <table class="production-table" style="table-layout:fixed;width:100%">
-                  <thead><tr><th v-if="canProductionExecute" style="width:64px"><input type="checkbox" :checked="allProductionSelected" :disabled="productionBusy" @change="toggleAllProduction($event.target.checked)" /> 全选</th><th style="width:14%">订单 / 客户</th><th style="width:18%">存货编码 / 产品</th><th style="width:15%">订单 / 收料 / 计划</th><th style="width:19%">实际投入 / 合格 / 损耗</th><th style="width:12%">覆盖 / 余货</th><th v-if="canProductionExecute" style="width:22%">完工去向 / 库位</th></tr></thead>
-                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
+              <data-panel v-if="productionTab==='pending'" class="production-pending-panel" :empty="!productionPending.length">
+                <table class="production-table">
+                  <thead><tr><th v-if="canProductionExecute" style="width:4%"><input type="checkbox" :checked="allProductionSelected" :disabled="productionBusy" @change="toggleAllProduction($event.target.checked)" /> 全选</th><th style="width:10%">订单 / 客户</th><th style="width:12%">存货编码 / 产品</th><th v-if="productionMaterialUsageEnabled" style="width:18%">本单领料</th><th style="width:11%">订单 / 收料 / 计划</th><th style="width:12%">投入 / 合格 / 损耗</th><th style="width:9%">覆盖 / 余货</th><th v-if="canProductionExecute" style="width:24%">完工去向 / 库位</th></tr></thead>
+                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="[canProductionExecute?'production-can-execute':'production-read-only',{'requisition-selected': productionSelected[row.id]}]">
                     <td v-if="canProductionExecute"><input v-if="productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row._direct_submitting ? '处理中' : '-' }}</span></td>
-                    <td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><span v-if="row.is_component_task" class="status blue">复合组件</span><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<br><span class="muted">{{ row.specification || '-' }}</span><div v-for="source in row.customer_board_preparation_sources || []" :key="source.reservation_id" class="status green" style="display:block;white-space:normal;margin-top:5px">客户专用纸板备料 {{ source.remaining_sheet_quantity }} 张｜{{ source.location_code || source.location_name || '库位未标注' }}<br>可生产 {{ source.remaining_product_quantity }} 个，确认完工后自动消耗</div></td>
-                    <td style="white-space:normal"><div>订单 <strong>{{ row.order_quantity || 0 }}</strong></div><div>已收 <strong>{{ row.material_received_quantity || 0 }}</strong></div><div>计划 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong></div><span class="muted">{{ row.special_process || '一开一' }} × {{ row.output_factor || 1 }}</span></td>
-                    <td style="white-space:normal"><div class="toolbar-group"><label class="muted">投入</label><input class="input" style="width:82px" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /></div><div class="toolbar-group" style="margin-top:4px"><label class="muted">合格</label><input class="input" style="width:82px" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /></div><div style="margin-top:4px">损耗 <strong>{{ productionDefectiveQuantity(row) }}</strong></div></td>
-                    <td style="white-space:normal"><div>覆盖订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">客户余货 {{ productionSurplusQuantity(row) }}</div></td>
-                    <td v-if="canProductionExecute" style="white-space:normal"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.location_floor_number)" :key="area.code" :value="area.code">{{ area.code }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><div v-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">余货 {{ productionSurplusQuantity(row) }} 个将保存为本客户专用库存</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">已加入本次入库；请点顶部“批量确认入库”</div><div v-else-if="row.completion_mode==='stock'" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></td>
+                    <td><div class="production-compact-two-lines"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></div></td>
+                    <td><div class="production-compact-two-lines"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}<span v-if="row.specification" class="muted"> · {{ row.specification }}</span></div></td>
+                    <td v-if="productionMaterialUsageEnabled" class="production-pick-cell">
+                      <div class="production-compact-line"><span :class="['production-pick-summary',productionPickStatusClass(row)]">{{ productionPickStatusLabel(row) }}</span><span class="muted">{{ (row.material_pick_sources || []).length }} 批</span></div>
+                      <div class="production-pick-detail-line"><span class="production-pick-detail-text">{{ productionCompactPickLine(row) }}</span><button v-if="(row.material_pick_sources || []).length" type="button" class="production-pick-review" :disabled="productionBusy" @click="openProductionMaterialUsage(row)">{{ productionMaterialUsageDraftReady(row) ? '用料已核对' : '核对用料' }}</button></div>
+                    </td>
+                    <td><div class="production-compact-two-lines">订单 <strong>{{ row.order_quantity || 0 }}</strong> · 计划 <strong>{{ row.planned_output_quantity || row.planned_quantity || 0 }}</strong><br>已收 <strong>{{ row.material_received_quantity || 0 }}</strong> · <span class="muted">{{ row.special_process || '一开一' }} × {{ row.output_factor || 1 }}</span></div></td>
+                    <td><div class="production-compact-line">投入 <strong>{{ row.actual_input_quantity || 0 }}</strong></div><div class="production-compact-line">合格 <input class="input" style="width:66px;height:30px" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /> · 损耗 <strong>{{ productionDefectiveQuantity(row) }}</strong></div></td>
+                    <td><div class="production-compact-two-lines">覆盖 <strong>{{ productionOrderCoverage(row) }}</strong><br><span :class="productionSurplusQuantity(row)>0?'status orange':'muted'">余货 {{ productionSurplusQuantity(row) }}</span></div></td>
+                    <td v-if="canProductionExecute" class="production-destination-cell"><div class="production-compact-line"><select class="select" style="width:100%" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><span v-if="row._direct_submitting" class="status blue">处理中</span><span v-else-if="productionSelected[row.id]" class="status blue">已选</span></div><div v-if="productionNeedsLocation(row)" class="production-location-picker"><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">区域</option><option v-for="area in productionAreasForFloor(row.location_floor_number)" :key="area.code" :value="area.code">{{ area.code }}</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">库位</option><option v-for="location in productionLocationsForArea(row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ location.location_code }}</option></select></div><div v-else class="production-compact-line muted">{{ row.completion_mode==='direct' ? '选择后直接进入待送货' : (productionMaterialUsageEnabled ? '正常用料无需额外操作' : '请选择完工去向') }}</div></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -4547,6 +4723,41 @@
         </div>
       </div>
 
+      <div v-if="productionMaterialUsageDialog.visible" class="modal-backdrop production-material-usage-backdrop" @click.self="closeProductionMaterialUsage">
+        <div class="modal production-material-usage-modal">
+          <div class="modal-header">
+            <h3>核对本次用料 · {{ productionMaterialUsageDialog.row?.product_code || productionMaterialUsageDialog.row?.product_name || '-' }}</h3>
+            <button class="btn small" :disabled="productionBusy" @click="closeProductionMaterialUsage">关闭</button>
+          </div>
+          <div class="production-material-usage-body">
+            <div class="notice">系统已按计划填好。只有实际投入、完整退回、破损或余片与计划不同才需要修改；四项合计必须等于该批指派张数。</div>
+            <div v-for="item in productionMaterialUsageDialog.draft?.items || []" :key="item.reservation_id" class="production-material-usage-card">
+              <div class="production-material-usage-line meta">
+                <strong>{{ item.location_code || '库位失效' }}</strong>
+                <span class="production-pick-detail-text">{{ item.lot_number || '批次失效' }}</span>
+                <span>{{ item.board_length_mm || '-' }}×{{ item.board_width_mm || '-' }} mm</span>
+                <span>{{ item.flute_type || '-' }}楞</span>
+                <span>计划 {{ item.planned_input_quantity }} 张</span>
+              </div>
+              <div class="production-material-usage-line edit">
+                <label class="production-material-usage-field">实际投入<input class="input" type="number" min="0" :max="item.assigned_stock_quantity" v-model.number="item.actual_consumed_stock_quantity" @input="onProductionMaterialUsageQuantityChange(item,'actual_consumed_stock_quantity')" /></label>
+                <label class="production-material-usage-field">完整退回<input class="input" type="number" min="0" :max="item.assigned_stock_quantity" v-model.number="item.returned_intact_stock_quantity" @input="onProductionMaterialUsageQuantityChange(item,'returned_intact_stock_quantity')" /></label>
+                <label class="production-material-usage-field">破损<input class="input" type="number" min="0" :max="item.assigned_stock_quantity" v-model.number="item.damaged_stock_quantity" @input="onProductionMaterialUsageQuantityChange(item,'damaged_stock_quantity')" /></label>
+                <label class="production-material-usage-field">余片<input class="input" type="number" min="0" :max="item.assigned_stock_quantity" v-model.number="item.offcut_stock_quantity" @input="onProductionMaterialUsageQuantityChange(item,'offcut_stock_quantity')" /></label>
+                <span :class="['status',item.variance_reason_code?'orange':'green']">{{ productionMaterialVarianceLabel(item) }}</span>
+                <label class="production-material-return-confirm"><input type="checkbox" v-model="item.return_confirmed" :disabled="!item.returned_intact_stock_quantity || !canWarehouseExecute" /><span>{{ item.returned_intact_stock_quantity ? '确认完整整张已退回' : '无需退回确认' }}</span></label>
+              </div>
+            </div>
+            <div v-if="productionMaterialUsageValidationError(productionMaterialUsageDialog.draft)" class="notice danger production-material-usage-error">{{ productionMaterialUsageValidationError(productionMaterialUsageDialog.draft) }}</div>
+          </div>
+          <div class="modal-foot">
+            <span class="muted" style="margin-right:auto">完整退回才恢复可用库存；破损和余片只记事实，不进入整张库存。</span>
+            <button class="btn" :disabled="productionBusy" @click="closeProductionMaterialUsage">取消</button>
+            <button class="btn primary" :disabled="productionBusy" @click="saveProductionMaterialUsageDraft">保存本次核对</button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="masterChangeConfirm.visible" class="modal-backdrop master-change-backdrop" @click.self="closeMasterChangeConfirm">
         <div class="modal" style="max-width:820px;max-height:90vh;overflow-y:auto">
           <div class="modal-header">
@@ -4949,7 +5160,10 @@
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
             incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingHistory: [], incomingLocations: [],
-            productionTab: "pending", productionPending: [], productionHistory: [], productionLocations: [], productionSelected: {}, productionBusy: false,
+            productionTab: "pending", productionPending: [], productionHistory: [], productionLocations: [], productionSelected: {}, productionSourceExpanded: {}, productionBusy: false,
+            productionMaterialUsageEnabled: false,
+            productionMaterialUsageDrafts: {},
+            productionMaterialUsageDialog: { visible:false, row:null, draft:null },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
@@ -8469,6 +8683,11 @@
               axios.get("/api/production/completions"),
               axios.get("/api/production/temporary-locations"),
             ]);
+            this.productionMaterialUsageEnabled = pending.data.material_usage_enabled === true;
+            if (!this.productionMaterialUsageEnabled) {
+              this.productionMaterialUsageDrafts = {};
+              this.productionMaterialUsageDialog = { visible:false, row:null, draft:null };
+            }
             const locationItems = locations.data.items || [];
             const floorNumbers = [...new Set(locationItems.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
             const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
@@ -8478,6 +8697,10 @@
               const canReuseOld = old && Number(old.version) === Number(row.version);
               const sourceOrder = this.orders.find(order => Number(order.id) === Number(row.order_id));
               const selectedLocation = locationItems.find(location => Number(location.id) === Number(canReuseOld ? old?.location_id : null));
+              const plannedSourceInput = (row.material_pick_sources || [])
+                .filter(source => source.source_status === "ready")
+                .reduce((total, source) => total + Number(source.planned_input_quantity || 0), 0);
+              const defaultInput = plannedSourceInput || Number(row.available_material_input_quantity || row.material_input_quantity || 0);
               return {
                 ...row,
                 delivery_date: row.delivery_date || sourceOrder?.delivery_date || null,
@@ -8485,10 +8708,24 @@
                 location_floor_number: canReuseOld ? (old?.location_floor_number || this.productionLocationFloorNumber(selectedLocation) || defaultFloorNumber) : defaultFloorNumber,
                 location_area_code: canReuseOld ? (old?.location_area_code || this.productionLocationAreaCode(selectedLocation)) : "",
                 location_id: canReuseOld ? (old?.location_id || null) : null,
-                actual_input_quantity: canReuseOld ? (old?.actual_input_quantity || Number(row.available_material_input_quantity || row.material_input_quantity || 0)) : Number(row.available_material_input_quantity || row.material_input_quantity || 0),
+                actual_input_quantity: canReuseOld ? (old?.actual_input_quantity || defaultInput) : defaultInput,
                 actual_output_quantity: canReuseOld ? (old?.actual_output_quantity || Number(row.planned_output_quantity || row.planned_quantity || 0)) : Number(row.planned_output_quantity || row.planned_quantity || 0),
                 _direct_submitting: false,
               };
+            });
+            this.productionPending.forEach(row => {
+              const signature = this.productionMaterialSourceSignature(row);
+              row._material_usage_source_signature = signature;
+              const draft = this.productionMaterialUsageDrafts[String(row.id)];
+              if (
+                draft
+                && (
+                  Number(draft.task_version) !== Number(row.version)
+                  || draft.source_signature !== signature
+                )
+              ) {
+                delete this.productionMaterialUsageDrafts[String(row.id)];
+              }
             });
             this.productionHistory = (history.data.items || []).map(row => ({
               ...row,
@@ -8501,6 +8738,286 @@
             Object.keys(this.productionSelected).forEach(taskId => {
               if (!validIds.has(taskId)) delete this.productionSelected[taskId];
             });
+            Object.keys(this.productionMaterialUsageDrafts).forEach(taskId => {
+              if (!validIds.has(String(taskId))) delete this.productionMaterialUsageDrafts[taskId];
+            });
+          },
+          productionVisiblePickSources(row) {
+            const sources = Array.isArray(row?.material_pick_sources) ? row.material_pick_sources : [];
+            return this.productionSourceExpanded[row?.id] ? sources : sources.slice(0, 2);
+          },
+          toggleProductionPickSources(row) {
+            if (!row?.id) return;
+            this.productionSourceExpanded[row.id] = !this.productionSourceExpanded[row.id];
+          },
+          productionPickStatusClass(row) {
+            const status = String(row?.material_pick_status || "unassigned");
+            return ["ready", "partial", "invalid"].includes(status) ? status : "unassigned";
+          },
+          productionPickStatusLabel(row) {
+            const status = this.productionPickStatusClass(row);
+            if (status === "ready") return `原料已齐 · ${Number(row?.material_pick_assigned_sheet_quantity || 0)} 张`;
+            if (status === "partial") return `部分材料，仍缺 ${Number(row?.material_pick_missing_quantity || 0)} 个`;
+            if (status === "invalid") return "预占来源失效";
+            return "尚无原料指派";
+          },
+          productionCompactPickLine(row) {
+            const sources = Array.isArray(row?.material_pick_sources) ? row.material_pick_sources : [];
+            if (!sources.length) return "无批次预占，沿用现有生产确认规则";
+            const source = sources[0];
+            const location = source.location_code || source.location_name || "库位失效";
+            const lot = source.lot_number || "批次失效";
+            const size = `${source.board_length_mm || "-"}×${source.board_width_mm || "-"}mm`;
+            const planned = Number(source.planned_input_quantity || 0);
+            return `${location} · ${lot} · ${size} · ${source.flute_type || "-"}楞 · 计划 ${planned} 张${sources.length > 1 ? ` · 等 ${sources.length} 批` : ""}`;
+          },
+          productionMaterialSourceSignature(row) {
+            return JSON.stringify((row?.material_pick_sources || []).map(source => ({
+              reservation_id:Number(source.reservation_id || 0),
+              inventory_lot_id:Number(source.inventory_lot_id || 0),
+              lot_version:Number(source.lot_version || 0),
+              source_status:String(source.source_status || ""),
+              remaining_sheet_quantity:Number(source.remaining_sheet_quantity || 0),
+              planned_input_quantity:Number(source.planned_input_quantity || 0),
+            })));
+          },
+          buildProductionMaterialUsageDraft(row) {
+            const items = (row?.material_pick_sources || []).map(source => {
+              const assigned = Math.max(Number(source.remaining_sheet_quantity || 0), 0);
+              const planned = Math.min(Math.max(Number(source.planned_input_quantity || 0), 0), assigned);
+              const returned = Math.max(assigned - planned, 0);
+              return {
+                reservation_id:Number(source.reservation_id || 0),
+                inventory_lot_id:Number(source.inventory_lot_id || 0),
+                expected_lot_version:Number(source.lot_version || 0),
+                source_status:String(source.source_status || ""),
+                location_code:source.location_code || source.location_name || "",
+                lot_number:source.lot_number || "",
+                board_length_mm:source.board_length_mm || null,
+                board_width_mm:source.board_width_mm || null,
+                flute_type:source.flute_type || "",
+                stock_yield_per_sheet:Math.max(Number(source.stock_yield_per_sheet || 1), 1),
+                planned_input_quantity:planned,
+                assigned_stock_quantity:assigned,
+                actual_consumed_stock_quantity:planned,
+                returned_intact_stock_quantity:returned,
+                damaged_stock_quantity:0,
+                offcut_stock_quantity:0,
+                variance_reason_code:returned > 0 ? "intact_return" : null,
+                variance_reason_text:null,
+                return_confirmed:false,
+              };
+            });
+            return {
+              task_id:Number(row?.id || 0),
+              task_version:Number(row?.version || 0),
+              source_signature:this.productionMaterialSourceSignature(row),
+              saved:false,
+              items,
+            };
+          },
+          productionMaterialUsageDraftReady(row) {
+            const draft = this.productionMaterialUsageDrafts[String(row?.id)];
+            return !!(
+              draft
+              && draft.saved
+              && Number(draft.task_version) === Number(row?.version)
+              && draft.source_signature === this.productionMaterialSourceSignature(row)
+              && !this.productionMaterialUsageValidationError(draft)
+            );
+          },
+          productionMaterialUsageReadyForCompletion(row) {
+            if (!this.productionMaterialUsageEnabled) return true;
+            const sources = Array.isArray(row?.material_pick_sources) ? row.material_pick_sources : [];
+            if (!sources.length) return true;
+            if (["partial","invalid"].includes(this.productionPickStatusClass(row))) return false;
+            if (this.productionMaterialUsageDraftReady(row)) return true;
+            const draft = this.buildProductionMaterialUsageDraft(row);
+            const needsReview = draft.items.some(item =>
+              item.returned_intact_stock_quantity > 0
+              || item.damaged_stock_quantity > 0
+              || item.offcut_stock_quantity > 0
+              || item.actual_consumed_stock_quantity !== item.assigned_stock_quantity
+            );
+            return !needsReview && !this.productionMaterialUsageValidationError(draft);
+          },
+          openProductionMaterialUsage(row) {
+            const saved = this.productionMaterialUsageDrafts[String(row?.id)];
+            const draft = saved && saved.source_signature === this.productionMaterialSourceSignature(row)
+              ? JSON.parse(JSON.stringify(saved))
+              : this.buildProductionMaterialUsageDraft(row);
+            this.productionMaterialUsageDialog = {
+              visible:true,
+              row,
+              draft,
+            };
+          },
+          closeProductionMaterialUsage() {
+            if (this.productionBusy) return;
+            this.productionMaterialUsageDialog = { visible:false, row:null, draft:null };
+          },
+          productionMaterialVarianceLabel(item) {
+            const returned = Number(item?.returned_intact_stock_quantity || 0) > 0;
+            const damaged = Number(item?.damaged_stock_quantity || 0) > 0;
+            const offcut = Number(item?.offcut_stock_quantity || 0) > 0;
+            const count = [returned, damaged, offcut].filter(Boolean).length;
+            if (!count) return "按计划";
+            if (count > 1) return "混合差异";
+            if (returned) return "完整退回";
+            if (damaged) return "破损";
+            return "余片";
+          },
+          updateProductionMaterialVariance(item) {
+            const returned = Number(item.returned_intact_stock_quantity || 0) > 0;
+            const damaged = Number(item.damaged_stock_quantity || 0) > 0;
+            const offcut = Number(item.offcut_stock_quantity || 0) > 0;
+            const count = [returned, damaged, offcut].filter(Boolean).length;
+            item.variance_reason_code = !count
+              ? null
+              : count > 1
+                ? "mixed"
+                : returned
+                  ? "intact_return"
+                  : damaged
+                    ? "damaged"
+                    : "offcut";
+            if (!returned) item.return_confirmed = false;
+          },
+          onProductionMaterialUsageQuantityChange(item, field) {
+            const assigned = Math.max(Number(item.assigned_stock_quantity || 0), 0);
+            const fields = [
+              "actual_consumed_stock_quantity",
+              "returned_intact_stock_quantity",
+              "damaged_stock_quantity",
+              "offcut_stock_quantity",
+            ];
+            fields.forEach(key => {
+              const value = Number(item[key] || 0);
+              item[key] = Number.isInteger(value) ? Math.min(Math.max(value, 0), assigned) : 0;
+            });
+            if (field === "actual_consumed_stock_quantity") {
+              item.returned_intact_stock_quantity = Math.max(
+                assigned
+                - item.actual_consumed_stock_quantity
+                - item.damaged_stock_quantity
+                - item.offcut_stock_quantity,
+                0,
+              );
+            } else {
+              item.actual_consumed_stock_quantity = Math.max(
+                assigned
+                - item.returned_intact_stock_quantity
+                - item.damaged_stock_quantity
+                - item.offcut_stock_quantity,
+                0,
+              );
+            }
+            this.updateProductionMaterialVariance(item);
+          },
+          productionMaterialUsageValidationError(draft) {
+            if (!draft || !Array.isArray(draft.items) || !draft.items.length) return "当前没有可核对的原料批次";
+            let physicalInput = 0;
+            for (let index = 0; index < draft.items.length; index += 1) {
+              const item = draft.items[index];
+              const prefix = `第 ${index + 1} 批`;
+              if (
+                !Number.isInteger(Number(item.reservation_id))
+                || Number(item.reservation_id) <= 0
+                || !Number.isInteger(Number(item.inventory_lot_id))
+                || Number(item.inventory_lot_id) <= 0
+                || !Number.isInteger(Number(item.expected_lot_version))
+                || Number(item.expected_lot_version) <= 0
+              ) return `${prefix}来源已失效，请刷新或让仓库重新指派`;
+              if (item.source_status !== "ready") return `${prefix}来源已失效，请让仓库重新指派`;
+              const quantities = [
+                Number(item.actual_consumed_stock_quantity),
+                Number(item.returned_intact_stock_quantity),
+                Number(item.damaged_stock_quantity),
+                Number(item.offcut_stock_quantity),
+              ];
+              if (quantities.some(value => !Number.isInteger(value) || value < 0)) return `${prefix}数量必须是非负整数`;
+              const assigned = Number(item.assigned_stock_quantity);
+              if (!Number.isInteger(assigned) || assigned <= 0 || quantities.reduce((sum, value) => sum + value, 0) !== assigned) {
+                return `${prefix}四项合计必须等于指派 ${assigned || 0} 张`;
+              }
+              if (
+                quantities[0] !== assigned
+                && !["intact_return","damaged","offcut","mixed"].includes(item.variance_reason_code)
+              ) return `${prefix}差异原因尚未确定`;
+              if (quantities[1] > 0 && !this.canWarehouseExecute) return "完整整张退回需要仓库执行权限";
+              if (quantities[1] > 0 && !item.return_confirmed) return `${prefix}请勾选“确认完整整张已退回”`;
+              if (quantities[1] === 0 && item.return_confirmed) return `${prefix}没有退回数量，不能勾选退回确认`;
+              physicalInput += quantities[0] + quantities[2] + quantities[3];
+            }
+            if (physicalInput <= 0) return "本次实际投入、破损和余片合计不能为 0";
+            return "";
+          },
+          async saveProductionMaterialUsageDraft() {
+            const dialog = this.productionMaterialUsageDialog;
+            const error = this.productionMaterialUsageValidationError(dialog.draft);
+            if (error) {
+              this.showToast(error, true);
+              return;
+            }
+            const row = this.productionPending.find(item => Number(item.id) === Number(dialog.row?.id));
+            if (!row || Number(row.version) !== Number(dialog.draft.task_version)) {
+              this.showToast("生产任务已变化，请刷新后重新核对", true);
+              return;
+            }
+            const saved = JSON.parse(JSON.stringify({ ...dialog.draft, saved:true }));
+            this.productionMaterialUsageDrafts[String(row.id)] = saved;
+            row.actual_input_quantity = saved.items.reduce(
+              (total, item) => total
+                + Number(item.actual_consumed_stock_quantity || 0)
+                + Number(item.damaged_stock_quantity || 0)
+                + Number(item.offcut_stock_quantity || 0),
+              0,
+            );
+            const normalOutputLimit = saved.items.reduce(
+              (total, item) => total
+                + Number(item.actual_consumed_stock_quantity || 0)
+                  * Math.max(Number(item.stock_yield_per_sheet || 1), 1),
+              0,
+            );
+            if (Number(row.actual_output_quantity || 0) > normalOutputLimit) {
+              row.actual_output_quantity = normalOutputLimit;
+            }
+            this.syncProductionQuantities(row);
+            this.productionMaterialUsageDialog = { visible:false, row:null, draft:null };
+            this.showToast("本次用料已核对");
+            if (row.completion_mode === "direct") {
+              if (this.productionNeedsLocation(row)) {
+                if (this.productionLocation(row.location_id)) this.autoSelectProductionRow(row);
+                else this.showToast("该明细有余货，请先选择余货库位", true);
+              } else {
+                await this.confirmProductionDirectRow(row);
+              }
+            } else if (row.completion_mode === "stock" && this.productionLocation(row.location_id)) {
+              this.autoSelectProductionRow(row);
+            }
+          },
+          productionMaterialUsagePayload(row) {
+            if (!this.productionMaterialUsageEnabled) return [];
+            const sources = Array.isArray(row?.material_pick_sources) ? row.material_pick_sources : [];
+            if (!sources.length) return [];
+            let draft = this.productionMaterialUsageDrafts[String(row.id)];
+            if (!this.productionMaterialUsageDraftReady(row)) {
+              draft = this.buildProductionMaterialUsageDraft(row);
+              if (!this.productionMaterialUsageReadyForCompletion(row)) return null;
+            }
+            return draft.items.map(item => ({
+              reservation_id:Number(item.reservation_id),
+              inventory_lot_id:Number(item.inventory_lot_id),
+              expected_lot_version:Number(item.expected_lot_version),
+              assigned_stock_quantity:Number(item.assigned_stock_quantity),
+              actual_consumed_stock_quantity:Number(item.actual_consumed_stock_quantity),
+              returned_intact_stock_quantity:Number(item.returned_intact_stock_quantity || 0),
+              damaged_stock_quantity:Number(item.damaged_stock_quantity || 0),
+              offcut_stock_quantity:Number(item.offcut_stock_quantity || 0),
+              variance_reason_code:item.variance_reason_code || null,
+              variance_reason_text:item.variance_reason_text || null,
+              return_confirmed:!!item.return_confirmed,
+            }));
           },
           productionLocation(locationId) {
             return this.productionAvailableLocations.find(location => Number(location.id) === Number(locationId));
@@ -8552,6 +9069,7 @@
           },
           canConfirmProductionRow(row) {
             if (!this.canProductionExecute || row?.status !== "pending") return false;
+            if (!this.productionMaterialUsageReadyForCompletion(row)) return false;
             const input = Number(row.actual_input_quantity || 0);
             const output = Number(row.actual_output_quantity || 0);
             const theoretical = this.productionTheoreticalOutput(row);
@@ -8607,6 +9125,16 @@
               row.location_floor_number = null;
               row.location_area_code = "";
               row.location_id = null;
+            }
+            if (row.completion_mode && !this.productionMaterialUsageReadyForCompletion(row)) {
+              this.openProductionMaterialUsage(row);
+              this.showToast(
+                ["partial","invalid"].includes(this.productionPickStatusClass(row))
+                  ? "当前原料未齐或来源失效，暂不能确认完工"
+                  : "请先核对本次用料差异",
+                true,
+              );
+              return;
             }
             if (row.completion_mode !== "direct") return;
             if (this.productionNeedsLocation(row)) {
@@ -8688,6 +9216,11 @@
               this.productionSelected[row.id] = false;
               return;
             }
+            if (checked && !this.productionMaterialUsageReadyForCompletion(row)) {
+              this.productionSelected[row.id] = false;
+              this.openProductionMaterialUsage(row);
+              return;
+            }
             this.productionSelected[row.id] = checked && this.canConfirmProductionRow(row);
           },
           toggleAllProduction(checked) {
@@ -8720,6 +9253,8 @@
           productionCompletionRequestItems(rows) {
             return rows.map(row => {
               const location = this.productionNeedsLocation(row) ? this.productionLocation(row.location_id) : null;
+              const materialUsages = this.productionMaterialUsagePayload(row);
+              if (materialUsages === null) throw new Error("请先核对本次用料差异");
               return {
                 task_id: row.id,
                 expected_version: row.version,
@@ -8731,6 +9266,7 @@
                 location_id: location ? Number(location.id) : null,
                 pallet_id: location?.pallet_id ? Number(location.pallet_id) : null,
                 pallet_code: location?.pallet_code || null,
+                material_usages:materialUsages,
               };
             });
           },

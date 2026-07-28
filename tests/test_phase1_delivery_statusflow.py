@@ -21,7 +21,7 @@ from threading import Barrier
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -34,6 +34,7 @@ def delivery_api_app(tmp_path: Path):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
+    from app.models.access_control import UserPermissionOverride
     from app.models.customer import Customer
     from app.models.order import Order, OrderItem
     from app.models.product import Product
@@ -70,6 +71,21 @@ def delivery_api_app(tmp_path: Path):
         )
         session.add_all([*users, customer, other_customer])
         session.flush()
+        sales = next(user for user in users if user.username == "sales")
+        session.add_all(
+            [
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="deliveries.view",
+                    is_allowed=True,
+                ),
+                UserPermissionOverride(
+                    user_id=sales.id,
+                    permission_code="deliveries.execute",
+                    is_allowed=True,
+                ),
+            ]
+        )
         products = [
             Product(
                 customer_id=customer.id,
@@ -424,8 +440,17 @@ def test_delete_pending_does_not_touch_order_quantity(delivery_api_app) -> None:
         _login(client, "sales")
         delivery_id = _create_pending(client)
         deleted = client.delete(f"/api/deliveries/{delivery_id}")
+        repeated = client.delete(f"/api/deliveries/{delivery_id}")
 
     assert deleted.status_code in (200, 204), deleted.text
+    assert deleted.json() == {
+        "deleted": True,
+        "voided": False,
+        "disposition": "deleted",
+        "id": delivery_id,
+    }
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == deleted.json()
     with session_factory() as session:
         assert session.get(Delivery, delivery_id) is None
         assert session.scalar(select(func.count()).select_from(Delivery)) == 0
@@ -445,6 +470,124 @@ def test_delete_rejected_after_dispatch(delivery_api_app) -> None:
     assert deleted.status_code == 409, deleted.text
     with session_factory() as session:
         assert session.get(Delivery, delivery_id) is not None
+
+
+def test_delete_after_cancel_voids_without_changing_order_quantity(
+    delivery_api_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import OrderItem
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        delivery_id = _create_and_dispatch(client)
+        cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
+        before_quantities = {
+            item_id: session_quantity
+            for item_id, session_quantity in (
+                (1, 20),
+                (2, 0),
+            )
+        }
+        removed = client.delete(f"/api/deliveries/{delivery_id}")
+        repeated = client.delete(f"/api/deliveries/{delivery_id}")
+        default_list = client.get("/api/deliveries")
+        voided_list = client.get(
+            "/api/deliveries",
+            params={"status": "voided"},
+        )
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert removed.status_code == 200, removed.text
+    assert removed.json() == {
+        "deleted": False,
+        "voided": True,
+        "disposition": "voided",
+        "id": delivery_id,
+    }
+    assert repeated.json() == removed.json()
+    assert all(
+        row["id"] != delivery_id
+        for row in default_list.json()["items"]
+    )
+    assert any(
+        row["id"] == delivery_id
+        for row in voided_list.json()["items"]
+    )
+    with session_factory() as session:
+        delivery = session.get(Delivery, delivery_id)
+        assert delivery.status == "voided"
+        assert delivery.ever_dispatched_at is not None
+        assert delivery.voided_at is not None
+        assert session.scalar(
+            select(func.count(DeliveryItem.id)).where(
+                DeliveryItem.delivery_id == delivery_id
+            )
+        ) == 2
+        assert {
+            item_id: session.get(OrderItem, item_id).delivered_quantity
+            for item_id in before_quantities
+        } == before_quantities
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.resource == "Delivery",
+                OperationLog.entity_id == delivery_id,
+                OperationLog.action == "VOID_AFTER_CANCEL",
+            )
+        ) == 1
+
+
+def test_delete_unknown_restrict_reference_returns_chinese_conflict(
+    delivery_api_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.delivery import Delivery
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        delivery_id = _create_pending(client)
+        with session_factory() as session:
+            session.execute(
+                text(
+                    """
+                    CREATE TABLE delivery_delete_test_blockers (
+                        id INTEGER PRIMARY KEY,
+                        delivery_id INTEGER NOT NULL,
+                        FOREIGN KEY(delivery_id)
+                            REFERENCES sales_deliveries(id)
+                            ON DELETE RESTRICT
+                    )
+                    """
+                )
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO delivery_delete_test_blockers
+                        (id, delivery_id)
+                    VALUES (1, :delivery_id)
+                    """
+                ),
+                {"delivery_id": delivery_id},
+            )
+            session.commit()
+        removed = client.delete(f"/api/deliveries/{delivery_id}")
+
+    assert removed.status_code == 409, removed.text
+    assert "关联业务记录" in removed.json()["detail"]
+    assert "不能物理删除" in removed.json()["detail"]
+    with session_factory() as session:
+        assert session.get(Delivery, delivery_id) is not None
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.resource == "Delivery",
+                OperationLog.entity_id == delivery_id,
+                OperationLog.action.in_(("DELETE", "VOID_AFTER_CANCEL")),
+            )
+        ) == 0
 
 
 def test_delete_requires_operate_role(delivery_api_app) -> None:
@@ -804,6 +947,9 @@ def test_delivery_frontend_exposes_guarded_status_actions() -> None:
     assert '@click="cancelDelivery(row)"' in index
     assert "canDelivery && row.status==='pending'" in index
     assert "canDelivery && row.status==='dispatched'" in index
+    assert "未发生发货的草稿将直接删除" in index
+    assert "库存流水和审计记录均已保留" in index
+    assert "仅删除送货单本身" not in index
 
 
 def test_cancel_is_atomic_on_rollback_failure(delivery_api_app) -> None:

@@ -1113,7 +1113,8 @@ def dashboard_overview(
                 "today_deliveries": _safe_int(
                     db.scalar(
                         select(func.count(Delivery.id)).where(
-                            Delivery.delivery_date == today
+                            Delivery.delivery_date == today,
+                            Delivery.status != "voided",
                         )
                     )
                 ),

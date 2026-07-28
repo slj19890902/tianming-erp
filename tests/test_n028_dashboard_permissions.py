@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -157,6 +157,17 @@ def _seed_dashboard_data(factory: sessionmaker[Session]) -> dict[str, int]:
                 total_quantity=10,
             )
             db.add(delivery)
+            db.add(
+                Delivery(
+                    delivery_number=f"VOIDED-{prefix}",
+                    customer_id=customer.id,
+                    delivery_date=today,
+                    status="voided",
+                    total_quantity=10,
+                    ever_dispatched_at=datetime.now(),
+                    voided_at=datetime.now(),
+                )
+            )
             db.flush()
             delivery_item = DeliveryItem(
                 delivery_id=delivery.id,

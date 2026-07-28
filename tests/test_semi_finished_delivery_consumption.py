@@ -7,21 +7,23 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
 from app.models.access_control import UserPermissionOverride
 from app.models import Base
+from app.models.audit import OperationLog
 from app.models.customer import Customer
-from app.models.delivery import Delivery
+from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     InventoryLot,
+    InventoryMovement,
     InventoryReservation,
     OrderItemSemiRequirement,
     WarehouseLocation,
@@ -32,7 +34,6 @@ from app.services.warehouse_inventory import (
     manual_semi_finished_in,
     replace_semi_finished_lot_allowed_products,
     release_active_finished_reservations_for_items,
-    replace_semi_finished_lot_allowed_products,
 )
 
 
@@ -697,6 +698,207 @@ def test_yield_whole_sheet_multi_delivery_cancel_preserves_remaining_need(
         assert reservation.consumed_requirement_quantity == 0
         assert (lot.quantity_reserved, lot.quantity_consumed) == (2, 0)
         assert any(row.status == "reversed" for row in allocations)
+
+
+def test_cancelled_delivery_delete_voids_and_preserves_inventory_history(
+    delivery_inventory_app,
+) -> None:
+    app, factory = delivery_inventory_app
+    lot_id, version = add_finished(
+        factory,
+        product_id=1,
+        quantity=30,
+        key="b2-void-after-cancel-finished",
+    )
+    with TestClient(app) as client:
+        login(client)
+        item_id = create_order(
+            client,
+            po="B2-VOID-AFTER-CANCEL",
+            product_id=1,
+            quantity=30,
+            finished=[finished_plan(lot_id, version, 30)],
+        )
+        mark_as_legacy_order_without_production_task(factory, item_id)
+        delivery = create_delivery(client, item_id, 30)
+        delivery_id = delivery["id"]
+        dispatched = client.put(
+            f"/api/deliveries/{delivery_id}/dispatch"
+        )
+        cancelled = client.put(
+            f"/api/deliveries/{delivery_id}/cancel"
+        )
+        assert dispatched.status_code == 200, dispatched.text
+        assert cancelled.status_code == 200, cancelled.text
+
+        with factory() as db:
+            delivery_item = db.scalar(
+                select(DeliveryItem).where(
+                    DeliveryItem.delivery_id == delivery_id
+                )
+            )
+            allocation = db.scalar(
+                select(DeliveryInventoryAllocation).where(
+                    DeliveryInventoryAllocation.delivery_item_id
+                    == delivery_item.id
+                )
+            )
+            reservation = db.get(
+                InventoryReservation,
+                allocation.reservation_id,
+            )
+            lot = db.get(InventoryLot, lot_id)
+            movements = db.scalars(
+                select(InventoryMovement)
+                .where(InventoryMovement.related_delivery_id == delivery_id)
+                .order_by(InventoryMovement.id)
+            ).all()
+            before = {
+                "delivery_item_id": delivery_item.id,
+                "allocation": (
+                    allocation.id,
+                    allocation.delivery_item_id,
+                    allocation.consume_movement_id,
+                    allocation.consumed_stock_quantity,
+                    allocation.credited_requirement_quantity,
+                    allocation.reversed_stock_quantity,
+                    allocation.reversed_requirement_quantity,
+                    allocation.status,
+                ),
+                "reservation": (
+                    reservation.status,
+                    reservation.reserved_stock_quantity,
+                    reservation.consumed_stock_quantity,
+                    reservation.credited_requirement_quantity,
+                    reservation.consumed_requirement_quantity,
+                ),
+                "lot": (
+                    lot.quantity_available,
+                    lot.quantity_reserved,
+                    lot.quantity_consumed,
+                ),
+                "movements": [
+                    (
+                        row.id,
+                        row.movement_type,
+                        row.quantity,
+                        row.reservation_id,
+                        row.related_delivery_id,
+                        row.reversal_of_movement_id,
+                        row.idempotency_key,
+                    )
+                    for row in movements
+                ],
+            }
+            assert allocation.status == "reversed"
+            assert [row.movement_type for row in movements] == [
+                "consume",
+                "reverse_consume",
+            ]
+            assert db.get(OrderItem, item_id).delivered_quantity == 0
+
+        removed = client.delete(f"/api/deliveries/{delivery_id}")
+        default_list = client.get("/api/deliveries")
+        voided_list = client.get(
+            "/api/deliveries",
+            params={"status": "voided"},
+        )
+        repeated = client.delete(f"/api/deliveries/{delivery_id}")
+        blocked_print = client.get(
+            f"/api/deliveries/{delivery_id}/print"
+        )
+
+    assert removed.status_code == 200, removed.text
+    assert removed.json() == {
+        "deleted": False,
+        "voided": True,
+        "disposition": "voided",
+        "id": delivery_id,
+    }
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == removed.json()
+    assert all(
+        row["id"] != delivery_id
+        for row in default_list.json()["items"]
+    )
+    archived = next(
+        row
+        for row in voided_list.json()["items"]
+        if row["id"] == delivery_id
+    )
+    assert archived["status"] == "voided"
+    assert archived["voided_at"] is not None
+    assert archived["ever_dispatched_at"] is not None
+    assert blocked_print.status_code == 409
+    assert "已作废" in blocked_print.json()["detail"]
+
+    with factory() as db:
+        saved_delivery = db.get(Delivery, delivery_id)
+        saved_item = db.get(DeliveryItem, before["delivery_item_id"])
+        allocation = db.scalar(
+            select(DeliveryInventoryAllocation).where(
+                DeliveryInventoryAllocation.delivery_item_id
+                == before["delivery_item_id"]
+            )
+        )
+        reservation = db.get(
+            InventoryReservation,
+            allocation.reservation_id,
+        )
+        lot = db.get(InventoryLot, lot_id)
+        movements = db.scalars(
+            select(InventoryMovement)
+            .where(InventoryMovement.related_delivery_id == delivery_id)
+            .order_by(InventoryMovement.id)
+        ).all()
+        void_logs = db.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.resource == "Delivery",
+                OperationLog.entity_id == delivery_id,
+                OperationLog.action == "VOID_AFTER_CANCEL",
+            )
+        )
+
+        assert saved_delivery.status == "voided"
+        assert saved_delivery.voided_at is not None
+        assert saved_delivery.ever_dispatched_at is not None
+        assert saved_item is not None
+        assert (
+            allocation.id,
+            allocation.delivery_item_id,
+            allocation.consume_movement_id,
+            allocation.consumed_stock_quantity,
+            allocation.credited_requirement_quantity,
+            allocation.reversed_stock_quantity,
+            allocation.reversed_requirement_quantity,
+            allocation.status,
+        ) == before["allocation"]
+        assert (
+            reservation.status,
+            reservation.reserved_stock_quantity,
+            reservation.consumed_stock_quantity,
+            reservation.credited_requirement_quantity,
+            reservation.consumed_requirement_quantity,
+        ) == before["reservation"]
+        assert (
+            lot.quantity_available,
+            lot.quantity_reserved,
+            lot.quantity_consumed,
+        ) == before["lot"]
+        assert [
+            (
+                row.id,
+                row.movement_type,
+                row.quantity,
+                row.reservation_id,
+                row.related_delivery_id,
+                row.reversal_of_movement_id,
+                row.idempotency_key,
+            )
+            for row in movements
+        ] == before["movements"]
+        assert db.get(OrderItem, item_id).delivered_quantity == 0
+        assert void_logs == 1
 
 
 def test_dispatch_inventory_failure_rolls_back_all_lines(

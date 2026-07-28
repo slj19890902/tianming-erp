@@ -35,7 +35,7 @@ class Delivery(Base):
     __tablename__ = "sales_deliveries"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'dispatched')",
+            "status IN ('pending', 'dispatched', 'voided')",
             name="ck_sales_deliveries_status",
         ),
         UniqueConstraint(
@@ -70,6 +70,15 @@ class Delivery(Base):
         nullable=True,
     )
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ever_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    voided_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     printed_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

@@ -115,6 +115,16 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
         )
         detail_after_update=client.get(f"/api/deliveries/{delivery_id}")
         print_after_update=client.get(f"/api/deliveries/{delivery_id}/print")
+        with factory() as db:
+            db.get(Delivery,delivery_id).status="voided"
+            db.commit()
+        voided_update=client.put(
+            f"/api/deliveries/tianhua-preimport/{up.json()['batch_id']}/update-draft",
+            json=payload,
+        )
+        with factory() as db:
+            db.get(Delivery,delivery_id).status="pending"
+            db.commit()
     assert wrong_batch.status_code==400
     assert duplicate_line.status_code==400
     assert [response.status_code for response in blocked_responses]==[400,400]
@@ -128,6 +138,9 @@ def test_api_creates_linked_pending_delivery_and_blocks_duplicate(tmp_path,monke
     assert detail_after_update.json()["items"][0]["remarks"]=="请核对数量后签字"
     assert print_after_update.json()["items"][0]["remarks"]=="请核对数量后签字"
     assert "现场确认 200" not in print_after_update.text
+    assert voided_update.status_code==400
+    assert "关联送货单已作废" in voided_update.json()["detail"]
+    assert "重新上传预送货截图" in voided_update.json()["detail"]
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(TianhuaPreDeliveryDraft))==1
         assert db.scalar(select(func.count()).select_from(Delivery))==1

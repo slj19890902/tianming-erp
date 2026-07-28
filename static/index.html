@@ -14386,11 +14386,15 @@
             this.modal = { type:"delivery", title:`编辑送货单 ${row.delivery_number}` };
           },
           async deleteDelivery(row) {
-            if (!confirm(`确认删除待发货送货单 ${row.delivery_number} 吗？\n仅删除送货单本身，不影响订单已送数量。`)) return;
+            if (!confirm(`确认移除送货单 ${row.delivery_number} 吗？\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return;
             try {
-              await axios.delete(`/api/deliveries/${row.id}`);
+              const response = await axios.delete(`/api/deliveries/${row.id}`);
               await Promise.all([this.loadDeliveries(), this.loadKpi()]);
-              this.showToast("已删除待发货送货单");
+              this.showToast(
+                response.data?.voided
+                  ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
+                  : "已删除未发货送货草稿"
+              );
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async cancelDelivery(row) {

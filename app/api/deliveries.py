@@ -42,6 +42,7 @@ from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     InventoryLot,
+    InventoryMovement,
     InventoryReservation,
     OrderItemSemiRequirement,
     WarehouseLocation,
@@ -1740,6 +1741,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         order.id: order for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
     } if order_ids else {}
     pick_task = _delivery_pick_task(db, delivery_id)
+    has_dispatch_history = delivery.status in {"dispatched", "voided"}
     pick_by_delivery_item = {
         item.delivery_item_id: _pick_item_response(db, item)
         for item in (pick_task.items if pick_task else [])
@@ -1764,7 +1766,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
             order_item,
             planned_delivery_quantity=mapping["delivered_quantity"],
             delivery_item_id=mapping["id"],
-            dispatched=delivery.status == "dispatched",
+            dispatched=has_dispatch_history,
         )
         actual_goods_lines = _actual_goods_lines(
             order_item_id=mapping["order_item_id"],
@@ -1807,7 +1809,7 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
                     order_item=order_item,
                     planned_delivery_quantity=mapping["delivered_quantity"],
                     delivery_item_id=mapping["id"],
-                    dispatched=delivery.status == "dispatched",
+                    dispatched=has_dispatch_history,
                 ),
                 "pick_result": pick_by_delivery_item.get(mapping["id"]),
             }
@@ -1827,6 +1829,17 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
             if delivery.dispatched_at
             else None
         ),
+        "ever_dispatched_at": (
+            utc_naive_to_api(delivery.ever_dispatched_at)
+            if delivery.ever_dispatched_at
+            else None
+        ),
+        "voided_at": (
+            utc_naive_to_api(delivery.voided_at)
+            if delivery.voided_at
+            else None
+        ),
+        "voided_by": delivery.voided_by,
         "is_printed": delivery.printed_at is not None,
         "printed_at": (
             utc_naive_to_api(delivery.printed_at) if delivery.printed_at else None
@@ -1864,6 +1877,133 @@ def _write_audit(
             description=description,
         )
     )
+
+
+def _current_delivery_lifecycle_dispatch_at(
+    db: Session,
+    delivery: Delivery,
+) -> datetime | None:
+    """Return a dispatch timestamp without confusing a reused SQLite row id."""
+
+    create_logs = db.scalars(
+        select(OperationLog)
+        .where(
+            OperationLog.resource == "Delivery",
+            OperationLog.entity_id == delivery.id,
+            OperationLog.action == "CREATE",
+        )
+        .order_by(OperationLog.id.desc())
+    ).all()
+    current_create_log: OperationLog | None = None
+    for log in create_logs:
+        try:
+            details = json.loads(log.details or "{}")
+        except (TypeError, ValueError):
+            continue
+        if details.get("delivery_number") == delivery.delivery_number:
+            current_create_log = log
+            break
+    if current_create_log is None:
+        # Legacy/imported rows may not have a CREATE audit.  A timestamp-bound
+        # lookup is conservative: a same-second id reuse may cause a harmless
+        # soft void, but it cannot cause historical facts to be hard-deleted.
+        return db.scalar(
+            select(func.min(OperationLog.created_at)).where(
+                OperationLog.resource == "Delivery",
+                OperationLog.entity_id == delivery.id,
+                OperationLog.created_at >= delivery.created_at,
+                OperationLog.action.in_(("DISPATCH", "CANCEL_DISPATCH")),
+            )
+        )
+    return db.scalar(
+        select(func.min(OperationLog.created_at)).where(
+            OperationLog.resource == "Delivery",
+            OperationLog.entity_id == delivery.id,
+            OperationLog.id > current_create_log.id,
+            OperationLog.action.in_(("DISPATCH", "CANCEL_DISPATCH")),
+        )
+    )
+
+
+def _delivery_deletion_facts(
+    db: Session,
+    delivery: Delivery,
+) -> dict:
+    from app.models.finance import (
+        ReturnReceipt,
+        ReturnReceiptItem,
+        StatementItem,
+    )
+
+    item_ids = list(
+        db.scalars(
+            select(DeliveryItem.id).where(
+                DeliveryItem.delivery_id == delivery.id
+            )
+        ).all()
+    )
+    inventory_allocations = (
+        db.scalars(
+            select(DeliveryInventoryAllocation).where(
+                DeliveryInventoryAllocation.delivery_item_id.in_(item_ids)
+            )
+        ).all()
+        if item_ids
+        else []
+    )
+    component_allocations = (
+        db.scalars(
+            select(BomComponentDirectDeliveryAllocation).where(
+                BomComponentDirectDeliveryAllocation.delivery_item_id.in_(
+                    item_ids
+                )
+            )
+        ).all()
+        if item_ids
+        else []
+    )
+    receipt = db.scalar(
+        select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery.id)
+    )
+    statement_item_id = db.scalar(
+        select(StatementItem.id)
+        .join(
+            ReturnReceiptItem,
+            ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+        )
+        .join(
+            ReturnReceipt,
+            ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
+        )
+        .where(ReturnReceipt.delivery_id == delivery.id)
+        .limit(1)
+    )
+    movement_at = db.scalar(
+        select(func.min(InventoryMovement.created_at)).where(
+            InventoryMovement.related_delivery_id == delivery.id
+        )
+    )
+    lifecycle_dispatch_at = _current_delivery_lifecycle_dispatch_at(
+        db,
+        delivery,
+    )
+    history_times = [
+        delivery.ever_dispatched_at,
+        movement_at,
+        lifecycle_dispatch_at,
+        receipt.created_at if receipt is not None else None,
+        *(row.created_at for row in inventory_allocations),
+        *(row.created_at for row in component_allocations),
+    ]
+    history_times = [value for value in history_times if value is not None]
+    return {
+        "inventory_allocations": inventory_allocations,
+        "component_allocations": component_allocations,
+        "receipt": receipt,
+        "statement_item_id": statement_item_id,
+        "history_at": min(history_times) if history_times else None,
+        "has_history": bool(history_times),
+    }
 
 
 def _build_pick_task(
@@ -2673,6 +2813,8 @@ def list_deliveries(
             query = query.where(Delivery.customer_id.in_(visible_customer_ids))
     if status_filter:
         query = query.where(Delivery.status == status_filter)
+    else:
+        query = query.where(Delivery.status != "voided")
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     delivery_ids = db.scalars(
         query.offset((page - 1) * page_size).limit(page_size)
@@ -2820,6 +2962,10 @@ def dispatch_delivery(
                 status="dispatched",
                 dispatched_by=user.id,
                 dispatched_at=dispatched_at,
+                ever_dispatched_at=func.coalesce(
+                    Delivery.ever_dispatched_at,
+                    dispatched_at,
+                ),
             )
         )
         if claimed.rowcount != 1:
@@ -2828,6 +2974,14 @@ def dispatch_delivery(
             )
             if exists is None:
                 raise HTTPException(status_code=404, detail="送货单不存在")
+            existing_status = db.scalar(
+                select(Delivery.status).where(Delivery.id == delivery_id)
+            )
+            if existing_status == "voided":
+                raise HTTPException(
+                    status_code=409,
+                    detail="送货单已作废，不能再次确认发货",
+                )
             raise HTTPException(status_code=409, detail="送货单已确认发货")
 
         lines = db.scalars(
@@ -3073,11 +3227,16 @@ def update_delivery(
             .values(status="pending")
         )
         if claimed.rowcount != 1:
-            exists = db.scalar(
-                select(Delivery.id).where(Delivery.id == delivery_id)
+            existing_status = db.scalar(
+                select(Delivery.status).where(Delivery.id == delivery_id)
             )
-            if exists is None:
+            if existing_status is None:
                 raise HTTPException(status_code=404, detail="送货单不存在")
+            if existing_status == "voided":
+                raise HTTPException(
+                    status_code=409,
+                    detail="送货单已作废，不能编辑",
+                )
             raise HTTPException(
                 status_code=409,
                 detail="送货单已确认发货，不能编辑，请先取消发货",
@@ -3162,8 +3321,23 @@ def delete_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    _delivery_for_user(db, delivery_id, user)
+    delivery = db.get(Delivery, delivery_id)
+    if delivery is None:
+        return {
+            "deleted": True,
+            "voided": False,
+            "disposition": "deleted",
+            "id": delivery_id,
+        }
+    require_customer_access(delivery.customer_id, user, db)
     try:
+        if delivery.status == "voided":
+            return {
+                "deleted": False,
+                "voided": True,
+                "disposition": "voided",
+                "id": delivery_id,
+            }
         # 与确认发货竞争时先锁定 pending 状态，防止发货累计数量后
         # 送货单又被按旧状态删除。
         claimed = db.execute(
@@ -3175,22 +3349,138 @@ def delete_delivery(
             .values(status="pending")
         )
         if claimed.rowcount != 1:
-            exists = db.scalar(
-                select(Delivery.id).where(Delivery.id == delivery_id)
+            existing_status = db.scalar(
+                select(Delivery.status).where(Delivery.id == delivery_id)
             )
-            if exists is None:
-                raise HTTPException(status_code=404, detail="送货单不存在")
+            if existing_status is None:
+                db.rollback()
+                return {
+                    "deleted": True,
+                    "voided": False,
+                    "disposition": "deleted",
+                    "id": delivery_id,
+                }
+            if existing_status == "voided":
+                return {
+                    "deleted": False,
+                    "voided": True,
+                    "disposition": "voided",
+                    "id": delivery_id,
+                }
             raise HTTPException(
                 status_code=409,
                 detail="已确认发货的送货单不能删除，请改用取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        facts = _delivery_deletion_facts(db, delivery)
+        if facts["statement_item_id"] is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="送货单已进入对账，不能删除或作废；请先反审核对账",
+            )
+        receipt = facts["receipt"]
+        if receipt is not None and receipt.status == "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail="送货单已有有效回单，不能删除或作废；请先撤销回单",
+            )
+        if any(
+            row.status != "reversed"
+            or int(row.reversed_stock_quantity or 0)
+            != int(row.consumed_stock_quantity or 0)
+            or int(row.reversed_requirement_quantity or 0)
+            != int(row.credited_requirement_quantity or 0)
+            for row in facts["inventory_allocations"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="送货单库存抵扣尚未全部冲回，不能作废；请先取消发货并刷新后重试",
+            )
+        if any(
+            row.status != "reversed"
+            or int(row.reversed_quantity or 0)
+            != int(row.consumed_quantity or 0)
+            for row in facts["component_allocations"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="送货单组件成品抵扣尚未全部冲回，不能作废；请先取消发货并刷新后重试",
+            )
         _discard_delivery_pick_task(
             db,
             delivery_id=delivery_id,
             user=user,
-            reason="送货草稿被删除",
+            reason=(
+                "delivery_voided_after_cancel"
+                if facts["has_history"]
+                else "送货草稿被删除"
+            ),
         )
+        if facts["has_history"]:
+            voided_at = _utc_now()
+            voided = db.execute(
+                update(Delivery)
+                .where(
+                    Delivery.id == delivery_id,
+                    Delivery.status == "pending",
+                )
+                .values(
+                    status="voided",
+                    voided_by=user.id,
+                    voided_at=voided_at,
+                    ever_dispatched_at=func.coalesce(
+                        Delivery.ever_dispatched_at,
+                        facts["history_at"],
+                        voided_at,
+                    ),
+                    printed_by=None,
+                    printed_at=None,
+                )
+            )
+            if voided.rowcount != 1:
+                current_status = db.scalar(
+                    select(Delivery.status).where(Delivery.id == delivery_id)
+                )
+                if current_status == "voided":
+                    db.rollback()
+                    return {
+                        "deleted": False,
+                        "voided": True,
+                        "disposition": "voided",
+                        "id": delivery_id,
+                    }
+                raise HTTPException(
+                    status_code=409,
+                    detail="送货单状态已变化，请刷新后重试",
+                )
+            _write_audit(
+                db,
+                user=user,
+                action="VOID_AFTER_CANCEL",
+                resource="Delivery",
+                entity_id=delivery.id,
+                details={
+                    "delivery_number": delivery.delivery_number,
+                    "total_quantity": delivery.total_quantity,
+                    "inventory_allocation_count": len(
+                        facts["inventory_allocations"]
+                    ),
+                    "component_allocation_count": len(
+                        facts["component_allocations"]
+                    ),
+                    "return_receipt_status": (
+                        receipt.status if receipt is not None else None
+                    ),
+                },
+                description="作废已取消发货的送货单并保留库存及审计记录",
+            )
+            db.commit()
+            return {
+                "deleted": False,
+                "voided": True,
+                "disposition": "voided",
+                "id": delivery_id,
+            }
         _write_audit(
             db,
             user=user,
@@ -3205,10 +3495,24 @@ def delete_delivery(
         )
         db.delete(delivery)
         db.commit()
-        return {"deleted": True, "id": delivery_id}
+        return {
+            "deleted": True,
+            "voided": False,
+            "disposition": "deleted",
+            "id": delivery_id,
+        }
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "送货单仍有关联业务记录，不能物理删除；"
+                "请刷新后确认回单、对账、库存抵扣或组件抵扣状态"
+            ),
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -3242,11 +3546,16 @@ def cancel_delivery(
             )
         )
         if claimed.rowcount != 1:
-            exists = db.scalar(
-                select(Delivery.id).where(Delivery.id == delivery_id)
+            existing_status = db.scalar(
+                select(Delivery.status).where(Delivery.id == delivery_id)
             )
-            if exists is None:
+            if existing_status is None:
                 raise HTTPException(status_code=404, detail="送货单不存在")
+            if existing_status == "voided":
+                raise HTTPException(
+                    status_code=409,
+                    detail="送货单已作废，不能取消发货",
+                )
             raise HTTPException(
                 status_code=409,
                 detail="送货单未确认发货，无需取消",
@@ -3395,11 +3704,16 @@ def mark_delivery_printed(
             )
         )
         if updated.rowcount != 1:
-            exists = db.scalar(
-                select(Delivery.id).where(Delivery.id == delivery_id)
+            existing_status = db.scalar(
+                select(Delivery.status).where(Delivery.id == delivery_id)
             )
-            if exists is None:
+            if existing_status is None:
                 raise HTTPException(status_code=404, detail="送货单不存在")
+            if existing_status == "voided":
+                raise HTTPException(
+                    status_code=409,
+                    detail="送货单已作废，不能打印",
+                )
             raise HTTPException(status_code=409, detail="送货单尚未确认发货")
         _write_audit(
             db,
@@ -3506,6 +3820,11 @@ def get_delivery_print_data(
     user: User = Depends(can_read),
 ) -> dict:
     delivery = _delivery_for_user(db, delivery_id, user)
+    if delivery.status == "voided":
+        raise HTTPException(
+            status_code=409,
+            detail="送货单已作废，不能打印",
+        )
     customer = db.get(Customer, delivery.customer_id)
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     rows = db.execute(

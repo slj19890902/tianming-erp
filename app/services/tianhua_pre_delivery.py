@@ -266,6 +266,11 @@ def ensure_draft_delivery(
     created_by: int | None = None,
 ) -> Delivery | None:
     delivery = db.get(Delivery, draft.delivery_id) if draft.delivery_id else None
+    if delivery is not None and delivery.status == "voided":
+        raise ValueError(
+            "关联送货单已作废；为保留历史审计，不能在原天华草稿上重建，"
+            "请重新上传预送货截图生成新草稿"
+        )
     if delivery is not None and delivery.status != "pending":
         raise ValueError("关联送货单已确认发货，不能再修改预送货拿货结果")
     rows = db.scalars(

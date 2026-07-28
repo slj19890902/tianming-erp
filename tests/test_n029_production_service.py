@@ -49,6 +49,11 @@ from app.services.production_workflow import (
     complete_production_batch,
     completion_batch_request_hash,
     create_or_refresh_production_task,
+    list_production_completions,
+    normalized_completion_output,
+    production_input_quantity,
+    production_output_quantity,
+    production_pieces_per_box,
     production_ready_quantity,
     refresh_production_task,
 )
@@ -723,6 +728,110 @@ def _complete(
             ],
         },
     )
+
+
+def test_double_splice_sixty_pieces_complete_and_deliver_as_thirty_boxes(
+    production_app,
+) -> None:
+    _app, factory, ids = production_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer_a"])
+        product = db.get(Product, ids["product_a"])
+        order, item, task = _add_case(
+            db,
+            key="double-splice-30",
+            customer=customer,
+            product=product,
+            quantity=30,
+            material_status="received",
+            task_status="pending",
+            planned_quantity=30,
+            readiness_basis="incoming_receipt",
+        )
+        item.requisition_qty = 60
+        item.snapshot_splice_mode = "double"
+        item.snapshot_pieces_per_box = 2
+        task.status = "waiting_material"
+        task.planned_quantity = 0
+        task.material_received_quantity = 0
+        task.material_input_quantity = 0
+        task.output_factor = 1
+        db.flush()
+
+        assert production_pieces_per_box(item) == 2
+        assert production_output_quantity(60, 1, 2) == 30
+        assert production_input_quantity(30, 1, 2) == 60
+        task = refresh_production_task(db, item.id)
+        assert task.status == "pending"
+        assert task.material_input_quantity == 60
+        assert task.planned_quantity == 30
+        # Simulate the legacy task fact left behind after reverting the old
+        # 60-piece-as-60-box completion.
+        task.planned_quantity = 60
+        db.flush()
+
+        result = complete_production_batch(
+            db,
+            idempotency_key="double-splice-60-to-30",
+            commands=[
+                CompletionCommand(
+                    task_id=task.id,
+                    expected_version=task.version,
+                    disposition="direct",
+                    material_input_quantity=60,
+                    actual_output_quantity=30,
+                    defective_quantity=0,
+                    direct_delivery_quantity=30,
+                )
+            ],
+            operator_id=None,
+        )
+        completion = result.completions[0]
+        assert completion.material_input_quantity == 60
+        assert completion.planned_output_quantity == 30
+        assert completion.actual_output_quantity == 30
+        assert completion.direct_delivery_quantity == 30
+        assert completion.stock_quantity == 0
+        assert normalized_completion_output(item, completion) == 30
+        assert production_ready_quantity(db, item) == 30
+        db.refresh(task)
+        assert task.planned_quantity == 30
+        history = list_production_completions(
+            db,
+            allowed_customer_ids=None,
+            completion_ids=[completion.id],
+        )
+        assert history[0]["pieces_per_box"] == 2
+        assert order.status == "pending_delivery"
+
+
+def test_old_double_splice_piece_count_is_normalized_for_delivery() -> None:
+    item = OrderItem(
+        snapshot_splice_mode="double",
+        snapshot_pieces_per_box=2,
+        special_process="一开一",
+    )
+    completion = ProductionCompletion(
+        material_input_quantity=60,
+        planned_output_quantity=60,
+        actual_output_quantity=60,
+    )
+    assert normalized_completion_output(item, completion) == 30
+
+
+def test_legacy_single_splice_snapshot_does_not_halve_finished_quantity() -> None:
+    item = OrderItem(
+        snapshot_splice_mode="single",
+        snapshot_pieces_per_box=2,
+        special_process="一开一",
+    )
+    completion = ProductionCompletion(
+        material_input_quantity=4,
+        planned_output_quantity=4,
+        actual_output_quantity=4,
+    )
+    assert production_pieces_per_box(item) == 1
+    assert normalized_completion_output(item, completion) == 4
 
 
 def _delivery_item(db: Session, *, item_id: int, customer_id: int, quantity: int) -> DeliveryItem:

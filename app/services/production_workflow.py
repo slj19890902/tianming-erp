@@ -169,6 +169,71 @@ def cutting_output_factor(value: str | None) -> int:
     return CUTTING_OUTPUT_FACTORS.get((value or "").strip(), 1)
 
 
+def production_pieces_per_box(item: OrderItem) -> int:
+    """Return how many produced pieces are required for one deliverable box."""
+    splice_mode = (item.snapshot_splice_mode or "").strip().lower()
+    if splice_mode != "double":
+        return 1
+    snapshot = int(item.snapshot_pieces_per_box or 0)
+    if snapshot > 0:
+        return snapshot
+    return 2
+
+
+def production_output_quantity(
+    material_input_quantity: int,
+    output_factor: int,
+    pieces_per_box: int,
+) -> int:
+    """Convert material sheets to finished boxes without mixing the two units."""
+    input_quantity = max(int(material_input_quantity or 0), 0)
+    factor = max(int(output_factor or 1), 1)
+    pieces = max(int(pieces_per_box or 1), 1)
+    return input_quantity * factor // pieces
+
+
+def production_input_quantity(
+    finished_quantity: int,
+    output_factor: int,
+    pieces_per_box: int,
+) -> int:
+    """Return the minimum material sheets needed for a finished-box target."""
+    target = max(int(finished_quantity or 0), 0)
+    factor = max(int(output_factor or 1), 1)
+    pieces = max(int(pieces_per_box or 1), 1)
+    return ceil(target * pieces / factor)
+
+
+def normalized_completion_output(
+    item: OrderItem,
+    completion: ProductionCompletion,
+) -> int:
+    """Read old double-splice bug records in finished-box units.
+
+    The buggy writer stored ``input * cutting factor`` as both planned and
+    actual output, ignoring the frozen pieces-per-box snapshot.  Detect only
+    that exact legacy signature so valid historical completion facts keep
+    their recorded quantities.
+    """
+    recorded = max(int(completion.actual_output_quantity or 0), 0)
+    pieces_per_box = production_pieces_per_box(item)
+    if pieces_per_box <= 1:
+        return recorded
+    material_input = max(int(completion.material_input_quantity or 0), 0)
+    factor = cutting_output_factor(item.special_process)
+    buggy_piece_output = material_input * factor
+    if (
+        int(completion.planned_output_quantity or 0) == buggy_piece_output
+        and recorded == buggy_piece_output
+    ):
+        return production_output_quantity(
+            material_input,
+            factor,
+            pieces_per_box,
+        )
+    return recorded
+
+
 def _material_quantity_facts(db: Session, item: OrderItem) -> tuple[int, int]:
     """Return (received, allowed production input) from posted receipt facts.
 
@@ -522,6 +587,7 @@ def refresh_production_task(
     )
     received_quantity, material_input_quantity = _material_quantity_facts(db, item)
     output_factor = cutting_output_factor(item.special_process)
+    pieces_per_box = production_pieces_per_box(item)
     now = utc_now_naive()
     if finished_coverage >= order_quantity:
         next_status = NOT_REQUIRED
@@ -531,15 +597,21 @@ def refresh_production_task(
         next_status = PENDING
         if material_input_quantity > 0:
             planned_quantity = max(
-                material_input_quantity * output_factor - finished_coverage,
+                production_output_quantity(
+                    material_input_quantity,
+                    output_factor,
+                    pieces_per_box,
+                )
+                - finished_coverage,
                 0,
             )
             readiness_basis = "incoming_receipt"
         else:
             planned_quantity = order_quantity - finished_coverage
-            material_input_quantity = max(
-                ceil(planned_quantity / output_factor),
-                0,
+            material_input_quantity = production_input_quantity(
+                planned_quantity,
+                output_factor,
+                pieces_per_box,
             )
             received_quantity = material_input_quantity
             readiness_basis = "material_received"
@@ -673,20 +745,15 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
             return int(kit_availability(db, item.id)["available_sets"])
         except CompositeBomWorkflowError as error:
             raise ProductionWorkflowError(str(error), 409) from error
-    completion_quantity = int(
-        db.scalar(
-            select(
-                func.coalesce(
-                    func.sum(ProductionCompletion.actual_output_quantity),
-                    0,
-                )
-            )
-            .where(
-                ProductionCompletion.order_item_id == item.id,
-                ProductionCompletion.status == "posted",
-            )
+    completions = db.scalars(
+        select(ProductionCompletion).where(
+            ProductionCompletion.order_item_id == item.id,
+            ProductionCompletion.status == "posted",
         )
-        or 0
+    ).all()
+    completion_quantity = sum(
+        normalized_completion_output(item, completion)
+        for completion in completions
     )
     if completion_quantity > 0:
         task = db.scalar(
@@ -1259,6 +1326,7 @@ def complete_production_batch(
 
         received_now, allowed_input_now = _material_quantity_facts(db, item)
         factor = cutting_output_factor(item.special_process)
+        pieces_per_box = production_pieces_per_box(item)
         if is_component_task:
             component_snapshot = db.get(
                 SalesOrderItemBomComponent,
@@ -1269,6 +1337,7 @@ def complete_production_batch(
             factor = cutting_output_factor(
                 component_snapshot.snapshot_component_default_cutting_mode
             )
+            pieces_per_box = 1
             component_input = ceil(
                 max(int(task.planned_quantity or 0), 0) / max(factor, 1)
             )
@@ -1283,8 +1352,10 @@ def complete_production_batch(
         if allowed_input_now <= 0:
             allowed_input_now = int(task.material_input_quantity or 0)
         if allowed_input_now <= 0:
-            allowed_input_now = ceil(
-                max(int(task.planned_quantity or 0), 0) / max(factor, 1)
+            allowed_input_now = production_input_quantity(
+                max(int(task.planned_quantity or 0), 0),
+                factor,
+                pieces_per_box,
             )
             received_now = max(received_now, allowed_input_now)
         prior_input = int(
@@ -1312,7 +1383,16 @@ def complete_production_batch(
                 f"本次实际投入超过可投入余额 {available_input}",
                 409,
             )
-        planned_output = material_input * factor
+        planned_output = production_output_quantity(
+            material_input,
+            factor,
+            pieces_per_box,
+        )
+        if planned_output <= 0:
+            raise ProductionWorkflowError(
+                f"本次实际投入不足以组成 1 个成品；每箱需要 {pieces_per_box} 片",
+                409,
+            )
         actual_output = int(
             command.actual_output_quantity
             if command.actual_output_quantity is not None
@@ -1412,6 +1492,7 @@ def complete_production_batch(
             "received": received_now,
             "allowed_input": allowed_input_now,
             "factor": factor,
+            "pieces_per_box": pieces_per_box,
             "input": material_input,
             "planned": planned_output,
             "actual": actual_output,
@@ -1516,9 +1597,10 @@ def complete_production_batch(
                 material_received_quantity=int(facts["received"]),
                 material_input_quantity=int(facts["allowed_input"]),
                 output_factor=int(facts["factor"]),
-                planned_quantity=max(
-                    int(task.planned_quantity or 0),
-                    int(facts["allowed_input"]) * int(facts["factor"]),
+                planned_quantity=production_output_quantity(
+                    int(facts["allowed_input"]),
+                    int(facts["factor"]),
+                    int(facts["pieces_per_box"]),
                 ),
             )
         )
@@ -2162,7 +2244,10 @@ def list_production_tasks(
         else:
             received_now, allowed_input_now = _material_quantity_facts(db, item)
             factor = cutting_output_factor(item.special_process)
+            pieces_per_box = production_pieces_per_box(item)
             target_quantity = int(item.quantity or 0)
+        if is_component_task:
+            pieces_per_box = 1
         posted_input = int(
             db.scalar(
                 select(
@@ -2227,7 +2312,12 @@ def list_production_tasks(
             "material_input_quantity": material_input,
             "available_material_input_quantity": available_input,
             "output_factor": factor,
-            "planned_output_quantity": material_input * factor,
+            "pieces_per_box": pieces_per_box,
+            "planned_output_quantity": production_output_quantity(
+                material_input,
+                factor,
+                pieces_per_box,
+            ),
             "actual_output_quantity": posted_output,
             "order_reserved_quantity": min(
                 posted_output + int(task.finished_coverage_snapshot or 0),
@@ -2375,6 +2465,11 @@ def list_production_completions(
                     int(task.material_received_quantity or 0),
                 ),
                 "output_factor": max(int(task.output_factor or 1), 1),
+                "pieces_per_box": (
+                    1
+                    if task.sales_order_item_bom_component_id is not None
+                    else production_pieces_per_box(item)
+                ),
                 "can_supplement": (
                     completion.status == "posted"
                     and task.status == COMPLETED

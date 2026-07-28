@@ -2818,14 +2818,16 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item["standard_match"] = {"matched": False}
             item["readiness"] = None
         # 客户单价仍以 PDF 为准；仅当 PDF 未识别到单价时回退常用箱默认价
-        if selected and not item.get("unit_price") and selected.sale_unit_price is not None:
+        has_pdf_price = item.get("unit_price") not in (None, "")
+        if selected and not has_pdf_price and selected.sale_unit_price is not None:
             item["unit_price"] = str(selected.sale_unit_price)
+            has_pdf_price = True
         # 默认单价对比（草稿页显示提醒，不自动修改常用箱）
-        if selected and selected.sale_unit_price is not None and item.get("unit_price"):
+        if selected and selected.sale_unit_price is not None and has_pdf_price:
             try:
-                pdf_price = float(item["unit_price"])
-                product_default = float(selected.sale_unit_price)
-                if abs(pdf_price - product_default) > 0.0001:
+                pdf_price = Decimal(str(item["unit_price"]).strip())
+                product_default = Decimal(str(selected.sale_unit_price))
+                if pdf_price != product_default:
                     item["price_conflict"] = {
                         "pdf_price": str(item["unit_price"]),
                         "product_default_price": str(selected.sale_unit_price),

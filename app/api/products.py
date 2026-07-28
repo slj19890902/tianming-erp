@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import mimetypes
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal
 from fastapi import (
@@ -67,6 +67,7 @@ from app.services.report_crease import crease_width_error
 from app.services.product_readiness import product_readiness
 from app.services.master_data_versioning import (
     apply_versioned_update,
+    normalize_json_value,
     record_versioned_create,
     serialize_versioned_entity,
 )
@@ -593,11 +594,95 @@ def _response(product: Product, user: User) -> dict:
     return data
 
 
+_PRODUCT_SYNC_DECIMAL_FIELDS = {
+    "length_mm",
+    "width_mm",
+    "height_mm",
+    "sale_unit_price",
+    "cost_unit_price",
+}
+_PRODUCT_SYNC_INTEGER_FIELDS = {
+    "material_id",
+    "mold_tool_id",
+    "layer_count",
+    "report_length_mm",
+    "report_width_mm",
+    "crease_left_mm",
+    "crease_middle_mm",
+    "crease_right_mm",
+    "base_report_length_mm",
+    "base_report_width_mm",
+    "base_crease_left_mm",
+    "base_crease_middle_mm",
+    "base_crease_right_mm",
+    "pieces_per_box",
+    "flap_mm",
+}
+_PRODUCT_SYNC_TEXT_FIELDS = {
+    "remark",
+    "report_notes",
+    "production_process",
+    "product_name",
+    "base_crease_type",
+    "base_report_notes",
+    "crease_type",
+    "flute_type",
+    "splice_mode",
+    "box_style",
+    "print_content",
+}
+
+
+def _normalize_product_sync_field(field_name: str, value: object) -> object:
+    if field_name in _PRODUCT_SYNC_DECIMAL_FIELDS:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            normalized = Decimal(str(value).strip())
+        except (InvalidOperation, ValueError, TypeError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} 必须是有效数值",
+            ) from error
+        if not normalized.is_finite():
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} 必须是有限数值",
+            )
+        return normalized
+
+    if field_name in _PRODUCT_SYNC_INTEGER_FIELDS:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            normalized = Decimal(str(value).strip())
+        except (InvalidOperation, ValueError, TypeError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} 必须是整数",
+            ) from error
+        if not normalized.is_finite() or normalized != normalized.to_integral_value():
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} 必须是整数",
+            )
+        return int(normalized)
+
+    if field_name in _PRODUCT_SYNC_TEXT_FIELDS:
+        normalized = "" if value is None else str(value).strip()
+        if field_name == "product_name" and not normalized:
+            raise HTTPException(status_code=400, detail="产品名称不能为空")
+        return normalized or None
+
+    return value
+
+
 def _changed_updates(product: Product, updates: dict) -> dict:
     return {
         key: value
         for key, value in updates.items()
-        if getattr(product, key, None) != value
+        if normalize_json_value(getattr(product, key, None))
+        != normalize_json_value(value)
     }
 
 
@@ -1396,18 +1481,37 @@ def sync_product_fields(
     }
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
+    _raise_product_version_conflict(product, payload.expected_version)
     if not has_permission(user, "cost.view"):
         for field in _COST_SENSITIVE_PRODUCT_FIELDS:
             payload.fields.pop(field, None)
-    requested_layer = payload.fields.get("layer_count", product.layer_count)
+    versioned_fields = set(serialize_versioned_entity("product", product))
+    fields = {
+        field_name: _normalize_product_sync_field(field_name, value)
+        for field_name, value in payload.fields.items()
+        if field_name in ALLOWED
+        and field_name in Product.__table__.columns
+        and field_name in versioned_fields
+    }
+    if not fields:
+        raise HTTPException(status_code=400, detail="没有可同步的字段")
+    changed = _changed_updates(product, fields)
+    if not changed:
+        return {
+            "updated": [],
+            "product_id": product.id,
+            "version": product.version,
+        }
+
+    requested_layer = fields.get("layer_count", product.layer_count)
     requested_flute = normalize_flute_type(
-        payload.fields.get("flute_type", product.flute_type)
+        fields.get("flute_type", product.flute_type)
     )
-    if "layer_count" in payload.fields:
+    if "layer_count" in fields:
         requested_error = validate_flute_for_write(requested_flute, requested_layer)
         if requested_error:
             raise HTTPException(status_code=400, detail=requested_error)
-    selected_material_id = payload.fields.get("material_id", product.material_id)
+    selected_material_id = fields.get("material_id", product.material_id)
     selected_material = (
         db.get(Material, selected_material_id)
         if selected_material_id is not None
@@ -1417,15 +1521,15 @@ def sync_product_fields(
         raise HTTPException(status_code=400, detail="材质不存在")
     if (
         selected_material is not None
-        and "layer_count" in payload.fields
-        and payload.fields["layer_count"] is not None
-        and payload.fields["layer_count"] != selected_material.layer_count
+        and "layer_count" in fields
+        and fields["layer_count"] is not None
+        and fields["layer_count"] != selected_material.layer_count
     ):
         raise HTTPException(status_code=400, detail="请求层数与所选材质真实层数不一致")
     prospective_layer = (
         selected_material.layer_count
         if selected_material is not None
-        else payload.fields.get("layer_count", product.layer_count)
+        else fields.get("layer_count", product.layer_count)
     )
     code_error = seven_layer_code_error(
         selected_material.code
@@ -1436,19 +1540,19 @@ def sync_product_fields(
     if code_error:
         raise HTTPException(status_code=400, detail=code_error)
     prospective_flute = normalize_flute_type(
-        payload.fields.get("flute_type", product.flute_type)
+        fields.get("flute_type", product.flute_type)
     )
     flute_fields = {"material_id", "layer_count", "flute_type"}
     flute_error = validate_flute_for_write(prospective_flute, prospective_layer)
     if flute_error:
         raise HTTPException(status_code=400, detail=flute_error)
-    if selected_material is not None and flute_fields.intersection(payload.fields):
-        payload.fields["layer_count"] = prospective_layer
-    if "production_process" in payload.fields or "mold_tool_id" in payload.fields:
-        prospective_process = payload.fields.get(
+    if selected_material is not None and flute_fields.intersection(fields):
+        fields["layer_count"] = prospective_layer
+    if "production_process" in fields or "mold_tool_id" in fields:
+        prospective_process = fields.get(
             "production_process", product.production_process
         )
-        prospective_mold_id = payload.fields.get(
+        prospective_mold_id = fields.get(
             "mold_tool_id", product.mold_tool_id
         )
         if _production_process_uses_mold(prospective_process):
@@ -1463,7 +1567,7 @@ def sync_product_fields(
             if not mold_tool.is_active:
                 raise HTTPException(status_code=400, detail="所选模具已停用")
         else:
-            payload.fields["mold_tool_id"] = None
+            fields["mold_tool_id"] = None
     main_crease_fields = {
         "report_width_mm",
         "crease_type",
@@ -1471,18 +1575,18 @@ def sync_product_fields(
         "crease_middle_mm",
         "crease_right_mm",
     }
-    if main_crease_fields.intersection(payload.fields):
+    if main_crease_fields.intersection(fields):
         error = _crease_width_error(
             label="压线",
-            crease_type=payload.fields.get("crease_type", product.crease_type),
-            report_width_mm=payload.fields.get(
+            crease_type=fields.get("crease_type", product.crease_type),
+            report_width_mm=fields.get(
                 "report_width_mm", product.report_width_mm
             ),
-            left_mm=payload.fields.get("crease_left_mm", product.crease_left_mm),
-            middle_mm=payload.fields.get(
+            left_mm=fields.get("crease_left_mm", product.crease_left_mm),
+            middle_mm=fields.get(
                 "crease_middle_mm", product.crease_middle_mm
             ),
-            right_mm=payload.fields.get(
+            right_mm=fields.get(
                 "crease_right_mm", product.crease_right_mm
             ),
         )
@@ -1495,46 +1599,45 @@ def sync_product_fields(
         "base_crease_middle_mm",
         "base_crease_right_mm",
     }
-    if base_crease_fields.intersection(payload.fields):
+    if base_crease_fields.intersection(fields):
         error = _crease_width_error(
             label="底压线",
-            crease_type=payload.fields.get(
+            crease_type=fields.get(
                 "base_crease_type", product.base_crease_type
             ),
-            report_width_mm=payload.fields.get(
+            report_width_mm=fields.get(
                 "base_report_width_mm", product.base_report_width_mm
             ),
-            left_mm=payload.fields.get(
+            left_mm=fields.get(
                 "base_crease_left_mm", product.base_crease_left_mm
             ),
-            middle_mm=payload.fields.get(
+            middle_mm=fields.get(
                 "base_crease_middle_mm", product.base_crease_middle_mm
             ),
-            right_mm=payload.fields.get(
+            right_mm=fields.get(
                 "base_crease_right_mm", product.base_crease_right_mm
             ),
         )
         if error:
             raise HTTPException(status_code=400, detail=error)
     updates = {}
-    versioned_fields = set(serialize_versioned_entity("product", product))
-    for k, v in payload.fields.items():
-        if k not in ALLOWED:
-            continue
-        if k not in Product.__table__.columns or k not in versioned_fields:
-            continue
+    for k, v in fields.items():
         if k == "flute_type":
             v = prospective_flute
         updates[k] = v
-    if not updates:
-        raise HTTPException(status_code=400, detail="没有可同步的字段")
     changed = _changed_updates(product, updates)
+    if not changed:
+        return {
+            "updated": [],
+            "product_id": product.id,
+            "version": product.version,
+        }
     try:
         apply_versioned_update(
             db,
             object_type="product",
             entity=product,
-            updates=updates,
+            updates=changed,
             expected_version=payload.expected_version,
             user=user,
             reason=payload.change_reason,

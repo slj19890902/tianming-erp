@@ -92,25 +92,217 @@ def test_version_conflict_errors_include_expected_and_current_versions() -> None
     assert "throw new Error(`" in sync_product
 
 
-def test_pdf_default_price_bulk_sync_reports_actual_outcomes() -> None:
+def test_pdf_order_save_does_not_start_post_save_default_price_sync() -> None:
     save_imports = _method_block("async saveConfirmedImportDrafts()", "openOrderEditor(group)")
 
-    assert "const syncSummary = { succeeded:[], cancelled:[], conflicted:[], failed:[] }" in save_imports
-    assert "if (synced) syncSummary.succeeded.push" in save_imports
-    assert "else syncSummary.cancelled.push" in save_imports
-    assert 'detail?.code === "MASTER_VERSION_CONFLICT"' in save_imports
-    assert "syncSummary.conflicted.push" in save_imports
-    assert "syncSummary.failed.push" in save_imports
-    assert "syncSummary.succeeded.length" in save_imports
-    assert "syncSummary.cancelled.length" in save_imports
-    assert "syncSummary.conflicted.length" in save_imports
-    assert "syncSummary.failed.length" in save_imports
-    assert "this.showToast(summary, syncSummary.conflicted.length > 0 || syncSummary.failed.length > 0)" in save_imports
-    assert "this.showToast(summary" in save_imports
-    assert re.search(
-        r"this\.showToast\(`[^`]*0[^`]*\$\{uniqueConflicts\.length\}[^`]*`\);",
-        save_imports,
+    assert "this.refreshPdfPriceConflict(item)" in save_imports
+    assert "priceConflictItems" not in save_imports
+    assert "uniqueConflicts" not in save_imports
+    assert "PDF 默认价批量同步" not in save_imports
+    assert "syncProductFieldsVersioned" not in save_imports
+
+
+def test_new_order_save_does_not_offer_post_save_common_box_overwrite() -> None:
+    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+
+    assert "async openOrder() {" in INDEX
+    assert "if (!this.customerOptions.length) await this.loadCustomerOptions();" in INDEX
+    assert "offerSyncCommonBox" not in INDEX
+    assert "await axios.post(\"/api/orders\", orderPayload)" in save
+    assert "await Promise.all([this.loadOrders(), this.loadKpi()])" in save
+    assert "是否同步更新到常用箱" not in INDEX
+
+
+def test_pdf_explicit_common_box_edit_short_circuits_equal_values() -> None:
+    edit = _method_block("async saveImportItemEdit(", "toggleAllDelivery(checked)")
+
+    assert '@click="startEditImportItem(draft,item)">修改本行</button>' in INDEX
+    assert "productSyncFieldChanges(prod, fields)" in edit
+    assert "if (Object.keys(changed).length)" in edit
+    assert '"PDF 草稿显式覆盖常用箱"' in edit
+    assert "prod.version" in edit
+    assert "false," in edit
+    assert "确认保存并覆盖常用箱" not in edit
+    assert "内容与常用箱一致，无需更新主数据" in edit
+
+
+def test_p1_12_price_recheck_and_explicit_sync_execute_without_extra_prompt() -> None:
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required for the P1-12 frontend behavior test"
+
+    harness = r"""
+const fs = require("fs");
+const vm = require("vm");
+const html = fs.readFileSync(process.argv[2], "utf8");
+const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+  .map(match => match[1])
+  .filter(source => source.trim());
+if (scripts.length !== 1) throw new Error(`Expected one inline script, found ${scripts.length}`);
+
+const sandbox = {
+  axios: {
+    defaults: {},
+    interceptors: { response: { use() {} } },
+  },
+  Vue: {
+    createApp(definition) {
+      sandbox.definition = definition;
+      return { component() { return this; }, mount() { return this; } };
+    },
+  },
+  localStorage: { getItem() { return ""; }, setItem() {}, removeItem() {} },
+  window: {},
+  console,
+  URLSearchParams,
+  setTimeout,
+  clearTimeout,
+};
+vm.createContext(sandbox);
+vm.runInContext(scripts[0], sandbox);
+const methods = sandbox.definition.methods;
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+const priceItem = {
+  unit_price: "1.00",
+  product_default_price: "1",
+  matched_product_id: 7,
+  price_conflict: { stale: true },
+};
+methods.refreshPdfPriceConflict.call(methods, priceItem);
+assert(priceItem.price_conflict === null, "1 and 1.00 were treated as different");
+priceItem.unit_price = "1.50";
+methods.refreshPdfPriceConflict.call(methods, priceItem);
+assert(priceItem.price_conflict?.pdf_price === "1.50", "Real price difference was not shown");
+priceItem.unit_price = "1.0000";
+methods.refreshPdfPriceConflict.call(methods, priceItem);
+assert(priceItem.price_conflict === null, "Restoring the original price kept a stale conflict");
+priceItem.unit_price = 0;
+priceItem.product_default_price = "0.0000";
+methods.refreshPdfPriceConflict.call(methods, priceItem);
+assert(priceItem.price_conflict === null, "Zero price was treated as missing or different");
+
+const product = {
+  id: 7,
+  version: 3,
+  product_name: "P1-12常用箱",
+  material_id: 4,
+  layer_count: 3,
+  flute_type: "B",
+  sale_unit_price: "1",
+  production_process: null,
+  report_length_mm: null,
+  report_width_mm: null,
+  crease_type: null,
+  crease_left_mm: null,
+  crease_middle_mm: null,
+  crease_right_mm: null,
+};
+sandbox.axios.get = async () => ({ data: product });
+const syncCalls = [];
+const toasts = [];
+const context = {
+  ...methods,
+  loading: false,
+  showToast(message, error = false) { toasts.push({ message, error }); },
+  isImportDraftLocked() { return false; },
+  invalidateImportDraftConfirmation(draft) { draft.confirmed = false; },
+  async syncProductFieldsVersioned(...args) {
+    syncCalls.push(args);
+    return { data: { updated: Object.keys(args[1]) } };
+  },
+};
+const makeEditItem = unitPrice => ({
+  matched_product_id: 7,
+  is_new_product: false,
+  product_name: product.product_name,
+  specification: "300×200×100",
+  unit_price: unitPrice,
+  production_notes: "",
+  matched_material_id: 4,
+  layer_count: 3,
+  flute_type: "B",
+  product_default_price: "1",
+  _editing: true,
+  _backup: {},
+  _edit: {
+    product_name: `  ${product.product_name}  `,
+    specification: "300×200×100",
+    unit_price: unitPrice,
+    production_notes: "",
+    matched_material_id: 4,
+    layer_count: 3,
+    flute_type: "b",
+    report_length_mm: null,
+    report_width_mm: null,
+    crease_type: null,
+    crease_left_mm: null,
+    crease_middle_mm: null,
+    crease_right_mm: null,
+  },
+});
+
+(async () => {
+  const equalItem = makeEditItem("1.00");
+  await methods.saveImportItemEdit.call(context, { confirmed: true }, equalItem, 0);
+  assert(syncCalls.length === 0, "Equal values triggered a common-box write");
+  assert(equalItem._editing === false, "Equal edit did not close cleanly");
+
+  const changedItem = makeEditItem("1.50");
+  await methods.saveImportItemEdit.call(context, { confirmed: true }, changedItem, 0);
+  assert(syncCalls.length === 1, "Explicit real change was not synced exactly once");
+  assert(syncCalls[0][1].sale_unit_price === "1.50", "Changed price was lost");
+  assert(syncCalls[0][3] === 3, "Expected product version was not frozen");
+  assert(syncCalls[0][4] === false, "Explicit button still requested a generic reason prompt");
+  assert(changedItem.price_conflict === null, "Successful explicit price sync kept a stale conflict");
+
+  let promptCount = 0;
+  let posted = null;
+  sandbox.window.prompt = () => {
+    promptCount += 1;
+    throw new Error("Generic reason prompt must not open");
+  };
+  sandbox.axios.get = async () => ({ data: product });
+  sandbox.axios.post = async (_url, payload) => {
+    posted = payload;
+    return { data: { updated: ["sale_unit_price"], version: 4 } };
+  };
+  await methods.syncProductFieldsVersioned.call(
+    methods,
+    7,
+    { sale_unit_price: "1.50" },
+    "PDF 草稿显式覆盖常用箱",
+    3,
+    false,
+  );
+  assert(promptCount === 0, "Explicit sync opened an extra reason prompt");
+  assert(posted.change_reason === "PDF 草稿显式覆盖常用箱", "Structured reason was not saved");
+  assert(posted.expected_version === 3, "Expected version changed during explicit sync");
+
+  process.stdout.write(JSON.stringify({
+    syncCalls: syncCalls.length,
+    promptCount,
+    lastToast: toasts.at(-1)?.message || "",
+  }));
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+
+    result = subprocess.run(
+        [node, "-", str(ROOT / "static" / "index.html")],
+        input=harness,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=ROOT,
+        check=False,
     )
+    assert result.returncode == 0, result.stderr
+    assert '"syncCalls":1' in result.stdout
+    assert '"promptCount":0' in result.stdout
 
 
 def test_three_master_lists_have_history_and_errors_are_not_empty_states() -> None:

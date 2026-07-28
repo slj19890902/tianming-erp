@@ -1339,7 +1339,11 @@ def test_pdf_draft_edits_and_reservation_changes_invalidate_confirmation() -> No
     )
 
     assert "invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh" in source
-    assert 'v-model="item.unit_price" style="width:75px" @input="invalidateImportDraftConfirmation(draft)"' in source
+    assert (
+        'v-model="item.unit_price" style="width:75px" '
+        '@input="invalidateImportDraftConfirmation(draft); refreshPdfPriceConflict(item)"'
+        in source
+    )
     assert 'v-model.trim="draft.customer_po" @input="invalidateImportDraftConfirmation(draft)"' in source
     assert 'v-model="draft.order_date" @input="invalidateImportDraftConfirmation(draft)"' in source
     assert 'v-model="draft.delivery_date" @input="invalidateImportDraftConfirmation(draft)"' in source

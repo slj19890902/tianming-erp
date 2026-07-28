@@ -3266,9 +3266,9 @@
                       </td>
                       <!-- 客户单价 + 冲突提示 -->
                       <td v-if="draft._show_advanced_details" class="sensitive-price" style="padding:4px 6px;vertical-align:top">
-                        <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" style="width:75px" @input="invalidateImportDraftConfirmation(draft)" />
+                        <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" style="width:75px" @input="invalidateImportDraftConfirmation(draft); refreshPdfPriceConflict(item)" />
                         <div v-if="item.price_conflict" style="font-size:10px;color:#d97706;margin-top:2px">
-                          ⚠ 常用箱默认 {{ money(item.price_conflict.product_default_price) }}
+                          本单价不同｜常用箱默认 {{ money(item.price_conflict.product_default_price) }}
                         </div>
                       </td>
                       <!-- 图纸 -->
@@ -3290,6 +3290,7 @@
                       </td>
                       <!-- 操作 -->
                       <td style="padding:4px 6px;vertical-align:top">
+                        <button v-if="draft._show_advanced_details && item.matched_product_id && !item.is_new_product && canEditProducts" class="btn small" type="button" @click="startEditImportItem(draft,item)">修改本行</button>
                         <button class="btn small danger" @click="removeImportDraftItem(draft,item)">删除</button>
                       </td>
                     </tr>
@@ -11468,6 +11469,73 @@
               if (!editObj.layer_count) editObj.layer_count = mat.layer_count;
             }
           },
+          normalizedProductSyncValue(fieldName, value) {
+            if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
+            const numericFields = new Set([
+              "material_id", "mold_tool_id", "layer_count",
+              "length_mm", "width_mm", "height_mm",
+              "sale_unit_price", "cost_unit_price",
+              "report_length_mm", "report_width_mm",
+              "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+              "base_report_length_mm", "base_report_width_mm",
+              "base_crease_left_mm", "base_crease_middle_mm", "base_crease_right_mm",
+              "pieces_per_box", "flap_mm",
+            ]);
+            if (numericFields.has(fieldName)) {
+              const numberValue = Number(value);
+              return Number.isFinite(numberValue) ? numberValue : String(value).trim();
+            }
+            const text = String(value).trim();
+            return fieldName === "flute_type" ? text.toUpperCase() : text;
+          },
+          productSyncFieldChanges(product, fields) {
+            const changed = {};
+            Object.entries(fields || {}).forEach(([fieldName, value]) => {
+              const before = this.normalizedProductSyncValue(fieldName, product?.[fieldName]);
+              const after = this.normalizedProductSyncValue(fieldName, value);
+              if (before !== after) changed[fieldName] = value;
+            });
+            return changed;
+          },
+          refreshPdfPriceConflict(item) {
+            if (!item) return null;
+            const current = this.normalizedProductSyncValue("sale_unit_price", item.unit_price);
+            const commonBox = this.normalizedProductSyncValue("sale_unit_price", item.product_default_price);
+            const comparable = typeof current === "number" && typeof commonBox === "number";
+            item.price_conflict = comparable && current !== commonBox
+              ? {
+                  pdf_price:item.unit_price,
+                  product_default_price:item.product_default_price,
+                  product_id:item.matched_product_id || null,
+                }
+              : null;
+            return item.price_conflict;
+          },
+          preparePdfImportItem(item) {
+            const prepared = {
+              ...item,
+              client_line_id:item.client_line_id || createIdempotencyKey(),
+              _inventory:item._inventory || this.newOrderInventoryState(),
+            };
+            this.refreshPdfPriceConflict(prepared);
+            return prepared;
+          },
+          applyPdfImportEditToDraft(item, edit) {
+            item.product_name = String(edit.product_name || "").trim();
+            item.specification = String(edit.specification || "").trim();
+            item.unit_price = edit.unit_price;
+            item.production_notes = String(edit.production_notes || "").trim();
+            item.matched_material_id = edit.matched_material_id ?? null;
+            item.layer_count = edit.layer_count ?? null;
+            item.flute_type = edit.flute_type || null;
+            item.report_length_mm = edit.report_length_mm ?? null;
+            item.report_width_mm = edit.report_width_mm ?? null;
+            item.crease_type = edit.crease_type || null;
+            item.crease_left_mm = edit.crease_left_mm ?? null;
+            item.crease_middle_mm = edit.crease_middle_mm ?? null;
+            item.crease_right_mm = edit.crease_right_mm ?? null;
+            this.refreshPdfPriceConflict(item);
+          },
           startEditImportItem(draft, item) {
             const mat = this.allMaterials.find(m => m.id === item.matched_material_id);
             item._backup = JSON.parse(JSON.stringify({
@@ -11509,45 +11577,48 @@
           async saveImportItemEdit(draft, item, draftIndex) {
             if (this.isImportDraftLocked(draft)) return;
             if (!item.matched_product_id || item.is_new_product) return;
-            if (!confirm('确认保存并覆盖常用箱产品资料？此操作将更新常用箱数据，不可撤销。')) return;
             this.loading = true;
             try {
               const edit = item._edit;
               const prod = (await axios.get(`/api/master/products/${item.matched_product_id}`)).data;
               const fields = {
-                product_name: edit.product_name || prod.product_name,
-                material_id: edit.matched_material_id || prod.material_id,
-                layer_count: edit.layer_count || prod.layer_count,
-                flute_type: edit.flute_type || prod.flute_type,
-                sale_unit_price: edit.unit_price || prod.sale_unit_price,
-                production_process: edit.production_notes || prod.production_process,
-                report_length_mm: edit.report_length_mm || null,
-                report_width_mm: edit.report_width_mm || null,
+                product_name: String(edit.product_name || "").trim(),
+                material_id: edit.matched_material_id ?? null,
+                layer_count: edit.layer_count ?? null,
+                flute_type: edit.flute_type || null,
+                sale_unit_price: edit.unit_price === "" ? null : edit.unit_price,
+                production_process: String(edit.production_notes || "").trim() || null,
+                report_length_mm: edit.report_length_mm ?? null,
+                report_width_mm: edit.report_width_mm ?? null,
                 crease_type: edit.crease_type || null,
-                crease_left_mm: edit.crease_left_mm || null,
-                crease_middle_mm: edit.crease_middle_mm || null,
-                crease_right_mm: edit.crease_right_mm || null,
+                crease_left_mm: edit.crease_left_mm ?? null,
+                crease_middle_mm: edit.crease_middle_mm ?? null,
+                crease_right_mm: edit.crease_right_mm ?? null,
               };
-              const synced = await this.syncProductFieldsVersioned(item.matched_product_id,fields,"PDF 草稿人工确认后同步常用箱");
-              if (!synced) return;
-              item.product_name = edit.product_name;
-              item.specification = edit.specification;
-              item.unit_price = edit.unit_price;
-              item.production_notes = edit.production_notes;
-              if (edit.matched_material_id) item.matched_material_id = edit.matched_material_id;
-              if (edit.layer_count) item.layer_count = edit.layer_count;
-              if (edit.flute_type) item.flute_type = edit.flute_type;
-              item.report_length_mm = edit.report_length_mm;
-              item.report_width_mm = edit.report_width_mm;
-              item.crease_type = edit.crease_type;
-              item.crease_left_mm = edit.crease_left_mm;
-              item.crease_middle_mm = edit.crease_middle_mm;
-              item.crease_right_mm = edit.crease_right_mm;
+              const changed = this.productSyncFieldChanges(prod, fields);
+              if (Object.keys(changed).length) {
+                const synced = await this.syncProductFieldsVersioned(
+                  item.matched_product_id,
+                  changed,
+                  "PDF 草稿显式覆盖常用箱",
+                  prod.version,
+                  false,
+                );
+                if (!synced) return;
+                if (Object.prototype.hasOwnProperty.call(changed, "sale_unit_price")) {
+                  item.product_default_price = changed.sale_unit_price;
+                }
+              }
+              this.applyPdfImportEditToDraft(item, edit);
               this.invalidateImportDraftConfirmation(draft);
-              await this.rematchImportDraft(draftIndex);
               item._editing = false;
               item._edit = null;
-              this.showToast('常用箱已更新，草稿已刷新');
+              item._backup = null;
+              this.showToast(
+                Object.keys(changed).length
+                  ? "常用箱已更新；本单草稿已保留当前输入"
+                  : "内容与常用箱一致，无需更新主数据",
+              );
             } catch(e) {
               this.showToast(this.errorMessage(e), true);
             } finally { this.loading = false; }
@@ -11602,9 +11673,11 @@
               }
             }
           },
-          async syncProductFieldsVersioned(productId, fields, defaultReason, expectedVersion = null) {
+          async syncProductFieldsVersioned(productId, fields, defaultReason, expectedVersion = null, askForReason = true) {
             const product = (await axios.get(`/api/master/products/${productId}`)).data;
-            const reason = this.askMasterMutationReason("同步更新常用箱", defaultReason);
+            const reason = askForReason
+              ? this.askMasterMutationReason("同步更新常用箱", defaultReason)
+              : String(defaultReason || "").trim();
             if (!reason) return null;
             const requestedVersion = Number(expectedVersion ?? product.version);
             let confirmationToken = null;
@@ -11704,7 +11777,8 @@
             try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row,reasonLabel:`停用材质“${row.code}”`,defaultReason:"停用材质"}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
-          openOrder() {
+          async openOrder() {
+            if (!this.customerOptions.length) await this.loadCustomerOptions();
             this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), remark:"", items:[] };
             this.orderNumberPreview = "";
             this.orderProductOptions = {};
@@ -11843,7 +11917,7 @@
                 _correction_form:null,
                 _save_status:"idle",
                 _save_message:"",
-                items:(draft.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))
+                items:(draft.items || []).map(item => this.preparePdfImportItem(item))
               }));
               await Promise.all(this.orderImportDrafts.map(draft => Promise.all((draft.items || []).filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id)))));
               this.orderImportBatch.status = "recognized";
@@ -12028,7 +12102,7 @@
                _correction_form:null,
                _save_status:"idle",
                _save_message:"",
-               items:(data.items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()}))
+               items:(data.items || []).map(item => this.preparePdfImportItem(item))
              };
             await Promise.all(this.orderImportDrafts[index].items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,this.orderImportDrafts[index].matched_customer_id)));
           },
@@ -12041,7 +12115,11 @@
               item.manual_product_selected = true;
               item.product_manual_modified = !!candidate.manual_modified;
               item.matched_material_id = candidate.material_id || null;
-              if (!item.unit_price && candidate.sale_unit_price !== null) item.unit_price = candidate.sale_unit_price;
+               if (
+                 (item.unit_price === null || item.unit_price === undefined || item.unit_price === "")
+                 && candidate.sale_unit_price !== null
+                 && candidate.sale_unit_price !== undefined
+               ) item.unit_price = candidate.sale_unit_price;
               // 切换候选后重新拉取常用箱详情（名称/规格/材质/生产说明）
               try {
                 const { data } = await axios.get(`/api/master/products/${item.matched_product_id}`);
@@ -12060,11 +12138,7 @@
                 item.product_drawing_file = data.drawings?.[0]?.image_path || null;
                 if (!item.production_notes && data.production_process) item.production_notes = data.production_process;
                 item.product_default_price = data.sale_unit_price != null ? String(data.sale_unit_price) : null;
-                // 价格冲突检测
-                if (item.unit_price && item.product_default_price) {
-                  const diff = Math.abs(parseFloat(item.unit_price) - parseFloat(item.product_default_price));
-                  item.price_conflict = diff > 0.0001 ? { pdf_price: item.unit_price, product_default_price: item.product_default_price, product_id: item.matched_product_id } : null;
-                }
+                 this.refreshPdfPriceConflict(item);
               } catch(_) {}
             }
             await this.recalculateImportCost(item);
@@ -12214,14 +12288,13 @@
             this.loading = true;
             const succeeded = [];
             const failed = [];
-            // Collect price conflicts across all confirmed drafts for post-save sync prompt
-            const priceConflictItems = [];
             try {
               for (const draft of drafts) {
                 try {
                   draft._save_status = "saving";
                   draft._save_message = "正在保存正式订单…";
                   const inventoryError = (draft.items || []).map((item, index) => {
+                    this.refreshPdfPriceConflict(item);
                     const reason = this.inventoryDecisionRequired(item);
                     return reason ? `第${index + 1}条${reason}` : "";
                   }).find(Boolean);
@@ -12267,18 +12340,6 @@
                   draft._save_status = "success";
                   draft._save_message = "保存成功；本草稿已锁定，不会再次提交。";
                   draft.confirmed = false;
-                  // Collect price conflict items from this draft
-                  for (const item of (draft.items || [])) {
-                    if (item.price_conflict && item.matched_product_id && !item.is_new_product) {
-                      priceConflictItems.push({
-                        product_id: item.matched_product_id,
-                        product_name: item.product_name || item.raw_product_name || item.raw_product_code,
-                        pdf_price: item.price_conflict.pdf_price,
-                        product_default_price: item.price_conflict.product_default_price,
-                        source_name: draft.source_name,
-                      });
-                    }
-                  }
                 } catch (error) {
                   const message = this.normalizeOrderSaveError(error);
                   draft._save_status = "failed";
@@ -12303,41 +12364,6 @@
                   draft => `${draft.source_name || "草稿"}：${draft._save_message || "订单保存失败"}`
                 );
                 this.showToast(`本次成功 ${succeeded.length} 份；当前失败 ${remainingFailed.length} 份 — ${failedSummary.join("｜")}`, true);
-              }
-              // Post-save: prompt to sync price conflicts to common box default price
-              if (priceConflictItems.length && succeeded.length) {
-                const uniqueConflicts = [];
-                const seen = new Set();
-                for (const c of priceConflictItems) {
-                  const key = `${c.product_id}`;
-                  if (!seen.has(key)) { seen.add(key); uniqueConflicts.push(c); }
-                }
-                const lines = uniqueConflicts.map(c =>
-                  `• ${c.product_name}：常用箱默认价 ¥${c.product_default_price} → PDF单价 ¥${c.pdf_price}`
-                ).join("\n");
-                const doSync = confirm(
-                  `以下产品的 PDF 单价与常用箱默认价不同，是否将常用箱默认价更新为 PDF 单价？\n\n${lines}\n\n点击"确定"同步，"取消"保留常用箱原有默认价。`
-                );
-                if (doSync) {
-                  const syncSummary = { succeeded:[], cancelled:[], conflicted:[], failed:[] };
-                  for (const c of uniqueConflicts) {
-                    try {
-                      const synced = await this.syncProductFieldsVersioned(c.product_id,{sale_unit_price:c.pdf_price},"PDF 单价人工确认后同步常用箱");
-                      if (synced) syncSummary.succeeded.push(c.product_name);
-                      else syncSummary.cancelled.push(c.product_name);
-                    } catch(e) {
-                      const detail = this.masterErrorDetail(e);
-                      const message = this.errorMessage(e);
-                      if (detail?.code === "MASTER_VERSION_CONFLICT" || message.includes("版本冲突")) syncSummary.conflicted.push(c.product_name);
-                      else syncSummary.failed.push(c.product_name);
-                      console.warn("sync price failed", c.product_id, e);
-                    }
-                  }
-                  const summary = `PDF 默认价批量同步：成功 ${syncSummary.succeeded.length} 项；取消 ${syncSummary.cancelled.length} 项；版本冲突 ${syncSummary.conflicted.length} 项；失败 ${syncSummary.failed.length} 项。`;
-                  this.showToast(summary, syncSummary.conflicted.length > 0 || syncSummary.failed.length > 0);
-                } else {
-                  this.showToast(`PDF 默认价批量同步：成功 0 项；取消 ${uniqueConflicts.length} 项。`);
-                }
               }
             } finally { this.loading=false; }
           },
@@ -12636,31 +12662,6 @@
             item.material=this.materials.find(row => row.id === item.material_id)?.code || "";
             await this.recalculateOrderCost(index);
             this.refreshOrderLineInventory(item, this.orderForm.customer_id);
-          },
-          async offerSyncCommonBox(items) {
-            // 对每个来自常用箱且有手动修改的明细，询问是否同步回常用箱
-            for (const item of items) {
-              if (!item._from_product || !item.product_id || !item._original_product) continue;
-              const orig = item._original_product;
-              const changed = {};
-              if (item.specification && item.specification !== orig.specification) changed["specification"] = item.specification;
-              if (item.unit_price && String(item.unit_price) !== String(orig.sale_unit_price)) changed["sale_unit_price"] = item.unit_price;
-              if (item.layer_count && item.layer_count !== orig.layer_count) changed["layer_count"] = item.layer_count;
-              if (item.flute_type && item.flute_type !== orig.flute_type) changed["flute_type"] = item.flute_type;
-              if (Object.keys(changed).length === 0) continue;
-              const fieldNames = Object.keys(changed).map(k => ({
-                specification:"规格", sale_unit_price:"客户单价", layer_count:"层数", flute_type:"楞型"
-              }[k] || k)).join("、");
-              const ok = confirm(`订单明细「${item.product_name || item.product_code}」以下字段与常用箱不同：${fieldNames}\n\n是否同步更新到常用箱？`);
-              if (ok) {
-                try {
-                  const synced=await this.syncProductFieldsVersioned(item.product_id,changed,"新订单人工修改后同步常用箱",orig.version);
-                  if(synced)this.showToast("已同步到常用箱");
-                } catch (err) {
-                  this.showToast("同步常用箱失败：" + this.errorMessage(err), true);
-                }
-              }
-            }
           },
           async uploadOrderDraftDrawing(index, event) {
             const file = event.target.files?.[0];
@@ -14092,8 +14093,6 @@
                   items: this.orderForm.items.map(item => this.orderFormItemPayload(item)),
                 };
                 await axios.post("/api/orders", orderPayload);
-                // 保存后：检测是否有来自常用箱但被手动修改的明细，提示是否同步
-                await this.offerSyncCommonBox(this.orderForm.items);
                 await Promise.all([this.loadOrders(), this.loadKpi()]);
               }
               if (this.modal.type === "orderEdit") {

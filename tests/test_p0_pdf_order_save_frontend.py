@@ -26,7 +26,7 @@ def test_pdf_order_save_template_exposes_persistent_per_file_status_and_retry() 
         'class="pdf-import-draft-fields"',
         ':disabled="isImportDraftLocked(draft)"',
         'placeholder="手动选择客户" :disabled="isImportDraftLocked(draft)"',
-        'placeholder="选择实际材质" :disabled="isImportDraftLocked(draft)"',
+        "pdfItemMaterialText(item)",
     ):
         assert expected in INDEX
 
@@ -254,7 +254,13 @@ const makeItem = () => ({
   is_new_product: false,
   material_candidates: [],
   quantity: 1,
-  unit_price: "1.00",
+  unit_price: "2.00",
+  product_default_price: "1.00",
+  price_conflict: {
+    pdf_price: "2.00",
+    product_default_price: "1.00",
+    product_id: 1,
+  },
   client_line_id: "line-id",
   product_name: "测试纸箱",
 });
@@ -279,6 +285,7 @@ const failedDraft = {
   items: [makeItem()],
 };
 const toasts = [];
+let commonBoxSyncAttempts = 0;
 Object.assign(context, {
   orderImportBatch: { retryDraft: null },
   orderImportDrafts: [successDraft, failedDraft],
@@ -290,7 +297,10 @@ Object.assign(context, {
   async loadOrders() {},
   async loadKpi() {},
   showToast(message, error = false) { toasts.push({ message, error }); },
-  async syncProductFieldsVersioned() { return true; },
+  async syncProductFieldsVersioned() {
+    commonBoxSyncAttempts += 1;
+    throw new Error("PDF order save must not sync common-box prices");
+  },
 });
 
 (async () => {
@@ -321,6 +331,7 @@ Object.assign(context, {
   await methods.saveConfirmedImportDrafts.call(context);
   assert(postCalls.filter(name => name === "success.pdf").length === 1, "Locked success was resubmitted");
   assert(postCalls.filter(name => name === "failed.pdf").length === 2, "Locked retry success was resubmitted");
+  assert(commonBoxSyncAttempts === 0, "PDF order save started an unrelated common-box sync");
 
   const lockedItemCount = successDraft.items.length;
   await methods.rematchImportDraft.call(context, 0);
@@ -334,6 +345,7 @@ Object.assign(context, {
     normalizedCaseCount: normalizedMessages.length,
     firstSuccessAttempts: postCalls.filter(name => name === "success.pdf").length,
     failedDraftAttempts: postCalls.filter(name => name === "failed.pdf").length,
+    commonBoxSyncAttempts,
     finalStatuses: [successDraft._save_status, failedDraft._save_status],
     toastCount: toasts.length,
   }));
@@ -357,4 +369,5 @@ Object.assign(context, {
     assert summary["normalizedCaseCount"] == 10
     assert summary["firstSuccessAttempts"] == 1
     assert summary["failedDraftAttempts"] == 2
+    assert summary["commonBoxSyncAttempts"] == 0
     assert summary["finalStatuses"] == ["success", "success"]

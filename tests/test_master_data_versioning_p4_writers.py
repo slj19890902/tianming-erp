@@ -417,6 +417,86 @@ def test_status_sync_soft_delete_restore_and_physical_delete_protection(
         assert session.get(Product, protected_product["id"]) is not None
 
 
+def test_product_sync_normalizes_equal_values_without_version_or_audit(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.audit import OperationLog
+
+    with TestClient(writer_app) as client:
+        customer = _create_customer(client, "SYNC-NOOP", 111)
+        created = client.post(
+            "/api/master/products",
+            json=_product_payload(
+                customer["id"],
+                "SYNC-NOOP",
+                sale_unit_price="1",
+            ),
+        )
+        assert created.status_code == 201, created.text
+        product = created.json()
+
+        with writer_app.state.session_factory() as session:
+            before_versions = session.scalar(
+                select(func.count(MasterDataObjectVersion.id)).where(
+                    MasterDataObjectVersion.object_type == "product",
+                    MasterDataObjectVersion.object_id == product["id"],
+                )
+            )
+            before_logs = session.scalar(select(func.count(OperationLog.id)))
+
+        no_change = client.post(
+            f"/api/master/products/{product['id']}/sync-fields",
+            json={
+                "fields": {
+                    "sale_unit_price": "1.00",
+                    "product_name": f"  {product['product_name']}  ",
+                },
+                "expected_version": 1,
+                "change_reason": "订单保存同步常用箱",
+            },
+        )
+
+        assert no_change.status_code == 200, no_change.text
+        assert no_change.json() == {
+            "updated": [],
+            "product_id": product["id"],
+            "version": 1,
+        }
+        with writer_app.state.session_factory() as session:
+            assert session.scalar(
+                select(func.count(MasterDataObjectVersion.id)).where(
+                    MasterDataObjectVersion.object_type == "product",
+                    MasterDataObjectVersion.object_id == product["id"],
+                )
+            ) == before_versions
+            assert session.scalar(select(func.count(OperationLog.id))) == before_logs
+
+        changed = client.post(
+            f"/api/master/products/{product['id']}/sync-fields",
+            json={
+                "fields": {"sale_unit_price": "1.50"},
+                "expected_version": 1,
+                "change_reason": "显式调整常用箱单价",
+            },
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["updated"] == ["sale_unit_price"]
+        assert changed.json()["version"] == 2
+
+        normalized_again = client.post(
+            f"/api/master/products/{product['id']}/sync-fields",
+            json={
+                "fields": {"sale_unit_price": "1.5000"},
+                "expected_version": 2,
+                "change_reason": "等值格式复核",
+            },
+        )
+        assert normalized_again.status_code == 200, normalized_again.text
+        assert normalized_again.json()["updated"] == []
+        assert normalized_again.json()["version"] == 2
+
+
 def test_price_adjust_preview_versions_and_stale_apply_rejected(
     writer_app: FastAPI,
 ) -> None:

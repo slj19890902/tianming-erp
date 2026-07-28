@@ -2199,7 +2199,7 @@ def test_business_hides_fully_delivered_orders_and_finished_view_lists_them(
     assert business_dead_keyword.json()["total"] == 0
 
 
-def test_completed_status_with_undelivered_items_stays_discoverable(
+def test_manual_business_stage_write_is_rejected_and_order_stays_discoverable(
     order_api_app,
 ) -> None:
     app, _ = order_api_app
@@ -2210,7 +2210,8 @@ def test_completed_status_with_undelivered_items_stays_discoverable(
             f"/api/orders/{created['id']}/status",
             json={"status": "completed", "remark": "legacy status mismatch"},
         )
-        assert marked.status_code == 200, marked.text
+        assert marked.status_code == 409, marked.text
+        assert "真实业务单据自动判断" in marked.json()["detail"]
         business = client.get("/api/orders", params={"status": "business"})
         finished = client.get(
             "/api/orders", params={"status": "finished_delivery"}
@@ -2789,42 +2790,28 @@ def test_cancelled_order_is_hidden_from_business_and_remains_traceable(
     assert created["id"] in [row["id"] for row in cancelled.json()["items"]]
 
 
-def test_frontend_delivery_group_status_uses_aggregate_quantities() -> None:
+def test_frontend_order_group_consumes_unified_business_projection() -> None:
     index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
         encoding="utf-8"
     )
 
-    assert 'delivered:"已送完"' in index
-    assert "deliveryStatusFromQuantities" in index
-    assert "group.hasDeliveryStatus" in index
-    assert "group.total_delivered_quantity" in index
-    assert "group.group_status = this.deliveryStatusFromQuantities" in index
+    assert 'partially_delivered:"部分送完"' in index
+    assert "aggregateOrderBusinessStatus(group.orders)" in index
+    assert "row?.business_delivery_progress?.delivered_quantity" in index
+    assert "deliveryStatusFromQuantities" not in index
+    assert "group.hasDeliveryStatus" not in index
 
 
-def _expected_delivery_status(quantity: int, delivered_quantity: int) -> str:
-    if quantity > 0 and delivered_quantity >= quantity:
-        return "delivered"
-    if delivered_quantity > 0:
-        return "partially_delivered"
-    return "pending_delivery"
-
-
-def test_frontend_detail_item_status_uses_item_quantities() -> None:
+def test_frontend_detail_item_status_uses_backend_business_projection() -> None:
     index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
         encoding="utf-8"
     )
 
-    assert 'v-for="item in row.items"' in index
-    assert '<status-tag v-else :value="itemDeliveryStatusKey(item)"></status-tag>' in index
-    assert "itemDeliveryStatusKey(item)" in index
-    assert "item?.quantity" in index
-    assert "item?.delivered_quantity" in index
-
-    assert _expected_delivery_status(150, 140) == "partially_delivered"
-    assert _expected_delivery_status(150, 0) == "pending_delivery"
-    assert _expected_delivery_status(150, 150) == "delivered"
-    assert _expected_delivery_status(150, 160) == "delivered"
-    assert _expected_delivery_status(300, 140) == "partially_delivered"
+    assert 'v-for="(item,itemIndex) in row.items"' in index
+    assert '<status-tag v-else :value="itemBusinessStatusKey(item)"></status-tag>' in index
+    assert "return item?.business_status || \"pending_material\"" in index
+    assert "itemDeliveryStatusKey" not in index
+    assert "business_delivered_quantity" in index
 
 
 def test_order_detail_exposes_item_level_delivery_quantities(order_api_app) -> None:
@@ -2866,17 +2853,15 @@ def test_order_detail_exposes_item_level_delivery_quantities(order_api_app) -> N
     assert rows[0]["delivered_quantity"] == 140
     assert rows[0]["remaining_quantity"] == 10
     assert rows[0]["completion_date"] is None
-    assert _expected_delivery_status(
-        rows[0]["quantity"], rows[0]["delivered_quantity"]
-    ) == "partially_delivered"
+    assert rows[0]["business_delivered_quantity"] == 0
+    assert rows[0]["business_status"] == "pending_material"
     assert rows[1]["quantity"] == 150
     assert rows[1]["ordered_quantity"] == 150
     assert rows[1]["delivered_quantity"] == 0
     assert rows[1]["remaining_quantity"] == 150
     assert rows[1]["completion_date"] is None
-    assert _expected_delivery_status(
-        rows[1]["quantity"], rows[1]["delivered_quantity"]
-    ) == "pending_delivery"
+    assert rows[1]["business_delivered_quantity"] == 0
+    assert rows[1]["business_status"] == "pending_material"
 
 
 def test_order_item_completion_date_uses_latest_dispatched_delivery(
@@ -3064,11 +3049,26 @@ def test_n028_sales_order_scope_blocks_other_customer_and_filters_list(
         _login(client, "sales")
         listing = client.get("/api/orders")
         scoped_search = client.get("/api/orders", params={"keyword": "OTHER-PO"})
+        derived_listing = client.get(
+            "/api/orders", params={"status": "pending_material"}
+        )
+        business_listing = client.get(
+            "/api/orders", params={"status": "business"}
+        )
+        unfinished_listing = client.get(
+            "/api/orders", params={"status": "unfinished"}
+        )
         forbidden_detail = client.get(f"/api/orders/{second.json()['id']}")
         forbidden_create = client.post("/api/orders", json=other_payload)
 
     assert listing.status_code == 200
     assert [row["id"] for row in listing.json()["items"]] == [first.json()["id"]]
+    for response in (derived_listing, business_listing, unfinished_listing):
+        assert response.status_code == 200, response.text
+        assert [row["id"] for row in response.json()["items"]] == [
+            first.json()["id"]
+        ]
+        assert response.json()["unfinished_total"] == 1
     assert scoped_search.status_code == 200
     assert scoped_search.json()["total"] == 0
     assert forbidden_detail.status_code == 403

@@ -8,32 +8,85 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
-def test_valid_production_destination_is_auto_selected_but_still_requires_submit() -> None:
-    assert "选择有效的完工去向后系统会自动勾选该行" in INDEX
-    assert "只有点击上方“批量确认完工”并确认成功，才算保存并进入待送货" in INDEX
+def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> None:
+    assert "直接待送：选择后立即完成" in INDEX
     assert '@change="ensureProductionMode(row)"' in INDEX
-    assert '@change="autoSelectProductionRow(row)"' in INDEX
-    assert "已加入本次确认；请点击上方“批量确认完工”保存" in INDEX
-    assert "尚未保存：请补全有效数量/库位，或先完成当前客户的确认" in INDEX
-
     ensure_mode = re.search(
-        r"ensureProductionMode\(row\) \{(.*?)\n\s+\},\n\s+autoSelectProductionRow",
+        r"async ensureProductionMode\(row\) \{(.*?)\n\s+\},\n"
+        r"\s+async onProductionLocationSelection",
         INDEX,
         re.DOTALL,
     )
     assert ensure_mode is not None
-    assert "this.autoSelectProductionRow(row);" in ensure_mode.group(1)
+    assert 'if (row.completion_mode !== "direct") return;' in ensure_mode.group(1)
+    assert "await this.confirmProductionDirectRow(row);" in ensure_mode.group(1)
 
-    auto_select = re.search(
-        r"autoSelectProductionRow\(row\) \{(.*?)\n\s+\},\n\s+productionSelectedCount",
+    direct_submit = re.search(
+        r"async confirmProductionDirectRow\(row\) \{(.*?)\n\s+\},\n"
+        r"\s+autoSelectProductionRow",
         INDEX,
         re.DOTALL,
     )
-    assert auto_select is not None
-    body = auto_select.group(1)
-    assert "if (!this.canConfirmProductionRow(row))" in body
-    assert "Number(row.customer_id) !== this.productionSelectedCustomerId" in body
-    assert "this.productionSelected[row.id] = true;" in body
+    assert direct_submit is not None
+    body = direct_submit.group(1)
+    assert 'axios.post("/api/production/completion-batches"' in body
+    assert "this.productionDirectAttempts[row.id]" in body
+    assert "this.productionBusy = true;" in body
+    assert "row.completion_mode = \"\";" in body
+    assert "this.loadDeliveries()" in body
+    assert "直接待送已保存，但页面刷新失败" in body
+    assert body.index('axios.post("/api/production/completion-batches"') < body.index(
+        "this.loadProduction()"
+    )
+    assert 'this.productionTab = "pending";' in body
+    assert 'this.productionTab = "history";' not in body
+    assert "重试会复用同一幂等键" in body
+
+
+def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -> None:
+    assert "全部入库：选好库位，再点顶部“批量确认入库”" in INDEX
+    assert "`批量确认入库（${productionSelectedCount()}）`" in INDEX
+    assert '@change="onProductionLocationSelection(row)"' in INDEX
+    assert "确认入库位置" not in INDEX
+
+    local_selection = re.search(
+        r"async onProductionLocationSelection\(row\) \{(.*?)\n\s+\},\n"
+        r"\s+async confirmProductionDirectRow",
+        INDEX,
+        re.DOTALL,
+    )
+    assert local_selection is not None
+    local_body = local_selection.group(1)
+    assert "this.autoSelectProductionRow(row)" in local_body
+    assert "axios." not in local_body
+    assert "/api/" not in local_body
+
+    batch_submit = re.search(
+        r"async batchConfirmProduction\(\) \{(.*?)\n\s+\},\n"
+        r"\s+async transferProductionCompletionToStock",
+        INDEX,
+        re.DOTALL,
+    )
+    assert batch_submit is not None
+    batch_body = batch_submit.group(1)
+    assert "const groups = new Map();" in batch_body
+    assert "for (const [customerId, groupRows] of groups.entries())" in batch_body
+    assert "this.productionCompletionAttempts[customerId]" in batch_body
+    assert 'axios.post("/api/production/completion-batches"' in batch_body
+    assert "confirm(" not in batch_body
+    assert "delete this.productionCompletionAttempts[customerId]" in batch_body
+    assert "delete this.productionSelected[row.id]" in batch_body
+    assert "this.loadDeliveries()" in batch_body
+    assert "失败项已保留，可直接重试" in batch_body
+    assert 'this.productionTab = "pending";' in batch_body
+    assert 'this.productionTab = "history";' not in batch_body
+    assert "一次只能确认同一客户" not in INDEX
+    assert "当前已选择其他客户" not in INDEX
+
+    service_source = (
+        ROOT / "app" / "services" / "production_workflow.py"
+    ).read_text(encoding="utf-8")
+    assert "一个完工批次只能包含同一客户的生产任务" in service_source
 
 
 def test_delivery_gate_still_requires_persisted_production_completion() -> None:

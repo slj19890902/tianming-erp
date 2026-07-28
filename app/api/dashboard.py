@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.orm import Session, selectinload, with_loader_criteria
+from sqlalchemy.orm import Session, load_only, selectinload, with_loader_criteria
 
 from app.api.deps import (
     PermissionChecker,
@@ -14,7 +15,6 @@ from app.api.deps import (
     has_permission,
     has_unrestricted_customer_access,
 )
-from app.api.incoming import _rows as incoming_rows
 from app.core.time_contract import beijing_today, utc_naive_to_beijing_date
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.customer import Customer
@@ -32,6 +32,7 @@ from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
 from app.services.inventory_insights import build_inventory_insights
+from app.services.order_business_status import build_order_business_statuses
 from app.services.stock_replenishment import (
     product_replenishment_defaults,
     product_replenishment_signature,
@@ -170,6 +171,123 @@ def _customer_scope_criteria(customer_id_column, visible_customer_ids: set[int] 
     if visible_customer_ids is None:
         return ()
     return (customer_id_column.in_(visible_customer_ids),)
+
+
+def _workflow_projection_rows(
+    db: Session,
+    *,
+    visible_customer_ids: set[int] | None,
+    due_on: date | None = None,
+    due_through: date | None = None,
+    include_delivery: bool = True,
+    include_finance: bool = True,
+) -> list[dict]:
+    """Build dashboard rows from the same projection returned by order APIs."""
+
+    query = (
+        select(Order)
+        .options(
+            load_only(
+                Order.id,
+                Order.order_number,
+                Order.customer_id,
+                Order.delivery_date,
+                Order.created_at,
+                Order.status,
+            ),
+            selectinload(Order.items).load_only(
+                OrderItem.id,
+                OrderItem.order_id,
+                OrderItem.item_sequence,
+                OrderItem.quantity,
+                OrderItem.delivered_quantity,
+                OrderItem.is_force_closed,
+                OrderItem.material_status,
+                OrderItem.snapshot_product_code,
+            ),
+        )
+        .where(
+            ~Order.order_number.like("RUIDA-%"),
+            Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+        )
+    )
+    if visible_customer_ids is not None:
+        query = query.where(Order.customer_id.in_(visible_customer_ids))
+    if due_on is not None:
+        query = query.where(Order.delivery_date == due_on)
+    if due_through is not None:
+        query = query.where(
+            or_(Order.delivery_date.is_(None), Order.delivery_date <= due_through)
+        )
+    orders = list(db.scalars(query).all())
+    projections = build_order_business_statuses(
+        db,
+        orders,
+        include_delivery=include_delivery,
+        include_finance=include_finance,
+    )
+    customer_ids = {int(order.customer_id) for order in orders}
+    customer_names = (
+        {
+            int(customer.id): customer.name
+            for customer in db.scalars(
+                select(Customer).where(Customer.id.in_(customer_ids))
+            ).all()
+        }
+        if customer_ids
+        else {}
+    )
+    rows: list[dict] = []
+    for order in orders:
+        projection = projections.get(int(order.id), {})
+        for item in order.items:
+            item_projection = projection.get("items", {}).get(int(item.id), {})
+            item_business_status = item_projection.get(
+                "business_status", "pending_material"
+            )
+            # A permission-restricted dashboard must not query delivery facts.
+            # When the persisted compatibility snapshot already records a
+            # delivery-or-later stage, fail closed instead of falsely exposing
+            # the line as an earlier production task. Full order APIs still use
+            # the formal delivery projection.
+            if (
+                not include_delivery
+                and order.status
+                in {
+                    "pending_delivery",
+                    "partially_delivered",
+                    "delivered",
+                    "waiting_receipt",
+                    "pending_reconciliation",
+                    "pending_invoice",
+                    "pending_payment",
+                    "completed",
+                }
+                and item_business_status
+                in {
+                    "pending_material",
+                    "pending_incoming",
+                    "pending_production",
+                }
+            ):
+                item_business_status = "pending_delivery"
+            rows.append(
+                {
+                    "order_id": int(order.id),
+                    "order_number": order.order_number,
+                    "customer_id": int(order.customer_id),
+                    "customer_name": customer_names.get(
+                        int(order.customer_id), "-"
+                    ),
+                    "delivery_date": order.delivery_date,
+                    "created_at": order.created_at,
+                    "item_id": int(item.id),
+                    "item_sequence": item.item_sequence,
+                    "product_code": item.snapshot_product_code,
+                    "business_status": item_business_status,
+                }
+            )
+    return rows
 
 
 class _CustomerScopedSession:
@@ -342,6 +460,7 @@ def dashboard_kpi(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    raw_db = db
     today = beijing_today()
     month = today.strftime("%Y-%m")
     visible_customer_ids = (
@@ -356,43 +475,35 @@ def dashboard_kpi(
     db = _CustomerScopedSession(db, visible_customer_ids)
     can_view_cost = can_view_finance and has_permission(user, "cost.view")
     result = {"month": month}
+    workflow_rows = (
+        _workflow_projection_rows(
+            raw_db,
+            visible_customer_ids=visible_customer_ids,
+            due_on=today,
+            include_delivery=can_view_deliveries or can_view_finance,
+            include_finance=can_view_finance,
+        )
+        if can_view_deliveries or can_view_orders or can_view_incoming
+        else []
+    )
     if can_view_deliveries:
-        pending_delivery = db.scalar(
-            select(func.count(OrderItem.id))
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.delivery_date == today,
-                _delivery_ready_filter(),
-                OrderItem.delivered_quantity < OrderItem.quantity,
-                OrderItem.is_force_closed.is_(False),
-                *_customer_scope_criteria(Order.customer_id, visible_customer_ids),
-            )
+        result["today_pending_delivery_tasks"] = sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] in {"pending_delivery", "partially_delivered"}
         )
-        result["today_pending_delivery_tasks"] = int(pending_delivery or 0)
     if can_view_orders:
-        pending_production = db.scalar(
-            select(func.count(ProductionTask.id))
-            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.delivery_date == today,
-                ProductionTask.status == "pending",
-                OrderItem.is_force_closed.is_(False),
-                *_customer_scope_criteria(Order.customer_id, visible_customer_ids),
-            )
+        result["today_pending_production_tasks"] = sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] == "pending_production"
         )
-        result["today_pending_production_tasks"] = int(pending_production or 0)
     if can_view_incoming:
-        pending_incoming = db.scalar(
-            select(func.count(OrderItem.id))
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.delivery_date == today,
-                OrderItem.material_status == "pending",
-                *_customer_scope_criteria(Order.customer_id, visible_customer_ids),
-            )
+        result["today_pending_incoming_tasks"] = sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] == "pending_incoming"
         )
-        result["today_pending_incoming_tasks"] = int(pending_incoming or 0)
     if can_view_finance:
         monthly_revenue = db.scalar(
             select(
@@ -475,85 +586,84 @@ def dashboard_overview(
     can_view_deliveries = has_permission(user, "deliveries.view")
     can_view_finance = has_permission(user, "finance.view")
     db = _CustomerScopedSession(db, visible_customer_ids)
+    workflow_rows = (
+        _workflow_projection_rows(
+            raw_db,
+            visible_customer_ids=visible_customer_ids,
+            include_delivery=can_view_deliveries or can_view_finance,
+            include_finance=can_view_finance,
+        )
+        if any(
+            (
+                can_view_orders,
+                can_view_requisition,
+                can_view_incoming,
+                can_view_deliveries,
+                can_view_finance,
+            )
+        )
+        else []
+    )
+    def is_due(row: dict) -> bool:
+        return row["delivery_date"] is None or row["delivery_date"] <= today
 
-    pending_material_orders = _safe_int(
-        db.scalar(
-            select(func.count(func.distinct(Order.id)))
-            .select_from(Order)
-            .join(OrderItem, OrderItem.order_id == Order.id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                OrderItem.requisition_status == "未报料",
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-                *_customer_scope_criteria(Order.customer_id, visible_customer_ids),
-            )
+    pending_material_orders = (
+        len(
+            {
+                row["order_id"]
+                for row in workflow_rows
+                if row["business_status"] == "pending_material" and is_due(row)
+            }
         )
-    ) if can_view_requisition else 0
-    pending_incoming_rows = incoming_rows(raw_db, user=user) if can_view_incoming else []
-    pending_incoming_items = len(pending_incoming_rows)
-    pending_production_items = _safe_int(
-        db.scalar(
-            select(func.count(ProductionTask.id))
-            .select_from(ProductionTask)
-            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                ProductionTask.status == "pending",
-                OrderItem.is_force_closed.is_(False),
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
+        if can_view_requisition
+        else 0
+    )
+    pending_incoming_items = (
+        sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] == "pending_incoming" and is_due(row)
         )
-    ) if can_view_orders else 0
-    pending_delivery_items = _safe_int(
-        db.scalar(
-            select(func.count(OrderItem.id))
-            .select_from(OrderItem)
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                _delivery_ready_filter(),
-                OrderItem.delivered_quantity < OrderItem.quantity,
-                OrderItem.is_force_closed.is_(False),
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
+        if can_view_incoming
+        else 0
+    )
+    pending_production_items = (
+        sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] == "pending_production" and is_due(row)
         )
-    ) if can_view_deliveries else 0
-    pending_receipt_deliveries = _safe_int(
-        db.scalar(
-            select(func.count(func.distinct(Delivery.id)))
-            .select_from(Delivery)
-            .where(
-                Delivery.status == "dispatched",
-                ~exists(
-                    select(ReturnReceipt.id).where(
-                        ReturnReceipt.delivery_id == Delivery.id,
-                        ReturnReceipt.status == "confirmed",
-                    )
-                ),
-            )
+        if can_view_orders
+        else 0
+    )
+    pending_delivery_items = (
+        sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] in {"pending_delivery", "partially_delivered"}
+            and is_due(row)
         )
-    ) if can_view_deliveries else 0
-    pending_reconciliation_items = _safe_int(
-        db.scalar(
-            select(func.count(ReturnReceiptItem.id))
-            .select_from(ReturnReceiptItem)
-            .join(
-                ReturnReceipt,
-                ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
-            )
-            .join(Delivery, Delivery.id == ReturnReceipt.delivery_id)
-            .where(
-                ReturnReceipt.status == "confirmed",
-                ~exists(
-                    select(StatementItem.id).where(
-                        StatementItem.return_receipt_item_id
-                        == ReturnReceiptItem.id,
-                    )
-                ),
-            )
+        if can_view_deliveries
+        else 0
+    )
+    pending_receipt_deliveries = (
+        sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] == "waiting_receipt"
         )
-    ) if can_view_finance else 0
+        if can_view_deliveries
+        else 0
+    )
+    pending_reconciliation_items = (
+        sum(
+            1
+            for row in workflow_rows
+            if row["business_status"] == "pending_reconciliation"
+        )
+        if can_view_finance
+        else 0
+    )
     unsettled_statements = (
         db.execute(
             select(
@@ -617,9 +727,9 @@ def dashboard_overview(
                 },
                 {
                     "key": "pending_receipt",
-                    "title": "待回单送货单",
+                    "title": "待回单明细",
                     "count": pending_receipt_deliveries,
-                    "description": "已发货但还没回单",
+                    "description": "已正式送货但还没回单",
                     "button_label": "去回单",
                     "target": "deliveries",
                 },
@@ -686,122 +796,53 @@ def dashboard_overview(
             ]
         )
 
+    def workflow_rows_for(status: str, *, due_only: bool = False) -> list[dict]:
+        return sorted(
+            [
+                row
+                for row in workflow_rows
+                if row["business_status"] == status
+                and (not due_only or is_due(row))
+            ],
+            key=lambda row: (
+                row["delivery_date"] is None,
+                row["delivery_date"] or date.max,
+                row["created_at"],
+                row["item_id"],
+            ),
+        )
+
     pending_material_rows = (
-        db.execute(
-            select(
-            Customer.id.label("customer_id"),
-            Customer.name.label("customer_name"),
-            Order.order_number,
-            Order.delivery_date,
-            Order.created_at,
-            )
-            .select_from(Order)
-            .join(Customer, Customer.id == Order.customer_id)
-            .join(OrderItem, OrderItem.order_id == Order.id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                OrderItem.requisition_status == "未报料",
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
-            .order_by(
-                Order.delivery_date.is_(None),
-                Order.delivery_date,
-                Order.created_at,
-                Order.id,
-            )
-        ).mappings().all()
+        workflow_rows_for("pending_material", due_only=True)
         if can_view_requisition
         else []
     )
+    pending_incoming_rows = (
+        workflow_rows_for("pending_incoming", due_only=True)
+        if can_view_incoming
+        else []
+    )
     pending_production_rows = (
-        db.execute(
-            select(
-                Customer.id.label("customer_id"),
-                Customer.name.label("customer_name"),
-                Order.order_number,
-                Order.delivery_date,
-                Order.created_at,
-                OrderItem.snapshot_product_code,
-            )
-            .select_from(ProductionTask)
-            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
-            .join(Order, Order.id == OrderItem.order_id)
-            .join(Customer, Customer.id == Order.customer_id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                ProductionTask.status == "pending",
-                OrderItem.is_force_closed.is_(False),
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
-            .order_by(
-                Order.delivery_date.is_(None),
-                Order.delivery_date,
-                Order.created_at,
-                OrderItem.id,
-            )
-        ).mappings().all()
+        workflow_rows_for("pending_production", due_only=True)
         if can_view_orders
         else []
     )
     pending_delivery_rows = (
-        db.execute(
-            select(
-            Customer.id.label("customer_id"),
-            Customer.name.label("customer_name"),
-            Order.order_number,
-            Order.delivery_date,
-            Order.created_at,
-            OrderItem.snapshot_product_code,
-            )
-            .select_from(OrderItem)
-            .join(Order, Order.id == OrderItem.order_id)
-            .join(Customer, Customer.id == Order.customer_id)
-            .where(
-                Order.status.notin_(["cancelled", "dead"]),
-                _delivery_ready_filter(),
-                OrderItem.delivered_quantity < OrderItem.quantity,
-                OrderItem.is_force_closed.is_(False),
-                or_(Order.delivery_date.is_(None), Order.delivery_date <= today),
-            )
-            .order_by(
-                Order.delivery_date.is_(None),
-                Order.delivery_date,
-                Order.created_at,
-                OrderItem.id,
-            )
-        ).mappings().all()
+        sorted(
+            workflow_rows_for("pending_delivery", due_only=True)
+            + workflow_rows_for("partially_delivered", due_only=True),
+            key=lambda row: (
+                row["delivery_date"] is None,
+                row["delivery_date"] or date.max,
+                row["created_at"],
+                row["item_id"],
+            ),
+        )
         if can_view_deliveries
         else []
     )
     pending_receipt_rows = (
-        db.execute(
-            select(
-            Customer.id.label("customer_id"),
-            Customer.name.label("customer_name"),
-            Delivery.delivery_number,
-            Delivery.delivery_date,
-            Delivery.created_at,
-            )
-            .select_from(Delivery)
-            .join(Customer, Customer.id == Delivery.customer_id)
-            .where(
-                Delivery.status == "dispatched",
-                ~exists(
-                    select(ReturnReceipt.id).where(
-                        ReturnReceipt.delivery_id == Delivery.id,
-                        ReturnReceipt.status == "confirmed",
-                    )
-                ),
-            )
-            .order_by(
-                Delivery.delivery_date.is_(None),
-                Delivery.delivery_date,
-                Delivery.created_at,
-                Delivery.id,
-            )
-        ).mappings().all()
-        if can_view_deliveries
-        else []
+        workflow_rows_for("waiting_receipt") if can_view_deliveries else []
     )
     recon_month_expr = func.coalesce(
         func.strftime("%Y-%m", ReturnReceipt.actual_received_date),
@@ -927,7 +968,7 @@ def dashboard_overview(
                 "customer_name": row["customer_name"],
                 "count": 0,
                 "first_order_no": row["order_number"],
-                "first_item_no": row["snapshot_product_code"],
+                "first_item_no": row["product_code"],
                 "sort_date": _business_date_string(
                     row["delivery_date"] or row["created_at"]
                 ),
@@ -947,7 +988,7 @@ def dashboard_overview(
                 "customer_name": row["customer_name"],
                 "count": 0,
                 "first_order_no": row["order_number"],
-                "first_item_no": row["snapshot_product_code"],
+                "first_item_no": row["product_code"],
                 "sort_date": _business_date_string(
                     row["delivery_date"] or row["created_at"]
                 ),
@@ -966,7 +1007,7 @@ def dashboard_overview(
                 "type": "待回单",
                 "customer_name": row["customer_name"],
                 "count": 0,
-                "first_order_no": row["delivery_number"],
+                "first_order_no": row["order_number"],
                 "first_item_no": None,
                 "sort_date": _business_date_string(
                     row["delivery_date"] or row["created_at"]
@@ -1001,7 +1042,7 @@ def dashboard_overview(
         todos.append(group)
     for group in pending_receipt_groups.values():
         group["message"] = (
-            f"该客户有 {group['count']} 张送货单已发货但还没确认回单。"
+            f"该客户有 {group['count']} 条明细已正式送货但还没确认回单。"
         )
         todos.append(group)
     for row in pending_recon_rows:
@@ -1102,11 +1143,40 @@ def dashboard_overview(
                 ),
             }
         )
+    visible_business_statuses: set[str] = set()
+    if can_view_orders:
+        visible_business_statuses.update(
+            {"pending_confirmation", "pending_production"}
+        )
+    if can_view_requisition:
+        visible_business_statuses.add("pending_material")
+    if can_view_incoming:
+        visible_business_statuses.add("pending_incoming")
+    if can_view_deliveries:
+        visible_business_statuses.update(
+            {"pending_delivery", "partially_delivered", "waiting_receipt"}
+        )
+    if can_view_finance:
+        visible_business_statuses.update(
+            {
+                "pending_reconciliation",
+                "pending_invoice",
+                "pending_payment",
+                "completed",
+            }
+        )
     result = {
         "cards": cards,
         "todos": todos,
         "remaining_todo_count": remaining_todo_count,
         "summary": summary,
+        "business_status_counts": dict(
+            Counter(
+                row["business_status"]
+                for row in workflow_rows
+                if row["business_status"] in visible_business_statuses
+            )
+        ),
         "month": month,
     }
     if can_view_requisition and can_view_warehouse:

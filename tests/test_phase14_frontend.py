@@ -75,15 +75,17 @@ def test_order_page_hides_main_order_number_in_default_list_and_moves_actions_to
     assert "openOrderEditor(group)" in orders
 
 
-def test_order_page_expand_card_shows_item_and_main_order_numbers() -> None:
-    # v0.19.2-B Hotfix: 主系统单号后台仍生成但不显示在展开明细中（§二.1）；
-    # 明细系统单号保留显示。
+def test_order_page_expand_card_uses_compact_sequence_and_moves_number_to_detail() -> None:
     orders = _orders_section()
     assert 'class="order-group-detail-card"' in orders
-    assert "item.item_order_number" in orders
+    assert "item.item_order_number" not in orders
+    assert "item.item_sequence || itemIndex + 1" in orders
+    assert 'class="col-order-item-sequence">序号</th>' in orders
     # row.order_number 仍存在（用于其它地方如 displayOrderNumber）
     assert "row.order_number" in INDEX
-    assert "<th>明细系统单号</th>" in orders
+    detail = INDEX.split("只读订单详情", 1)[1]
+    assert "<th>明细系统单号</th>" in detail
+    assert "item.item_order_number || \"-\"" in detail
     # 主系统单号列已从展开明细表头移除
     assert "<th>主系统单号</th>" not in orders
 

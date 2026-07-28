@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -140,8 +141,10 @@ def test_dashboard_kpi_uses_real_database_aggregates(tmp_path: Path) -> None:
             return_receipt_id=receipt.id,
             delivery_item_id=delivery_item.id,
             actual_received_quantity=78,
+            resolution_action="continue_delivery",
             difference_reason="拒收2个",
         )
+        received_item.delivered_quantity = 78
         session.add(receipt_item)
         session.flush()
         statement = Statement(
@@ -189,7 +192,9 @@ def test_dashboard_kpi_uses_real_database_aggregates(tmp_path: Path) -> None:
     assert Decimal(str(body["monthly_gross_profit"])) == Decimal("70.20")
     assert Decimal(str(body["outstanding_receivables"])) == Decimal("280.80")
     assert body["today_pending_delivery_tasks"] == 1
-    assert body["today_pending_incoming_tasks"] == 1
+    # P0-04：没有 confirmed 供应商报料单时仍是待报料，不能仅凭
+    # material_status=pending 把它算成待收料。
+    assert body["today_pending_incoming_tasks"] == 0
 
 
 def test_dashboard_overview_returns_safe_empty_defaults(tmp_path: Path) -> None:
@@ -358,6 +363,10 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
     )
     from app.models.order import Order, OrderItem
     from app.models.product import Product
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
     from app.models.user import User
 
     engine = create_sqlite_engine(tmp_path / "dashboard-overview-counts.sqlite3")
@@ -482,6 +491,29 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
             ]
         )
         session.flush()
+        incoming_item = session.scalar(
+            select(OrderItem).where(OrderItem.order_id == incoming_order.id)
+        )
+        assert incoming_item is not None
+        supplier_order = SupplierRequisitionOrder(
+            order_number="SRO-DASH-002",
+            total_quantity=80,
+            requisition_qty=80,
+            status="confirmed",
+        )
+        session.add(supplier_order)
+        session.flush()
+        session.add(
+            SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=incoming_item.id,
+                product_id=product.id,
+                product_name=product.product_name,
+                quantity=80,
+                requisition_qty=80,
+            )
+        )
+        session.flush()
         delivery_pending = Delivery(
             delivery_number="DH-DASH-001",
             customer_id=customer.id,
@@ -527,8 +559,11 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
             return_receipt_id=receipt.id,
             delivery_item_id=delivery_confirmed.items[0].id,
             actual_received_quantity=58,
+            resolution_action="accept_short",
             difference_reason="少收2箱",
         )
+        confirmed_delivery_item.delivered_quantity = 58
+        confirmed_delivery_item.is_force_closed = True
         session.add(receipt_item)
         session.flush()
         statement = Statement(
@@ -585,12 +620,14 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
     assert counts["pending_material"] == 1
     assert counts["pending_incoming"] == 1
     assert counts["pending_delivery"] == 1
-    assert counts["pending_receipt"] == 1
+    # 20/70 尚未送完的明细保持“部分送完”，不能仅因第一批已经发货
+    # 就把整条明细推进成“待回单”。
+    assert counts["pending_receipt"] == 0
     assert counts["pending_reconciliation"] == 0
     assert counts["unsettled_statements"] == 1
     assert body["todos"]
     todo_types = {todo["type"] for todo in body["todos"]}
-    assert {"待报料", "待入库", "待送货", "待回单", "未结清对账单"} <= todo_types
+    assert {"待报料", "待入库", "待送货", "未结清对账单"} <= todo_types
     pending_material = next(todo for todo in body["todos"] if todo["type"] == "待报料")
     assert pending_material["target"] == "requisition"
     assert pending_material["count"] == 1
@@ -813,6 +850,11 @@ def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
     from app.models.finance import Statement
     from app.models.order import Order, OrderItem
     from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
     from app.models.user import User
 
     engine = create_sqlite_engine(tmp_path / "dashboard-overview-grouped.sqlite3")
@@ -901,13 +943,52 @@ def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
 
         add_order(customer=customer_a, product=product_a, order_no="PO-MAT-001", requisition_status="未报料", material_status="pending")
         add_order(customer=customer_a, product=product_a, order_no="PO-MAT-002", requisition_status="未报料", material_status="pending")
-        add_order(customer=customer_a, product=product_a, order_no="PO-IN-001", requisition_status="已报料", material_status="pending")
-        add_order(customer=customer_a, product=product_a, order_no="PO-IN-002", requisition_status="供应商已排单", material_status="pending")
-        add_order(customer=customer_a, product=product_a, order_no="PO-DE-001", requisition_status="已入库", material_status="received", delivered_quantity=0)
-        add_order(customer=customer_a, product=product_a, order_no="PO-DE-002", requisition_status="已入库", material_status="received", delivered_quantity=4, quantity=10)
+        incoming_item_1 = add_order(customer=customer_a, product=product_a, order_no="PO-IN-001", requisition_status="已报料", material_status="pending")
+        incoming_item_2 = add_order(customer=customer_a, product=product_a, order_no="PO-IN-002", requisition_status="供应商已排单", material_status="pending")
+        pending_delivery_item_1 = add_order(customer=customer_a, product=product_a, order_no="PO-DE-001", requisition_status="已入库", material_status="received", delivered_quantity=0)
+        pending_delivery_item_2 = add_order(customer=customer_a, product=product_a, order_no="PO-DE-002", requisition_status="已入库", material_status="received", delivered_quantity=4, quantity=10)
         shipped_item_1 = add_order(customer=customer_a, product=product_a, order_no="PO-RC-001", requisition_status="已入库", material_status="received", delivered_quantity=8, quantity=8)
         shipped_item_2 = add_order(customer=customer_a, product=product_a, order_no="PO-RC-002", requisition_status="已入库", material_status="received", delivered_quantity=6, quantity=6)
         add_order(customer=customer_b, product=product_b, order_no="PO-MAT-B1", requisition_status="未报料", material_status="pending")
+
+        for index, incoming_item in enumerate(
+            [incoming_item_1, incoming_item_2], start=1
+        ):
+            supplier_order = SupplierRequisitionOrder(
+                order_number=f"SRO-GROUP-{index}",
+                total_quantity=10,
+                requisition_qty=10,
+                status="confirmed",
+            )
+            session.add(supplier_order)
+            session.flush()
+            session.add(
+                SupplierRequisitionOrderItem(
+                    supplier_order_id=supplier_order.id,
+                    order_item_id=incoming_item.id,
+                    product_id=product_a.id,
+                    product_name=product_a.product_name,
+                    quantity=10,
+                    requisition_qty=10,
+                )
+            )
+        for pending_delivery_item in [
+            pending_delivery_item_1,
+            pending_delivery_item_2,
+        ]:
+            session.add(
+                ProductionTask(
+                    order_item_id=pending_delivery_item.id,
+                    status="completed",
+                    planned_quantity=10,
+                    finished_coverage_snapshot=0,
+                    ordered_quantity_snapshot=10,
+                    material_received_quantity=10,
+                    material_input_quantity=10,
+                    output_factor=1,
+                    version=1,
+                )
+            )
 
         delivery_1 = Delivery(
             delivery_number="DH-RC-001",
@@ -923,12 +1004,20 @@ def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
             status="dispatched",
             total_quantity=6,
         )
-        session.add_all([delivery_1, delivery_2])
+        partial_delivery = Delivery(
+            delivery_number="DH-DE-002",
+            customer_id=customer_a.id,
+            delivery_date=today,
+            status="dispatched",
+            total_quantity=4,
+        )
+        session.add_all([delivery_1, delivery_2, partial_delivery])
         session.flush()
         session.add_all(
             [
                 DeliveryItem(delivery_id=delivery_1.id, order_item_id=shipped_item_1.id, delivered_quantity=8),
                 DeliveryItem(delivery_id=delivery_2.id, order_item_id=shipped_item_2.id, delivered_quantity=6),
+                DeliveryItem(delivery_id=partial_delivery.id, order_item_id=pending_delivery_item_2.id, delivered_quantity=4),
             ]
         )
         session.add_all(

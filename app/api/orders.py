@@ -94,6 +94,11 @@ from app.services.order_numbering import (
     reserve_next_item_sequence,
     reserve_next_order_number,
 )
+from app.services.order_business_status import (
+    BUSINESS_STATUS_ORDER,
+    DERIVED_BUSINESS_STATUSES,
+    build_order_business_statuses,
+)
 from app.services import material_pricing
 from app.services.order_pdf_import import (
     PARSE_STATUS_LABELS,
@@ -250,6 +255,26 @@ def _require_product_drawing_edit(user: User) -> None:
 # Do not hide solely on completed/delivered snapshots: quantity is the source
 # of truth for this view, and inconsistent legacy rows must stay discoverable.
 _BUSINESS_EXCLUDED_STATUSES = ("dead", "cancelled", "closed", "archived")
+_DERIVED_STATUS_FILTER_GROUPS = {
+    "unfinished": {
+        "pending_confirmation",
+        "pending_material",
+        "pending_incoming",
+        "pending_production",
+        "pending_delivery",
+        "partially_delivered",
+    },
+    "finished_delivery": {
+        "waiting_receipt",
+        "pending_reconciliation",
+        "pending_invoice",
+        "pending_payment",
+        "completed",
+    },
+}
+_MANUAL_ORDER_STATUS_TARGETS = frozenset(
+    {"archived", "closed", "dead", "cancelled"}
+)
 _INACTIVE_SUPPLIER_REQUISITION_ORDER_STATUSES = [
     "voided", "cancelled", "canceled", "withdrawn", "invalid",
     "已作废", "已取消", "已撤回",
@@ -1493,6 +1518,7 @@ def _order_response(
     display_registry=None,
     completion_dates: dict[int, date] | None = None,
     bom_components_by_item_id: dict[int, list[dict]] | None = None,
+    business_projection: dict | None = None,
 ) -> dict:
     item_ids = [item.id for item in order.items]
     reservation_map = (
@@ -1514,6 +1540,15 @@ def _order_response(
             if db is not None
             else {}
         )
+    if business_projection is None and db is not None:
+        business_projection = build_order_business_statuses(
+            db,
+            [order],
+            include_finance=has_permission(user, "finance.view"),
+        ).get(
+            int(order.id),
+        )
+    business_projection = business_projection or {}
     data = {
         "id": order.id,
         **serialize_order_number_fields(order, display_registry),
@@ -1524,12 +1559,28 @@ def _order_response(
         "order_date": order.order_date,
         "delivery_date": order.delivery_date,
         "status": order.status,
+        "business_status": business_projection.get("business_status", order.status),
+        "business_status_label": business_projection.get(
+            "business_status_label"
+        ),
+        "business_status_evidence": business_projection.get(
+            "business_status_evidence"
+        ),
+        "business_delivery_progress": business_projection.get(
+            "business_delivery_progress"
+        ),
+        "business_item_status_counts": business_projection.get(
+            "business_item_status_counts", {}
+        ),
         "payment_status": order.payment_status,
         "total_amount": order.total_amount,
         "remark": sanitize_user_text(order.remark),
         "items": [],
     }
     for item in order.items:
+        item_business_projection = business_projection.get("items", {}).get(
+            int(item.id), {}
+        )
         mold_tool = (
             item.product.mold_tool
             if item.product_id
@@ -1573,6 +1624,27 @@ def _order_response(
                 "remaining_quantity": max(
                     int(item.quantity or 0) - int(item.delivered_quantity or 0),
                     0,
+                ),
+                "business_status": item_business_projection.get(
+                    "business_status"
+                ),
+                "business_status_label": item_business_projection.get(
+                    "business_status_label"
+                ),
+                "business_status_evidence": item_business_projection.get(
+                    "business_status_evidence"
+                ),
+                "business_delivered_quantity": item_business_projection.get(
+                    "business_delivered_quantity",
+                    int(item.delivered_quantity or 0),
+                ),
+                "business_remaining_quantity": item_business_projection.get(
+                    "business_remaining_quantity",
+                    max(
+                        int(item.quantity or 0)
+                        - int(item.delivered_quantity or 0),
+                        0,
+                    ),
                 ),
                 "completion_date": (
                     completion_date_map.get(item.id)
@@ -1747,46 +1819,35 @@ def list_orders(
         ids_query = ids_query.where(Order.order_date <= date_to)
 
     history_condition = Order.order_number.like("RUIDA-%")
-    fully_delivered_condition = and_(
-        Order.items.any(),
-        ~Order.items.any(OrderItem.delivered_quantity < OrderItem.quantity),
-    )
     if status_filter == "business":
-        business_conditions = [
+        # The default daily view stays focused on order-to-delivery work. A
+        # targeted search may also return the downstream finance and completed
+        # stages, while explicit management statuses keep dedicated views.
+        derived_status_filter = set(
+            BUSINESS_STATUS_ORDER
+            if search_keyword
+            else (
+                "pending_confirmation",
+                *_DERIVED_STATUS_FILTER_GROUPS["unfinished"],
+            )
+        )
+    else:
+        derived_status_filter = (
+            {status_filter}
+            if status_filter in DERIVED_BUSINESS_STATUSES
+            else _DERIVED_STATUS_FILTER_GROUPS.get(status_filter)
+        )
+    if status_filter == "business":
+        ids_query = ids_query.where(
             ~history_condition,
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
-        ]
-        # A targeted business search must still find normally completed
-        # deliveries. Without a search term, keep the operational list focused
-        # on orders that still need attention.
-        if not search_keyword:
-            business_conditions.append(~fully_delivered_condition)
-        ids_query = ids_query.where(*business_conditions)
+        )
     elif status_filter == "history":
         ids_query = ids_query.where(history_condition)
-    elif status_filter == "finished_delivery":
+    elif derived_status_filter:
         ids_query = ids_query.where(
             ~history_condition,
-            Order.status.notin_(("dead", "cancelled", "closed", "archived")),
-            fully_delivered_condition,
-        )
-    elif status_filter == "unfinished":
-        ids_query = ids_query.where(
-            ~history_condition,
-            Order.status.in_(
-                (
-                    "pending_confirmation",
-                    "pending_production",
-                    "production",
-                    "pending_delivery",
-                    "partially_delivered",
-                )
-            ),
-            Order.items.any(
-                (OrderItem.delivered_quantity < OrderItem.quantity)
-                & OrderItem.is_force_closed.is_(False)
-                & (OrderItem.requisition_status != "已结算")
-            ),
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
         )
     elif status_filter:
         ids_query = ids_query.where(Order.status == status_filter)
@@ -1858,10 +1919,41 @@ def list_orders(
             func.coalesce(Order.updated_at, Order.created_at).desc(),
             Order.id.desc(),
         )
-    total = db.scalar(select(func.count()).select_from(ids_query.subquery())) or 0
-    page_ids = list(
-        db.scalars(ids_query.offset((page - 1) * page_size).limit(page_size)).all()
-    )
+    candidate_ids: list[int] = []
+    candidate_orders: list[Order] = []
+    candidate_projection: dict[int, dict] = {}
+    if derived_status_filter:
+        candidate_ids = list(db.scalars(ids_query).all())
+        if candidate_ids:
+            candidate_orders = list(
+                db.scalars(
+                    select(Order)
+                    .options(selectinload(Order.items))
+                    .where(Order.id.in_(candidate_ids))
+                ).all()
+            )
+        candidate_projection = build_order_business_statuses(
+            db,
+            candidate_orders,
+            include_finance=has_permission(user, "finance.view"),
+        )
+        matched_ids = [
+            order_id
+            for order_id in candidate_ids
+            if candidate_projection.get(order_id, {}).get("business_status")
+            in derived_status_filter
+        ]
+        total = len(matched_ids)
+        page_ids = matched_ids[(page - 1) * page_size : page * page_size]
+    else:
+        total = (
+            db.scalar(select(func.count()).select_from(ids_query.subquery())) or 0
+        )
+        page_ids = list(
+            db.scalars(
+                ids_query.offset((page - 1) * page_size).limit(page_size)
+            ).all()
+        )
 
     orders: list[Order] = []
     if page_ids:
@@ -1899,28 +1991,67 @@ def list_orders(
         db,
         [item.id for order in orders for item in order.items],
     )
-    unfinished_query = select(func.count(Order.id)).where(
+    business_projections = (
+        {
+            order_id: candidate_projection[order_id]
+            for order_id in page_ids
+            if order_id in candidate_projection
+        }
+        if derived_status_filter
+        else build_order_business_statuses(
+            db,
+            orders,
+            include_finance=has_permission(user, "finance.view"),
+        )
+    )
+    can_reuse_global_candidate_projection = bool(
+        derived_status_filter
+        and customer_id is None
+        and not search_keyword
+        and not (order_number and order_number.strip())
+        and not (customer_name and customer_name.strip())
+        and order_date is None
+        and date_from is None
+        and date_to is None
+    )
+    if can_reuse_global_candidate_projection:
+        unfinished_ids = [
+            int(order.id) for order in candidate_orders if order.items
+        ]
+        unfinished_projections = candidate_projection
+    else:
+        unfinished_ids_query = select(Order.id).where(
             ~history_condition,
-            Order.status.in_(
-                (
-                    "pending_confirmation",
-                    "pending_production",
-                    "production",
-                    "pending_delivery",
-                    "partially_delivered",
-                )
-            ),
-            Order.items.any(
-                (OrderItem.delivered_quantity < OrderItem.quantity)
-                & OrderItem.is_force_closed.is_(False)
-                & (OrderItem.requisition_status != "已结算")
-            ),
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+            Order.items.any(),
         )
-    if is_customer_scope_restricted:
-        unfinished_query = unfinished_query.where(
-            Order.customer_id.in_(scoped_customer_ids)
+        if is_customer_scope_restricted:
+            unfinished_ids_query = unfinished_ids_query.where(
+                Order.customer_id.in_(scoped_customer_ids)
+            )
+        unfinished_ids = list(db.scalars(unfinished_ids_query).all())
+        unfinished_orders = (
+            list(
+                db.scalars(
+                    select(Order)
+                    .options(selectinload(Order.items))
+                    .where(Order.id.in_(unfinished_ids))
+                ).all()
+            )
+            if unfinished_ids
+            else []
         )
-    unfinished_total = db.scalar(unfinished_query) or 0
+        unfinished_projections = build_order_business_statuses(
+            db,
+            unfinished_orders,
+            include_finance=has_permission(user, "finance.view"),
+        )
+    unfinished_total = sum(
+        1
+        for order_id in unfinished_ids
+        if unfinished_projections.get(order_id, {}).get("business_status")
+        in _DERIVED_STATUS_FILTER_GROUPS["unfinished"]
+    )
     return {
         "total": total,
         "unfinished_total": unfinished_total,
@@ -1935,6 +2066,7 @@ def list_orders(
                 display_registry=display_registry,
                 completion_dates=completion_dates,
                 bom_components_by_item_id=bom_components_by_item_id,
+                business_projection=business_projections.get(int(order.id)),
             )
             for order in orders
         ],
@@ -3140,17 +3272,17 @@ def update_order_status(
     remark = payload.remark.strip()
     if target not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="订单状态无效")
-    if target in {"dead", "closed", "archived", "cancelled"} and not remark:
+    if target not in _MANUAL_ORDER_STATUS_TARGETS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "待报料、待收料、待生产、待送货、回单、对账、开票、结款和完成状态"
+                "均由真实业务单据自动判断，不能手工修改。需要撤回流程时请使用受控撤回。"
+            ),
+        )
+    if not remark:
         raise HTTPException(status_code=400, detail="标记死单、已结档、已归档或已作废时必须填写备注")
-    if target in {
-        "pending_confirmation",
-        "pending_production",
-        "production",
-        "dead",
-        "cancelled",
-        "closed",
-        "archived",
-    }:
+    if target in _MANUAL_ORDER_STATUS_TARGETS:
         _lock_orders_for_production_transition(db, [order.id])
         order = db.scalar(
             select(Order)
@@ -3160,13 +3292,7 @@ def update_order_status(
         )
         if order is None:
             raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
-    if target in {
-        "pending_confirmation",
-        "pending_production",
-        "production",
-        "dead",
-        "cancelled",
-    }:
+    if target in {"dead", "cancelled"}:
         _ensure_no_production_completion_facts(
             db,
             [item.id for item in order.items],

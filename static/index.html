@@ -337,7 +337,22 @@
         background: #fafafe;
       }
       .order-group-detail-card table th { position: static; background: #f0f0f5; }
-      .sub-order-number { font-size: 11px; color: #b0b0bb; font-weight: 600; }
+      .col-order-item-sequence {
+        width: 4em;
+        min-width: 4em;
+        max-width: 4em;
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+      .order-delivery-compact {
+        margin-top: 2px;
+        font-size: 11px;
+        line-height: 1.35;
+        white-space: nowrap;
+      }
       .main-order-number { color: var(--muted); font-size: 11px; }
       .order-search-highlight { background: #fef08a; border-radius: 2px; color: inherit; }
       .delivery-batch-picker-toolbar,
@@ -418,6 +433,13 @@
       .status.orange { background: var(--orange-bg); color: var(--orange); }
       .status.red { background: var(--red-bg); color: var(--red); }
       .status.gray { background: #f3f4f6; color: #4b5563; }
+      .status.gray-orange { background: #fff7ed; color: #9a3412; }
+      .status.cyan { background: #ecfeff; color: #0e7490; }
+      .status.purple { background: #f3e8ff; color: #7e22ce; }
+      .status.indigo { background: #eef2ff; color: #4338ca; }
+      .status.ochre { background: #fef3c7; color: #92400e; }
+      .status.deep-yellow { background: #fef9c3; color: #854d0e; }
+      .status.pink-purple { background: #fae8ff; color: #a21caf; }
       .row-voided { opacity: 0.5; text-decoration: line-through; }
       .status.blue { background: var(--blue-soft); color: var(--primary-dark); }
 
@@ -1409,7 +1431,7 @@
                             @click="materialSupplierFilter=''; loadMaterials()">全部供应商</button>
                     <button v-for="sup in materialSuppliers" :key="sup"
                             :class="['status-tab-btn', {active: materialSupplierFilter === sup}]"
-                            @click="materialSupplierFilter=sup; loadMaterials()">{{ sup }}</button>
+                            @click="materialSupplierFilter=sup; loadMaterials()">{{ supplierDisplayName(sup) }}</button>
                   </div>
                 </div>
                 <!-- 层数筛选（第二级） -->
@@ -1433,7 +1455,7 @@
                   </div>
                 </div>
                 <datalist id="material-composer-suppliers">
-                  <option v-for="supplier in materialSuppliers" :key="supplier" :value="supplier"></option>
+                  <option v-for="supplier in materialSuppliers" :key="supplier" :value="supplier">{{ supplierDisplayName(supplier) }}</option>
                 </datalist>
                 <div v-if="showPaperCodePanel" class="panel" style="margin:10px 0;border-color:#93c5fd">
                   <div class="toolbar">
@@ -1445,7 +1467,30 @@
                       <input class="input" style="width:170px" v-model.trim="paperCodeKeyword" placeholder="搜索代码/纸种/等级" @keyup.enter="loadPaperCodes" />
                       <button class="btn small" @click="loadPaperCodes">查询</button>
                       <button class="btn small" @click="resetPaperCodeForm">新增代码</button>
+                      <button class="btn small" :disabled="supplierMaterialWorkbook.loading" @click="downloadSupplierMaterialWorkbook">导出材质 Excel</button>
+                      <label class="btn small success" :class="{disabled:supplierMaterialWorkbook.loading}">
+                        {{ supplierMaterialWorkbook.loading ? '正在预检…' : '导入材质 Excel' }}
+                        <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" :disabled="supplierMaterialWorkbook.loading" @change="previewSupplierMaterialWorkbook" />
+                      </label>
                     </div>
+                  </div>
+                  <div v-if="supplierMaterialWorkbook.preview" :class="['notice',supplierMaterialWorkbook.preview.valid ? 'success' : 'danger']" style="margin:8px 0">
+                    <div class="toolbar" style="margin-bottom:6px">
+                      <strong>{{ supplierMaterialWorkbook.preview.valid ? 'Excel 预检通过' : 'Excel 需要修正' }} · {{ supplierMaterialWorkbook.preview.filename }}</strong>
+                      <div class="toolbar-group">
+                        <button class="btn small" :disabled="supplierMaterialWorkbook.loading" @click="clearSupplierMaterialWorkbook">取消</button>
+                        <button v-if="supplierMaterialWorkbook.preview.valid" class="btn small primary" :disabled="supplierMaterialWorkbook.loading" @click="applySupplierMaterialWorkbook">确认批量导入</button>
+                      </div>
+                    </div>
+                    <div>
+                      基础纸种：新增 {{ supplierMaterialWorkbook.preview.summary?.paper_create || 0 }}、更新 {{ supplierMaterialWorkbook.preview.summary?.paper_update || 0 }}、不变 {{ supplierMaterialWorkbook.preview.summary?.paper_unchanged || 0 }}；
+                      组合材质：新增 {{ supplierMaterialWorkbook.preview.summary?.material_create || 0 }}、更新 {{ supplierMaterialWorkbook.preview.summary?.material_update || 0 }}、不变 {{ supplierMaterialWorkbook.preview.summary?.material_unchanged || 0 }}。
+                    </div>
+                    <div v-if="supplierMaterialWorkbook.preview.errors?.length" style="margin-top:6px">
+                      <div v-for="(error,index) in supplierMaterialWorkbook.preview.errors.slice(0,20)" :key="`${error.sheet}-${error.row_number}-${index}`">{{ error.sheet }} 第 {{ error.row_number }} 行：{{ error.message }}</div>
+                      <div v-if="supplierMaterialWorkbook.preview.errors.length > 20">另有 {{ supplierMaterialWorkbook.preview.errors.length - 20 }} 条错误，请修正后重新导入。</div>
+                    </div>
+                    <div v-else class="muted" style="margin-top:6px">确认后一次写入；若中途发生错误，整批回滚，不会留下半批数据。</div>
                   </div>
                   <div class="notice" style="margin:8px 0">嘉林亿规则：最小修边225mm；最小切宽270mm；最小切长500mm；100米以下接受随机配料并按牌价计价；分纸加价金额待确认，暂不参与自动报价。</div>
                   <div class="form-grid" style="margin:10px 0">
@@ -1459,7 +1504,7 @@
                     <div class="field"><label>操作</label><button class="btn primary" :disabled="loading" @click="savePaperCode">{{ paperCodeForm.id ? '保存修改' : '新增代码' }}</button></div>
                   </div>
                   <div class="table-wrap"><table><thead><tr><th>供应商</th><th>代码</th><th>纸种</th><th>克重</th><th>等级</th><th>用途</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ row.supplier_name }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" @click="togglePaperCodeStatus(row)">{{ row.is_active ? '停用' : '启用' }}</button></td></tr>
+                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ supplierDisplayName(row.supplier_name) }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" @click="togglePaperCodeStatus(row)">{{ row.is_active ? '停用' : '启用' }}</button></td></tr>
                   </tbody></table><div v-if="!paperCodes.length" class="empty">当前没有基础纸种代码</div></div>
                 </div>
                 <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
@@ -1491,7 +1536,7 @@
                 <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示；新增"克重结构"列 -->
                 <table v-else><thead><tr><th>供应商</th><th>层数</th><th>材质代码</th><th>克重结构</th><th v-if="canViewCosts" class="cost-sensitive">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in displayedMaterials" :key="row.id">
-                  <td>{{ row.supplier_name || "-" }}</td>
+                  <td>{{ supplierDisplayName(row.supplier_name) }}</td>
                   <td>{{ row.layer_count ? row.layer_count+'层' : "-" }}</td>
                   <td :title="row.code">{{ materialBaseCode(row) }}</td>
                   <td>{{ materialWeightStructure(row) }}</td>
@@ -1535,7 +1580,7 @@
                   <div class="modal-header"><h3>材质比价</h3><button class="btn small" @click="showCompareModal=false">关闭</button></div>
                   <div style="padding:12px">
                     <div class="toolbar" style="gap:10px;align-items:center;margin-bottom:8px">
-                      <span style="font-size:13px">层数：<strong>{{ materialLayerFilter }}层</strong>　供应商：<strong>{{ materialSupplierFilter || '全部' }}</strong></span>
+                      <span style="font-size:13px">层数：<strong>{{ materialLayerFilter }}层</strong>　供应商：<strong>{{ materialSupplierFilter ? supplierDisplayName(materialSupplierFilter) : '全部' }}</strong></span>
                       <input class="input" style="width:160px" v-model.trim="compareKeyword" placeholder="输入材质代码" />
                       <input class="input" style="width:140px" v-model.trim="compareWeight" placeholder="输入克重结构" />
                       <button class="btn small" @click="loadCompare">查询比价</button>
@@ -1553,7 +1598,7 @@
                         <tbody>
                           <tr v-for="(r, ri) in group.rows" :key="ri" :style="{background: ri===0 ?'#f0fdf4':''}">
                             <td style="padding:5px 10px">{{ r.material_code }}</td>
-                            <td style="padding:5px 10px">{{ r.supplier_name||"-" }}</td>
+                            <td style="padding:5px 10px">{{ supplierDisplayName(r.supplier_name) }}</td>
                             <td style="padding:5px 10px;text-align:right" class="sensitive-price">{{ money(r.base_price) }}</td>
                             <td style="padding:5px 10px;text-align:right" class="sensitive-price">+{{ money(r.flute_delta) }}</td>
                             <td style="padding:5px 10px;text-align:right;font-weight:600" class="sensitive-price">{{ money(r.effective_price) }}</td>
@@ -1601,7 +1646,7 @@
                       <thead><tr style="background:#f9fafb"><th style="padding:6px 10px;text-align:left">供应商</th><th>层数</th><th>楞型</th><th class="sensitive-price">加价(元/㎡)</th><th>生效日期</th><th>状态</th><th>操作</th></tr></thead>
                       <tbody>
                         <tr v-for="r in fluteRules" :key="r.id" :style="{opacity: r.is_active?1:0.5}">
-                          <td style="padding:5px 10px">{{ r.supplier_name }}</td>
+                          <td style="padding:5px 10px">{{ supplierDisplayName(r.supplier_name) }}</td>
                           <td style="padding:5px 10px;text-align:center">{{ r.layer_count }}层</td>
                           <td style="padding:5px 10px;text-align:center">{{ r.flute_type }}</td>
                           <td style="padding:5px 10px;text-align:right" class="sensitive-price">+{{ money(r.price_delta) }}</td>
@@ -1636,7 +1681,7 @@
                     <div class="form-grid">
                       <div class="field"><label>供应商</label>
                         <select class="select" v-model="priceAdjustForm.supplier_name">
-                          <option v-for="s in priceAdjustSuppliers" :key="s" :value="s">{{ s }}</option>
+                          <option v-for="s in priceAdjustSuppliers" :key="s" :value="s">{{ supplierDisplayName(s) }}</option>
                         </select>
                       </div>
                       <div class="field"><label>调价幅度（如 +5% / -10% / 5 / -3）</label>
@@ -1651,7 +1696,7 @@
                     <div v-if="priceAdjustError" style="color:#dc2626;font-size:13px">{{ priceAdjustError }}</div>
                     <div v-if="priceAdjustPreview" style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px">
                       <div style="font-size:13px;margin-bottom:6px">
-                        供应商 <strong>{{ priceAdjustPreview.supplier_name }}</strong>｜幅度 <strong>{{ priceAdjustPreview.adjust_percent }}%</strong>｜影响材质 <strong>{{ priceAdjustPreview.affected_count }}</strong> 条<br>
+                        供应商 <strong>{{ supplierDisplayName(priceAdjustPreview.supplier_name) }}</strong>｜幅度 <strong>{{ priceAdjustPreview.adjust_percent }}%</strong>｜影响材质 <strong>{{ priceAdjustPreview.affected_count }}</strong> 条<br>
                         旧最低/最高：{{ priceAdjustPreview.old_min }} / {{ priceAdjustPreview.old_max }}　→　新最低/最高：{{ priceAdjustPreview.new_min }} / {{ priceAdjustPreview.new_max }}
                       </div>
                       <table style="width:100%;font-size:12px"><thead><tr style="background:#f9fafb"><th style="text-align:left;padding:4px 8px">材质代码</th><th>旧报价</th><th>新报价</th><th>涨跌</th><th>旧报价日期</th><th>新报价日期</th></tr></thead>
@@ -1674,7 +1719,7 @@
                 <div class="modal" style="max-width:680px;max-height:84vh;overflow-y:auto">
                   <div class="modal-header"><h3>价格历史 · {{ priceHistory.material_code }}</h3><button class="btn small" @click="showPriceHistoryModal=false">关闭</button></div>
                   <div style="padding:12px">
-                    <div style="font-size:13px;margin-bottom:8px">供应商 {{ priceHistory.supplier_name || "-" }}｜当前报价 {{ priceHistory.current_price ?? "-" }}</div>
+                    <div style="font-size:13px;margin-bottom:8px">供应商 {{ supplierDisplayName(priceHistory.supplier_name) }}｜当前报价 {{ priceHistory.current_price ?? "-" }}</div>
                     <svg v-if="priceHistoryPoints.length>1" :width="priceHistoryChart.w" :height="priceHistoryChart.h" style="border:1px solid #eee;background:#fafafa">
                       <polyline :points="priceHistoryPolyline" fill="none" stroke="#2563eb" stroke-width="2" />
                       <circle v-for="(p,i) in priceHistoryPoints" :key="i" :cx="p.x" :cy="p.y" r="3" fill="#2563eb" />
@@ -1700,7 +1745,7 @@
                   <div class="order-head-actions">
                     <div>
                       <h2 style="margin:0;font-size:22px">订单管理</h2>
-                      <div class="page-subtitle">按客户 + 客户单号分组展示，展开后查看系统单号和明细系统单号</div>
+                      <div class="page-subtitle">按客户 + 客户单号分组，展开后按序号查看明细，完整系统单号在详情中</div>
                     </div>
                     <div class="toolbar-group">
                       <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
@@ -1761,7 +1806,6 @@
                       <th class="cell-right">总数量</th>
                       <th v-if="!isWorkshop" class="sensitive-price cell-right">总金额</th>
                       <th>状态</th>
-                      <th>展开</th>
                       <th class="col-actions">操作</th>
                     </tr>
                   </thead>
@@ -1784,26 +1828,26 @@
                           <div v-if="group.hasHistoryOnly" class="status blue">历史归档</div>
                           <status-tag v-else :value="group.group_status"></status-tag>
                         </td>
-                        <td><button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button></td>
                         <td class="cell-actions">
                           <div class="toolbar-group">
+                            <button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button>
                             <button class="btn small" @click="openOrderDetail(group.orders[0])">查看</button>
                             <button v-if="canEditOrders" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
                           </div>
                         </td>
                       </tr>
                       <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
-                        <td :colspan="isWorkshop ? 9 : 10">
+                        <td :colspan="isWorkshop ? 8 : 9">
                           <div class="order-group-detail-card">
                             <table>
                               <thead>
                                 <tr>
-                                  <th>明细系统单号</th>
+                                  <th class="col-order-item-sequence">序号</th>
                                   <th>存货编码</th>
                                   <th>产品名称</th>
                                   <th>规格 / 尺寸</th>
                                   <th>材质 / 楞型</th>
-                                  <th class="cell-right">已送 / 未送</th>
+                                  <th class="cell-right">数量 / 送货</th>
                                   <th v-if="!isWorkshop" class="sensitive-price cell-right">单价</th>
                                   <th v-if="!isWorkshop" class="sensitive-price cell-right">金额</th>
                                   <th v-if="!isWorkshop" class="cost-sensitive cell-right">总预估成本 / 毛利</th>
@@ -1814,19 +1858,19 @@
                               </thead>
                               <tbody>
                                 <template v-for="row in group.orders" :key="row.id">
-                                  <tr v-for="item in row.items" :key="item.id">
-                                    <td><span class="sub-order-number"><span v-for="(part,index) in orderSearchHighlightParts(item.item_order_number || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
+                                  <tr v-for="(item,itemIndex) in row.items" :key="item.id">
+                                    <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span><div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="item.mold_location" class="muted" style="font-size:11px">模具：{{ moldLocationText(item) }}</div></td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(item.snapshot_spec || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
-                                    <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
-                                    <td class="cell-right"><strong>已送 {{ item.delivered_quantity || 0 }}</strong><div class="muted" style="font-size:11px">未送 {{ item.remaining_quantity ?? Math.max(Number(item.quantity || 0) - Number(item.delivered_quantity || 0), 0) }}</div></td>
+                                    <td style="white-space:normal;word-break:break-all;max-width:140px;font-size:12px"><span v-for="(part,index) in orderSearchHighlightParts(orderItemMaterialText(item, false))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
+                                    <td class="cell-right"><strong>{{ item.quantity }}</strong><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.unit_price) }}</td>
                                     <td v-if="!isWorkshop" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
                                     <td v-if="!isWorkshop" class="cost-sensitive cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
                                     <td>
                                       <div v-if="row.is_history_order" class="status blue">历史归档</div>
-                                      <status-tag v-else :value="itemDeliveryStatusKey(item)"></status-tag>
+                                      <status-tag v-else :value="itemBusinessStatusKey(item)"></status-tag>
                                     </td>
                                     <td>{{ item.completion_date || "-" }}</td>
                                     <td class="toolbar-group">
@@ -1871,8 +1915,8 @@
               <data-panel :empty="!orders.length">
                 <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="!isWorkshop" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
-                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ sum(row.items,'delivered_quantity') }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="row.status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
-                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th>明细系统单号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量</th><th>已送</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.id"><td class="sys-num" style="font-size:11px">{{ item.item_order_number || "-" }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" @click="saveOrderBomComponentDemand(item,component)">保存本订单需求</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.delivered_quantity }}</td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
+                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
+                  <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="isWorkshop ? 13 : 14"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="!isWorkshop" class="sensitive-price">单价</th><th class="cost-sensitive">总预估成本</th><th class="cost-sensitive">总预估毛利</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" @click="saveOrderBomComponentDemand(item,component)">保存本订单需求</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ item.snapshot_spec || "-" }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td><td class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong></td><td class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</strong></td><td class="toolbar-group"><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
                   <tr>
@@ -1943,7 +1987,7 @@
                   </div>
                 </div>
               </div>
-              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求 / 客户备料 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :class="{ 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br>{{ displayOrderNumber(row) }}<div v-if="row.is_merge_group" class="muted">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id">{{ m.order_number }}｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" min="1" v-model.number="row.report_width_mm" /></div><select class="select merge-cutter-select" v-model="row.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ row.snapshot_supplier_name || "未设置供应商" }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></template></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong><template v-if="row.can_auto_use_late_finished_inventory"><div class="status green" style="display:block;white-space:normal;margin-top:4px">后来可用 {{ row.late_finished_inventory_reservable_qty || 0 }} 个</div><div v-for="location in row.late_finished_inventory_locations || []" :key="location.location_id || location.location_code" class="muted" style="white-space:normal">{{ location.location_code || location.location_name }} {{ location.available_quantity || 0 }}</div></template></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div>需求：{{ row.required_piece_qty || 0 }} 个</div><div class="semi-deducted">客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 个</div><div class="remaining-demand">仍需生产：{{ row.remaining_required_piece_qty || 0 }} 个</div><div class="purchase-demand">本次只需报：{{ row.requisition_qty || 0 }} 张</div></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><template v-else><button v-if="row.can_auto_use_late_finished_inventory && canWarehouseReserve" class="btn small success" :disabled="row._late_finished_loading" @click="autoUseLateFinishedInventory(row)">{{ row._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button><template v-if="!row.can_auto_use_late_finished_inventory"><div v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="status green" style="display:block;white-space:normal;margin-bottom:6px">可用客户专用纸板备料 {{ row.customer_board_preparation_available_sheet_qty || 0 }} 张</div><button v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="btn small success" :disabled="row._board_preparation_loading" @click="autoUseCustomerBoardPreparation(row)">{{ row._board_preparation_loading ? '正在预占…' : '使用备料，只报差额' }}</button></template><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></template></td></tr></tbody></table></data-panel>
+              <data-panel v-if="requisitionTab==='pending'" :empty="!filteredRequisitionPending.length"><table class="requisition-pending-table"><thead><tr><th><input type="checkbox" :checked="allRequisitionSelected" @change="toggleAllRequisition($event.target.checked)" /> 全选</th><th>订单号</th><th>客户</th><th>存货编码 / 产品</th><th>报料尺寸 / 压线</th><th>供应商 / 材质</th><th>订单数量</th><th>成品库存抵扣</th><th>需生产数量</th><th>需求 / 客户备料 / 采购</th><th>交期</th><th>操作</th></tr></thead><tbody><tr v-for="row in filteredRequisitionPending" :key="pendingRowKey(row)" :class="{ 'requisition-selected': selectedPendingKeys.includes(pendingRowKey(row)), 'warning-row': row.is_merge_group }"><td><input type="checkbox" :checked="selectedPendingKeys.includes(pendingRowKey(row))" @change="togglePendingRow(row, $event.target.checked)" :disabled="!isPendingRowSelectable(row)" /></td><td><span v-if="row.is_merge_group" class="status blue">合并组</span><br>{{ displayOrderNumber(row) }}<div v-if="row.is_merge_group" class="muted">{{ (row.order_numbers || []).join(' / ') }}</div></td><td>{{ row.customer_name }}</td><td><template v-if="row.is_merge_group"><strong>{{ (row.product_codes || []).join(' / ') }}</strong><br><span class="muted">{{ row.specification }}</span><div><button class="btn small" @click="requisitionMergeExpanded[row.merge_group_id] = !requisitionMergeExpanded[row.merge_group_id]">{{ requisitionMergeExpanded[row.merge_group_id] ? '收起来源' : '展开来源' }}</button></div><div v-if="requisitionMergeExpanded[row.merge_group_id]" class="muted" style="margin-top:4px;white-space:normal"><div v-for="m in row.members" :key="m.item_id">{{ m.order_number }}｜{{ m.product_code }}｜{{ m.product_name }} × {{ m.quantity }}</div></div></template><template v-else><strong>{{ plainProductText(row.product_code) }}</strong><br>{{ plainProductText(row.product_name) }}<br><span class="muted">{{ row.specification }}</span></template></td><td style="font-size:12px;white-space:nowrap"><template v-if="row.is_merge_group"><div class="merge-size-editor"><input class="input merge-size-input" type="number" min="1" v-model.number="row.report_length_mm" /> <span>×</span> <input class="input merge-size-input" type="number" min="1" v-model.number="row.report_width_mm" /></div><select class="select merge-cutter-select" v-model="row.cutting_mode"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></template><template v-else>{{ formatReportDims(row) }}<br>{{ formatCrease(row) }}</template><div v-for="warning in row.dimension_warnings || []" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><template v-if="row.is_merge_group"><select class="select merge-supplier-select" v-model="row.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><br><span class="muted">{{ row.material_display || "-" }}</span></template><template v-else>{{ supplierDisplayName(row.snapshot_supplier_name || "未设置供应商") }}<br><span class="muted">{{ row.material || "-" }} / {{ row.flute_type || "-" }}</span></template></td><td>{{ row.quantity }}</td><td><strong>{{ row.finished_inventory_reserved_qty || 0 }}</strong><template v-if="row.can_auto_use_late_finished_inventory"><div class="status green" style="display:block;white-space:normal;margin-top:4px">后来可用 {{ row.late_finished_inventory_reservable_qty || 0 }} 个</div><div v-for="location in row.late_finished_inventory_locations || []" :key="location.location_id || location.location_code" class="muted" style="white-space:normal">{{ location.location_code || location.location_name }} {{ location.available_quantity || 0 }}</div></template></td><td><strong>{{ row.production_required_qty }}</strong><div v-if="row.fully_covered_by_finished_inventory" class="status green">成品库存已全额抵扣</div></td><td class="requisition-demand-cell"><div>需求：{{ row.required_piece_qty || 0 }} 个</div><div class="semi-deducted">客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 个</div><div class="remaining-demand">仍需生产：{{ row.remaining_required_piece_qty || 0 }} 个</div><div class="purchase-demand">本次只需报：{{ row.requisition_qty || 0 }} 张</div></td><td>{{ row.delivery_date || "-" }}</td><td><template v-if="row.is_merge_group"><input class="input merge-remark-input" v-model.trim="row.remark" placeholder="备注" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" @click="updateMergeGroup(row)">保存合并组</button></div></template><template v-else><button v-if="row.can_auto_use_late_finished_inventory && canWarehouseReserve" class="btn small success" :disabled="row._late_finished_loading" @click="autoUseLateFinishedInventory(row)">{{ row._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button><template v-if="!row.can_auto_use_late_finished_inventory"><div v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="status green" style="display:block;white-space:normal;margin-bottom:6px">可用客户专用纸板备料 {{ row.customer_board_preparation_available_sheet_qty || 0 }} 张</div><button v-if="row.can_auto_use_customer_board_preparation && canWarehouseReserve" class="btn small success" :disabled="row._board_preparation_loading" @click="autoUseCustomerBoardPreparation(row)">{{ row._board_preparation_loading ? '正在预占…' : '使用备料，只报差额' }}</button></template><button class="btn small" @click="openRequisitionMaterialChange(row)">更换供应商/材质</button></template></td></tr></tbody></table></data-panel>
               <data-panel v-else-if="requisitionTab==='submitted'" :empty="!requisitionItems.length"><table class="reported-compact-table"><thead><tr><th>报料单号</th><th>来源</th><th>供应商</th><th>客户 / 订单</th><th>存货编码 / 产品</th><th>明细数</th><th>报料数</th><th>入库状态</th><th>日期</th><th>操作</th></tr></thead><tbody><tr v-for="row in requisitionItems" :key="row.source_type + '-' + row.id" :class="{'row-voided': row.status==='voided' || row.status==='已取消'}"><td><strong>{{ row.document_number }}</strong></td><td><span :class="['status', row.source_type==='supplier_order' ? 'blue' : row.source_type==='stock_replenishment' ? 'orange' : 'green']">{{ reportedSourceLabel(row) }}</span></td><td>{{ row.supplier_name || '-' }}</td><td class="reported-source-cell" :title="fullJoin(row.order_numbers) + '\\n' + fullJoin(row.customer_names)"><div><span v-for="orderNo in compactList(row.order_numbers)" :key="orderNo" class="reported-chip">{{ orderNo }}</span><span v-if="compactMore(row.order_numbers)" class="reported-more">+{{ compactMore(row.order_numbers) }}</span></div><div class="muted"><span v-for="customerName in compactList(row.customer_names)" :key="customerName" class="reported-chip">{{ shortCustomerName(customerName) }}</span><span v-if="compactMore(row.customer_names)" class="reported-more">+{{ compactMore(row.customer_names) }}</span></div></td><td class="reported-code-cell" :title="fullJoin(row.product_codes)"><strong><span v-for="code in compactList(row.product_codes)" :key="code" class="reported-chip">{{ code }}</span><span v-if="compactMore(row.product_codes)" class="reported-more">+{{ compactMore(row.product_codes) }}</span></strong></td><td>{{ row.item_count }}</td><td><strong>{{ row.requisition_qty || 0 }}</strong></td><td>{{ row.incoming_status || '-' }}</td><td style="font-size:12px">{{ formatBeijingDate(row.created_at) }}</td><td><div class="toolbar-group"><button class="btn small" @click="openReportedDocument(row)">打印</button><button v-if="row.source_type==='stock_replenishment' && row.status==='confirmed' && canRequisition" class="btn small success" @click="stockReportedReplenishment(row)">确认入库</button><button v-else-if="row.source_type!=='stock_replenishment' && row.incoming_status!=='已作废' && (isWorkshop || canAdmin)" class="btn small" @click="openIncomingPage()">去入库</button><button v-if="row.source_type==='supplier_order' && row.status!=='voided' && canRequisition" class="btn small danger" @click="voidReportedSupplierOrder(row)">作废</button><button v-if="row.source_type==='composite_bom_requisition' && row.can_void && canRequisition" class="btn small danger" @click="voidReportedCompositeRequisition(row)">作废</button></div></td></tr></tbody></table></data-panel>
             </template>
 
@@ -2774,7 +2818,7 @@
                 <div class="product-material-controls">
                 <div class="field"><label>材质供应商</label>
                   <select class="select" v-model="productForm._material_supplier" @change="resetMaterialIfNotMatched(productForm, productForm._material_supplier, productForm.layer_count, productForm.flute_type)">
-                    <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ opt }}</option>
+                    <option v-for="opt in materialSupplierSelectOptions" :key="opt" :value="opt">{{ supplierDisplayName(opt) }}</option>
                   </select>
                 </div>
                 <div class="field"><label>层数</label>
@@ -3264,7 +3308,7 @@
                               <select class="select" v-model="item._edit._material_supplier"
                                 @change="resetMaterialIfNotMatched(item._edit, item._edit._material_supplier, item._edit.layer_count, item._edit.flute_type)">
                                 <option value="">全部</option>
-                                <option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
+                                <option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option>
                               </select>
                             </div>
                             <div class="field"><label>层数</label>
@@ -3581,7 +3625,7 @@
                   <select class="select" v-model="orderItemForm._material_supplier"
                     @change="resetMaterialIfNotMatched(orderItemForm, orderItemForm._material_supplier, orderItemForm.layer_count, orderItemForm.flute_type)">
                     <option value="">全部</option>
-                    <option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
+                    <option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option>
                   </select>
                 </div>
                 <div class="field"><label>层数</label>
@@ -3705,7 +3749,7 @@
               </div>
               <div class="section-title">只读订单详情</div>
               <table><thead><tr>
-                <th>明细编号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
+                <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格</th>
                 <th>材质</th><th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                 <th>报料尺寸</th><th>压线</th>
                 <th v-if="!isWorkshop" class="sensitive-price">单价</th>
@@ -3713,7 +3757,7 @@
                 <th>图纸</th>
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
-                <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}</td>
+                <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                 <td>{{ item.snapshot_product_code }}</td>
                 <td :title="item.snapshot_product_name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:normal">{{ item.snapshot_product_name }}<div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div><div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div></td>
                 <td>{{ item.snapshot_spec || "-" }}</td>
@@ -3835,7 +3879,7 @@
                     </div>
                   </div>
                 </div>
-                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
+                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="materialSelectOptions(requisitionMaterialForm.supplier_name,requisitionMaterialForm.layer_count,requisitionMaterialForm.flute_type)" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @change="onRequisitionMaterialSelected"></search-select></div>
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
@@ -3883,7 +3927,7 @@
               </div>
               <div class="form-grid" style="margin-bottom:10px">
                 <div class="field"><label>补库来源</label><input class="input" :value="stockReplenishmentForm.source_type==='stock_warning' ? '库存预警' : '手动库存补库'" disabled /></div>
-                <div class="field"><label>供应商（随材质联动）</label><select class="select" v-model="stockReplenishmentForm.supplier_name" :disabled="stockReplenishmentMaterialSuppliers().length === 1"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length === 1" class="muted">已按材质主数据自动确定</div><div v-else-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
+                <div class="field"><label>供应商（随材质联动）</label><select class="select" v-model="stockReplenishmentForm.supplier_name" :disabled="stockReplenishmentMaterialSuppliers().length === 1"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length === 1" class="muted">已按材质主数据自动确定</div><div v-else-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
                 <div class="status green">只保存报料草稿；到料后进入客户专用纸板备料，不直接增加成品库存</div>
               </div>
               <div v-if="!stockReplenishmentForm.items.length" class="empty">点击“新增补库行”，再选择客户和常用箱。</div>
@@ -3928,7 +3972,7 @@
                 <div>先一键使用成品，系统会自动刷新草稿并只保留剩余采购数量。</div>
               </div>
               <div v-for="(group, groupIndex) in supplierRequisitionDraft.supplier_groups" :key="groupIndex" class="order-group-detail-card" style="margin-bottom:12px">
-                <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
+                <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <table style="font-size:12px">
                   <thead><tr><th>采购规格</th><th>来源概览</th><th>材质</th><th>需生产</th><th>报料长</th><th>报料宽</th><th>开料方式</th><th>成品抵扣</th><th>采购张数</th><th>备注</th></tr></thead>
                   <tbody>
@@ -3983,7 +4027,7 @@
             </div>
             <div v-else-if="modal.type === 'requisition'">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">当前只是报料明细草稿。请先核对库存抵扣、采购张数、尺寸和开料方式；点击“确认生成正式采购单”后才会正式入账并进入打印页。</div>
-              <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-if="requisitionForm.supplier_name && !materialSupplierSelectOptions.includes(requisitionForm.supplier_name)" :value="requisitionForm.supplier_name">{{ requisitionForm.supplier_name }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ s }}</option></select></div>
+              <div class="field" style="width:360px"><label>报料供应商</label><select class="select" v-model="requisitionForm.supplier_name"><option value="">请选择供应商</option><option v-if="requisitionForm.supplier_name && !materialSupplierSelectOptions.includes(requisitionForm.supplier_name)" :value="requisitionForm.supplier_name">{{ supplierDisplayName(requisitionForm.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
               <table><thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>需求数量</th><th>库存抵扣</th><th class="purchase-qty-cell">采购张数</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead><tbody><tr v-for="line in requisitionForm.items" :key="`${line.order_item_id}-${line.bom_snapshot_id || line.component_type || 'parent'}`" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}"><td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component" class="status green">组件</div></td><td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td><td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td><td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td><td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.requisition_qty" /><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.requisition_qty }} 张</div></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_len)>0 && Number(line.cardboard_len)<500 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_len" /></td><td><input :class="['input','compact-input',{'warning-input':Number(line.cardboard_width)>0 && Number(line.cardboard_width)<270 && String(line.snapshot_supplier_name || requisitionForm.supplier_name).includes('嘉林亿')}]" type="number" min="1" step="1" v-model.number="line.cardboard_width" /></td><td><select class="select" v-model="line.special_process" @change="autoRequisitionQty(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select><div v-for="warning in requisitionDimensionWarnings(line)" :key="warning" class="status orange" style="white-space:normal;margin-top:4px">{{ warning }}</div></td><td><input class="input compact-input" v-model.trim="line.remark" /></td></tr></tbody></table>
               <div class="muted" style="margin-top:8px">采购张数允许按供应商实际要求增加；如需减少，请先使用同客户匹配库存，系统会自动降低最低采购张数。</div>
             </div>
@@ -4846,6 +4890,7 @@
             paperCodeKeyword: "",
             paperCodes: [],
             paperCodeForm: blankPaperCode(),
+            supplierMaterialWorkbook: { loading:false, preview:null },
             showMaterialComposer: false,
             materialComposer: blankMaterialComposer(),
             materialComposerPreview: null,
@@ -4932,14 +4977,19 @@
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderDateFrom:"", orderDateTo:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderStatusTabs: [
               { label: "日常订单", value: "business" },
-              { label: "待处理", value: "pending_confirmation" },
-              { label: "生产中", value: "production" },
+              { label: "待报料", value: "pending_material" },
+              { label: "待收料", value: "pending_incoming" },
+              { label: "待生产", value: "pending_production" },
               { label: "待送货", value: "pending_delivery" },
-              { label: "已送完", value: "finished_delivery" },
             ],
             orderStatusMoreTabs: [
-              { label: "未送货", value: "unfinished" },
-              { label: "待生产", value: "pending_production" },
+              { label: "部分送完", value: "partially_delivered" },
+              { label: "待回单", value: "waiting_receipt" },
+              { label: "待对账", value: "pending_reconciliation" },
+              { label: "待开票", value: "pending_invoice" },
+              { label: "待结款", value: "pending_payment" },
+              { label: "订单完成", value: "completed" },
+              { label: "待确认", value: "pending_confirmation" },
               { label: "历史归档", value: "history" },
             ],
             showOrderMoreMenu: false,
@@ -5031,9 +5081,11 @@
             }
             return [{ value: "B", label: "B瓦" }, { value: "E", label: "E瓦" }, { value: "A", label: "A瓦" }];
           },
-          // 材质选择器供应商下拉固定选项
+          // 供应商值保留数据库标准名；新增供应商会从材质主数据自动进入下拉。
           materialSupplierSelectOptions() {
-            return ["全部供应商", "苏州嘉林亿", "昆山鸣朋", "苏州佳丰", "其他供应商"];
+            const standard = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
+            const dynamic = (this.materialSuppliers || []).filter(Boolean);
+            return ["全部供应商", ...new Set([...standard, ...dynamic])];
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
@@ -5451,8 +5503,8 @@
                   total_delivered_quantity: 0,
                   total_amount: 0,
                   all_received: true,
-                  group_status: this.orderDisplayStatusKey(row),
-                  hasDeliveryStatus: false,
+                  group_status: null,
+                  business_delivery_progress: null,
                   hasHistoryOnly: true,
                   orders: [],
                 });
@@ -5464,19 +5516,24 @@
               group.total_delivered_quantity += this.sum(row.items, "delivered_quantity");
               group.total_amount += Number(row.total_amount || 0);
               group.all_received = group.all_received && row.items.every((item) => item.material_status === "received");
-              group.hasDeliveryStatus = group.hasDeliveryStatus || this.isDeliveryStatus(row.status);
               group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
-              if (!group.hasHistoryOnly) group.group_status = this.orderDisplayStatusKey(row);
               if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
                 group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
               }
             }
             return [...groups.values()].map((group) => {
-              if (!group.hasHistoryOnly && group.hasDeliveryStatus) {
-                group.group_status = this.deliveryStatusFromQuantities(
-                  group.total_quantity,
-                  group.total_delivered_quantity,
+              if (!group.hasHistoryOnly) {
+                group.group_status = this.aggregateOrderBusinessStatus(group.orders);
+                const delivered = group.orders.reduce(
+                  (total, row) => total + Number(row?.business_delivery_progress?.delivered_quantity || 0),
+                  0,
                 );
+                const sequences = [...new Set(group.orders.flatMap(
+                  row => row?.business_delivery_progress?.item_sequences || [],
+                ).map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
+                group.business_delivery_progress = delivered > 0
+                  ? { delivered_quantity:delivered, total_quantity:group.total_quantity, item_sequences:sequences }
+                  : null;
               }
               return group;
             });
@@ -5488,14 +5545,15 @@
               "finished_delivery",
               "history",
               "pending_confirmation",
+              "pending_material",
+              "pending_incoming",
               "pending_production",
-              "production",
               "pending_delivery",
               "partially_delivered",
+              "waiting_receipt",
               "pending_reconciliation",
               "pending_invoice",
               "pending_payment",
-              "delivered",
               "completed",
               "archived",
               "closed",
@@ -6115,9 +6173,16 @@
             return `${this.displayMaterialText(row.code)}${row.basis_weight_description ? ` (${row.basis_weight_description})` : ""}`;
           },
           materialFlute(id) { return this.materials.find(row=>row.id===id)?.flute_type || "-"; },
+          supplierDisplayName(value) {
+            const name = String(value || "").trim();
+            if (!name) return "-";
+            if (name.includes("嘉林亿")) return "嘉林亿";
+            if (name.includes("鸣朋")) return "鸣朋";
+            return name;
+          },
           // 订单材质显示「材质代码/实际楞型」（A6D/A），实际楞型以订单明细 flute_type 为准，
           // 绝不把材质报价适用楞型后缀（-B/E）当作产品实际楞型显示。
-          orderItemMaterialText(item) {
+          orderItemMaterialText(item, includeWeight = true) {
             // v0.19.2-B：优先用新字段（snapshot_supplier_name / snapshot_weight / flute_type）
             // 格式：A6D/A｜150/130/130｜苏州嘉林亿
             // 历史订单无新字段时降级到旧逻辑，不报错。
@@ -6129,9 +6194,11 @@
             const codeFlute = base ? (flute ? `${base}/${flute}` : base) : (flute ? `${flute}瓦` : "");
             if (!codeFlute) return "-";
             const weight = item.snapshot_weight ? this.pureWeights(item.snapshot_weight) : "";
-            const supplier = item.snapshot_supplier_name || "";
+            const supplier = item.snapshot_supplier_name
+              ? this.supplierDisplayName(item.snapshot_supplier_name)
+              : "";
             const parts = [codeFlute];
-            if (weight) parts.push(weight);
+            if (includeWeight && weight) parts.push(weight);
             if (supplier) parts.push(supplier);
             return parts.join("｜");
           },
@@ -6140,7 +6207,9 @@
             const code = (item._material_code || "").split("-")[0];
             const flute = item.flute_type || item._flute_filter || "";
             const weight = item._material_weight ? this.pureWeights(item._material_weight) : "";
-            const supplier = item._material_supplier_name || "";
+            const supplier = item._material_supplier_name
+              ? this.supplierDisplayName(item._material_supplier_name)
+              : "";
             const codeFlute = code ? (flute ? `${code}/${flute}` : code) : (flute ? `${flute}瓦` : "");
             const parts = [codeFlute];
             if (weight) parts.push(weight);
@@ -6492,53 +6561,80 @@
           statusTone(value) {
             if (["received","dispatched","settled","active","delivered","completed","archived","closed","confirmed","accepted","converted","已入库","已结算"].includes(value)) return "green";
             if (["cancelled","dead","inactive","voided"].includes(value)) return "red";
-            if (["pending","unsettled","waiting_receipt","pending_production","pending_material","draft"].includes(value)) return "orange";
+            if (value === "pending_material") return "gray-orange";
+            if (["pending","unsettled","pending_incoming","draft"].includes(value)) return "orange";
+            if (value === "pending_production") return "blue";
+            if (value === "pending_delivery") return "cyan";
+            if (value === "partially_delivered") return "purple";
+            if (value === "waiting_receipt") return "indigo";
+            if (value === "pending_reconciliation") return "ochre";
+            if (value === "pending_invoice") return "deep-yellow";
+            if (value === "pending_payment") return "pink-purple";
             return "blue";
           },
           statusText(value) {
             return ({
               active:"启用", inactive:"停用", pending:"待处理", received:"材料已到",
-              business:"日常订单", finished_delivery:"已送完", history:"历史归档", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", production:"生产中", pending_delivery:"待送货",
-              partially_delivered:"部分送货", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待收款",
-              delivered:"已送完", completed:"已完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
+              business:"日常订单", finished_delivery:"已送完", history:"历史归档", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", pending_incoming:"待收料", production:"生产中", pending_delivery:"待送货",
+              partially_delivered:"部分送完", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待结款",
+              delivered:"已送完", completed:"订单完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
               unsettled:"未结清", settled:"已结清", draft:"草稿", quoted:"已报价", accepted:"客户接受", converted:"已转常用箱", voided:"作废", contract_draft:"草稿", contract_confirmed:"客户已确认", contract_converted:"已转订单",
               "未报料":"未报料", "已报料":"已报料", "已入库":"已入库", "已结算":"已结算"
             })[value] || value || "-";
           },
-          // v0.23.0 P0-1：新建订单 / PDF 导入订单在还没有任何明细报料前，
-          // 后端状态仍是 pending_production（保持状态机与既有筛选逻辑不变），
-          // 但列表 / 详情展示需要显示为"待报料"，直到至少一条明细的
-          // requisition_status 脱离"未报料"（即已经满足系统原有的"已报料/可生产"条件）。
           orderDisplayStatusKey(row) {
-            if (!row) return row;
-            if (this.isDeliveryStatus(row.status)) {
-              const items = Array.isArray(row.items) ? row.items : [];
-              return this.deliveryStatusFromQuantities(
-                this.sum(items, "quantity"),
-                this.sum(items, "delivered_quantity"),
-              );
-            }
-            if (row.status !== "pending_production") return row.status;
-            const items = Array.isArray(row.items) ? row.items : [];
-            const noneRequisitioned = items.every((item) => (item?.requisition_status || "未报料") === "未报料");
-            return noneRequisitioned ? "pending_material" : "pending_production";
+            return row?.business_status || row?.status || "pending_material";
           },
-          isDeliveryStatus(value) {
-            return ["pending_delivery", "partially_delivered", "delivered"].includes(value);
+          itemBusinessStatusKey(item) {
+            return item?.business_status || "pending_material";
           },
-          deliveryStatusFromQuantities(totalQuantity, deliveredQuantity) {
-            const total = Number(totalQuantity || 0);
-            const delivered = Number(deliveredQuantity || 0);
-            if (total > 0 && delivered >= total) return "delivered";
-            if (delivered > 0) return "partially_delivered";
-            return "pending_delivery";
-          },
-          itemDeliveryStatusKey(item) {
-            return this.deliveryStatusFromQuantities(
-              item?.quantity,
-              item?.delivered_quantity,
+          aggregateOrderBusinessStatus(rows) {
+            const statusRank = [
+              "pending_confirmation",
+              "pending_material",
+              "pending_incoming",
+              "pending_production",
+              "pending_delivery",
+              "partially_delivered",
+              "waiting_receipt",
+              "pending_reconciliation",
+              "pending_invoice",
+              "pending_payment",
+              "completed",
+            ];
+            const management = new Set(["archived","closed","dead","cancelled"]);
+            const statuses = (rows || []).map(row => this.orderDisplayStatusKey(row));
+            const activeStatuses = statuses.filter(status => !management.has(status));
+            const candidates = activeStatuses.length ? activeStatuses : statuses;
+            if (!candidates.length) return "pending_material";
+            const blockers = candidates.filter(status =>
+              ["pending_material","pending_incoming","pending_production"].includes(status)
             );
+            if (blockers.length) {
+              return [...blockers].sort(
+                (left,right) => statusRank.indexOf(left) - statusRank.indexOf(right),
+              )[0];
+            }
+            const delivered = (rows || []).reduce(
+              (total,row) => total + Number(row?.business_delivery_progress?.delivered_quantity || 0),
+              0,
+            );
+            const remaining = (rows || []).reduce(
+              (total,row) => total + (row?.items || []).reduce(
+                (subtotal,item) => subtotal + Number(item?.business_remaining_quantity || 0),
+                0,
+              ),
+              0,
+            );
+            if (delivered > 0 && remaining > 0) return "partially_delivered";
+            return [...candidates].sort(
+              (left,right) => {
+                const leftRank = statusRank.indexOf(left);
+                const rightRank = statusRank.indexOf(right);
+                return (leftRank < 0 ? 999 : leftRank) - (rightRank < 0 ? 999 : rightRank);
+              },
+            )[0];
           },
           orderSearchHighlightParts(value) {
             const text = String(value ?? "-");
@@ -7697,7 +7793,7 @@
           // 订单材质下拉显示：'D4B  嘉林亿  130/100/100  ¥1.21'
           materialOptionLabel(m) {
             const code = this.materialBaseCode(m);
-            const sup = (m.supplier_name || "").replace(/(苏州|昆山|包装科技有限公司|包装|有限公司|科技)/g, "") || "-";
+            const sup = this.supplierDisplayName(m.supplier_name);
             const w = (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g);
             const weight = w && w.length ? w.join("/") : "";
             const price = (m.quote_price != null && !this.isWorkshop) ? `  ¥${m.quote_price}` : "";
@@ -7721,7 +7817,7 @@
           formatMaterialOption(m) {
             if (!m) return "";
             const code = this.materialBaseCode(m);
-            const sup = m.supplier_name || "-";
+            const sup = this.supplierDisplayName(m.supplier_name);
             const w = (m.basis_weight_description || "").match(/\d+(?:\.\d+)?/g);
             const weight = (w && w.length) ? w.join("/") : "-";
             const price = (m.quote_price != null && !this.isWorkshop) ? `¥${m.quote_price}` : "-";
@@ -10255,6 +10351,94 @@
             if (this.paperCodeKeyword) params.keyword = this.paperCodeKeyword;
             const {data} = await axios.get("/api/master/materials/paper-codes", {params});
             this.paperCodes = data.items || [];
+          },
+          supplierMaterialWorkbookError(error) {
+            const detail = error?.response?.data?.detail;
+            if (detail && typeof detail === "object" && detail.message) return detail.message;
+            return this.errorMessage(error);
+          },
+          clearSupplierMaterialWorkbook() {
+            this.supplierMaterialWorkbook = { loading:false, preview:null };
+          },
+          async downloadSupplierMaterialWorkbook() {
+            if (this.supplierMaterialWorkbook.loading) return;
+            this.supplierMaterialWorkbook.loading = true;
+            try {
+              const response = await axios.get(
+                "/api/master/materials/import-template.xlsx",
+                {responseType:"blob"},
+              );
+              const blob = response.data instanceof Blob
+                ? response.data
+                : new Blob(
+                    [response.data],
+                    {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                  );
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement("a");
+              anchor.href = url;
+              anchor.download = "天明ERP_供应商材质批量维护.xlsx";
+              document.body.appendChild(anchor);
+              anchor.click();
+              anchor.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+              this.showToast("材质 Excel 已导出，可直接修改后再导入");
+            } catch(error) {
+              this.showToast(this.supplierMaterialWorkbookError(error),true);
+            } finally {
+              this.supplierMaterialWorkbook.loading = false;
+            }
+          },
+          async previewSupplierMaterialWorkbook(event) {
+            const input = event?.target;
+            const file = input?.files?.[0];
+            if (input) input.value = "";
+            if (!file || this.supplierMaterialWorkbook.loading) return;
+            this.supplierMaterialWorkbook = { loading:true, preview:null };
+            try {
+              const form = new FormData();
+              form.append("file",file);
+              const {data} = await axios.post(
+                "/api/master/materials/import/preview",
+                form,
+              );
+              this.supplierMaterialWorkbook.preview = data;
+              this.showToast(
+                data.valid
+                  ? "Excel 预检通过，请核对数量后确认导入"
+                  : `Excel 有 ${data.errors?.length || 0} 条错误，请修正后重试`,
+                !data.valid,
+              );
+            } catch(error) {
+              this.showToast(this.supplierMaterialWorkbookError(error),true);
+            } finally {
+              this.supplierMaterialWorkbook.loading = false;
+            }
+          },
+          async applySupplierMaterialWorkbook() {
+            const preview = this.supplierMaterialWorkbook.preview;
+            if (
+              this.supplierMaterialWorkbook.loading
+              || !preview?.valid
+              || !preview?.preview_token
+            ) return;
+            this.supplierMaterialWorkbook.loading = true;
+            try {
+              const {data} = await axios.post(
+                "/api/master/materials/import/apply",
+                {preview_token:preview.preview_token},
+              );
+              this.allMaterials = [];
+              this.materialSuppliers = [];
+              await this.loadMaterials();
+              await this.loadPaperCodes();
+              this.supplierMaterialWorkbook.preview = null;
+              this.showToast(data.message || "供应商材质已批量导入");
+            } catch(error) {
+              this.showToast(this.supplierMaterialWorkbookError(error),true);
+            } finally {
+              this.supplierMaterialWorkbook.loading = false;
+            }
           },
           resetPaperCodeForm() {
             this.paperCodeForm = {

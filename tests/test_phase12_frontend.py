@@ -235,13 +235,12 @@ def test_product_drawing_upload_and_mobile_page_support_pdf() -> None:
     assert "返回来料入库" in INCOMING
 
 
-def test_new_order_status_displays_as_pending_material_until_requisitioned() -> None:
-    # v0.23.0 P0-1：新建订单在明细尚未报料前，后端状态仍保持
-    # pending_production（状态机与筛选逻辑不变），但列表/详情展示需要
-    # 显示为"待报料"，等至少一条明细报料后再恢复显示"待生产"。
+def test_order_status_display_consumes_backend_business_projection() -> None:
     assert "orderDisplayStatusKey" in INDEX
     assert 'pending_material:"待报料"' in INDEX
-    assert "group_status: this.orderDisplayStatusKey(row)" in INDEX
+    assert 'pending_incoming:"待收料"' in INDEX
+    assert 'return row?.business_status || row?.status || "pending_material"' in INDEX
+    assert "aggregateOrderBusinessStatus(group.orders)" in INDEX
     assert ':value="group.group_status"' in INDEX
     assert ':value="orderDisplayStatusKey(orderDetail)"' in INDEX
 
@@ -254,7 +253,7 @@ def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
     assert "params.sort_direction = this.filters.orderSortDirection" in INDEX
     assert "params.keyword = this.filters.orderKeyword" in INDEX
     assert "params.customer_name = this.filters.orderKeyword" not in INDEX
-    assert '{ label: "已送完", value: "finished_delivery" }' in INDEX
+    assert '{ label: "待收料", value: "pending_incoming" }' in INDEX
     assert ':style="customerRowStyle(group.customer_id)"' in INDEX
 
     delivery_search_start = INDEX.index("async searchDeliveryLine(line)")
@@ -276,22 +275,23 @@ def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
     detail_end = INDEX.index("</table>", detail_start)
     detail_block = INDEX[detail_start:detail_end]
     ordered_fields = [
-        "item.item_order_number",
+        "item.item_sequence",
         "item.snapshot_product_code",
         "item.snapshot_product_name",
         "item.snapshot_spec",
         "orderItemMaterialText(item)",
-        "item.delivered_quantity",
+        "item.quantity",
+        "item.business_delivered_quantity",
         "item.unit_price",
         "item.subtotal",
         "item.total_estimated_cost",
-        "itemDeliveryStatusKey(item)",
+        "itemBusinessStatusKey(item)",
         "item.completion_date",
         "openOrderDetail(row)",
     ]
     positions = [detail_block.index(field) for field in ordered_fields]
     assert positions == sorted(positions)
-    assert "item.remaining_quantity" in detail_block
+    assert "item.item_order_number" not in detail_block
 
 
 def test_order_search_highlights_visible_text_without_html_injection() -> None:
@@ -312,7 +312,7 @@ def test_order_search_highlights_visible_text_without_html_injection() -> None:
     order_page_block = INDEX[order_page_start:order_page_end]
     assert "orderSearchHighlightParts(group.customer_name || '-')" in order_page_block
     assert "orderSearchHighlightParts(group.customer_po || '-')" in order_page_block
-    assert "orderSearchHighlightParts(item.item_order_number || '-')" in order_page_block
+    assert "orderSearchHighlightParts(item.item_order_number || '-')" not in order_page_block
     assert "orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" in order_page_block
     assert "orderSearchHighlightParts(plainProductText(item.snapshot_product_name))" in order_page_block
     assert "orderSearchHighlightParts(item.snapshot_spec || '-')" in order_page_block

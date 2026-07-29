@@ -97,6 +97,13 @@ def stock_replenishment_app(tmp_path: Path):
                 warehouse_floor=3,
                 source_version="V11",
             ),
+            WarehouseLocation(
+                location_code="SI-UNPLACED",
+                location_name="待布局半成品库位",
+                warehouse_type="semi_finished",
+                placement_status="unplaced",
+                is_active=True,
+            ),
         ]
         session.add_all([product, *locations])
         session.commit()
@@ -224,6 +231,39 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
             "FG-A01",
             "SI-A01",
         }
+
+        unplaced_policy_payload = _semi_policy_payload()
+        unplaced_policy_payload["default_location_id"] = 4
+        rejected_unplaced_policy = client.post(
+            "/api/requisition/stock-policies",
+            json=unplaced_policy_payload,
+        )
+        assert rejected_unplaced_policy.status_code == 409
+        assert "尚未完成平面图布局" in rejected_unplaced_policy.json()["detail"]
+
+        rejected_unplaced_item = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "customer_request",
+                "stock_now": False,
+                "items": [
+                    {
+                        "target_inventory_type": "semi_finished",
+                        "product_id": 1,
+                        "customer_id": 1,
+                        "material_code": "A416D",
+                        "layer_count": 5,
+                        "flute_type": "AB",
+                        "report_length_mm": 1865,
+                        "report_width_mm": 830,
+                        "quantity": 1,
+                        "location_id": 4,
+                    }
+                ],
+            },
+        )
+        assert rejected_unplaced_item.status_code == 409
+        assert "尚未完成平面图布局" in rejected_unplaced_item.json()["detail"]
 
         policy_payload = _semi_policy_payload()
         policy_payload["default_location_id"] = 3

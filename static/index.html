@@ -2527,6 +2527,20 @@
                   <span style="font-weight:600">{{ versionInfo.version_name || '' }}</span>
                   <span class="muted">发布日期：{{ versionInfo.build_date || '-' }}</span>
                 </div>
+                <div v-if="currentReleaseDetails.updates.length || currentReleaseDetails.verifications.length" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+                  <div v-if="currentReleaseDetails.updates.length" style="border:1px solid #bfdbfe;border-radius:10px;padding:10px 12px;background:#eff6ff">
+                    <strong style="color:#1d4ed8">本次更新</strong>
+                    <ol style="margin:8px 0 0 0;padding-left:20px;font-size:13px;color:var(--text-secondary)">
+                      <li v-for="item in currentReleaseDetails.updates" :key="item" style="margin-bottom:4px">{{ item }}</li>
+                    </ol>
+                  </div>
+                  <div v-if="currentReleaseDetails.verifications.length" style="border:1px solid #bbf7d0;border-radius:10px;padding:10px 12px;background:#f0fdf4">
+                    <strong style="color:#15803d">如何验证</strong>
+                    <ol style="margin:8px 0 0 0;padding-left:20px;font-size:13px;color:var(--text-secondary)">
+                      <li v-for="item in currentReleaseDetails.verifications" :key="item" style="margin-bottom:4px">{{ item }}</li>
+                    </ol>
+                  </div>
+                </div>
                 <div v-if="versionMajorGroups.length" style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
                   <div v-for="group in versionMajorGroups" :key="group.key" style="border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fff">
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -5424,6 +5438,25 @@
           };
         },
         computed: {
+          currentReleaseDetails() {
+            const currentVersion = String(this.versionInfo?.version || "").trim();
+            const details = { updates: [], verifications: [] };
+            const changelog = Array.isArray(this.versionInfo?.changelog) ? this.versionInfo.changelog : [];
+            changelog.forEach(rawItem => {
+              const raw = String(rawItem || "").trim();
+              const separatorIndex = raw.search(/[：:]/);
+              if (separatorIndex < 0 || raw.slice(0, separatorIndex).trim() !== currentVersion) return;
+              const body = raw.slice(separatorIndex + 1).trim();
+              const markerIndex = body.indexOf("｜");
+              if (markerIndex < 0) return;
+              const label = body.slice(0, markerIndex).trim();
+              const text = body.slice(markerIndex + 1).trim();
+              if (!text) return;
+              if (label === "本次更新") details.updates.push(text);
+              if (label === "如何验证") details.verifications.push(text);
+            });
+            return details;
+          },
           versionMajorGroups() {
             const changelog = Array.isArray(this.versionInfo?.changelog) ? this.versionInfo.changelog : [];
             const groups = [];

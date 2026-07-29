@@ -25,6 +25,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.flute_mapping import seven_layer_code_error
+from app.services.location_candidates import operational_location_issue
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
@@ -679,6 +680,15 @@ def validate_stock_policy(db: Session, policy: InventoryStockPolicy) -> None:
         }[policy.target_inventory_type]
         if location.warehouse_type not in allowed:
             raise StockReplenishmentError("默认库位类型与目标库存类型不一致。")
+        location_issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types=allowed,
+        )
+        if location_issue:
+            raise StockReplenishmentError(
+                f"默认库位不可使用：{location_issue}", 409
+            )
 
 
 def next_replenishment_order_number() -> str:

@@ -77,6 +77,10 @@ from app.services.historical_purchase_lookup import (
     normalize_lookup_text,
     search_historical_purchase_database,
 )
+from app.services.location_candidates import (
+    list_operational_locations,
+    operational_location_issue,
+)
 from app.services.stock_replenishment import (
     StockReplenishmentError,
     finished_product_quantity_summary,
@@ -6118,13 +6122,7 @@ def search_stock_replenishment_locations(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    query = select(WarehouseLocation).where(
-        WarehouseLocation.is_active.is_(True),
-        or_(
-            WarehouseLocation.source_version.is_(None),
-            WarehouseLocation.source_version != "V11",
-        ),
-    )
+    allowed: set[str] | None = None
     if target_inventory_type:
         target = target_inventory_type.strip().lower()
         allowed = {
@@ -6133,16 +6131,23 @@ def search_stock_replenishment_locations(
         }.get(target)
         if allowed is None:
             raise HTTPException(status_code=400, detail="库存目标类型无效。")
-        query = query.where(WarehouseLocation.warehouse_type.in_(allowed))
-    if q and q.strip():
-        pattern = f"%{q.strip()}%"
-        query = query.where(
-            or_(
-                WarehouseLocation.location_code.like(pattern),
-                WarehouseLocation.location_name.like(pattern),
-            )
+    rows = [
+        row.location
+        for row in list_operational_locations(
+            db,
+            warehouse_types=allowed,
         )
-    rows = db.scalars(query.order_by(WarehouseLocation.location_code)).all()
+        if row.location.source_version != "V11"
+    ]
+    keyword = (q or "").strip().casefold()
+    if keyword:
+        rows = [
+            row
+            for row in rows
+            if keyword in str(row.location_code or "").casefold()
+            or keyword in str(row.location_name or "").casefold()
+        ]
+    rows.sort(key=lambda row: (row.location_code, row.id))
     return {
         "items": [
             {
@@ -6708,6 +6713,15 @@ def _build_replenishment_item(
         }[payload.target_inventory_type]
         if location.warehouse_type not in allowed:
             raise StockReplenishmentError("补库明细库位类型不匹配。")
+        location_issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types=allowed,
+        )
+        if location_issue:
+            raise StockReplenishmentError(
+                f"补库明细库位不可使用：{location_issue}", 409
+            )
 
     if payload.target_inventory_type == "finished" and product is None:
         raise StockReplenishmentError("成品补库必须选择产品。")

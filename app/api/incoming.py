@@ -44,6 +44,7 @@ from app.models.supplier_requisition_order import (
 from app.models.user import User
 from app.models.warehouse_inventory import WarehouseLocation
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.location_candidates import list_operational_locations
 from app.services.incoming_receipts import (
     IncomingReceiptError,
     accept_short,
@@ -1549,14 +1550,14 @@ def surplus_inventory_locations(
     _user: User = Depends(can_operate),
 ) -> dict:
     """Return only locations that can receive an incoming surplus transfer."""
-    rows = db.scalars(
-        select(WarehouseLocation)
-        .where(
-            WarehouseLocation.is_active.is_(True),
-            WarehouseLocation.warehouse_type.in_(("semi_finished", "shared")),
+    rows = [
+        row.location
+        for row in list_operational_locations(
+            db,
+            warehouse_types={"semi_finished", "shared"},
         )
-        .order_by(WarehouseLocation.location_code, WarehouseLocation.id)
-    ).all()
+    ]
+    rows.sort(key=lambda row: (row.location_code, row.id))
     return {
         "items": [
             {

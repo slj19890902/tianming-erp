@@ -2271,6 +2271,60 @@ def test_location_ledger_create_stays_pending_until_real_layout_is_recorded(
             row["id"] for row in mapped.json()["items"]
         }
 
+        invalid_floor3_semi = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "SF-TEMP-01",
+                "location_name": "编码不属于 A1 的半成品临时位",
+                "warehouse_type": "semi_finished",
+                "warehouse_floor": 3,
+                "area_code": "A1",
+                "storage_type": "temporary_aisle",
+            },
+        )
+        assert invalid_floor3_semi.status_code == 422
+        assert "三楼货位编码必须以区域编码加连字符开头" in str(
+            invalid_floor3_semi.json()
+        )
+
+        floor3_semi = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "A1-SF-TEMP-01",
+                "location_name": "A1 半成品临时位",
+                "warehouse_type": "semi_finished",
+                "warehouse_floor": 3,
+                "area_code": "A1",
+                "storage_type": "temporary_aisle",
+                "remarks": "半成品临时存放台账",
+            },
+        )
+        assert floor3_semi.status_code == 200, floor3_semi.text
+        floor3_semi_row = floor3_semi.json()
+        assert floor3_semi_row["warehouse_type"] == "semi_finished"
+        assert floor3_semi_row["warehouse_floor"] == 3
+        assert floor3_semi_row["area_code"] == "A1"
+        assert floor3_semi_row["storage_type"] == "temporary_aisle"
+        assert floor3_semi_row["is_temporary"] is True
+        assert floor3_semi_row["source_version"] is None
+        assert floor3_semi_row["placement_status"] == "unplaced"
+        mapped_after_semi = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"area_code": "A1", "include_inactive": True},
+        )
+        assert mapped_after_semi.status_code == 200, mapped_after_semi.text
+        assert floor3_semi_row["id"] not in {
+            row["id"] for row in mapped_after_semi.json()["items"]
+        }
+        semi_candidates = client.get(
+            "/api/warehouse/location-candidates",
+            params={"inventory_type": "semi_finished"},
+        )
+        assert semi_candidates.status_code == 200, semi_candidates.text
+        assert floor3_semi_row["id"] not in {
+            row["id"] for row in semi_candidates.json()["items"]
+        }
+
         floor1 = client.post(
             "/api/warehouse/locations",
             json={
@@ -2294,11 +2348,11 @@ def test_location_ledger_create_stays_pending_until_real_layout_is_recorded(
         progress = client.get("/api/warehouse/space/floors")
         assert progress.status_code == 200, progress.text
         floors = {row["floor_code"]: row for row in progress.json()["items"]}
-        assert floors["3F"]["recorded_location_count"] == 4
+        assert floors["3F"]["recorded_location_count"] == 5
         a1 = next(row for row in floors["3F"]["areas"] if row["area_code"] == "A1")
-        assert a1["recorded_location_count"] == 4
+        assert a1["recorded_location_count"] == 5
         assert a1["laid_out_location_count"] == 3
-        assert a1["pending_layout_count"] == 1
+        assert a1["pending_layout_count"] == 2
 
 
 def test_location_ledger_rejects_unregistered_floor_area(floor3_app) -> None:
@@ -2318,6 +2372,33 @@ def test_location_ledger_rejects_unregistered_floor_area(floor3_app) -> None:
         )
         assert response.status_code == 409
         assert "先新增楼层和区域" in response.json()["detail"]
+
+        floor3_semi = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "UNKNOWN-SF-TEMP-01",
+                "location_name": "三楼未登记区域半成品临时库位",
+                "warehouse_type": "semi_finished",
+                "warehouse_floor": 3,
+                "area_code": "UNKNOWN",
+                "storage_type": "temporary_aisle",
+            },
+        )
+        assert floor3_semi.status_code == 409
+        assert "先新增楼层和区域" in floor3_semi.json()["detail"]
+
+        missing_area = client.post(
+            "/api/warehouse/locations",
+            json={
+                "location_code": "A1-SF-TEMP-02",
+                "location_name": "三楼缺少区域半成品临时库位",
+                "warehouse_type": "semi_finished",
+                "warehouse_floor": 3,
+                "storage_type": "temporary_aisle",
+            },
+        )
+        assert missing_area.status_code == 422
+        assert "三楼库位必须填写所属区域" in str(missing_area.json())
 
 
 def test_floor3_official_create_requires_target_location_to_be_empty(floor3_app) -> None:

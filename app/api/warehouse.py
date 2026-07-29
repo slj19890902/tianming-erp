@@ -194,8 +194,6 @@ class LocationPayload(BaseModel):
         if self.warehouse_floor == 3:
             if not self.area_code:
                 raise ValueError("三楼库位必须填写所属区域")
-            if self.warehouse_type == "semi_finished":
-                raise ValueError("三楼平面图目前只接入成品或共用库位")
             if not self.location_code.upper().startswith(f"{self.area_code}-"):
                 raise ValueError("三楼货位编码必须以区域编码加连字符开头")
         elif any((self.warehouse_floor, self.area_code, self.storage_type)) and not all(

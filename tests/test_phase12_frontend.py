@@ -396,6 +396,11 @@ def test_delivery_variance_ui_separates_return_difference_and_authorized_over_de
 
 
 def test_system_version_panel_groups_major_releases_and_hides_legacy_tools() -> None:
+    assert "currentReleaseDetails" in INDEX
+    assert "currentReleaseDetails.updates" in INDEX
+    assert "currentReleaseDetails.verifications" in INDEX
+    assert "<strong style=\"color:#1d4ed8\">本次更新</strong>" in INDEX
+    assert "<strong style=\"color:#15803d\">如何验证</strong>" in INDEX
     assert "versionMajorGroups" in INDEX
     assert "toggleVersionGroup(group.key)" in INDEX
     assert "group.visibleEntries" in INDEX

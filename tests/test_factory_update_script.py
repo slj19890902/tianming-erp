@@ -25,11 +25,35 @@ def test_legacy_update_entry_is_fail_closed() -> None:
 
 
 def test_factory_update_reports_current_release_version() -> None:
-    from app.version import APP_CHANGELOG, APP_VERSION, APP_VERSION_NAME
+    from app.version import (
+        APP_BUILD_DATE,
+        APP_CHANGELOG,
+        APP_VERSION,
+        APP_VERSION_NAME,
+    )
 
-    assert APP_VERSION == "v0.22.16"
-    assert "\u590d\u5408\u4ea7\u54c1\u751f\u4ea7" in APP_VERSION_NAME
-    assert "\u5ba2\u6237\u6750\u8d28\u8ffd\u6eaf" in APP_VERSION_NAME
+    assert APP_VERSION == "v0.22.17"
+    assert APP_VERSION_NAME == "三楼半成品待布局登记"
+    assert APP_BUILD_DATE == "2026-07-29"
+    current_release = [
+        item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
+    ]
+    assert any(
+        "本次更新｜" in item and "三楼半成品库位" in item and "待布局" in item
+        for item in current_release
+    )
+    assert any(
+        "本次更新｜" in item and "不会进入" in item and "补货" in item
+        for item in current_release
+    )
+    assert any(
+        "如何验证｜" in item and "库位台账" in item and "提示成功" in item
+        for item in current_release
+    )
+    assert any(
+        "如何验证｜" in item and "body输入有误" in item
+        for item in current_release
+    )
     assert any(
         "\u5ba2\u6237" in item
         and "\u5e38\u7528\u7bb1" in item

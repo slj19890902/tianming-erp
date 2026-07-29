@@ -272,6 +272,13 @@ def test_surplus_locations_use_incoming_execute_without_warehouse_view(
                     warehouse_type="semi_finished",
                     is_active=False,
                 ),
+                WarehouseLocation(
+                    location_code="N005-UNPLACED",
+                    location_name="N005待布局半成品库位",
+                    warehouse_type="semi_finished",
+                    placement_status="unplaced",
+                    is_active=True,
+                ),
             ]
         )
         session.commit()

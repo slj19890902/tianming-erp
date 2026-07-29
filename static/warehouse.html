@@ -586,8 +586,8 @@
       if(typeof body.detail==="string"&&body.detail.trim())return body.detail;
       if(body.detail&&typeof body.detail==="object"&&!Array.isArray(body.detail)){const message=body.detail.message||body.detail.detail||body.detail.msg;if(typeof message==="string"&&message.trim())return message}
       if(Array.isArray(body.detail)&&body.detail.length){
-        const fields={location_id:"库位",warehouse_floor:"楼层",area_code:"区域",inventory_type:"库存类型",status:"状态",stale_level:"库龄",keyword:"关键词",finished_spec:"成品规格",semi_board_length_mm:"纸板长",semi_board_width_mm:"纸板宽",page:"页码",page_size:"每页数量"};
-        return body.detail.map(item=>{const field=item.loc&&item.loc.length?item.loc[item.loc.length-1]:"";return `${fields[field]||field||"请求参数"}输入有误`}).join("；");
+        const fields={location_id:"库位",location_code:"库位编码",location_name:"库位名称",warehouse_type:"库位类型",warehouse_floor:"楼层",area_code:"区域",storage_type:"存储方式",remarks:"备注",inventory_type:"库存类型",status:"状态",stale_level:"库龄",keyword:"关键词",finished_spec:"成品规格",semi_board_length_mm:"纸板长",semi_board_width_mm:"纸板宽",page:"页码",page_size:"每页数量"};
+        return body.detail.map(item=>{const loc=Array.isArray(item?.loc)?item.loc:[],field=loc.length?loc[loc.length-1]:"",rawMessage=typeof item.msg==="string"?item.msg.trim():"";if(loc.length===1&&loc[0]==="body"&&rawMessage)return rawMessage.replace(/^Value error,\s*/i,"").trim()||"请求参数输入有误";return `${fields[field]||field||"请求参数"}输入有误`}).join("；");
       }
       return `仓库接口请求失败（HTTP ${status}）：${url}`;
     }

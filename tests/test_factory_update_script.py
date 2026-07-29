@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.19"
-    assert APP_VERSION_NAME == "一楼数字工厂地图"
-    assert APP_BUILD_DATE == "2026-08-03"
+    assert APP_VERSION == "v0.22.31"
+    assert APP_VERSION_NAME == "PDF订单库存三态与库位定位"
+    assert APP_BUILD_DATE == "2026-08-04"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -50,19 +50,20 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "一楼/三楼" in item and "DXF V4" in item
+        "本次更新｜" in item and "库存状态" in item and "有库存" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "室外临时装卸区" in item and "天气" in item
+        "本次更新｜" in item and "只读地图" in item
+        for item in current_release
+    )
+    assert any("本次更新｜" in item and "不产生预占" in item for item in current_release)
+    assert any(
+        "如何验证｜" in item and "足额" in item and "无库存" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "系统版本" in item and "v0.22.19" in item
-        for item in current_release
-    )
-    assert any(
-        "如何验证｜" in item and "仓库地图" in item and "1F" in item
+        "如何验证｜" in item and "浏览器返回" in item and "PDF草稿" in item
         for item in current_release
     )
     assert any(

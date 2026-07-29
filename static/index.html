@@ -567,6 +567,79 @@
       .inventory-auto-summary.attention { color:#9a3412; }
       .inventory-auto-detail-button { margin-top:4px; }
       .order-entry-modal { width: min(1760px, 100%); }
+      .pdf-order-import-modal { width:min(1760px, 100%); }
+      .pdf-inventory-table-wrap {
+        width:100%; max-width:100%; overflow-x:hidden; overflow-y:visible;
+        border:1px solid var(--line); border-radius:10px;
+      }
+      .pdf-inventory-table {
+        width:100%; min-width:0; table-layout:fixed; white-space:normal;
+      }
+      .pdf-inventory-table th,
+      .pdf-inventory-table td {
+        min-width:0; padding:6px; vertical-align:top; overflow-wrap:anywhere;
+      }
+      .pdf-inventory-table .pdf-sequence-col { width:7%; }
+      .pdf-inventory-table .pdf-code-col { width:15%; }
+      .pdf-inventory-table .pdf-name-col { width:22%; }
+      .pdf-inventory-table .pdf-quantity-col { width:16%; }
+      .pdf-inventory-table .pdf-requisition-col { width:13%; }
+      .pdf-inventory-table .pdf-issue-col { width:19%; }
+      .pdf-inventory-table .pdf-action-col { width:8%; }
+      .pdf-product-name {
+        display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical;
+        -webkit-line-clamp:2; line-clamp:2; line-height:1.35;
+      }
+      .pdf-inventory-cell { display:flex; align-items:flex-start; gap:5px; flex-wrap:wrap; }
+      .pdf-inventory-cell .input { width:7ch; min-width:7ch; }
+      .pdf-inventory-state {
+        min-height:26px; padding:3px 8px; border-radius:999px;
+        border:1px solid transparent; font-size:12px; font-weight:700; line-height:1.2;
+      }
+      button.pdf-inventory-state { cursor:pointer; }
+      .pdf-inventory-state.full { color:#166534; background:#dcfce7; border-color:#86efac; }
+      .pdf-inventory-state.partial { color:#9a3412; background:#ffedd5; border-color:#fdba74; }
+      .pdf-inventory-state.exception { color:#991b1b; background:#fee2e2; border-color:#fca5a5; }
+      .pdf-inventory-state.neutral { color:#475569; background:#f1f5f9; border-color:#cbd5e1; }
+      .pdf-shortage-line { margin-top:3px; color:#9a3412; font-size:11px; line-height:1.3; }
+      .pdf-requisition-value { font-weight:800; color:#1d4ed8; }
+      .pdf-advanced-summary {
+        display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px;
+        padding:8px; border:1px solid #dbeafe; border-radius:8px; background:#f8fbff;
+      }
+      .pdf-advanced-summary > div { min-width:0; }
+      .pdf-advanced-label { display:block; color:var(--muted); font-size:11px; }
+      .pdf-inventory-detail-card {
+        padding:8px; border:1px solid #bfdbfe; border-radius:8px;
+        background:#f8fbff; font-size:12px;
+      }
+      .pdf-inventory-detail-summary {
+        display:flex; gap:8px; flex-wrap:wrap; margin:6px 0;
+      }
+      .pdf-inventory-candidate {
+        display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+        margin-top:5px; padding:5px 7px; border-radius:7px; background:#fff;
+      }
+      .pdf-warehouse-locator {
+        position:fixed; inset:0; z-index:120; display:grid;
+        grid-template-rows:auto minmax(0,1fr); background:#f5f7fb;
+      }
+      .pdf-warehouse-locator-head {
+        display:flex; align-items:center; justify-content:space-between; gap:12px;
+        padding:10px 16px; border-bottom:1px solid var(--line); background:#fff;
+        box-shadow:0 2px 10px rgba(15,23,42,.08);
+      }
+      .pdf-warehouse-locator iframe { width:100%; height:100%; border:0; background:#fff; }
+      .ui-large .pdf-order-import-modal .pdf-inventory-table th,
+      .ui-large .pdf-order-import-modal .pdf-inventory-table td {
+        min-height:0; padding:7px 6px; font-size:15px; line-height:1.35;
+      }
+      .ui-large .pdf-order-import-modal .pdf-inventory-state { font-size:14px; }
+      .ui-large .pdf-order-import-modal .pdf-advanced-label,
+      .ui-large .pdf-order-import-modal .pdf-shortage-line { font-size:13px; }
+      @media (max-width:1100px) {
+        .pdf-advanced-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      }
       .order-entry-header {
         display: grid;
         grid-template-columns: minmax(320px, 1.55fr) minmax(210px, .8fr) 155px 155px;
@@ -3092,7 +3165,7 @@
       </div>
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi}">
+        <div class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport'}">
           <div class="modal-head"><strong>{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small" @click="closeModal">关闭</button></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
@@ -3673,26 +3746,27 @@
                   </div>
                 </div>
                 <!-- PDF 草稿默认只保留现场核对必需信息；候选、证据和主档详情统一收在高级详情。 -->
-                <div v-if="draft.items?.length" style="overflow-x:auto">
-                <table class="line-items" style="min-width:560px">
+                <div
+                  v-if="draft.items?.length"
+                  class="pdf-inventory-table-wrap"
+                  :data-pdf-draft-key="draft.file_hash || draft.source_name"
+                >
+                <table class="line-items pdf-inventory-table">
                   <thead><tr>
-                    <th class="pdf-match-sequence-column">序号</th>
-                    <th class="pdf-match-code-column">存货编码</th>
-                    <th v-if="draft._show_advanced_details" style="min-width:180px">产品名称</th>
-                    <th v-if="draft._show_advanced_details" style="min-width:160px">材质 + 楞型</th>
-                    <th v-if="draft._show_advanced_details" style="min-width:80px">规格</th>
-                    <th style="min-width:150px">数量与库存</th>
-                    <th v-if="draft._show_advanced_details" class="sensitive-price" style="min-width:80px">客户单价</th>
-                    <th v-if="draft._show_advanced_details" style="min-width:80px">图纸</th>
-                    <th style="min-width:130px">异常</th>
-                    <th style="width:60px">操作</th>
+                    <th class="pdf-sequence-col">序号</th>
+                    <th class="pdf-code-col">存货编码</th>
+                    <th class="pdf-name-col">产品名称</th>
+                    <th class="pdf-quantity-col">订单数量 / 库存</th>
+                    <th class="pdf-requisition-col">需报数量</th>
+                    <th class="pdf-issue-col">异常</th>
+                    <th class="pdf-action-col">操作</th>
                   </tr></thead>
                   <tbody>
-                  <template v-for="item in draft.items" :key="item.line_no">
+                  <template v-for="item in draft.items" :key="item.client_line_id || item.line_no">
                     <!-- 主行 -->
                     <tr :class="{'is-new-product-row': item.is_new_product}">
                       <!-- 序号 + 常用箱资料状态 -->
-                      <td class="pdf-match-sequence-cell" style="padding:4px 6px;font-size:12px;vertical-align:top">
+                      <td style="font-size:12px">
                         <div class="muted" style="font-size:11px">{{ item.line_no }}</div>
                         <span v-if="item.merge_status==='merged'" class="status green pdf-match-status-line" style="font-size:11px">已合并</span>
                         <span v-else-if="item.merge_status==='conflict'" class="status orange pdf-match-status-line" style="font-size:11px" :title="(item.merge_conflict_reasons||[]).join('；')">同编码差异</span>
@@ -3708,77 +3782,101 @@
                           <div v-for="src in item.merged_sources" :key="src.line_no">{{ src.page ? `第${src.page}页` : '' }}行{{ src.line_no }}×{{ src.quantity }}</div>
                         </div>
                       </td>
-                      <!-- 默认只显示存货编码；名称属于高级主档详情。 -->
-                      <td class="pdf-match-code-cell" style="padding:4px 6px;vertical-align:top">
+                      <td>
                         <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
-                          <input v-if="item.is_new_product" class="input compact-input" style="width:110px" v-model.trim="item.raw_product_code" placeholder="存货编码" @input="invalidateImportDraftConfirmation(draft)" />
-                          <span v-else class="sys-num pdf-match-code-value" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
+                          <input v-if="item.is_new_product" class="input compact-input" v-model.trim="item.raw_product_code" placeholder="存货编码" @input="invalidateImportDraftConfirmation(draft)" />
+                          <span v-else class="pdf-match-code-value" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
                         </div>
                         <!-- 无匹配时允许新建 -->
                         <label v-if="!item.matched_product_id" style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px;cursor:pointer">
                           <input type="checkbox" v-model="item.is_new_product" @change="toggleNewProduct(draft,item)" style="margin:0" /> 新产品（系统新建）
                         </label>
                       </td>
-                      <td v-if="draft._show_advanced_details" style="padding:4px 6px;vertical-align:top;font-size:13px">
+                      <td style="font-size:13px">
                         <div v-if="item.matched_product_id && !item.is_new_product">
-                          {{ pdfCommonBoxProductName(item) }}
-                          <div class="toolbar-group" style="justify-content:flex-start;margin-top:4px">
-                            <span v-if="item.product_manual_modified" class="muted" style="font-size:11px">已人工编辑（版本事实）</span>
-                            <button v-if="canEditProducts" class="btn small" type="button" @click="openCommonBoxEditorFromPdf(draftIndex,item)">编辑常用箱</button>
-                          </div>
-                          <div v-if="item.standard_match && item.standard_match.matched && item.standard_match.pdf_product_name && item.standard_match.pdf_product_name !== item.product_name" style="font-size:10px;color:#6b7280;margin-top:1px">PDF识别：{{ item.standard_match.pdf_product_name }}</div>
+                          <div class="pdf-product-name" :title="pdfCommonBoxProductName(item)">{{ pdfCommonBoxProductName(item) }}</div>
                         </div>
-                        <input v-else-if="item.is_new_product" class="input" style="width:100%" v-model.trim="item.raw_product_name" placeholder="产品名称" @input="invalidateImportDraftConfirmation(draft)" />
-                        <span v-else>{{ item.raw_product_name || "-" }}</span>
+                        <input v-else-if="item.is_new_product" class="input" v-model.trim="item.raw_product_name" placeholder="产品名称" @input="invalidateImportDraftConfirmation(draft)" />
+                        <div v-else class="pdf-product-name" :title="item.raw_product_name || '-'">{{ item.raw_product_name || "-" }}</div>
                       </td>
-                      <!-- 材质+楞型（常用箱） -->
-                      <td v-if="draft._show_advanced_details" style="font-size:12px;padding:4px 6px;vertical-align:top;white-space:normal;word-break:break-all;max-width:170px">
-                        <span v-if="item.matched_product_id && !item.is_new_product">
-                          {{ pdfItemMaterialText(item) }}
-                          <div v-if="pdfOriginalMaterialText(item)" class="pdf-material-evidence">PDF识别材质：{{ pdfOriginalMaterialText(item) }}（仅保留证据）</div>
-                        </span>
-                        <span v-else class="muted">-</span>
-                      </td>
-                      <!-- 规格（常用箱） -->
-                      <td v-if="draft._show_advanced_details" style="font-size:12px;padding:4px 6px;vertical-align:top">
-                        <span v-if="item.matched_product_id && !item.is_new_product">{{ item.specification || item.raw_spec_model || "-" }}</span>
-                        <input v-else class="input" style="width:100%" v-model.trim="item.raw_spec_model" placeholder="规格" @input="invalidateImportDraftConfirmation(draft)" />
-                      </td>
-                      <!-- 数量 -->
-                      <td style="padding:4px 6px;vertical-align:top">
-                        <div class="order-quantity-inventory"><input class="input compact-input" type="number" min="1" step="any" v-model.number="item.quantity" style="width:8ch" @input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)" /></div>
-                        <div v-if="item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
-                        <button v-if="item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryNeedsAttention(item)?'danger':'']" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起库存安排' : (orderLineInventoryNeedsAttention(item) ? '处理库存例外' : '查看库存安排') }}</button>
+                      <td>
+                        <div class="pdf-inventory-cell">
+                          <input
+                            class="input compact-input"
+                            type="number"
+                            min="1"
+                            step="any"
+                            v-model.number="item.quantity"
+                            :id="`pdf-quantity-${draftIndex}-${item.client_line_id}`"
+                            @input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"
+                          />
+                          <button
+                            v-if="pdfInventoryHasButton(item)"
+                            type="button"
+                            :class="['pdf-inventory-state',pdfInventoryDisplayState(item)]"
+                            @click="item._show_inventory_details=!item._show_inventory_details"
+                          >{{ pdfInventoryStatusText(item) }}</button>
+                          <span
+                            v-else-if="pdfInventoryStatusText(item)"
+                            :class="['pdf-inventory-state',pdfInventoryDisplayState(item)==='none'?'neutral':pdfInventoryDisplayState(item)]"
+                          >{{ pdfInventoryStatusText(item) }}</span>
+                        </div>
+                        <div v-if="pdfInventoryShortageText(item)" class="pdf-shortage-line">{{ pdfInventoryShortageText(item) }}</div>
                         <div v-if="!Number.isInteger(Number(item.quantity))" style="font-size:10px;color:#dc2626;margin-top:2px">数量不是整数，请人工确认</div>
                       </td>
-                      <!-- 客户单价 + 冲突提示 -->
-                      <td v-if="draft._show_advanced_details" class="sensitive-price" style="padding:4px 6px;vertical-align:top">
-                        <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" style="width:75px" @input="invalidateImportDraftConfirmation(draft); refreshPdfPriceConflict(item)" />
-                        <div v-if="item.price_conflict" style="font-size:10px;color:#d97706;margin-top:2px">
-                          本单价不同｜常用箱默认 {{ money(item.price_conflict.product_default_price) }}
+                      <td>
+                        <div class="pdf-requisition-value">{{ pdfInventoryRequisitionText(item) }}</div>
+                        <div v-if="item._inventory?.authoritative?.cutting_mode" class="muted" style="font-size:11px">
+                          {{ item._inventory.authoritative.cutting_mode }}
                         </div>
                       </td>
-                      <!-- 图纸 -->
-                      <td v-if="draft._show_advanced_details" style="font-size:12px;padding:4px 6px;vertical-align:top">
-                        <div v-if="item.temp_drawing_token || item.product_drawing_file" style="margin-bottom:3px">
-                          <a href="#" class="btn small" style="display:block;margin-bottom:2px"
-                             @click.prevent="previewDrawingFile(item.temp_drawing_preview_url || item.product_drawing_file)">
-                            {{ item.temp_drawing_token ? "查看订单图纸" : "查看常用箱图纸" }}
-                          </a>
-                        </div>
-                        <label class="btn small" style="cursor:pointer;display:inline-block;font-size:11px">
-                          上传图纸
-                          <input type="file" accept="image/*,.pdf" style="display:none"
-                            @change="uploadImportDraftDrawing(draft,item,$event)" />
-                        </label>
+                      <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
+                        <span v-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
+                        <span v-else class="muted">-</span>
                       </td>
-                      <td style="padding:4px 6px;vertical-align:top;font-size:11px;white-space:normal">
-                        <div v-if="!commonBoxReadiness(item).ready && item.matched_product_id" class="status orange" :title="commonBoxReadinessTitle(item)">待完善</div>
-                      </td>
-                      <!-- 操作 -->
-                      <td style="padding:4px 6px;vertical-align:top">
-                        <button v-if="draft._show_advanced_details && item.matched_product_id && !item.is_new_product && canEditProducts" class="btn small" type="button" @click="startEditImportItem(draft,item)">修改本行</button>
+                      <td>
                         <button class="btn small danger" @click="removeImportDraftItem(draft,item)">删除</button>
+                      </td>
+                    </tr>
+                    <tr v-if="draft._show_advanced_details" class="order-item-sub-row">
+                      <td colspan="7">
+                        <div class="pdf-advanced-summary">
+                          <div>
+                            <span class="pdf-advanced-label">常用箱资料</span>
+                            <div>{{ item.product_manual_modified ? "已人工编辑" : (item.matched_product_id ? "已匹配" : "未匹配") }}</div>
+                            <div class="toolbar-group" style="justify-content:flex-start;margin-top:4px">
+                              <button v-if="item.matched_product_id && !item.is_new_product && canEditProducts" class="btn small" type="button" @click="openCommonBoxEditorFromPdf(draftIndex,item)">编辑常用箱</button>
+                              <button v-if="item.matched_product_id && !item.is_new_product && canEditProducts" class="btn small" type="button" @click="startEditImportItem(draft,item)">修改本行</button>
+                            </div>
+                          </div>
+                          <div>
+                            <span class="pdf-advanced-label">材质 / 楞型</span>
+                            <div>{{ item.matched_product_id && !item.is_new_product ? pdfItemMaterialText(item) : "-" }}</div>
+                            <div v-if="pdfOriginalMaterialText(item)" class="pdf-material-evidence">PDF：{{ pdfOriginalMaterialText(item) }}</div>
+                          </div>
+                          <div>
+                            <span class="pdf-advanced-label">规格</span>
+                            <span v-if="item.matched_product_id && !item.is_new_product">{{ item.specification || item.raw_spec_model || "-" }}</span>
+                            <input v-else class="input" v-model.trim="item.raw_spec_model" placeholder="规格" @input="invalidateImportDraftConfirmation(draft)" />
+                          </div>
+                          <div class="sensitive-price">
+                            <span class="pdf-advanced-label">客户单价</span>
+                            <input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" @input="invalidateImportDraftConfirmation(draft); refreshPdfPriceConflict(item)" />
+                            <div v-if="item.price_conflict" class="pdf-shortage-line">本单价不同｜常用箱 {{ money(item.price_conflict.product_default_price) }}</div>
+                          </div>
+                          <div>
+                            <span class="pdf-advanced-label">图纸</span>
+                            <button v-if="item.temp_drawing_token || item.product_drawing_file" class="btn small" type="button" @click="previewDrawingFile(item.temp_drawing_preview_url || item.product_drawing_file)">查看图纸</button>
+                            <label class="btn small" style="cursor:pointer;display:inline-block">
+                              上传图纸
+                              <input type="file" accept="image/*,.pdf" style="display:none" @change="uploadImportDraftDrawing(draft,item,$event)" />
+                            </label>
+                          </div>
+                          <div style="grid-column:1/-1">
+                            <span class="pdf-advanced-label">生产说明</span>
+                            <input class="input" v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" @input="invalidateImportDraftConfirmation(draft)" />
+                          </div>
+                        </div>
                       </td>
                     </tr>
                     <!-- 多候选副行：只切换常用箱，不改写 PDF 存货编码 -->
@@ -3872,17 +3970,12 @@
                         </div>
                       </td>
                     </tr>
-                    <!-- 副行：成本/毛利 + 生产说明 -->
-                    <tr v-if="draft._show_advanced_details" class="order-item-sub-row">
-                      <td :colspan="draft._show_advanced_details ? 3 : 2" style="padding:2px 6px 6px;font-size:12px" v-if="!isWorkshop">
+                    <tr v-if="draft._show_advanced_details && !isWorkshop" class="order-item-sub-row">
+                      <td colspan="7" style="font-size:12px">
                         <span class="cost-sensitive" style="margin-right:10px">预估成本：{{ item.cost_status === "calculated" ? money(item.estimated_cost) : "待计算" }}</span>
                         <span class="cost-sensitive">预估毛利：{{ estimatedGrossProfit(item) }}</span>
                       </td>
-                      <td :colspan="draft._show_advanced_details ? 3 : 2" v-else></td>
-                      <td :colspan="draft._show_advanced_details ? pdfDraftColumnCount(draft)-3 : pdfDraftColumnCount(draft)-2" style="padding:2px 6px 6px">
-                        <input class="input" style="width:100%" v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" @input="invalidateImportDraftConfirmation(draft)" />
-                      </td>
-                     </tr>
+                    </tr>
                      <tr v-if="item._show_inventory_details && item.matched_product_id && item._inventory && inventoryComponents(item).some(component => generalSemiFinishedCandidates(item._inventory.semi[component]).length)">
                         <td :colspan="pdfDraftColumnCount(draft)" style="padding:3px 6px 6px;background:#fffbeb;border:1px solid #f59e0b;color:#92400e;font-size:12px">
                          <div v-for="component in inventoryComponents(item)" :key="`pdf-general-confirm-${component}`" v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" class="toolbar-group">
@@ -3893,9 +3986,67 @@
                          </div>
                        </td>
                      </tr>
-                     <template v-if="item._show_inventory_details">
-                     <tr v-if="item.matched_product_id && item._inventory"><td :colspan="pdfDraftColumnCount(draft)" style="padding:3px 6px 7px"><div style="border:1px solid #bfdbfe;border-radius:6px;padding:6px;background:#f8fbff;font-size:12px"><div class="toolbar-group"><strong>库存安排</strong><span v-if="item._inventory.loading" class="muted">正在查询…</span><span v-else-if="item._inventory.stale" class="status orange">信息已变化</span><button class="btn small" type="button" @click="loadOrderLineInventory(item,draft.matched_customer_id)">重新查询</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div><div v-if="item._inventory.error" class="danger-text">{{ item._inventory.error }}</div><div v-if="item._inventory.finished.candidates.length">成品库存：<span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><div v-for="allocation in item._inventory.finished.allocations" :key="`pdf-finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 个，{{ inventoryLocation(allocation.candidate) }}</div></div><div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:4px">半成品{{ componentLabel(component) }}库存：<span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`pdf-manual-${candidate.lot_id}`">人工匹配 {{ candidate.lot_number }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`pdf-semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div></div></td></tr>
-                     </template>
+                     <tr v-if="item._show_inventory_details && item.matched_product_id && item._inventory">
+                       <td colspan="7">
+                         <div class="pdf-inventory-detail-card">
+                           <div class="toolbar-group" style="justify-content:flex-start">
+                             <strong>库存与报料明细</strong>
+                             <span v-if="item._inventory.loading || item._inventory.authoritative_loading" class="muted">正在查询…</span>
+                             <span v-else-if="item._inventory.stale" class="status orange">信息已变化</span>
+                             <button class="btn small" type="button" @click="loadOrderLineInventory(item,draft.matched_customer_id)">重新查询</button>
+                             <span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span>
+                           </div>
+                           <div v-if="item._inventory.error || item._inventory.authoritative_error" class="danger-text">
+                             {{ item._inventory.error || item._inventory.authoritative_error }}
+                           </div>
+                           <div v-if="item._inventory.authoritative" class="pdf-inventory-detail-summary">
+                             <span>订单 {{ item._inventory.authoritative.order_quantity }} 个</span>
+                             <span>候选成品 {{ item._inventory.authoritative.finished_candidate_available_quantity || 0 }} 个</span>
+                             <span>已安排 {{ item._inventory.authoritative.finished_planned_quantity || 0 }} 个</span>
+                             <span>还需生产 {{ item._inventory.authoritative.production_required_quantity || 0 }} 个</span>
+                             <strong>需报 {{ item._inventory.authoritative.requisition_sheet_quantity || 0 }} {{ item._inventory.authoritative.requisition_unit || "张" }}</strong>
+                           </div>
+                           <div v-if="item._inventory.finished.candidates.length">
+                             <strong>成品库存</strong>
+                             <div v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" class="pdf-inventory-candidate">
+                               <span>{{ candidate.lot_number }}｜可用 {{ candidate.quantity_available }} 个｜{{ inventoryLocation(candidate) }}</span>
+                               <button v-if="pdfWarehouseLocatorCanOpen(candidate)" class="btn small" type="button" @click="openPdfWarehouseLocator(draft,item,candidate)">{{ pdfWarehouseLocatorLabel(candidate) }}</button>
+                             </div>
+                             <div class="toolbar-group" style="justify-content:flex-start;margin-top:5px">
+                               <button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button>
+                               <button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button>
+                             </div>
+                             <div v-for="allocation in item._inventory.finished.allocations" :key="`pdf-finished-plan-${allocation.candidate.lot_id}`" class="status green">
+                               已安排 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 个，{{ inventoryLocation(allocation.candidate) }}
+                             </div>
+                           </div>
+                           <div v-else class="muted">没有可用成品库存。</div>
+                           <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:8px">
+                             <strong>客户专用纸板备料{{ componentLabel(component) }}</strong>
+                             <span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span>
+                             <div v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" class="pdf-inventory-candidate">
+                               <span>{{ inventorySourceLabel(candidate) }}｜{{ candidate.lot_number }}｜可用 {{ candidate.available_stock_quantity }} 张｜{{ inventoryLocation(candidate) }}</span>
+                               <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异：{{ candidate.signature_differences.join('、') }}</span>
+                               <button v-if="pdfWarehouseLocatorCanOpen(candidate)" class="btn small" type="button" @click="openPdfWarehouseLocator(draft,item,candidate)">{{ pdfWarehouseLocatorLabel(candidate) }}</button>
+                             </div>
+                             <div class="toolbar-group" style="justify-content:flex-start;margin-top:5px">
+                               <button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button>
+                               <button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button>
+                               <button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">查看其他候选</button>
+                             </div>
+                             <div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`pdf-manual-${candidate.lot_id}`" class="pdf-inventory-candidate">
+                               <span>人工匹配 {{ candidate.lot_number }}｜{{ inventoryLocation(candidate) }}｜差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}</span>
+                               <button v-if="pdfWarehouseLocatorCanOpen(candidate)" class="btn small" type="button" @click="openPdfWarehouseLocator(draft,item,candidate)">{{ pdfWarehouseLocatorLabel(candidate) }}</button>
+                               <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label>
+                               <button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button>
+                             </div>
+                             <div v-for="allocation in item._inventory.semi[component].allocations" :key="`pdf-semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">
+                               已安排 {{ allocation.candidate.lot_number }} × {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}
+                             </div>
+                           </div>
+                         </div>
+                       </td>
+                     </tr>
                   </template>
                   </tbody>
                 </table>
@@ -5088,6 +5239,17 @@
         </div>
       </div>
 
+      <div v-if="pdfWarehouseLocator.visible" class="pdf-warehouse-locator" role="dialog" aria-modal="true" aria-label="库存位置只读查看">
+        <div class="pdf-warehouse-locator-head">
+          <div>
+            <strong>库存位置（只读）</strong>
+            <span class="muted" style="margin-left:8px">{{ pdfWarehouseLocator.title }}</span>
+          </div>
+          <button class="btn primary" type="button" @click="closePdfWarehouseLocator">返回 PDF 订单</button>
+        </div>
+        <iframe ref="pdfWarehouseLocatorFrame" src="about:blank" title="库存位置只读查看"></iframe>
+      </div>
+
       <div v-if="orderCommonBoxPicker.visible" class="modal-backdrop order-common-box-backdrop" @click.self="closeOrderCommonBoxPicker">
         <div class="modal order-common-box-modal">
           <div class="modal-header">
@@ -5674,6 +5836,10 @@
             orderNumberPreview: "",
             orderImportBatch: { files: [], status: "idle", retryDraft: null },
             orderImportDrafts: [],
+            pdfWarehouseLocator: {
+              visible:false, url:"", title:"", draftKey:"", focusId:"",
+              modalScrollTop:0, tableScrollTop:0, historyPushed:false,
+            },
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
@@ -6401,10 +6567,15 @@
           // ESC 关闭弹层（含防呆检查）
           document.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
+            if (this.pdfWarehouseLocator.visible) {
+              this.closePdfWarehouseLocator();
+              return;
+            }
             if (!this.modal || this.isForcedPassword) return;
             if (this.modal.type === "order" || this.modal.type === "orderEdit") return;
             this.closeModal();
           });
+          window.addEventListener("popstate", this.handlePdfWarehousePopState);
         },
         methods: {
           async setUiMode(mode) {
@@ -6972,7 +7143,7 @@
             return readiness.ready ? "订单与报料关键资料已完善" : (`待完善：${readiness.missing_fields.join("、") || "后端未返回完整性缺项"}`);
           },
           pdfDraftColumnCount(draft) {
-            return draft?._show_advanced_details ? 10 : 5;
+            return 7;
           },
           normalizedMaterialCode(value) {
             const firstToken = String(value || "").trim().split(/[\s|｜,，;；]/, 1)[0] || "";
@@ -7714,7 +7885,11 @@
 	          },
           newOrderInventoryState() {
             const part = () => ({ candidates:[], manual_candidates:[], selected:null, selected_candidates:[], allocations:[], skipped:false, manual_override:false, general_confirmation:false, unavailable_reason:"" });
-            return { loading:false, stale:false, api_error:false, error:"", context:null, finished:part(), semi:{ whole:part(), cover:part(), base:part() } };
+            return {
+              loading:false, stale:false, api_error:false, error:"", context:null,
+              authoritative:null, authoritative_loading:false, authoritative_error:"",
+              finished:part(), semi:{ whole:part(), cover:part(), base:part() },
+            };
           },
           inventoryCustomerForLine(line) {
             if (this.orderForm.items.includes(line)) return this.orderForm.customer_id;
@@ -7730,6 +7905,134 @@
           inventoryLocation(candidate) {
             const location = candidate?.warehouse_location || candidate?.location || {};
             return location.location_code || location.location_name || "库位未标注";
+          },
+          pdfInventoryDisplayState(line) {
+            const state = line?._inventory;
+            const authority = state?.authoritative;
+            if (!Number(line?.matched_product_id || line?.product_id || 0)) return "exception";
+            if (!state || state.loading || state.stale || state.api_error || state.authoritative_loading || state.authoritative_error) return "exception";
+            if (!authority) return "exception";
+            if (authority.interaction_state === "decision_required" || authority.coverage_state === "unsupported" || authority.coverage_state === "candidates_unplanned") return "exception";
+            if (authority.coverage_state === "full") return "full";
+            if (authority.coverage_state === "partial") return "partial";
+            if (authority.coverage_state === "none" || authority.interaction_state === "skipped") return "none";
+            return "exception";
+          },
+          pdfInventoryStatusText(line) {
+            const state = line?._inventory;
+            if (!Number(line?.matched_product_id || line?.product_id || 0)) return "";
+            if (!state || state.loading || state.authoritative_loading) return "库存计算中";
+            if (state.stale) return "库存待刷新";
+            if (state.api_error || state.authoritative_error) return "库存查询失败";
+            return ({
+              full:"有库存",
+              partial:"库存不足",
+              none:"无成品库存",
+              exception:"库存需核对",
+            })[this.pdfInventoryDisplayState(line)] || "库存需核对";
+          },
+          pdfInventoryShortageText(line) {
+            const authority = line?._inventory?.authoritative;
+            if (this.pdfInventoryDisplayState(line) !== "partial" || !authority) return "";
+            return `缺 ${Math.max(Number(authority.shortage_quantity || 0), 0)} 个`;
+          },
+          pdfInventoryRequisitionText(line) {
+            const state = line?._inventory;
+            const authority = state?.authoritative;
+            if (!Number(line?.matched_product_id || line?.product_id || 0)) return "待匹配";
+            if (!state || state.loading || state.authoritative_loading) return "计算中";
+            if (state.api_error || state.authoritative_error || !authority) return "待计算";
+            if (authority.coverage_state === "unsupported") return "进入订单后计算";
+            const quantity = Math.max(Number(authority.requisition_sheet_quantity || 0), 0);
+            const unit = authority.requisition_unit || "张";
+            return quantity > 0 ? `${quantity} ${unit}` : `0 ${unit}`;
+          },
+          pdfInventoryIssueText(line) {
+            const state = line?._inventory;
+            const authority = state?.authoritative;
+            if (!Number.isInteger(Number(line?.quantity))) return "数量不是整数";
+            if (!Number(line?.matched_product_id || line?.product_id || 0)) return line?.is_new_product ? "新产品待保存" : "未匹配常用箱";
+            if (!this.commonBoxReadiness(line).ready) return "常用箱资料待完善";
+            if (!state || state.loading || state.authoritative_loading) return "库存计算中";
+            if (state.stale) return "库存信息已变化";
+            if (state.api_error) return state.error || "库存查询失败";
+            if (state.authoritative_error) return state.authoritative_error;
+            if (authority?.coverage_state === "unsupported") return authority.message || "组合产品需进入订单后计算";
+            if (authority?.interaction_state === "decision_required" || authority?.coverage_state === "candidates_unplanned") return "有库存候选待确认";
+            const decision = this.inventoryDecisionRequired(line);
+            return decision || "";
+          },
+          pdfInventoryHasButton(line) {
+            if (!Number(line?.matched_product_id || line?.product_id || 0)) return false;
+            return this.pdfInventoryDisplayState(line) !== "none";
+          },
+          pdfWarehouseLocatorCanOpen(candidate) {
+            const location = candidate?.warehouse_location || candidate?.location || {};
+            return this.hasPermission("warehouse.view") && !!candidate?.lot_id && !!location?.id;
+          },
+          pdfWarehouseLocatorLabel(candidate) {
+            const location = candidate?.warehouse_location || candidate?.location || {};
+            return location.map_status === "floor3_mapped" ? "三楼图定位" : "查看库存台账";
+          },
+          openPdfWarehouseLocator(draft, line, candidate) {
+            if (!this.pdfWarehouseLocatorCanOpen(candidate)) return;
+            const location = candidate?.warehouse_location || candidate?.location || {};
+            const mapped = location.map_status === "floor3_mapped";
+            const inventoryType = candidate?.available_stock_quantity !== undefined ? "semi_finished" : "finished";
+            const params = new URLSearchParams({
+              embedded:"1",
+              readonly:"1",
+              source:"pdf-order",
+              tab:mapped ? "locations" : inventoryType,
+              inventory_type:inventoryType,
+              location_id:String(location.id),
+              lot_id:String(candidate.lot_id),
+            });
+            const draftKey = String(draft?.file_hash || draft?.source_name || "");
+            const table = [...document.querySelectorAll("[data-pdf-draft-key]")]
+              .find(element => element.dataset.pdfDraftKey === draftKey);
+            const modalMask = document.querySelector(".modal-mask");
+            const focusId = document.activeElement?.id || "";
+            this.pdfWarehouseLocator = {
+              visible:true,
+              url:`/warehouse.html?${params.toString()}`,
+              title:`${this.inventoryLocation(candidate)}｜${candidate.lot_number || "库存批次"}`,
+              draftKey,
+              focusId,
+              modalScrollTop:Number(modalMask?.scrollTop || 0),
+              tableScrollTop:Number(table?.scrollTop || 0),
+              historyPushed:true,
+            };
+            window.history.pushState({ pdfWarehouseLocator:true }, "", window.location.href);
+            this.$nextTick(() => {
+              const frame = this.$refs.pdfWarehouseLocatorFrame;
+              frame?.contentWindow?.location.replace(this.pdfWarehouseLocator.url);
+            });
+          },
+          closePdfWarehouseLocator(fromPopstate=false) {
+            if (!this.pdfWarehouseLocator.visible) return;
+            if (!fromPopstate && this.pdfWarehouseLocator.historyPushed) {
+              window.history.back();
+              return;
+            }
+            const restore = { ...this.pdfWarehouseLocator };
+            this.pdfWarehouseLocator = {
+              visible:false, url:"", title:"", draftKey:"", focusId:"",
+              modalScrollTop:0, tableScrollTop:0, historyPushed:false,
+            };
+            this.$nextTick(() => {
+              const modalMask = document.querySelector(".modal-mask");
+              if (modalMask) modalMask.scrollTop = restore.modalScrollTop || 0;
+              const table = restore.draftKey
+                ? [...document.querySelectorAll("[data-pdf-draft-key]")]
+                  .find(element => element.dataset.pdfDraftKey === restore.draftKey)
+                : null;
+              if (table) table.scrollTop = restore.tableScrollTop || 0;
+              if (restore.focusId) document.getElementById(restore.focusId)?.focus();
+            });
+          },
+          handlePdfWarehousePopState() {
+            if (this.pdfWarehouseLocator.visible) this.closePdfWarehouseLocator(true);
           },
           inventorySourceLabel(candidate) {
             return ({learned:"系统推荐（已学习）",signature:"系统推荐（规格一致）",general_signature:"通用半成品（general_signature）",manual:"人工匹配"})[candidate?.source] || "系统推荐（规格一致）";
@@ -7997,6 +8300,9 @@
           invalidateLineInventory(line) {
             const state = line._inventory || this.newOrderInventoryState();
             state.stale = true; state.error = ""; state.api_error = false;
+            state.authoritative = null;
+            state.authoritative_loading = false;
+            state.authoritative_error = "";
             [state.finished, ...Object.values(state.semi)].forEach(part => { part.selected = null; part.selected_candidates = []; part.allocations = []; part.skipped = false; part.manual_override = false; part.general_confirmation = false; });
             line._inventory = state;
           },
@@ -8129,9 +8435,70 @@
               });
             });
           },
+          schedulePdfDraftInventoryAuthority(draft) {
+            if (!draft || !this.orderImportDrafts.includes(draft)) return;
+            if (draft._inventory_authority_timer) clearTimeout(draft._inventory_authority_timer);
+            draft._inventory_authority_timer = setTimeout(() => {
+              draft._inventory_authority_timer = null;
+              this.loadPdfDraftInventoryAuthority(draft);
+            }, 100);
+          },
+          async loadPdfDraftInventoryAuthority(draft) {
+            const customerId = Number(draft?.matched_customer_id || 0);
+            const items = (draft?.items || []).filter(line => (
+              Number(line?.matched_product_id || line?.product_id || 0) > 0
+              && Number.isInteger(Number(line?.quantity))
+              && Number(line.quantity) > 0
+            ));
+            if (!customerId || !items.length || items.some(line => line?._inventory?.loading || line?._inventory?.stale)) return;
+            const generation = Number(draft._inventory_authority_generation || 0) + 1;
+            draft._inventory_authority_generation = generation;
+            items.forEach(line => {
+              const state = line._inventory || this.newOrderInventoryState();
+              state.authoritative_loading = true;
+              state.authoritative_error = "";
+              line._inventory = state;
+            });
+            try {
+              const payload = {
+                customer_id:customerId,
+                items:items.map(line => ({
+                  client_line_id:String(line.client_line_id || ""),
+                  product_id:Number(line.matched_product_id || line.product_id),
+                  quantity:Number(line.quantity),
+                  material:this.pdfImportItemMaterialCode(line),
+                  flute_type:line.flute_type || null,
+                  reservation_plan:this.buildReservationPlan(line),
+                  finished_skipped:!!line._inventory?.finished?.skipped,
+                })),
+              };
+              const { data } = await axios.post("/api/orders/inventory-draft-preview", payload);
+              if (Number(draft._inventory_authority_generation) !== generation) return;
+              const byLineId = new Map((data?.items || []).map(row => [String(row.client_line_id), row]));
+              items.forEach(line => {
+                const authority = byLineId.get(String(line.client_line_id));
+                line._inventory.authoritative = authority || null;
+                line._inventory.authoritative_error = authority ? "" : "系统未返回本行库存计算结果";
+              });
+            } catch (error) {
+              if (Number(draft._inventory_authority_generation) !== generation) return;
+              const message = `库存与报料数量计算失败：${this.errorMessage(error)}`;
+              items.forEach(line => {
+                line._inventory.authoritative = null;
+                line._inventory.authoritative_error = message;
+              });
+            } finally {
+              if (Number(draft._inventory_authority_generation) === generation) {
+                items.forEach(line => { line._inventory.authoritative_loading = false; });
+              }
+            }
+          },
           reallocateAllDraftInventory() {
             this.reallocateDraftInventorySequentially(this.orderForm.items);
-            this.orderImportDrafts.forEach(draft => this.reallocateDraftInventorySequentially(draft.items));
+            this.orderImportDrafts.forEach(draft => {
+              this.reallocateDraftInventorySequentially(draft.items);
+              this.schedulePdfDraftInventoryAuthority(draft);
+            });
           },
           buildReservationPlan(line) {
             const state = line._inventory || this.newOrderInventoryState();
@@ -12991,6 +13358,11 @@
             this.refreshPdfPriceConflict(prepared);
             return prepared;
           },
+          pdfImportItemMaterialCode(item) {
+            return (item?.material_candidates || [])
+              .find(row => Number(row.id) === Number(item?.matched_material_id))
+              ?.code || null;
+          },
           applyPdfImportEditToDraft(item, edit) {
             item.product_name = String(edit.product_name || "").trim();
             item.specification = String(edit.specification || "").trim();
@@ -13957,7 +14329,7 @@
                     items:draft.items.map(item => {
                       // 优先使用常用箱数据，回退到 PDF 原始识别
                       const useStd = !!(item.matched_product_id && !item.is_new_product);
-                      const matCode = (item.material_candidates || []).find(row => row.id === item.matched_material_id)?.code || null;
+                      const matCode = this.pdfImportItemMaterialCode(item);
                       return {
                         client_line_id: item.client_line_id || createIdempotencyKey(),
                         reservation_plan: this.buildReservationPlan(item),
@@ -15885,6 +16257,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+            if (this.pdfWarehouseLocator.visible) {
+              this.closePdfWarehouseLocator();
+              return;
+            }
             if (
               this.modal?.type === "delivery"
               && this.deliveryFormHasUnsavedChanges()

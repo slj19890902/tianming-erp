@@ -99,7 +99,7 @@ def test_warehouse_page_has_required_sections_and_no_missing_assets() -> None:
     assert "<link rel=" not in WAREHOUSE_HTML
     assert 'href="/"' in WAREHOUSE_HTML
     assert 'body.embedded>header{display:none}' in WAREHOUSE_HTML
-    assert 'new URLSearchParams(window.location.search).get("embedded") === "1"' in WAREHOUSE_HTML
+    assert 'const warehouseEmbeddedMode = warehouseSearchParams.get("embedded") === "1";' in WAREHOUSE_HTML
     for empty_text in ("暂无库存批次", "暂无库位", "暂无库存流水"):
         assert empty_text in WAREHOUSE_HTML
     assert "/api/warehouse/insights" in WAREHOUSE_HTML

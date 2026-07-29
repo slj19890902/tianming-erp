@@ -184,6 +184,7 @@ from app.services.warehouse_inventory import (
     active_finished_reserved_qty,
     active_finished_reservations_by_item_ids,
     component_inventory_coverage,
+    finished_inventory_candidates_for_product,
     has_unconsumed_inventory_reservations,
     normalize_material_code,
     release_active_finished_reservations_for_items,
@@ -201,6 +202,13 @@ from app.services.semi_finished_inventory import (
     reserve_semi_finished_inventory,
     save_order_item_semi_requirement,
     semi_finished_inventory_candidates,
+)
+from app.services.requisition_quantities import (
+    CUTTING_MODE_BOX_STYLES,
+    DEFAULT_CUTTING_MODE,
+    cutting_factor,
+    purchase_sheet_quantity,
+    required_piece_quantity,
 )
 
 
@@ -385,6 +393,27 @@ class OrderItemReservationPlan(BaseModel):
 
     finished: list[FinishedReservationPlanEntry] = Field(default_factory=list)
     semi: list[SemiReservationPlanEntry] = Field(default_factory=list)
+
+
+class InventoryDraftPreviewItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    client_line_id: str = Field(min_length=1, max_length=100)
+    product_id: int = Field(gt=0, strict=True)
+    quantity: int = Field(gt=0, strict=True)
+    material: str | None = None
+    flute_type: str | None = None
+    reservation_plan: OrderItemReservationPlan = Field(
+        default_factory=OrderItemReservationPlan
+    )
+    finished_skipped: bool = False
+
+
+class InventoryDraftPreviewPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    customer_id: int = Field(gt=0, strict=True)
+    items: list[InventoryDraftPreviewItem] = Field(min_length=1, max_length=200)
 
 
 class NewOrderBomComponentDemand(BaseModel):
@@ -890,6 +919,7 @@ def _preflight_reservation_plans(
         if plan is None:
             continue
         product = resolved_products[index]
+        component_yields: dict[str, int] = {}
         if is_composite_product(product):
             if plan.finished or plan.semi:
                 raise WarehouseInventoryError(
@@ -945,12 +975,20 @@ def _preflight_reservation_plans(
                 detail = lot.semi_finished_detail
                 if lot.inventory_type != "semi_finished" or detail is None:
                     raise WarehouseInventoryError("所选批次不是半成品库存", 409)
+                current_yield = max(int(detail.stock_yield_per_sheet or 1), 1)
+                prior_yield = component_yields.get(entry.component_type)
+                if prior_yield is not None and prior_yield != current_yield:
+                    raise WarehouseInventoryError(
+                        f"第{index}条明细同一组件不能混用不同每张产出的半成品批次",
+                        409,
+                    )
+                component_yields[entry.component_type] = current_yield
                 expected = _preflight_semi_signature(
                     customer_id=customer_id,
                     product=product,
                     item_payload=item_payload,
                     component_type=entry.component_type,
-                    stock_yield_per_sheet=detail.stock_yield_per_sheet,
+                    stock_yield_per_sheet=current_yield,
                 )
                 scope = ensure_semi_finished_lot_eligibility(
                     db,
@@ -2446,6 +2484,285 @@ def _pdf_failure_draft(
         "duplicate_status": None,
         "items": [],
         "warnings": [f"{label}：{error.message}"],
+    }
+
+
+def _draft_preview_cutting_mode(product: Product) -> str:
+    box_style = (product.box_style or "").strip()
+    if box_style not in CUTTING_MODE_BOX_STYLES:
+        return DEFAULT_CUTTING_MODE
+    mode = (product.default_cutting_mode or "").strip()
+    return mode if cutting_factor(mode) > 1 or mode == DEFAULT_CUTTING_MODE else DEFAULT_CUTTING_MODE
+
+
+def _draft_preview_component_specs(product: Product) -> list[dict[str, int | str]]:
+    if _is_telescoping_product(product):
+        return [
+            {"component_type": "cover", "pieces_per_box": 1},
+            {"component_type": "base", "pieces_per_box": 1},
+        ]
+    pieces_per_box = max(
+        int(
+            product.pieces_per_box
+            or (2 if (product.splice_mode or "").strip().lower() == "double" else 1)
+        ),
+        1,
+    )
+    return [{"component_type": "whole", "pieces_per_box": pieces_per_box}]
+
+
+@router.post("/inventory-draft-preview")
+def preview_order_inventory_draft(
+    payload: InventoryDraftPreviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """Return the authoritative read-only quantity contract for a new-order draft.
+
+    This endpoint deliberately accepts the complete draft.  Shared lots are
+    simulated once, in line order, so a physical balance cannot be counted in
+    two PDF rows.  It creates no order, reservation, movement, or inventory
+    mutation; formal save still performs the existing transactional preflight.
+    """
+
+    if not has_permission(user, "warehouse.view"):
+        raise HTTPException(status_code=403, detail="当前账号没有仓库库存查看权限")
+    require_customer_access(payload.customer_id, user, db)
+
+    client_line_ids: set[str] = set()
+    for index, draft_item in enumerate(payload.items, start=1):
+        client_line_id = draft_item.client_line_id.strip()
+        if client_line_id in client_line_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=f"第{index}条明细 client_line_id 重复",
+            )
+        client_line_ids.add(client_line_id)
+
+    products: list[Product] = []
+    preflight_items: list[OrderItemCreate] = []
+    resolved_products: dict[int, Product] = {}
+    for index, draft_item in enumerate(payload.items, start=1):
+        product = db.get(Product, draft_item.product_id)
+        if product is None or product.deleted_at is not None or not product.is_active:
+            raise HTTPException(
+                status_code=404,
+                detail=f"第{index}条明细产品不存在或已停用",
+            )
+        if product.customer_id != payload.customer_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"第{index}条明细产品不属于所选客户",
+            )
+        products.append(product)
+        if is_composite_product(product):
+            if draft_item.reservation_plan.finished or draft_item.reservation_plan.semi:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"第{index}条组合产品不能建立父项库存抵扣计划",
+                )
+            continue
+        preflight_index = len(preflight_items) + 1
+        preflight_items.append(
+            OrderItemCreate(
+                client_line_id=draft_item.client_line_id,
+                product_id=draft_item.product_id,
+                quantity=draft_item.quantity,
+                unit_price=Decimal("0"),
+                material=draft_item.material,
+                flute_type=draft_item.flute_type,
+                reservation_plan=draft_item.reservation_plan,
+            )
+        )
+        resolved_products[preflight_index] = product
+
+    if preflight_items:
+        try:
+            _preflight_reservation_plans(
+                db,
+                customer_id=payload.customer_id,
+                payload_items=preflight_items,
+                resolved_products=resolved_products,
+            )
+        except WarehouseInventoryError as error:
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+
+    used_stock_by_lot: dict[int, int] = {}
+    response_items: list[dict] = []
+    for draft_item, product in zip(payload.items, products, strict=True):
+        order_quantity = int(draft_item.quantity)
+        if is_composite_product(product):
+            response_items.append(
+                {
+                    "client_line_id": draft_item.client_line_id,
+                    "product_id": product.id,
+                    "order_quantity": order_quantity,
+                    "interaction_state": "decision_required",
+                    "coverage_state": "unsupported",
+                    "message": "组合产品需进入订单明细后按父件和组件分别计算库存与报料",
+                    "requisition_unit": "张",
+                    "requisition_components": [],
+                }
+            )
+            continue
+
+        candidates = finished_inventory_candidates_for_product(
+            db,
+            customer_id=payload.customer_id,
+            product_id=product.id,
+        )
+        candidate_available_quantity = sum(
+            max(
+                int(lot.quantity_available or 0)
+                - used_stock_by_lot.get(lot.id, 0),
+                0,
+            )
+            for lot in candidates
+        )
+        remaining_boxes = order_quantity
+        planned_finished_quantity = 0
+        for entry in draft_item.reservation_plan.finished:
+            if remaining_boxes <= 0:
+                break
+            lot = db.get(InventoryLot, entry.lot_id)
+            if lot is None:
+                continue
+            used_quantity = used_stock_by_lot.get(lot.id, 0)
+            available_quantity = max(
+                int(lot.quantity_available or 0) - used_quantity,
+                0,
+            )
+            allocated_quantity = min(
+                int(entry.requested_qty),
+                remaining_boxes,
+                available_quantity,
+            )
+            if allocated_quantity <= 0:
+                continue
+            used_stock_by_lot[lot.id] = used_quantity + allocated_quantity
+            planned_finished_quantity += allocated_quantity
+            remaining_boxes -= allocated_quantity
+
+        production_required_quantity = max(
+            order_quantity - planned_finished_quantity,
+            0,
+        )
+        cutting_mode = _draft_preview_cutting_mode(product)
+        component_rows: list[dict] = []
+        for component in _draft_preview_component_specs(product):
+            component_type = str(component["component_type"])
+            pieces_per_box = int(component["pieces_per_box"])
+            required_pieces = required_piece_quantity(
+                production_required_quantity,
+                pieces_per_box,
+            )
+            remaining_pieces = required_pieces
+            semi_planned_pieces = 0
+            for entry in draft_item.reservation_plan.semi:
+                if entry.component_type != component_type or remaining_pieces <= 0:
+                    continue
+                lot = db.get(InventoryLot, entry.lot_id)
+                detail = lot.semi_finished_detail if lot is not None else None
+                if lot is None or detail is None:
+                    continue
+                output_per_stock_sheet = max(
+                    int(detail.stock_yield_per_sheet or 1),
+                    1,
+                )
+                used_sheets = used_stock_by_lot.get(lot.id, 0)
+                available_sheets = max(
+                    int(lot.quantity_available or 0) - used_sheets,
+                    0,
+                )
+                allocated_pieces = min(
+                    int(entry.requested_qty),
+                    remaining_pieces,
+                    available_sheets * output_per_stock_sheet,
+                )
+                if allocated_pieces <= 0:
+                    continue
+                consumed_sheets = (
+                    allocated_pieces + output_per_stock_sheet - 1
+                ) // output_per_stock_sheet
+                used_stock_by_lot[lot.id] = used_sheets + consumed_sheets
+                semi_planned_pieces += allocated_pieces
+                remaining_pieces -= allocated_pieces
+
+            component_rows.append(
+                {
+                    "component_type": component_type,
+                    "pieces_per_box": pieces_per_box,
+                    "required_piece_quantity": required_pieces,
+                    "semi_planned_requirement_quantity": semi_planned_pieces,
+                    "remaining_required_piece_quantity": remaining_pieces,
+                    "cutting_mode": cutting_mode,
+                    "cutting_factor": cutting_factor(cutting_mode),
+                    "requisition_sheet_quantity": purchase_sheet_quantity(
+                        remaining_pieces,
+                        0,
+                        cutting_mode,
+                    ),
+                    "requisition_unit": "张",
+                }
+            )
+
+        if planned_finished_quantity == order_quantity and planned_finished_quantity > 0:
+            coverage_state = "full"
+        elif planned_finished_quantity > 0:
+            coverage_state = "partial"
+        elif candidate_available_quantity <= 0:
+            coverage_state = "none"
+        else:
+            coverage_state = "candidates_unplanned"
+        interaction_state = (
+            "skipped"
+            if coverage_state == "candidates_unplanned" and draft_item.finished_skipped
+            else (
+                "decision_required"
+                if coverage_state == "candidates_unplanned"
+                else "ready"
+            )
+        )
+        response_items.append(
+            {
+                "client_line_id": draft_item.client_line_id,
+                "product_id": product.id,
+                "order_quantity": order_quantity,
+                "interaction_state": interaction_state,
+                "coverage_state": coverage_state,
+                "finished_candidate_available_quantity": candidate_available_quantity,
+                "finished_planned_quantity": planned_finished_quantity,
+                "production_required_quantity": production_required_quantity,
+                "shortage_quantity": production_required_quantity,
+                "required_piece_quantity": sum(
+                    int(row["required_piece_quantity"]) for row in component_rows
+                ),
+                "semi_planned_requirement_quantity": sum(
+                    int(row["semi_planned_requirement_quantity"])
+                    for row in component_rows
+                ),
+                "remaining_required_piece_quantity": sum(
+                    int(row["remaining_required_piece_quantity"])
+                    for row in component_rows
+                ),
+                "requisition_sheet_quantity": sum(
+                    int(row["requisition_sheet_quantity"])
+                    for row in component_rows
+                ),
+                "requisition_unit": "张",
+                "cutting_mode": cutting_mode,
+                "cutting_factor": cutting_factor(cutting_mode),
+                "requisition_components": component_rows,
+            }
+        )
+
+    return {
+        "customer_id": payload.customer_id,
+        "calculation_scope": "read_only_new_order_draft",
+        "items": response_items,
     }
 
 

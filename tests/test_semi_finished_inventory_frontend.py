@@ -338,12 +338,14 @@ def test_pdf_direct_save_carries_the_same_reservation_plan() -> None:
     assert "reservation_plan: this.buildReservationPlan(item)" in source
 
 
-def test_new_and_pdf_order_quantity_cells_share_automatic_inventory_summary() -> None:
+def test_manual_order_keeps_summary_and_pdf_uses_authoritative_three_state() -> None:
     assert 'class="btn small success inventory-recommend-button"' not in INDEX
     assert '@click="confirmSafeOrderLineInventoryRecommendations(item)"' not in INDEX
-    assert INDEX.count("orderLineInventoryAutoSummary(item)") == 2
-    assert INDEX.count("orderLineInventoryNeedsAttention(item)") >= 4
-    assert INDEX.count("查看库存安排") == 2
+    assert INDEX.count("orderLineInventoryAutoSummary(item)") == 1
+    assert INDEX.count("查看库存安排") == 1
+    assert "pdfInventoryDisplayState(item)" in INDEX
+    assert "pdfInventoryRequisitionText(item)" in INDEX
+    assert "item._inventory.authoritative" in INDEX
     assert "下单${orderQuantity}" in INDEX
     assert "现有成品${availableFinished}" in INDEX
     assert "自动预占${reservedFinished}" in INDEX

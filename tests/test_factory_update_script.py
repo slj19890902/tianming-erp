@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.30"
-    assert APP_VERSION_NAME == "订单与仓库工作台（地图入口）"
+    assert APP_VERSION == "v0.22.31"
+    assert APP_VERSION_NAME == "PDF订单库存三态与库位定位"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,20 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "一级导航" in item and "订单与仓库" in item
+        "本次更新｜" in item and "库存状态" in item and "有库存" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "真实三楼二维地图" in item and "不生成假区域" in item
+        "本次更新｜" in item and "只读地图" in item
+        for item in current_release
+    )
+    assert any("本次更新｜" in item and "不产生预占" in item for item in current_release)
+    assert any(
+        "如何验证｜" in item and "足额" in item and "无库存" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "订单与仓库" in item and "仓库地图" in item
-        for item in current_release
-    )
-    assert any(
-        "如何验证｜" in item and "一楼" in item and "虚构库存" in item
+        "如何验证｜" in item and "浏览器返回" in item and "PDF草稿" in item
         for item in current_release
     )
     assert any(

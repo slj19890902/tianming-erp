@@ -955,6 +955,8 @@ def test_manual_pdf_customer_product_and_quantity_confirmation_allows_save_and_l
     from app.models.material import Material
     from app.models.order import OrderItem
     from app.models.product import Product
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
 
     app = _order_import_app(tmp_path)
     dependency = app.dependency_overrides[get_db]
@@ -974,7 +976,26 @@ def test_manual_pdf_customer_product_and_quantity_confirmation_allows_save_and_l
         layer_count=3,
         flute_type="B",
     )
-    db.add_all([current_material, pdf_candidate])
+    db.add_all(
+        [
+            Supplier(
+                standard_name="P1 Supplier",
+                normalized_name=normalize_supplier_identity("P1 Supplier"),
+                display_name="P1 Supplier",
+                is_active=True,
+                version=1,
+            ),
+            Supplier(
+                standard_name="PDF Supplier",
+                normalized_name=normalize_supplier_identity("PDF Supplier"),
+                display_name="PDF Supplier",
+                is_active=True,
+                version=1,
+            ),
+            current_material,
+            pdf_candidate,
+        ]
+    )
     db.flush()
     product = db.get(Product, 1)
     assert product is not None
@@ -1340,7 +1361,7 @@ def test_pdf_draft_edits_and_reservation_changes_invalidate_confirmation() -> No
 
     assert "invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh" in source
     assert (
-        'v-model="item.unit_price" style="width:75px" '
+        'v-model="item.unit_price" '
         '@input="invalidateImportDraftConfirmation(draft); refreshPdfPriceConflict(item)"'
         in source
     )

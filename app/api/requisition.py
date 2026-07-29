@@ -136,6 +136,14 @@ from app.services.customer_material_candidates import (
     normalize_material_candidate_key,
     normalize_supplier_candidate_key,
 )
+from app.services.requisition_quantities import (
+    CUTTING_MODE_BOX_STYLES,
+    CUTTING_MODE_FACTORS,
+    DEFAULT_CUTTING_MODE,
+    cutting_factor,
+    purchase_sheet_quantity,
+    required_piece_quantity,
+)
 
 
 router = APIRouter()
@@ -143,15 +151,6 @@ can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
-CUTTING_MODE_FACTORS = {
-    "一开一": 1,
-    "一开二": 2,
-    "一开三": 3,
-    "一开四": 4,
-    "一开五": 5,
-}
-DEFAULT_CUTTING_MODE = "一开一"
-CUTTING_MODE_BOX_STYLES = {"平卡", "模切内盒", "隔板", "刀卡"}
 INACTIVE_REQUISITION_ITEM_STATUSES = {
     "cancelled",
     "canceled",
@@ -785,17 +784,19 @@ def _component_crease(item: OrderItem, component: str | None) -> tuple[str | Non
 
 
 def _cutting_factor(cutting_mode: str | None) -> int:
-    return CUTTING_MODE_FACTORS.get((cutting_mode or "").strip(), 1)
+    return cutting_factor(cutting_mode)
 
 
 def _required_piece_qty(order_qty: int, pieces_per_box: int) -> int:
-    return max(int(order_qty or 0), 0) * max(int(pieces_per_box or 1), 1)
+    return required_piece_quantity(order_qty, pieces_per_box)
 
 
 def _purchase_qty(required_piece_qty: int, inventory_deducted_qty: int, cutting_mode: str | None) -> int:
-    remaining = max(int(required_piece_qty or 0) - max(int(inventory_deducted_qty or 0), 0), 0)
-    factor = _cutting_factor(cutting_mode)
-    return (remaining + factor - 1) // factor
+    return purchase_sheet_quantity(
+        required_piece_qty,
+        inventory_deducted_qty,
+        cutting_mode,
+    )
 
 
 class _PendingRequisitionReadContext:

@@ -810,6 +810,19 @@ def _require_reservation_customer_access(
         require_customer_access(customer_id, user, db)
 
 
+def _location_map_status(row: WarehouseLocation) -> str:
+    if int(row.warehouse_floor or 0) != 3:
+        return "ledger_only"
+    if (
+        row.source_version != "V11"
+        or (row.placement_status or "placed") != "placed"
+        or not row.is_active
+        or row.floor3_layout is None
+    ):
+        return "unplaced"
+    return "floor3_mapped"
+
+
 def _location_dict(row: WarehouseLocation) -> dict:
     return {
         "id": row.id,
@@ -826,6 +839,7 @@ def _location_dict(row: WarehouseLocation) -> dict:
         "source_version": getattr(row, "source_version", None),
         "placement_status": getattr(row, "placement_status", None) or "placed",
         "is_active": row.is_active,
+        "map_status": _location_map_status(row),
         "remarks": row.remarks,
     }
 
@@ -1468,11 +1482,7 @@ def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
         "match_rule_id": row.match_rule_id,
         "available_stock_quantity": row.available_stock_quantity,
         "deductible_requirement_quantity": row.deductible_requirement_quantity,
-        "warehouse_location": {
-            "id": lot.location.id,
-            "location_code": lot.location.location_code,
-            "location_name": lot.location.location_name,
-        },
+        "warehouse_location": _location_dict(lot.location),
         "customer_id": detail.owner_customer_id,
         "customer_name": detail.owner_customer_name_snapshot,
         "board_length_mm": detail.board_length_mm,
@@ -1952,11 +1962,7 @@ def finished_product_candidates(
                     "version": lot.version,
                     "is_general": lot.finished_detail.is_general,
                     "quantity_available": lot.quantity_available,
-                    "warehouse_location": {
-                        "id": lot.location.id,
-                        "location_code": lot.location.location_code,
-                        "location_name": lot.location.location_name,
-                    },
+                    "warehouse_location": _location_dict(lot.location),
                     "warning_codes": (
                         ["GENERAL_FINISHED_STOCK"]
                         if lot.finished_detail.is_general

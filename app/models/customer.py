@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.customer_quote_preference import CustomerQuotePreference
     from app.models.product import Product
 
 
@@ -97,6 +98,10 @@ class Customer(Base):
     )
 
     products: Mapped[list["Product"]] = relationship(
+        back_populates="customer",
+        passive_deletes=True,
+    )
+    quote_preferences: Mapped[list["CustomerQuotePreference"]] = relationship(
         back_populates="customer",
         passive_deletes=True,
     )

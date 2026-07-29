@@ -13,11 +13,14 @@ from app.api.deps import (
     PermissionChecker,
     customer_scope_ids,
     get_db,
+    has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
 )
 from app.api.master_data_common import audit_master_change, clean_code
 from app.models.customer import Customer
+from app.models.customer_quote_preference import CustomerQuotePreference
+from app.models.material import Material
 from app.models.access_control import UserCustomerScope
 from app.models.order import Order
 from app.models.user import User
@@ -25,6 +28,13 @@ from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
 )
+from app.services.customer_quote_pricing import (
+    CustomerQuotePricingError,
+    canonical_quote_box_type,
+    estimate_a1_unit_price,
+    resolve_customer_square_price,
+)
+from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
 
 
 router = APIRouter()
@@ -94,6 +104,46 @@ class CustomerStatusPayload(CustomerMutationPayload):
     is_active: bool
 
 
+class CustomerQuotePreferenceCreatePayload(BaseModel):
+    box_type: str = Field(min_length=1, max_length=150)
+    material_id: int = Field(gt=0)
+    flute_type: str = Field(min_length=1, max_length=20)
+    tax_included_square_price: Decimal = Field(gt=0)
+    is_active: bool = True
+
+    @field_validator("box_type", "flute_type")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("不能为空")
+        return cleaned.upper()
+
+
+class CustomerQuotePreferenceUpdatePayload(BaseModel):
+    tax_included_square_price: Decimal = Field(gt=0)
+    is_active: bool
+    expected_version: int = Field(ge=1)
+
+
+class CustomerQuoteEstimatePayload(BaseModel):
+    box_type: str = Field(min_length=1, max_length=150)
+    material_id: int = Field(gt=0)
+    flute_type: str = Field(min_length=1, max_length=20)
+    length_mm: Decimal = Field(gt=0)
+    width_mm: Decimal = Field(gt=0)
+    height_mm: Decimal = Field(gt=0)
+    manual_unit_price: Decimal | None = Field(default=None, ge=0)
+
+    @field_validator("box_type", "flute_type")
+    @classmethod
+    def strip_estimate_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("不能为空")
+        return cleaned.upper()
+
+
 def _customer_write_data(payload: CustomerPayload) -> dict:
     data = payload.model_dump(include=set(CustomerPayload.model_fields))
     data.update(
@@ -117,6 +167,69 @@ def _customer_or_404(db: Session, customer_id: int) -> Customer:
     if customer is None:
         raise HTTPException(status_code=404, detail="客户不存在")
     return customer
+
+
+def _quote_preference_or_404(
+    db: Session, customer_id: int, preference_id: int
+) -> CustomerQuotePreference:
+    preference = db.scalar(
+        select(CustomerQuotePreference).where(
+            CustomerQuotePreference.id == preference_id,
+            CustomerQuotePreference.customer_id == customer_id,
+        )
+    )
+    if preference is None:
+        raise HTTPException(status_code=404, detail="客户报价偏好不存在")
+    return preference
+
+
+def _validated_preference_flute(material: Material, flute_type: str) -> str:
+    flute = normalize_flute_type(flute_type)
+    error = validate_flute_consistency(flute, material.layer_count)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    if not flute:
+        raise HTTPException(status_code=400, detail="楞型不能为空")
+    return flute
+
+
+def _normalized_quote_box_type(box_type: str) -> str:
+    return canonical_quote_box_type(box_type)
+
+
+def _require_a1_quote_box_type(box_type: str) -> str:
+    normalized = _normalized_quote_box_type(box_type)
+    if normalized != "A1":
+        raise HTTPException(status_code=400, detail="当前仅支持 A1/0201 尺寸报价试算")
+    return normalized
+
+
+def _quote_preference_response(preference: CustomerQuotePreference) -> dict:
+    return {
+        "id": preference.id,
+        "customer_id": preference.customer_id,
+        "box_type": preference.box_type,
+        "material_id": preference.material_id,
+        "material_code": preference.material.code if preference.material else None,
+        "supplier_name": preference.material.supplier_name if preference.material else None,
+        "layer_count": preference.material.layer_count if preference.material else None,
+        "material_display": (
+            " / ".join(
+                part
+                for part in (
+                    preference.material.code,
+                    preference.material.supplier_name,
+                )
+                if part
+            )
+            if preference.material
+            else None
+        ),
+        "flute_type": preference.flute_type,
+        "tax_included_square_price": preference.tax_included_square_price,
+        "is_active": preference.is_active,
+        "version": preference.version,
+    }
 
 
 @router.get("")
@@ -165,6 +278,179 @@ def get_customer(
 ) -> CustomerResponse:
     require_customer_access(customer_id, current_user=user, db=db)
     return CustomerResponse.model_validate(_customer_or_404(db, customer_id))
+
+
+@router.get("/{customer_id}/quote-preferences")
+def list_customer_quote_preferences(
+    customer_id: int,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    _customer_or_404(db, customer_id)
+    statement = (
+        select(CustomerQuotePreference)
+        .where(CustomerQuotePreference.customer_id == customer_id)
+        .order_by(
+            CustomerQuotePreference.box_type,
+            CustomerQuotePreference.material_id,
+            CustomerQuotePreference.flute_type,
+            CustomerQuotePreference.id,
+        )
+    )
+    if not include_inactive:
+        statement = statement.where(CustomerQuotePreference.is_active.is_(True))
+    preferences = db.scalars(statement).all()
+    return {"items": [_quote_preference_response(item) for item in preferences]}
+
+
+@router.post("/{customer_id}/quote-preferences", status_code=status.HTTP_201_CREATED)
+def create_customer_quote_preference(
+    customer_id: int,
+    payload: CustomerQuotePreferenceCreatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    _customer_or_404(db, customer_id)
+    material = db.get(Material, payload.material_id)
+    if material is None or not material.is_active:
+        raise HTTPException(status_code=400, detail="所选材质不存在或已停用")
+    flute = _validated_preference_flute(material, payload.flute_type)
+    preference = CustomerQuotePreference(
+        customer_id=customer_id,
+        box_type=_normalized_quote_box_type(payload.box_type),
+        material_id=material.id,
+        flute_type=flute,
+        tax_included_square_price=payload.tax_included_square_price,
+        is_active=payload.is_active,
+    )
+    try:
+        db.add(preference)
+        db.flush()
+        audit_master_change(
+            db,
+            user=user,
+            action="CREATE",
+            resource="CustomerQuotePreference",
+            resource_id=preference.id,
+            details={"after": _quote_preference_response(preference)},
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="该客户、箱型、材质和楞型的报价偏好已存在",
+        ) from error
+    db.refresh(preference)
+    return _quote_preference_response(preference)
+
+
+@router.put("/{customer_id}/quote-preferences/{preference_id}")
+def update_customer_quote_preference(
+    customer_id: int,
+    preference_id: int,
+    payload: CustomerQuotePreferenceUpdatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    preference = _quote_preference_or_404(db, customer_id, preference_id)
+    if preference.version != payload.expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"客户报价偏好已从 v{payload.expected_version} 更新为 "
+                f"v{preference.version}，请刷新后再保存"
+            ),
+        )
+    before = _quote_preference_response(preference)
+    updates = {
+        "tax_included_square_price": payload.tax_included_square_price,
+        "is_active": payload.is_active,
+    }
+    changed = {
+        key: value for key, value in updates.items() if getattr(preference, key) != value
+    }
+    if changed:
+        for key, value in changed.items():
+            setattr(preference, key, value)
+        preference.version += 1
+        db.flush()
+        audit_master_change(
+            db,
+            user=user,
+            action="UPDATE",
+            resource="CustomerQuotePreference",
+            resource_id=preference.id,
+            details={
+                "before": before,
+                "after": _quote_preference_response(preference),
+                "change_reason": "修改客户尺寸报价偏好",
+            },
+        )
+        db.commit()
+    db.refresh(preference)
+    return _quote_preference_response(preference)
+
+
+@router.post("/{customer_id}/quote-preferences/estimate")
+def estimate_customer_quote_preference(
+    customer_id: int,
+    payload: CustomerQuoteEstimatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    _customer_or_404(db, customer_id)
+    material = db.get(Material, payload.material_id)
+    if material is None or not material.is_active:
+        raise HTTPException(status_code=400, detail="所选材质不存在或已停用")
+    flute = _validated_preference_flute(material, payload.flute_type)
+    box_type = _require_a1_quote_box_type(payload.box_type)
+    preference = db.scalar(
+        select(CustomerQuotePreference)
+        .where(
+            CustomerQuotePreference.customer_id == customer_id,
+            CustomerQuotePreference.box_type == box_type,
+            CustomerQuotePreference.material_id == material.id,
+            CustomerQuotePreference.flute_type == flute,
+            CustomerQuotePreference.is_active.is_(True),
+        )
+        .order_by(CustomerQuotePreference.id.desc())
+    )
+    try:
+        square = resolve_customer_square_price(
+            db,
+            material=material,
+            flute_type=flute,
+            saved_square_price=(
+                preference.tax_included_square_price if preference is not None else None
+            ),
+        )
+        estimate = estimate_a1_unit_price(
+            length_mm=payload.length_mm,
+            width_mm=payload.width_mm,
+            height_mm=payload.height_mm,
+            customer_square_price=square["customer_square_price"],
+            manual_unit_price=payload.manual_unit_price,
+        )
+    except CustomerQuotePricingError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    response = {
+        "customer_id": customer_id,
+        "box_type": box_type,
+        "material_id": material.id,
+        "flute_type": flute,
+        "preference_id": preference.id if preference is not None else None,
+        **square,
+        **estimate,
+    }
+    if not has_permission(user, "cost.view"):
+        response["material_effective_square_price"] = None
+    return response
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

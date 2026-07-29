@@ -253,6 +253,30 @@ def test_product_search_combines_code_name_material_and_dimensions(
     assert response.json()["items"][0]["product_code"] == "TH001"
 
 
+@pytest.mark.parametrize("spec", ["520×350×300", "520 350 300", "520x350x300"])
+def test_product_picker_filters_customer_code_name_and_full_specification(
+    master_data_app: FastAPI,
+    spec: str,
+) -> None:
+    with TestClient(master_data_app) as client:
+        _login(client, "sales")
+        response = client.get(
+            "/api/master/products",
+            params={
+                "customer_id": 1,
+                "product_code": "TH0",
+                "product_name": "加强",
+                "spec": spec,
+                "page": 1,
+                "page_size": 50,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["product_code"] == "TH001"
+
+
 def test_public_customer_alias_requires_login_and_hides_legacy_trace_fields(
     master_data_app: FastAPI,
 ) -> None:

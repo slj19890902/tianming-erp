@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+from collections.abc import Generator
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlalchemy.orm import Session, sessionmaker
+
+
+@pytest.fixture()
+def delivery_scaling_app(tmp_path: Path):
+    """A deterministic 24-row page plus 24 pending-candidate fixture.
+
+    It deliberately uses normal business rows instead of mocks, so a future
+    batch serializer must preserve the delivery/candidate contract while its
+    SQL count no longer grows per row.
+    """
+
+    from app.api.auth import router as auth_router
+    from app.api.deliveries import router as deliveries_router
+    from app.api.deps import get_db
+    from app.core.database import create_sqlite_engine
+    from app.core.security import hash_password
+    from app.models import Base
+    from app.models.access_control import UserCustomerScope, UserPermissionOverride
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.user import User
+
+    engine = create_sqlite_engine(tmp_path / "p1-09b-scaling.sqlite3")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as db:
+        admin = User(
+            username="p109b-admin",
+            password_hash=hash_password("P109bPass123!"),
+            role="admin",
+            real_name="P1-09B 管理员",
+            display_name="P1-09B 管理员",
+            must_change_password=False,
+        )
+        scoped = User(
+            username="p109b-scoped",
+            password_hash=hash_password("P109bPass123!"),
+            role="sales",
+            real_name="P1-09B 范围用户",
+            display_name="P1-09B 范围用户",
+            customer_access_mode="selected",
+            must_change_password=False,
+        )
+        customer = Customer(
+            customer_number=901,
+            customer_code="P109A",
+            name="P1-09B 性能客户",
+            payment_term_days=30,
+            credit_limit=Decimal("0"),
+        )
+        outside_customer = Customer(
+            customer_number=902,
+            customer_code="P109B",
+            name="P1-09B 范围外客户",
+            payment_term_days=30,
+            credit_limit=Decimal("0"),
+        )
+        db.add_all([admin, scoped, customer, outside_customer])
+        db.flush()
+        db.add_all(
+            [
+                UserCustomerScope(user_id=scoped.id, customer_id=customer.id),
+                UserPermissionOverride(
+                    user_id=scoped.id,
+                    permission_code="deliveries.view",
+                    is_allowed=True,
+                ),
+                UserPermissionOverride(
+                    user_id=scoped.id,
+                    permission_code="deliveries.execute",
+                    is_allowed=True,
+                ),
+            ]
+        )
+        product = Product(
+            customer_id=customer.id,
+            product_code="P109-A-BOX",
+            customer_material_code="P109-A-BOX",
+            product_name="性能回归外箱",
+            legacy_material_text="A=B",
+            box_category="normal",
+        )
+        outside_product = Product(
+            customer_id=outside_customer.id,
+            product_code="P109-B-BOX",
+            customer_material_code="P109-B-BOX",
+            product_name="范围外外箱",
+            legacy_material_text="K=K",
+            box_category="normal",
+        )
+        db.add_all([product, outside_product])
+        db.flush()
+
+        base = datetime(2026, 7, 29, 9, 0, 0)
+        for index in range(24):
+            order = Order(
+                order_number=f"P109A-SO-{index + 1:03d}",
+                customer_id=customer.id,
+                customer_po=f"P109A-PO-{index + 1:03d}",
+                order_date=date(2026, 7, 1),
+                delivery_date=date(2026, 7, 30),
+                status="pending_delivery",
+                payment_status="unpaid",
+                total_amount=Decimal("20"),
+            )
+            db.add(order)
+            db.flush()
+            delivered_item = OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                quantity=20,
+                unit_price=Decimal("1"),
+                subtotal=Decimal("20"),
+                material_status="received",
+                delivered_quantity=0,
+                snapshot_product_name="性能回归外箱",
+                snapshot_spec="400×300×200mm",
+                snapshot_material="A=B",
+            )
+            pending_item = OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                quantity=10,
+                unit_price=Decimal("1"),
+                subtotal=Decimal("10"),
+                material_status="received",
+                delivered_quantity=0,
+                snapshot_product_name="性能候选外箱",
+                snapshot_spec="400×300×200mm",
+                snapshot_material="A=B",
+            )
+            db.add_all([delivered_item, pending_item])
+            db.flush()
+            delivery = Delivery(
+                delivery_number=f"P109A-{index + 1:04d}",
+                customer_id=customer.id,
+                delivery_date=date(2026, 7, 29),
+                status="dispatched" if index % 2 == 0 else "pending",
+                total_quantity=5,
+                created_at=base + timedelta(minutes=index),
+            )
+            db.add(delivery)
+            db.flush()
+            db.add(
+                DeliveryItem(
+                    delivery_id=delivery.id,
+                    order_item_id=delivered_item.id,
+                    delivered_quantity=5,
+                    remarks="P1-09B 金样本",
+                )
+            )
+            if index % 3 == 0:
+                db.add(
+                    ReturnReceipt(
+                        delivery_id=delivery.id,
+                        actual_received_date=date(2026, 7, 29),
+                        status="confirmed",
+                    )
+                )
+
+        outside_order = Order(
+            order_number="P109B-SO-001",
+            customer_id=outside_customer.id,
+            customer_po="P109B-PO-001",
+            order_date=date(2026, 7, 1),
+            delivery_date=date(2026, 7, 30),
+            status="pending_delivery",
+            payment_status="unpaid",
+            total_amount=Decimal("10"),
+        )
+        db.add(outside_order)
+        db.flush()
+        outside_item = OrderItem(
+            order_id=outside_order.id,
+            product_id=outside_product.id,
+            quantity=10,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("10"),
+            material_status="received",
+            delivered_quantity=0,
+            snapshot_product_name="范围外外箱",
+            snapshot_spec="400×300×200mm",
+            snapshot_material="K=K",
+        )
+        db.add(outside_item)
+        db.commit()
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(deliveries_router, prefix="/api/deliveries")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    return app, engine, {"customer_id": customer.id, "outside_customer_id": outside_customer.id}
+
+
+def _login(client: TestClient, username: str) -> None:
+    response = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": "P109bPass123!"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def _read_with_sql_count(client: TestClient, engine, path: str, *, params: dict) -> tuple[object, list[str]]:
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _many) -> None:
+        statements.append(" ".join(statement.lstrip().lower().split()))
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        response = client.get(path, params=params)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert response.status_code == 200, response.text
+    assert not any(statement.startswith(("insert ", "update ", "delete ", "replace ")) for statement in statements)
+    return response, statements
+
+
+def _select_count(statements: list[str]) -> int:
+    return sum(statement.startswith(("select ", "pragma ")) for statement in statements)
+
+
+def test_delivery_list_page_scales_without_per_row_sql_and_keeps_summary_contract(delivery_scaling_app) -> None:
+    app, engine, ids = delivery_scaling_app
+    with TestClient(app) as client:
+        _login(client, "p109b-admin")
+        small, small_sql = _read_with_sql_count(
+            client, engine, "/api/deliveries", params={"page": 1, "page_size": 5}
+        )
+        large, large_sql = _read_with_sql_count(
+            client, engine, "/api/deliveries", params={"page": 1, "page_size": 24}
+        )
+
+    assert small.json()["total"] == large.json()["total"] == 24
+    assert small.json()["page_size"] == 5
+    assert large.json()["page_size"] == 24
+    assert [row["id"] for row in small.json()["items"]] == [
+        row["id"] for row in large.json()["items"][:5]
+    ]
+    row = large.json()["items"][0]
+    assert {"id", "delivery_number", "customer_id", "customer_name", "delivery_date", "status", "pick_task", "items", "return_receipt_status"} <= set(row)
+    assert {"id", "order_item_id", "product_code", "product_name", "specification", "delivered_quantity", "inventory_sources"} <= set(row["items"][0])
+
+    # A batch implementation can spend a fixed number of queries for the page,
+    # but must not add one query family per delivery or item.
+    assert _select_count(large_sql) <= _select_count(small_sql) + 24
+
+    with TestClient(app) as client:
+        _login(client, "p109b-scoped")
+        scoped, _ = _read_with_sql_count(
+            client, engine, "/api/deliveries", params={"page": 1, "page_size": 24}
+        )
+        forbidden = client.get("/api/deliveries", params={"customer_id": ids["outside_customer_id"]})
+    assert scoped.json()["total"] == 24
+    assert forbidden.status_code == 403
+
+
+def test_pending_delivery_search_scales_by_limit_without_writes_or_scope_leak(delivery_scaling_app) -> None:
+    app, engine, ids = delivery_scaling_app
+    with TestClient(app) as client:
+        _login(client, "p109b-admin")
+        small, small_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": ids["customer_id"], "list_all": "true", "limit": 5},
+        )
+        large, large_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": ids["customer_id"], "list_all": "true", "limit": 20},
+        )
+
+    assert len(small.json()["items"]) == 5
+    assert len(large.json()["items"]) == 20
+    first = large.json()["items"][0]
+    assert {"order_item_id", "order_id", "customer_id", "product_code", "product_name", "specification", "remaining_quantity", "deliverable_quantity", "inventory_sources"} <= set(first)
+    assert _select_count(large_sql) <= _select_count(small_sql) + 24
+
+    with TestClient(app) as client:
+        _login(client, "p109b-scoped")
+        scoped, _ = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": ids["customer_id"], "list_all": "true", "limit": 5},
+        )
+        forbidden = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": ids["outside_customer_id"], "list_all": "true", "limit": 5},
+        )
+    assert len(scoped.json()["items"]) == 5
+    assert forbidden.status_code == 403

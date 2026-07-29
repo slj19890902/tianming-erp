@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
     PermissionChecker,
@@ -843,14 +843,23 @@ def list_products(
     if product_name.strip():
         query = query.where(Product.product_name.like(f"%{product_name.strip()}%"))
     if spec.strip():
-        pattern = f"%{spec.strip()}%"
-        query = query.where(
-            or_(
-                cast(Product.length_mm, String).like(pattern),
-                cast(Product.width_mm, String).like(pattern),
-                cast(Product.height_mm, String).like(pattern),
+        spec_numbers = re.findall(r"\d+(?:\.\d+)?", spec)
+        if len(spec_numbers) >= 2:
+            for column, value in zip(
+                (Product.length_mm, Product.width_mm, Product.height_mm),
+                spec_numbers[:3],
+                strict=False,
+            ):
+                query = query.where(cast(column, String).like(f"%{value}%"))
+        else:
+            pattern = f"%{spec.strip()}%"
+            query = query.where(
+                or_(
+                    cast(Product.length_mm, String).like(pattern),
+                    cast(Product.width_mm, String).like(pattern),
+                    cast(Product.height_mm, String).like(pattern),
+                )
             )
-        )
     if material.strip():
         pattern = f"%{material.strip()}%"
         query = query.where(
@@ -863,7 +872,13 @@ def list_products(
         )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     items = db.scalars(
-        query.offset((page - 1) * page_size).limit(page_size)
+        query.options(
+            selectinload(Product.drawings),
+            selectinload(Product.material),
+            selectinload(Product.mold_tool),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     ).all()
     return {
         "total": total,

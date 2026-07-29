@@ -11,7 +11,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -242,6 +242,56 @@ def test_pending_items_use_strict_filter_and_remaining_quantity(
     items = response.json()["items"]
     assert [item["item_id"] for item in items] == [5, 2, 1]
     assert items[-1]["remaining_quantity"] == 80
+
+
+def test_pending_items_batches_plain_received_rows_without_row_by_row_sql(
+    delivery_api_app,
+) -> None:
+    """The ordinary material-received path stays query-bounded as rows grow."""
+
+    from app.models.order import OrderItem
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        seed = session.get(OrderItem, 1)
+        assert seed is not None
+        session.add_all(
+            OrderItem(
+                order_id=seed.order_id,
+                product_id=seed.product_id,
+                quantity=100,
+                delivered_quantity=0,
+                unit_price=seed.unit_price,
+                subtotal=seed.subtotal,
+                material_status="received",
+                snapshot_product_name=f"批量待送-{index}",
+                snapshot_spec=seed.snapshot_spec,
+                snapshot_material=seed.snapshot_material,
+            )
+            for index in range(20)
+        )
+        session.commit()
+
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.lstrip().lower())
+
+    engine = session_factory.kw["bind"]
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        with TestClient(app) as client:
+            _login(client, "workshop")
+            statements.clear()
+            response = client.get("/api/deliveries/pending_items")
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["items"]) >= 22
+    selects = [statement for statement in statements if statement.startswith("select")]
+    assert len(selects) <= 20
+    assert not any(statement.startswith(("insert", "update", "delete")) for statement in statements)
 
 
 def test_create_combined_delivery_then_partial_dispatch_once(

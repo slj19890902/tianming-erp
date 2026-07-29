@@ -1,0 +1,63 @@
+from pathlib import Path
+
+
+INDEX = Path("static/index.html").read_text(encoding="utf-8")
+
+
+def _method_block(name: str, next_name: str) -> str:
+    start = INDEX.index(name)
+    end = INDEX.index(next_name, start)
+    return INDEX[start:end]
+
+
+def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
+    load_page = _method_block("async loadPage(page", "refreshCurrent()")
+    requisition_load = _method_block("async loadRequisition()", "async loadReportedDocuments()")
+
+    assert 'if (page === "requisition") await this.loadRequisition();' in load_page
+    assert "loadCustomerOptions(force)" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
+    assert "loadMaterials()" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
+    assert 'axios.get("/api/requisition/pending", { signal:controller.signal })' in requisition_load
+    assert "/api/requisition/reported-documents" not in requisition_load
+    assert "/api/requisition/merge-suggestions" not in requisition_load
+    assert "/api/requisition/stock-policies" not in requisition_load
+    assert 'beginLatestRequest("requisition:pending")' in requisition_load
+
+
+def test_requisition_secondary_tabs_and_tools_load_on_demand() -> None:
+    tab_switch = _method_block("async selectRequisitionTab(tab)", "async refreshRequisitionTab()")
+    merge_open = _method_block("async openMergeSuggestions()", "async ensureRequisitionMaterials()")
+    replenishment_open = _method_block("async openStockReplenishment(options={})", "defaultStockLocation(type)")
+
+    assert "if (tab === \"submitted\")" in tab_switch
+    assert "this.loadReportedDocuments()" in tab_switch
+    assert "this.loadCustomerOptions()" in tab_switch
+    assert 'beginLatestRequest("requisition:reported")' in INDEX
+    assert 'beginLatestRequest("requisition:merge-suggestions")' in merge_open
+    assert 'axios.get("/api/requisition/merge-suggestions", {signal:controller.signal})' in merge_open
+    assert "mergeSuggestionsError" in merge_open
+    assert 'beginLatestRequest("requisition:stock-replenishment-bootstrap")' in replenishment_open
+    assert 'axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal})' in replenishment_open
+    assert 'axios.get("/api/requisition/stock-replenishment/locations", {signal:controller.signal})' in replenishment_open
+    assert "if (!this.allMaterials.length) tasks.push(this.loadMaterials());" in replenishment_open
+
+
+def test_requisition_materials_are_deferred_without_hiding_existing_merge_supplier() -> None:
+    material_change = _method_block("async openRequisitionMaterialChange(row)", "async loadRequisitionMaterialCandidates(itemId)")
+
+    assert "async ensureRequisitionMaterials()" in INDEX
+    assert "await this.ensureRequisitionMaterials();" in material_change
+    assert '@focus="ensureRequisitionMaterials()"' in INDEX
+    assert "const pendingGroupSuppliers" in INDEX
+    assert "pendingGroupSuppliers" in INDEX
+    assert 'v-model="group.supplier_name" @focus="ensureRequisitionMaterials()"' in INDEX
+    assert "!materialSupplierSelectOptions.includes(group.supplier_name)" in INDEX
+
+
+def test_requisition_toolbar_refreshes_only_visible_tab() -> None:
+    refresh = _method_block("async refreshRequisitionTab()", "resetReportedFilters()")
+
+    assert "if (this.requisitionTab === \"submitted\") return this.loadReportedDocuments();" in refresh
+    assert "return this.loadRequisition();" in refresh
+    assert '@click="refreshRequisitionTab"' in INDEX
+    assert '@click="selectRequisitionTab(\'submitted\')"' in INDEX

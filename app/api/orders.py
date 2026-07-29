@@ -94,6 +94,7 @@ from app.services.order_numbering import (
     reserve_next_item_sequence,
     reserve_next_order_number,
 )
+from app.services.order_document_trace import build_order_item_document_trace
 from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
     DERIVED_BUSINESS_STATUSES,
@@ -117,6 +118,11 @@ from app.services.product_import import (
     NewProductInput,
     parse_dimensions,
     resolve_or_create_product,
+)
+from app.services.manual_size_product import (
+    ManualSizeProductError,
+    ManualSizeProductInput,
+    resolve_or_create_manual_size_product,
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
@@ -359,6 +365,13 @@ class OrderItemCreate(BaseModel):
     customer_model: str | None = None  # v0.19.1: TH型号 / 客户型号
     production_notes: str | None = None  # v0.19.2-A: 生产/印刷/打勾/摆放/日文警示等行级说明
     is_new_product: bool = False
+    # P1-03: an explicit new-order-only path.  A null product_id alone never
+    # means this is a hand-entered size line.
+    manual_size_entry: bool = False
+    box_type: str | None = Field(default=None, max_length=50)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
     material_id: int | None = None
     layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
     flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
@@ -1775,13 +1788,24 @@ def _refresh_total(db: Session, order: Order) -> None:
 @router.get("")
 def list_orders(
     customer_id: int | None = None,
+    customer_ids: list[int] | None = Query(default=None),
     keyword: str | None = None,
     order_number: str | None = None,
+    customer_po: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    specification: str | None = None,
     customer_name: str | None = None,
     order_date: date | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
-    status_filter: str | None = Query(default=None, alias="status"),
+    order_date_from: date | None = None,
+    order_date_to: date | None = None,
+    delivery_date_from: date | None = None,
+    delivery_date_to: date | None = None,
+    status_filter: list[str] | None = Query(default=None, alias="status"),
+    scope: Literal["active", "completed", "cancelled", "history", "all"] | None = Query(default=None),
+    stage: list[str] | None = Query(default=None),
     sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
     sort_direction: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1),
@@ -1791,6 +1815,15 @@ def list_orders(
 ) -> dict:
     display_registry = build_display_registry(db)
     search_keyword = keyword.strip() if keyword and keyword.strip() else None
+    status_values = tuple(
+        dict.fromkeys(value.strip() for value in (status_filter or []) if value.strip())
+    )
+    stage_values = tuple(
+        dict.fromkeys(value.strip() for value in (stage or []) if value.strip())
+    )
+    requested_customer_ids = set(customer_ids or [])
+    if customer_id is not None:
+        requested_customer_ids.add(customer_id)
     ids_query = (
         select(Order.id)
         .join(Customer, Customer.id == Order.customer_id)
@@ -1803,9 +1836,10 @@ def list_orders(
     if is_customer_scope_restricted:
         ids_query = ids_query.where(Order.customer_id.in_(scoped_customer_ids))
 
-    if customer_id is not None:
-        require_customer_access(customer_id, current_user=user, db=db)
-        ids_query = ids_query.where(Order.customer_id == customer_id)
+    if requested_customer_ids:
+        for requested_customer_id in requested_customer_ids:
+            require_customer_access(requested_customer_id, current_user=user, db=db)
+        ids_query = ids_query.where(Order.customer_id.in_(requested_customer_ids))
 
     if customer_name and customer_name.strip():
         ids_query = ids_query.where(
@@ -1818,40 +1852,57 @@ def list_orders(
         ids_query = ids_query.where(Order.order_date >= date_from)
     if date_to is not None:
         ids_query = ids_query.where(Order.order_date <= date_to)
+    if order_date_from is not None:
+        ids_query = ids_query.where(Order.order_date >= order_date_from)
+    if order_date_to is not None:
+        ids_query = ids_query.where(Order.order_date <= order_date_to)
+    if delivery_date_from is not None:
+        ids_query = ids_query.where(Order.delivery_date >= delivery_date_from)
+    if delivery_date_to is not None:
+        ids_query = ids_query.where(Order.delivery_date <= delivery_date_to)
 
     history_condition = Order.order_number.like("RUIDA-%")
-    if status_filter == "business":
-        # The default daily view stays focused on order-to-delivery work. A
-        # targeted search may also return the downstream finance and completed
-        # stages, while explicit management statuses keep dedicated views.
-        derived_status_filter = set(
-            BUSINESS_STATUS_ORDER
-            if search_keyword
-            else (
-                "pending_confirmation",
-                *_DERIVED_STATUS_FILTER_GROUPS["unfinished"],
-            )
-        )
+    raw_status_filters = {
+        status_value
+        for status_value in status_values
+        if status_value not in {"business", "history"}
+        and status_value not in DERIVED_BUSINESS_STATUSES
+        and status_value not in _DERIVED_STATUS_FILTER_GROUPS
+    }
+    requested_stage_values = stage_values or tuple(
+        value for value in status_values if value not in {"business", "history"}
+    )
+    derived_status_filter: set[str] = set()
+    for stage_value in requested_stage_values:
+        if stage_value in DERIVED_BUSINESS_STATUSES or stage_value == "pending_confirmation":
+            derived_status_filter.add(stage_value)
+        elif stage_value in _DERIVED_STATUS_FILTER_GROUPS:
+            derived_status_filter.update(_DERIVED_STATUS_FILTER_GROUPS[stage_value])
+
+    if scope is None:
+        if status_values == ("history",):
+            resolved_scope = "history"
+        elif status_values == ("completed",):
+            # Keep the historical ``status=completed`` query compatible while
+            # the new UI uses the explicit ``scope=completed`` contract.
+            resolved_scope = "completed"
+        elif raw_status_filters & set(_BUSINESS_EXCLUDED_STATUSES):
+            resolved_scope = "cancelled"
+        else:
+            resolved_scope = "active"
     else:
-        derived_status_filter = (
-            {status_filter}
-            if status_filter in DERIVED_BUSINESS_STATUSES
-            else _DERIVED_STATUS_FILTER_GROUPS.get(status_filter)
-        )
-    if status_filter == "business":
+        resolved_scope = scope
+    if resolved_scope in {"active", "completed"}:
         ids_query = ids_query.where(
             ~history_condition,
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
         )
-    elif status_filter == "history":
+    elif resolved_scope == "cancelled":
+        ids_query = ids_query.where(Order.status.in_(_BUSINESS_EXCLUDED_STATUSES))
+    elif resolved_scope == "history":
         ids_query = ids_query.where(history_condition)
-    elif derived_status_filter:
-        ids_query = ids_query.where(
-            ~history_condition,
-            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
-        )
-    elif status_filter:
-        ids_query = ids_query.where(Order.status == status_filter)
+    if raw_status_filters:
+        ids_query = ids_query.where(Order.status.in_(raw_status_filters))
 
     if search_keyword:
         trimmed = search_keyword
@@ -1891,6 +1942,37 @@ def list_orders(
             )
         )
 
+    def _join_items_for_filter() -> None:
+        nonlocal ids_query, joined_items
+        if not joined_items:
+            ids_query = ids_query.outerjoin(
+                OrderItem, OrderItem.order_id == Order.id
+            ).outerjoin(Product, Product.id == OrderItem.product_id)
+            joined_items = True
+
+    if customer_po and customer_po.strip():
+        ids_query = ids_query.where(Order.customer_po.ilike(f"%{customer_po.strip()}%"))
+    if product_code and product_code.strip():
+        _join_items_for_filter()
+        trimmed = product_code.strip()
+        ids_query = ids_query.where(
+            or_(
+                OrderItem.snapshot_product_code.ilike(f"%{trimmed}%"),
+                Product.product_code.ilike(f"%{trimmed}%"),
+                Product.customer_material_code.ilike(f"%{trimmed}%"),
+            )
+        )
+    if product_name and product_name.strip():
+        _join_items_for_filter()
+        ids_query = ids_query.where(
+            OrderItem.snapshot_product_name.ilike(f"%{product_name.strip()}%")
+        )
+    if specification and specification.strip():
+        _join_items_for_filter()
+        ids_query = ids_query.where(
+            OrderItem.snapshot_spec.ilike(f"%{specification.strip()}%")
+        )
+
     # Explicit table-header sorting is constrained to a fixed whitelist above.
     if sort_by:
         sort_column = {
@@ -1913,17 +1995,21 @@ def list_orders(
     # order surfaces at the top even when its order_date is back-dated to the
     # source document date (e.g. PDF imports), instead of being buried below
     # newer-dated rows where users assume it "disappeared".
-    elif status_filter == "history":
+    elif resolved_scope == "history":
         ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
     else:
         ids_query = ids_query.order_by(
-            func.coalesce(Order.updated_at, Order.created_at).desc(),
+            Order.created_at.desc(),
             Order.id.desc(),
         )
     candidate_ids: list[int] = []
     candidate_orders: list[Order] = []
     candidate_projection: dict[int, dict] = {}
-    if derived_status_filter:
+    needs_business_projection = bool(derived_status_filter) or resolved_scope in {
+        "active",
+        "completed",
+    }
+    if needs_business_projection:
         candidate_ids = list(db.scalars(ids_query).all())
         if candidate_ids:
             candidate_orders = list(
@@ -1938,11 +2024,28 @@ def list_orders(
             candidate_orders,
             include_finance=has_permission(user, "finance.view"),
         )
+        candidate_order_map = {order.id: order for order in candidate_orders}
         matched_ids = [
             order_id
             for order_id in candidate_ids
-            if candidate_projection.get(order_id, {}).get("business_status")
-            in derived_status_filter
+            if (
+                (
+                    resolved_scope != "active"
+                    or candidate_projection.get(order_id, {}).get("business_status")
+                    != "completed"
+                )
+                and (
+                    resolved_scope != "completed"
+                    or candidate_projection.get(order_id, {}).get("business_status")
+                    == "completed"
+                )
+                and (
+                    not derived_status_filter
+                    or candidate_projection.get(order_id, {}).get("business_status")
+                    in derived_status_filter
+                    or candidate_order_map[order_id].status in raw_status_filters
+                )
+            )
         ]
         total = len(matched_ids)
         page_ids = matched_ids[(page - 1) * page_size : page * page_size]
@@ -1998,7 +2101,7 @@ def list_orders(
             for order_id in page_ids
             if order_id in candidate_projection
         }
-        if derived_status_filter
+        if needs_business_projection
         else build_order_business_statuses(
             db,
             orders,
@@ -2006,14 +2109,22 @@ def list_orders(
         )
     )
     can_reuse_global_candidate_projection = bool(
-        derived_status_filter
-        and customer_id is None
+        needs_business_projection
+        and not requested_customer_ids
         and not search_keyword
         and not (order_number and order_number.strip())
         and not (customer_name and customer_name.strip())
         and order_date is None
         and date_from is None
         and date_to is None
+        and order_date_from is None
+        and order_date_to is None
+        and delivery_date_from is None
+        and delivery_date_to is None
+        and not (customer_po and customer_po.strip())
+        and not (product_code and product_code.strip())
+        and not (product_name and product_name.strip())
+        and not (specification and specification.strip())
     )
     if can_reuse_global_candidate_projection:
         unfinished_ids = [
@@ -2070,6 +2181,97 @@ def list_orders(
                 business_projection=business_projections.get(int(order.id)),
             )
             for order in orders
+        ],
+    }
+
+
+@router.get("/customer-options")
+def list_order_customer_options(
+    keyword: str | None = None,
+    scope: Literal["active", "completed", "cancelled", "history", "all"] = "active",
+    stage: list[str] | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """List only customers that have orders in the selected business scope.
+
+    This is intentionally separate from ``/api/customers``: its keyword only
+    narrows customer identity fields and can never broaden the order scope.
+    """
+
+    history_condition = Order.order_number.like("RUIDA-%")
+    order_query = select(Order).options(selectinload(Order.items))
+    scoped_customer_ids = customer_scope_ids(user, db)
+    if not has_unrestricted_customer_access(user, db):
+        order_query = order_query.where(Order.customer_id.in_(scoped_customer_ids))
+    if scope in {"active", "completed"}:
+        order_query = order_query.where(
+            ~history_condition,
+            Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
+        )
+    elif scope == "cancelled":
+        order_query = order_query.where(Order.status.in_(_BUSINESS_EXCLUDED_STATUSES))
+    elif scope == "history":
+        order_query = order_query.where(history_condition)
+
+    candidates = list(db.scalars(order_query).all())
+    stage_values = tuple(
+        dict.fromkeys(value.strip() for value in (stage or []) if value.strip())
+    )
+    selected_stages: set[str] = set()
+    for value in stage_values:
+        if value in DERIVED_BUSINESS_STATUSES or value == "pending_confirmation":
+            selected_stages.add(value)
+        elif value in _DERIVED_STATUS_FILTER_GROUPS:
+            selected_stages.update(_DERIVED_STATUS_FILTER_GROUPS[value])
+    needs_business_projection = bool(selected_stages) or scope in {"active", "completed"}
+    if needs_business_projection:
+        projections = build_order_business_statuses(
+            db, candidates, include_finance=has_permission(user, "finance.view")
+        )
+        candidates = [
+            order
+            for order in candidates
+            if (
+                (scope != "active" or projections.get(int(order.id), {}).get("business_status") != "completed")
+                and (scope != "completed" or projections.get(int(order.id), {}).get("business_status") == "completed")
+                and (
+                    not selected_stages
+                    or projections.get(int(order.id), {}).get("business_status") in selected_stages
+                )
+            )
+        ]
+
+    order_counts: dict[int, int] = {}
+    for order in candidates:
+        order_counts[order.customer_id] = order_counts.get(order.customer_id, 0) + 1
+    customer_ids = set(order_counts)
+    customer_query = select(Customer).where(Customer.id.in_(customer_ids))
+    if keyword and keyword.strip():
+        pattern = f"%{keyword.strip()}%"
+        customer_query = customer_query.where(
+            or_(Customer.name.ilike(pattern), Customer.customer_code.ilike(pattern))
+        )
+    customer_query = customer_query.order_by(Customer.customer_number, Customer.id)
+    total = db.scalar(select(func.count()).select_from(customer_query.subquery())) or 0
+    customers = db.scalars(
+        customer_query.offset((page - 1) * page_size).limit(page_size)
+    ).all()
+    return {
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+        "items": [
+            {
+                "id": customer.id,
+                "name": customer.name,
+                "customer_code": customer.customer_code,
+                "is_active": customer.is_active,
+                "order_count": order_counts.get(customer.id, 0),
+            }
+            for customer in customers
         ],
     }
 
@@ -3619,6 +3821,52 @@ def get_order_detail(
     )
 
 
+@router.get("/{order_id}/items/{item_id}/documents")
+def get_order_item_documents(
+    order_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return only real documents linked to one exact order detail."""
+
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    item = db.scalar(
+        select(OrderItem).where(
+            OrderItem.id == item_id,
+            OrderItem.order_id == order.id,
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="订单明细不存在")
+    customer = db.get(Customer, order.customer_id)
+    display_registry = build_display_registry(db)
+    return build_order_item_document_trace(
+        db,
+        order=order,
+        item=item,
+        customer_name=customer.name if customer is not None else "-",
+        display_order_number=serialize_order_number_fields(
+            order, display_registry
+        )["display_order_number"],
+        permissions={
+            code
+            for code in (
+                "orders.view",
+                "requisition.view",
+                "incoming.view",
+                "warehouse.view",
+                "deliveries.view",
+                "finance.view",
+            )
+            if has_permission(user, code)
+        },
+    )
+
+
 @router.put("/{order_id}")
 def update_order(
     order_id: int,
@@ -3995,7 +4243,43 @@ def _create_order_impl(
                 item_payload.quantity,
                 index,
             )
-            if item_payload.product_id is not None and not item_payload.is_new_product:
+            if item_payload.manual_size_entry:
+                if item_payload.product_id is not None or item_payload.is_new_product:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"第{index}条手工尺寸订单不能同时选择已有常用箱或新产品标记",
+                    )
+                try:
+                    product = resolve_or_create_manual_size_product(
+                        db,
+                        customer=customer,
+                        data=ManualSizeProductInput(
+                            client_line_id=(item_payload.client_line_id or "").strip(),
+                            box_type=item_payload.box_type,
+                            product_name=item_payload.product_name,
+                            length_mm=item_payload.length_mm,
+                            width_mm=item_payload.width_mm,
+                            height_mm=item_payload.height_mm,
+                            material_id=item_payload.material_id,
+                            layer_count=item_payload.layer_count,
+                            flute_type=item_payload.flute_type,
+                            sale_unit_price=Decimal(str(item_payload.unit_price)),
+                        ),
+                        user=user,
+                    )
+                    # Preserve the exact manually entered dimensions as the
+                    # order snapshot.  Do not route this through the legacy
+                    # decimal display helper, which is only a product-read
+                    # convenience and may shorten trailing integer zeroes.
+                    item_payload.specification = (
+                        f"{item_payload.length_mm}×{item_payload.width_mm}×"
+                        f"{item_payload.height_mm}mm"
+                    )
+                except ManualSizeProductError as error:
+                    raise HTTPException(
+                        status_code=400, detail=f"第{index}条{error}"
+                    ) from error
+            elif item_payload.product_id is not None and not item_payload.is_new_product:
                 product = db.scalar(
                     select(Product)
                     .options(joinedload(Product.material))
@@ -4608,6 +4892,10 @@ def create_order(
             observability=observability,
         )
     except HTTPException as error:
+        # Validation may run after an explicit manual-size common-box flush.
+        # The product is part of this order transaction and must never survive
+        # when a later line rejects the order.
+        db.rollback()
         _log_order_save_failure(
             error=error,
             observability=observability,
@@ -4615,6 +4903,7 @@ def create_order(
         )
         raise
     except Exception as error:
+        db.rollback()
         _log_order_save_failure(
             error=error,
             observability=observability,

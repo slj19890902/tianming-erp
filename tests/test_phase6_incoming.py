@@ -543,6 +543,53 @@ def test_received_returns_only_last_24_hours_for_authorized_roles(incoming_api_a
     assert len(response.json()["items"]) == 2
 
 
+def test_received_history_supports_stable_server_paging_and_structured_filters(
+    incoming_api_app,
+) -> None:
+    app, _ = incoming_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        first = client.get(
+            "/api/incoming/history",
+            params={
+                "page": 1,
+                "page_size": 1,
+                "customer_id": 1,
+                "product_code": "SME-001",
+                "product_name": "加强纸箱",
+            },
+        )
+        second = client.get(
+            "/api/incoming/history",
+            params={
+                "page": 2,
+                "page_size": 1,
+                "customer_id": 1,
+                "product_code": "SME-001",
+                "product_name": "加强纸箱",
+            },
+        )
+        invalid_range = client.get(
+            "/api/incoming/history",
+            params={"date_from": "2026-07-02", "date_to": "2026-07-01"},
+        )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["total"] == 3
+    assert first_payload["page"] == 1
+    assert first_payload["page_size"] == 1
+    assert first_payload["sort"] == [
+        "material_received_at:desc",
+        "history_key:desc",
+    ]
+    assert first_payload["items"][0]["item_id"] != second_payload["items"][0]["item_id"]
+    assert invalid_range.status_code == 422
+    assert "开始日期" in invalid_range.json()["detail"]
+
+
 @pytest.mark.parametrize("role", ["finance", "sales"])
 def test_finance_and_sales_cannot_read_incoming_lists(incoming_api_app, role: str) -> None:
     app, _ = incoming_api_app

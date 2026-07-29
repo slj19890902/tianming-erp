@@ -29,9 +29,13 @@ from app.models.delivery import (
     DeliveryPickTask,
     DeliveryPickTaskItem,
 )
+from app.models.finance import ReturnReceipt
 from app.models.order import Order, OrderItem
 from app.models.product import Product
-from app.models.product_bom import BomComponentDirectDeliveryAllocation
+from app.models.product_bom import (
+    BomComponentDirectDeliveryAllocation,
+    SalesOrderItemBomComponent,
+)
 from app.models.production import ProductionTask
 from app.models.requisition import RequisitionItem
 from app.models.tianhua_pre_delivery import (
@@ -1699,15 +1703,214 @@ def _inventory_sources_for_order_item(
     return items
 
 
-def _delivery_response(db: Session, delivery_id: int) -> dict:
+def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
+    if not delivery_ids:
+        return []
+    return [
+        dict(row._mapping)
+        for row in db.execute(
+            select(
+                DeliveryItem.id,
+                DeliveryItem.delivery_id,
+                DeliveryItem.order_item_id,
+                DeliveryItem.delivered_quantity,
+                DeliveryItem.ordered_quantity_snapshot,
+                DeliveryItem.order_remaining_snapshot,
+                DeliveryItem.over_delivery_quantity,
+                DeliveryItem.over_delivery_confirmed_by,
+                DeliveryItem.over_delivery_reason,
+                DeliveryItem.remarks,
+                Order.id.label("order_id"),
+                Order.order_number,
+                Order.customer_po,
+                Product.product_code,
+                OrderItem.snapshot_product_name.label("product_name"),
+                OrderItem.snapshot_spec.label("specification"),
+                OrderItem.snapshot_production_notes.label("production_notes"),
+            )
+            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .join(Product, Product.id == OrderItem.product_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
+        ).all()
+    ]
+
+
+def _delivery_pick_task_summary(
+    task: DeliveryPickTask,
+    *,
+    customer_name: str | None,
+    delivery_number: str | None,
+    items: list[DeliveryPickTaskItem],
+) -> dict:
+    """List-view summary; full location planning remains on the detail routes."""
+
+    exception_items = [
+        {
+            "id": item.id,
+            "delivery_item_id": item.delivery_item_id,
+            "order_item_id": item.order_item_id,
+            "planned_quantity": item.original_quantity,
+            "picked_quantity": item.picked_quantity,
+            "status": item.status,
+            "pick_status": item.status,
+            "product_code": item.product_code_snapshot,
+            "product_name": item.product_name_snapshot,
+            "specification": item.specification_snapshot,
+            "customer_name": customer_name,
+        }
+        for item in items
+        if item.status in {"partial", "no_stock"}
+        or int(item.picked_quantity) > int(item.original_quantity)
+    ]
+    return {
+        "id": task.id,
+        "delivery_id": task.delivery_id,
+        "customer_id": task.customer_id,
+        "customer_name": customer_name,
+        "delivery_number": delivery_number,
+        "status": task.status,
+        "has_exception": bool(exception_items) or task.status == "exception",
+        "exceptions": exception_items,
+        "snapshot_version": task.snapshot_version,
+        "created_at": utc_naive_to_api(task.created_at) if task.created_at else None,
+        "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
+        "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
+        "dispatched_at": utc_naive_to_api(task.dispatched_at) if task.dispatched_at else None,
+        "items": [],
+        "location_groups": [],
+        "location_plan_complete": None,
+    }
+
+
+def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
+    """Batch data used only by the desktop delivery list page."""
+
+    deliveries = {
+        delivery.id: delivery
+        for delivery in db.scalars(
+            select(Delivery).where(Delivery.id.in_(delivery_ids))
+        ).all()
+    } if delivery_ids else {}
+    customer_ids = {delivery.customer_id for delivery in deliveries.values()}
+    customers = {
+        customer.id: customer
+        for customer in db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
+    } if customer_ids else {}
+    receipts = {
+        receipt.delivery_id: receipt
+        for receipt in db.scalars(
+            select(ReturnReceipt).where(ReturnReceipt.delivery_id.in_(delivery_ids))
+        ).all()
+    } if delivery_ids else {}
+    item_rows = _delivery_item_rows(db, delivery_ids)
+    rows_by_delivery: dict[int, list[dict]] = {}
+    for row in item_rows:
+        rows_by_delivery.setdefault(int(row["delivery_id"]), []).append(row)
+    order_ids = {int(row["order_id"]) for row in item_rows}
+    orders = {
+        order.id: order
+        for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
+    } if order_ids else {}
+    order_item_ids = {int(row["order_item_id"]) for row in item_rows}
+    order_items = {
+        item.id: item
+        for item in db.scalars(select(OrderItem).where(OrderItem.id.in_(order_item_ids))).all()
+    } if order_item_ids else {}
+    composite_item_ids = set(
+        db.scalars(
+            select(SalesOrderItemBomComponent.sales_order_item_id)
+            .where(SalesOrderItemBomComponent.sales_order_item_id.in_(order_item_ids))
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    reserved_item_ids = set(
+        db.scalars(
+            select(InventoryReservation.order_item_id)
+            .where(
+                InventoryReservation.order_item_id.in_(order_item_ids),
+                InventoryReservation.status != "cancelled",
+            )
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    semi_requirement_item_ids = set(
+        db.scalars(
+            select(OrderItemSemiRequirement.order_item_id)
+            .where(OrderItemSemiRequirement.order_item_id.in_(order_item_ids))
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    safe_empty_inventory_order_item_ids = (
+        order_item_ids - composite_item_ids - reserved_item_ids - semi_requirement_item_ids
+    )
+    pick_task_rows = db.scalars(
+        select(DeliveryPickTask)
+        .where(DeliveryPickTask.delivery_id.in_(delivery_ids))
+        .order_by(DeliveryPickTask.delivery_id, DeliveryPickTask.id.desc())
+    ).all() if delivery_ids else []
+    pick_tasks: dict[int, DeliveryPickTask] = {}
+    for task in pick_task_rows:
+        pick_tasks.setdefault(int(task.delivery_id), task)
+    pick_task_ids = [task.id for task in pick_tasks.values()]
+    pick_items_by_task: dict[int, list[DeliveryPickTaskItem]] = {}
+    if pick_task_ids:
+        for item in db.scalars(
+            select(DeliveryPickTaskItem)
+            .where(DeliveryPickTaskItem.pick_task_id.in_(pick_task_ids))
+            .order_by(DeliveryPickTaskItem.id)
+        ).all():
+            pick_items_by_task.setdefault(int(item.pick_task_id), []).append(item)
+    internal_remarks = _tianhua_internal_remarks_by_delivery_item(
+        db, [int(row["id"]) for row in item_rows]
+    )
+    return {
+        "deliveries": deliveries,
+        "customers": customers,
+        "receipts": receipts,
+        "rows_by_delivery": rows_by_delivery,
+        "orders": orders,
+        "order_items": order_items,
+        "safe_empty_inventory_order_item_ids": safe_empty_inventory_order_item_ids,
+        "pick_tasks": pick_tasks,
+        "pick_items_by_task": pick_items_by_task,
+        "internal_remarks": internal_remarks,
+        "registry": build_display_registry(db),
+    }
+
+
+def _delivery_response(
+    db: Session,
+    delivery_id: int,
+    *,
+    list_context: dict | None = None,
+) -> dict:
     from app.models.finance import ReturnReceipt
 
-    delivery = _delivery_or_404(db, delivery_id)
-    customer = db.get(Customer, delivery.customer_id)
-    return_receipt = db.scalar(
-        select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery_id)
+    delivery = (
+        list_context["deliveries"].get(delivery_id)
+        if list_context is not None
+        else _delivery_or_404(db, delivery_id)
     )
-    items = db.execute(
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="送货单不存在")
+    customer = (
+        list_context["customers"].get(delivery.customer_id)
+        if list_context is not None
+        else db.get(Customer, delivery.customer_id)
+    )
+    return_receipt = (
+        list_context["receipts"].get(delivery_id)
+        if list_context is not None
+        else db.scalar(select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery_id))
+    )
+    items = (
+        list_context["rows_by_delivery"].get(delivery_id, [])
+        if list_context is not None
+        else [
+            dict(row._mapping)
+            for row in db.execute(
         select(
             DeliveryItem.id,
             DeliveryItem.order_item_id,
@@ -1731,42 +1934,76 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         .join(Product, Product.id == OrderItem.product_id)
         .where(DeliveryItem.delivery_id == delivery_id)
         .order_by(DeliveryItem.id)
-    ).all()
-    registry = build_display_registry(db)
+            ).all()
+        ]
+    )
+    registry = list_context["registry"] if list_context is not None else build_display_registry(db)
     order_ids = {
-        row._mapping["order_id"]
+        row["order_id"]
         for row in items
     }
-    orders = {
-        order.id: order for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
-    } if order_ids else {}
-    pick_task = _delivery_pick_task(db, delivery_id)
+    orders = (
+        {order_id: list_context["orders"][order_id] for order_id in order_ids if order_id in list_context["orders"]}
+        if list_context is not None
+        else {
+            order.id: order for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
+        } if order_ids else {}
+    )
+    pick_task = (
+        list_context["pick_tasks"].get(delivery_id)
+        if list_context is not None
+        else _delivery_pick_task(db, delivery_id)
+    )
     has_dispatch_history = delivery.status in {"dispatched", "voided"}
     pick_by_delivery_item = {
         item.delivery_item_id: _pick_item_response(db, item)
-        for item in (pick_task.items if pick_task else [])
+        for item in (pick_task.items if pick_task and list_context is None else [])
     }
-    internal_remarks = _tianhua_internal_remarks_by_delivery_item(
-        db,
-        [
-            row._mapping["id"]
-            for row in items
-            if str(row._mapping["remarks"] or "").strip().startswith(
+    internal_remarks = (
+        list_context["internal_remarks"]
+        if list_context is not None
+        else _tianhua_internal_remarks_by_delivery_item(
+            db,
+            [
+                row["id"]
+                for row in items
+                if str(row["remarks"] or "").strip().startswith(
                 "来源：天华预送货草稿 "
-            )
-        ],
+                )
+            ],
+        )
     )
     response_items: list[dict] = []
     total_actual_goods_quantity = 0
     for row in items:
-        mapping = row._mapping
-        order_item = db.get(OrderItem, mapping["order_item_id"])
-        kit_metadata = _delivery_kit_metadata(
-            db,
-            order_item,
-            planned_delivery_quantity=mapping["delivered_quantity"],
-            delivery_item_id=mapping["id"],
-            dispatched=has_dispatch_history,
+        mapping = row
+        order_item = (
+            list_context["order_items"].get(mapping["order_item_id"])
+            if list_context is not None
+            else db.get(OrderItem, mapping["order_item_id"])
+        )
+        skip_inventory_lookup = bool(
+            list_context is not None
+            and order_item is not None
+            and int(order_item.id)
+            in list_context["safe_empty_inventory_order_item_ids"]
+        )
+        kit_metadata = (
+            {
+                "is_composite_bom": False,
+                "kit_availability": None,
+                "available_sets": None,
+                "missing_components": [],
+                "component_lines": [],
+            }
+            if skip_inventory_lookup
+            else _delivery_kit_metadata(
+                db,
+                order_item,
+                planned_delivery_quantity=mapping["delivered_quantity"],
+                delivery_item_id=mapping["id"],
+                dispatched=has_dispatch_history,
+            )
         )
         actual_goods_lines = _actual_goods_lines(
             order_item_id=mapping["order_item_id"],
@@ -1804,12 +2041,16 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
                 **kit_metadata,
                 "actual_goods_lines": actual_goods_lines,
                 "actual_goods_quantity": actual_goods_quantity,
-                "inventory_sources": _inventory_sources_for_order_item(
-                    db,
-                    order_item=order_item,
-                    planned_delivery_quantity=mapping["delivered_quantity"],
-                    delivery_item_id=mapping["id"],
-                    dispatched=has_dispatch_history,
+                "inventory_sources": (
+                    []
+                    if skip_inventory_lookup
+                    else _inventory_sources_for_order_item(
+                        db,
+                        order_item=order_item,
+                        planned_delivery_quantity=mapping["delivered_quantity"],
+                        delivery_item_id=mapping["id"],
+                        dispatched=has_dispatch_history,
+                    )
                 ),
                 "pick_result": pick_by_delivery_item.get(mapping["id"]),
             }
@@ -1849,7 +2090,16 @@ def _delivery_response(db: Session, delivery_id: int) -> dict:
         "return_receipt_status": (
             return_receipt.status if return_receipt else None
         ),
-        "pick_task": _pick_task_response(db, pick_task) if pick_task else None,
+        "pick_task": (
+            _delivery_pick_task_summary(
+                pick_task,
+                customer_name=customer.name if customer else None,
+                delivery_number=delivery.delivery_number,
+                items=list_context["pick_items_by_task"].get(pick_task.id, []),
+            )
+            if pick_task and list_context is not None
+            else (_pick_task_response(db, pick_task) if pick_task else None)
+        ),
         "items": response_items,
     }
 
@@ -2657,39 +2907,190 @@ def delivery_route_suggestions(
     }
 
 
+class _PendingDeliveryReadContext:
+    """Request-scoped lookup for uncomplicated pending rows.
+
+    Complex production, inventory and BOM rows continue through the existing
+    workflow helpers.  A received-material row with none of those related
+    facts has an exact, stable delivery formula: ordered minus delivered.
+    Prefetching only the negative facts prevents a query-per-row cascade
+    without using a stale process-wide cache for inventory availability.
+    """
+
+    def __init__(self, db: Session, rows: list[object]):
+        item_ids = {
+            int(row._mapping["order_item_id"])
+            for row in rows
+            if row._mapping["order_item_id"] is not None
+        }
+        order_ids = {
+            int(row._mapping["order_id"])
+            for row in rows
+            if row._mapping["order_id"] is not None
+        }
+        self.order_items = {
+            item.id: item
+            for item in db.scalars(
+                select(OrderItem).where(OrderItem.id.in_(item_ids))
+            ).all()
+        } if item_ids else {}
+        self.orders = {
+            order.id: order
+            for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
+        } if order_ids else {}
+        if not item_ids:
+            self.fast_item_ids: set[int] = set()
+            return
+
+        composite_ids = set(
+            db.scalars(
+                select(SalesOrderItemBomComponent.sales_order_item_id)
+                .where(SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids))
+                .distinct()
+            ).all()
+        )
+        task_item_ids = set(
+            db.scalars(
+                select(ProductionTask.order_item_id)
+                .where(ProductionTask.order_item_id.in_(item_ids))
+                .distinct()
+            ).all()
+        )
+        reservation_item_ids = set(
+            db.scalars(
+                select(InventoryReservation.order_item_id)
+                .where(InventoryReservation.order_item_id.in_(item_ids))
+                .distinct()
+            ).all()
+        )
+        semi_requirement_item_ids = set(
+            db.scalars(
+                select(OrderItemSemiRequirement.order_item_id)
+                .where(OrderItemSemiRequirement.order_item_id.in_(item_ids))
+                .distinct()
+            ).all()
+        )
+        telescoping_item_ids = set(
+            db.scalars(
+                select(RequisitionItem.order_item_id)
+                .where(
+                    RequisitionItem.order_item_id.in_(item_ids),
+                    or_(
+                        RequisitionItem.product_name_snapshot.like("%-盖"),
+                        RequisitionItem.product_name_snapshot.like("%-底"),
+                    ),
+                )
+                .distinct()
+            ).all()
+        )
+        excluded_ids = (
+            composite_ids
+            | task_item_ids
+            | reservation_item_ids
+            | semi_requirement_item_ids
+            | telescoping_item_ids
+        )
+        self.fast_item_ids = {
+            item_id
+            for item_id, item in self.order_items.items()
+            if item.material_status == "received" and item_id not in excluded_ids
+        }
+
+    def order(self, order_id: int) -> Order | None:
+        return self.orders.get(int(order_id))
+
+    def order_item(self, order_item_id: int) -> OrderItem | None:
+        return self.order_items.get(int(order_item_id))
+
+    def is_fast(self, order_item: OrderItem | None) -> bool:
+        return bool(order_item and order_item.id in self.fast_item_ids)
+
+
+def _pending_delivery_item_payload(
+    db: Session,
+    *,
+    row,
+    registry,
+    context: _PendingDeliveryReadContext,
+    include_material_display: bool = False,
+) -> dict | None:
+    """Build the legacy response, avoiding duplicate SQL for the safe path."""
+
+    mapping = row._mapping
+    order = context.order(mapping["order_id"])
+    order_item = context.order_item(mapping["order_item_id"])
+    if order_item is None:
+        return None
+    display = display_order_number(order, registry) if order is not None else mapping["order_number"]
+    if context.is_fast(order_item):
+        ordered = max(int(order_item.quantity or 0), 0)
+        delivered = max(int(order_item.delivered_quantity or 0), 0)
+        remaining_quantity = max(ordered - delivered, 0)
+        if remaining_quantity <= 0:
+            return None
+        quantity_facts = {
+            "ordered_quantity": ordered,
+            "delivered_quantity": delivered,
+            "order_remaining_quantity": remaining_quantity,
+            "deliverable_quantity": remaining_quantity,
+            "over_delivery_quantity": 0,
+            "surplus_finished_quantity": 0,
+        }
+        kit_metadata = {
+            "is_composite_bom": False,
+            "kit_availability": None,
+            "available_sets": None,
+            "missing_components": [],
+            "component_lines": [],
+        }
+        inventory_sources: list[dict] = []
+    else:
+        remaining_quantity = _delivery_remaining_quantity(db, order_item)
+        if remaining_quantity <= 0:
+            return None
+        quantity_facts = _delivery_quantity_facts(db, order_item)
+        kit_metadata = _delivery_kit_metadata(db, order_item)
+        inventory_sources = _inventory_sources_for_order_item(
+            db,
+            order_item=order_item,
+            planned_delivery_quantity=remaining_quantity,
+        )
+
+    payload = {
+        **dict(mapping),
+        "remaining_quantity": remaining_quantity,
+        **quantity_facts,
+        "order_number": display,
+        "display_order_number": display,
+        **kit_metadata,
+        "inventory_sources": inventory_sources,
+    }
+    if include_material_display:
+        material = (mapping["material"] or "").strip()
+        flute_type = (mapping["flute_type"] or "").strip()
+        payload["material_display"] = (
+            f"{material} / {flute_type}" if material and flute_type else material
+        )
+    return payload
+
+
 @router.get("/pending_items")
 def pending_delivery_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     registry = build_display_registry(db)
+    rows = list(
+        db.execute(_pending_query(customer_ids=_visible_customer_ids(user, db)))
+    )
+    context = _PendingDeliveryReadContext(db, rows)
     items = []
-    for row in db.execute(
-        _pending_query(customer_ids=_visible_customer_ids(user, db))
-    ):
-        order = db.get(Order, row._mapping["order_id"])
-        order_item = db.get(OrderItem, row._mapping["order_item_id"])
-        remaining_quantity = (
-            _delivery_remaining_quantity(db, order_item) if order_item else 0
+    for row in rows:
+        payload = _pending_delivery_item_payload(
+            db, row=row, registry=registry, context=context
         )
-        if remaining_quantity <= 0:
-            continue
-        display = display_order_number(order, registry)
-        items.append(
-            {
-                **dict(row._mapping),
-                "remaining_quantity": remaining_quantity,
-                **_delivery_quantity_facts(db, order_item),
-                "order_number": display,
-                "display_order_number": display,
-                **_delivery_kit_metadata(db, order_item),
-                "inventory_sources": _inventory_sources_for_order_item(
-                    db,
-                    order_item=order_item,
-                    planned_delivery_quantity=remaining_quantity,
-                ),
-            }
-        )
+        if payload is not None:
+            items.append(payload)
     return {"items": items}
 
 
@@ -2742,48 +3143,31 @@ def search_pending_delivery_items(
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     effective_limit = limit or (100 if list_all else 20)
-    registry = build_display_registry(db)
-    items = []
     query_limit = min(effective_limit * 3, 200)
-    for row in db.execute(
-        _pending_query(
-            customer_id=customer_id,
-            inventory_keyword=inventory_keyword,
-            customer_po_keyword=customer_po_keyword,
-            product_name_keyword=product_name_keyword,
-            general_keyword=general_keyword,
-        ).limit(query_limit)
-    ):
-        order = db.get(Order, row._mapping["order_id"])
-        order_item = db.get(OrderItem, row._mapping["order_item_id"])
-        remaining_quantity = (
-            _delivery_remaining_quantity(db, order_item) if order_item else 0
+    registry = build_display_registry(db)
+    rows = list(
+        db.execute(
+            _pending_query(
+                customer_id=customer_id,
+                inventory_keyword=inventory_keyword,
+                customer_po_keyword=customer_po_keyword,
+                product_name_keyword=product_name_keyword,
+                general_keyword=general_keyword,
+            ).limit(query_limit)
         )
-        if remaining_quantity <= 0:
-            continue
-        display = display_order_number(order, registry)
-        material = (row._mapping["material"] or "").strip()
-        flute_type = (row._mapping["flute_type"] or "").strip()
-        items.append(
-            {
-                **dict(row._mapping),
-                "remaining_quantity": remaining_quantity,
-                **_delivery_quantity_facts(db, order_item),
-                "order_number": display,
-                "display_order_number": display,
-                "material_display": (
-                    f"{material} / {flute_type}"
-                    if material and flute_type
-                    else material
-                ),
-                **_delivery_kit_metadata(db, order_item),
-                "inventory_sources": _inventory_sources_for_order_item(
-                    db,
-                    order_item=order_item,
-                    planned_delivery_quantity=remaining_quantity,
-                ),
-            }
+    )
+    context = _PendingDeliveryReadContext(db, rows)
+    items = []
+    for row in rows:
+        payload = _pending_delivery_item_payload(
+            db,
+            row=row,
+            registry=registry,
+            context=context,
+            include_material_display=True,
         )
+        if payload is not None:
+            items.append(payload)
         if len(items) >= effective_limit:
             break
     return {"items": items}
@@ -2792,7 +3176,18 @@ def search_pending_delivery_items(
 @router.get("")
 def list_deliveries(
     customer_id: int | None = None,
+    customer_ids: list[int] | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
+    statuses: list[str] | None = Query(default=None),
+    delivery_no: str | None = None,
+    order_no: str | None = None,
+    customer_po: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    spec: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    return_status: list[str] | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -2800,31 +3195,111 @@ def list_deliveries(
 ) -> dict:
     # New delivery drafts must stay at the top. Printing or dispatching an old
     # delivery must not move it ahead of a delivery that was just created.
-    query = select(Delivery.id).order_by(
-        Delivery.created_at.desc(),
-        Delivery.id.desc(),
-    )
+    query = select(Delivery.id)
+
+    # Apply the customer's visibility boundary before any document or product
+    # filter.  A direct filter request for an out-of-scope customer keeps the
+    # existing endpoint's explicit 403 behaviour instead of silently revealing
+    # whether that customer has deliveries.
+    requested_customer_ids = {
+        int(value) for value in (customer_ids or [])
+    }
     if customer_id is not None:
-        require_customer_access(customer_id, user, db)
-        query = query.where(Delivery.customer_id == customer_id)
+        requested_customer_ids.add(customer_id)
+    if requested_customer_ids:
+        for requested_customer_id in requested_customer_ids:
+            require_customer_access(requested_customer_id, user, db)
+        query = query.where(Delivery.customer_id.in_(requested_customer_ids))
     else:
         visible_customer_ids = _visible_customer_ids(user, db)
         if visible_customer_ids is not None:
             query = query.where(Delivery.customer_id.in_(visible_customer_ids))
-    if status_filter:
+
+    normalized_statuses = [
+        value.strip() for value in (statuses or []) if value and value.strip()
+    ]
+    if normalized_statuses:
+        query = query.where(Delivery.status.in_(normalized_statuses))
+    elif status_filter:
         query = query.where(Delivery.status == status_filter)
     else:
         query = query.where(Delivery.status != "voided")
+
+    def _contains(column, value: str | None):
+        normalized = (value or "").strip().lower()
+        return func.lower(column).like(f"%{normalized}%") if normalized else None
+
+    delivery_number_filter = _contains(Delivery.delivery_number, delivery_no)
+    if delivery_number_filter is not None:
+        query = query.where(delivery_number_filter)
+    if date_from is not None:
+        query = query.where(Delivery.delivery_date >= date_from)
+    if date_to is not None:
+        query = query.where(Delivery.delivery_date <= date_to)
+
+    item_filters = [
+        condition
+        for condition in (
+            _contains(Order.order_number, order_no),
+            _contains(Order.customer_po, customer_po),
+            _contains(Product.product_code, product_code),
+            _contains(OrderItem.snapshot_product_name, product_name),
+            _contains(OrderItem.snapshot_spec, spec),
+        )
+        if condition is not None
+    ]
+    if item_filters:
+        query = query.where(
+            exists(
+                select(1)
+                .select_from(DeliveryItem)
+                .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+                .join(Order, Order.id == OrderItem.order_id)
+                .join(Product, Product.id == OrderItem.product_id)
+                .where(
+                    DeliveryItem.delivery_id == Delivery.id,
+                    *item_filters,
+                )
+            )
+        )
+
+    normalized_return_statuses = {
+        value.strip() for value in (return_status or []) if value and value.strip()
+    }
+    if normalized_return_statuses:
+        return_conditions = []
+        receipt_exists = exists(
+            select(1).where(ReturnReceipt.delivery_id == Delivery.id)
+        )
+        for receipt_status in normalized_return_statuses:
+            if receipt_status in {"waiting", "waiting_receipt", "pending"}:
+                return_conditions.append(~receipt_exists)
+            else:
+                return_conditions.append(
+                    exists(
+                        select(1).where(
+                            ReturnReceipt.delivery_id == Delivery.id,
+                            ReturnReceipt.status == receipt_status,
+                        )
+                    )
+                )
+        query = query.where(or_(*return_conditions))
+
+    query = query.order_by(
+        Delivery.created_at.desc(),
+        Delivery.id.desc(),
+    )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     delivery_ids = db.scalars(
         query.offset((page - 1) * page_size).limit(page_size)
     ).all()
+    list_context = _delivery_list_page_context(db, list(delivery_ids))
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
         "items": [
-            _delivery_response(db, delivery_id)
+            _delivery_response(db, delivery_id, list_context=list_context)
             for delivery_id in delivery_ids
         ],
     }

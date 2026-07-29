@@ -3,13 +3,13 @@ from __future__ import annotations
 import base64
 import json
 import socket
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 import qrcode
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
@@ -87,6 +87,43 @@ def _product_drawing_url(drawing: ProductDrawing | None) -> str | None:
         f"/api/master/products/drawings/{drawing.id}/content/"
         f"original{_drawing_suffix(drawing.image_path)}"
     )
+
+
+class _PendingIncomingReadContext:
+    """Request-local negative receipt facts for ordinary pending rows.
+
+    A normal order-item row with neither a requisition route nor any receipt
+    fact has the same source-summary result as the old helper: ``None``.  The
+    context proves that negative fact in one query, so the list need not call
+    the authoritative helper once per row.  Every row with a receipt fact or a
+    special route deliberately keeps the old helper path.
+    """
+
+    def __init__(self, db: Session, rows: list[dict]) -> None:
+        ordinary_item_ids = {
+            int(row["item_id"])
+            for row in rows
+            if isinstance(row.get("item_id"), int)
+            and not row.get("requisition_item_id")
+            and not row.get("supplier_order_number")
+        }
+        self._receipt_free_item_ids = set(ordinary_item_ids)
+        if not ordinary_item_ids:
+            return
+        receipt_item_ids = set(
+            db.scalars(
+                select(IncomingReceiptItem.order_item_id).where(
+                    IncomingReceiptItem.order_item_id.in_(ordinary_item_ids)
+                )
+            ).all()
+        )
+        self._receipt_free_item_ids -= {
+            int(item_id) for item_id in receipt_item_ids if item_id is not None
+        }
+
+    def has_proven_empty_summary(self, row: dict) -> bool:
+        item_id = row.get("item_id")
+        return isinstance(item_id, int) and item_id in self._receipt_free_item_ids
 
 
 def _utc_now() -> datetime:
@@ -619,6 +656,7 @@ def _rows(
                 "component_type": component,
                 "product_id": item.product_id,
                 "order_id": order.id,
+                "customer_id": order.customer_id,
                 "order_number": order.order_number,
                 "customer_po": order.customer_po,
                 "customer_name": customer.name,
@@ -781,6 +819,7 @@ def _rows(
         ).all()
         for drawing in drawings:
             latest_drawings.setdefault(drawing.product_id, drawing)
+    read_context = _PendingIncomingReadContext(db, rows)
     for row in rows:
         # v0.23.0 P0-3：订单/明细上传的图纸优先于常用箱图纸——车间来料页面
         # 需要能看到"这一单"实际上传的图纸，而不仅仅是常用箱历史图纸。
@@ -797,7 +836,11 @@ def _rows(
         row["drawing_is_pdf"] = bool(
             final_reference and final_reference.lower().endswith(".pdf")
         )
-        summary = source_summary_for_item(db, row["item_id"])
+        summary = (
+            None
+            if read_context.has_proven_empty_summary(row)
+            else source_summary_for_item(db, row["item_id"])
+        )
         if summary is not None:
             row.update(summary)
             if received_since is None:
@@ -1316,6 +1359,7 @@ def _receipt_fact_rows(
             "receipt_status": fact.status,
             "product_id": item.product_id,
             "order_id": order.id,
+            "customer_id": order.customer_id,
             "order_number": display_number,
             "display_order_number": display_number,
             "customer_po": order.customer_po,
@@ -1410,10 +1454,75 @@ def _received_rows(
     ]
     combined = [*facts, *legacy]
     combined.sort(
-        key=lambda row: row.get("material_received_at") or datetime.min,
+        key=lambda row: (
+            row.get("material_received_at") or datetime.min,
+            str(row.get("history_key") or row.get("receipt_item_id") or row.get("item_id") or ""),
+        ),
         reverse=True,
     )
     return combined
+
+
+def _filter_received_history_rows(
+    rows: list[dict],
+    *,
+    customer_ids: set[int],
+    document_keyword: str | None,
+    product_code: str | None,
+    product_name: str | None,
+    supplier_name: str | None,
+    board_length_mm: int | None,
+    board_width_mm: int | None,
+    date_from: date | None,
+    date_to: date | None,
+    receipt_status: str | None,
+) -> list[dict]:
+    document_text = (document_keyword or "").strip().lower()
+    code_text = (product_code or "").strip().lower()
+    name_text = (product_name or "").strip().lower()
+    supplier_text = (supplier_name or "").strip().lower()
+
+    def matches(row: dict) -> bool:
+        if customer_ids and int(row.get("customer_id") or 0) not in customer_ids:
+            return False
+        if document_text and document_text not in " ".join(
+            str(row.get(key) or "").lower()
+            for key in (
+                "receipt_number",
+                "order_number",
+                "customer_po",
+                "supplier_order_number",
+            )
+        ):
+            return False
+        if code_text and code_text not in str(row.get("product_code") or "").lower():
+            return False
+        if name_text and name_text not in str(row.get("product_name") or "").lower():
+            return False
+        if supplier_text and supplier_text not in str(
+            row.get("snapshot_supplier_name") or ""
+        ).lower():
+            return False
+        if board_length_mm is not None and int(row.get("cardboard_len") or 0) != board_length_mm:
+            return False
+        if board_width_mm is not None and int(row.get("cardboard_width") or 0) != board_width_mm:
+            return False
+        received_at = row.get("material_received_at")
+        received_date = received_at.date() if isinstance(received_at, datetime) else None
+        if date_from is not None and (received_date is None or received_date < date_from):
+            return False
+        if date_to is not None and (received_date is None or received_date > date_to):
+            return False
+        if receipt_status:
+            actual_status = str(
+                row.get("receipt_status")
+                or ("posted" if row.get("material_status") == "received" else "")
+            )
+            if actual_status != receipt_status:
+                return False
+        return True
+
+    return [row for row in rows if matches(row)]
 
 
 
@@ -1493,22 +1602,72 @@ def recently_received_items(
 
 @router.get("/history")
 def history_received_items(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    customer_id: list[int] | None = Query(default=None),
+    document_keyword: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    supplier_name: str | None = None,
+    board_length_mm: int | None = Query(default=None, ge=1),
+    board_width_mm: int | None = Query(default=None, ge=1),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    receipt_status: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    """返回全部历史入库记录（不限时间）。"""
-    # received_since=epoch_start 表示"从最早时间起"即不过滤
+    """Return scoped, stable pages of historical incoming receipt facts."""
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(status_code=422, detail="入库开始日期不能晚于结束日期")
+    requested_customer_ids = {value for value in (customer_id or []) if value > 0}
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        denied = requested_customer_ids - visible_customer_ids
+        if denied:
+            raise HTTPException(status_code=403, detail="无客户访问权限")
+    for requested_id in requested_customer_ids:
+        require_customer_access(requested_id, current_user=user, db=db)
+
     epoch_start = datetime(2000, 1, 1)
+    rows = _filter_received_history_rows(
+        _received_rows(
+            db,
+            user=user,
+            received_since=epoch_start,
+            include_reversed=True,
+        ),
+        customer_ids=requested_customer_ids,
+        document_keyword=document_keyword,
+        product_code=product_code,
+        product_name=product_name,
+        supplier_name=supplier_name,
+        board_length_mm=board_length_mm,
+        board_width_mm=board_width_mm,
+        date_from=date_from,
+        date_to=date_to,
+        receipt_status=receipt_status,
+    )
+    total = len(rows)
+    start = (page - 1) * page_size
     return {
-        "items": [
-            _incoming_row_response(row)
-            for row in _received_rows(
-                db,
-                user=user,
-                received_since=epoch_start,
-                include_reversed=True,
-            )
-        ]
+        "items": [_incoming_row_response(row) for row in rows[start : start + page_size]],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "filters": {
+            "customer_ids": sorted(requested_customer_ids),
+            "document_keyword": (document_keyword or "").strip(),
+            "product_code": (product_code or "").strip(),
+            "product_name": (product_name or "").strip(),
+            "supplier_name": (supplier_name or "").strip(),
+            "board_length_mm": board_length_mm,
+            "board_width_mm": board_width_mm,
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "receipt_status": receipt_status,
+        },
+        "sort": ["material_received_at:desc", "history_key:desc"],
     }
 
 

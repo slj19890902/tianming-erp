@@ -63,5 +63,8 @@ def test_new_order_refreshes_readiness_from_product_detail() -> None:
     select_end = INDEX.index("async selectOrderMaterial", select_start)
     select = INDEX[select_start:select_end]
     assert "item._common_box_readiness = this.commonBoxReadiness(data);" in select
-    assert "资料已完善" in INDEX[INDEX.index("<!-- 新建订单明细表"):INDEX.index("<!-- 副行：成本/毛利", INDEX.index("<!-- 新建订单明细表"))]
-    assert "来自常用箱" in INDEX[INDEX.index("<!-- 新建订单明细表"):INDEX.index("<!-- 副行：成本/毛利", INDEX.index("<!-- 新建订单明细表"))]
+    order_start = INDEX.index("<!-- P1-02：固定一行一款")
+    order_end = INDEX.index('<div v-else-if="modal.type === \'orderEdit\'">', order_start)
+    order = INDEX[order_start:order_end]
+    assert "资料已完善" in order
+    assert "来自常用箱" in order

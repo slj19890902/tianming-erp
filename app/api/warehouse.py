@@ -4310,11 +4310,25 @@ def disable_location(
 def list_lots(
     inventory_type: str | None = None,
     status: str | None = None,
+    statuses: list[str] | None = Query(default=None),
+    customer_ids: list[int] | None = Query(default=None),
+    finished_product_code: str | None = None,
+    finished_product_name: str | None = None,
+    finished_spec: str | None = None,
+    semi_supplier: str | None = None,
+    semi_material_code: str | None = None,
+    semi_flute_type: str | None = None,
+    semi_board_length_mm: int | None = Query(default=None, gt=0),
+    semi_board_width_mm: int | None = Query(default=None, gt=0),
+    semi_allowed_product: str | None = None,
+    location_keyword: str | None = None,
+    pallet_keyword: str | None = None,
     location_id: int | None = None,
     warehouse_floor: int | None = Query(default=None, ge=1, le=99),
     area_code: str | None = None,
     keyword: str | None = None,
     stale_level: str | None = None,
+    sort: str = "last_movement_at_desc",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -4324,9 +4338,35 @@ def list_lots(
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))
+
+    requested_customer_ids = {int(value) for value in (customer_ids or [])}
+    if requested_customer_ids:
+        for requested_customer_id in requested_customer_ids:
+            require_customer_access(requested_customer_id, user, db)
+        finished_customer_lot_ids = select(
+            FinishedGoodsInventoryDetail.inventory_lot_id
+        ).where(
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(requested_customer_ids)
+        )
+        semi_customer_lot_ids = select(
+            SemiFinishedInventoryDetail.inventory_lot_id
+        ).where(
+            SemiFinishedInventoryDetail.owner_customer_id.in_(requested_customer_ids)
+        )
+        query = query.where(
+            or_(
+                InventoryLot.id.in_(finished_customer_lot_ids),
+                InventoryLot.id.in_(semi_customer_lot_ids),
+            )
+        )
     if inventory_type:
         query = query.where(InventoryLot.inventory_type == inventory_type)
-    if status:
+    normalized_statuses = [
+        value.strip() for value in (statuses or []) if value and value.strip()
+    ]
+    if normalized_statuses:
+        query = query.where(InventoryLot.status.in_(normalized_statuses))
+    elif status:
         query = query.where(InventoryLot.status == status)
     if location_id:
         query = query.where(InventoryLot.warehouse_location_id == location_id)
@@ -4342,6 +4382,125 @@ def list_lots(
                 == area_code.strip().upper()
             )
         query = query.where(InventoryLot.warehouse_location_id.in_(location_ids))
+
+    def _contains_ci(column, value: str | None):
+        normalized = (value or "").strip().lower()
+        return func.lower(column).like(f"%{normalized}%") if normalized else None
+
+    finished_conditions = [
+        condition
+        for condition in (
+            _contains_ci(
+                FinishedGoodsInventoryDetail.inventory_code_snapshot,
+                finished_product_code,
+            ),
+            _contains_ci(
+                FinishedGoodsInventoryDetail.product_name_snapshot,
+                finished_product_name,
+            ),
+        )
+        if condition is not None
+    ]
+    if finished_spec and finished_spec.strip():
+        normalized_spec = (
+            finished_spec.strip().lower().replace("x", "×").replace(" ", "")
+        )
+        spec_parts = normalized_spec.split("×")
+        try:
+            length_mm, width_mm, height_mm = (int(part) for part in spec_parts)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=422,
+                detail="成品规格请按 长×宽×高（毫米）填写",
+            ) from error
+        if len(spec_parts) != 3 or min(length_mm, width_mm, height_mm) <= 0:
+            raise HTTPException(status_code=422, detail="成品规格请按 长×宽×高（毫米）填写")
+        finished_conditions.extend(
+            (
+                FinishedGoodsInventoryDetail.length_mm == length_mm,
+                FinishedGoodsInventoryDetail.width_mm == width_mm,
+                FinishedGoodsInventoryDetail.height_mm == height_mm,
+            )
+        )
+    if finished_conditions:
+        query = query.where(
+            InventoryLot.id.in_(
+                select(FinishedGoodsInventoryDetail.inventory_lot_id).where(
+                    *finished_conditions
+                )
+            )
+        )
+
+    semi_conditions = [
+        condition
+        for condition in (
+            _contains_ci(SemiFinishedInventoryDetail.supplier_name, semi_supplier),
+            _contains_ci(
+                SemiFinishedInventoryDetail.material_code_snapshot,
+                semi_material_code,
+            ),
+            _contains_ci(SemiFinishedInventoryDetail.flute_type, semi_flute_type),
+            (
+                SemiFinishedInventoryDetail.board_length_mm == semi_board_length_mm
+                if semi_board_length_mm is not None
+                else None
+            ),
+            (
+                SemiFinishedInventoryDetail.board_width_mm == semi_board_width_mm
+                if semi_board_width_mm is not None
+                else None
+            ),
+        )
+        if condition is not None
+    ]
+    if semi_conditions:
+        query = query.where(
+            InventoryLot.id.in_(
+                select(SemiFinishedInventoryDetail.inventory_lot_id).where(
+                    *semi_conditions
+                )
+            )
+        )
+    allowed_product_condition = _contains_ci(
+        Product.product_code, semi_allowed_product
+    )
+    if allowed_product_condition is not None:
+        query = query.where(
+            InventoryLot.id.in_(
+                select(SemiFinishedLotAllowedProduct.inventory_lot_id)
+                .join(
+                    Product,
+                    Product.id == SemiFinishedLotAllowedProduct.product_id,
+                )
+                .where(allowed_product_condition)
+            )
+        )
+
+    location_condition = _contains_ci(WarehouseLocation.location_code, location_keyword)
+    location_name_condition = _contains_ci(
+        WarehouseLocation.location_name, location_keyword
+    )
+    if location_condition is not None and location_name_condition is not None:
+        query = query.where(
+            InventoryLot.warehouse_location_id.in_(
+                select(WarehouseLocation.id).where(
+                    or_(location_condition, location_name_condition)
+                )
+            )
+        )
+    pallet_condition = _contains_ci(InventoryPallet.pallet_code, pallet_keyword)
+    if pallet_condition is not None:
+        query = query.where(
+            InventoryLot.id.in_(
+                select(InventoryPalletItem.inventory_lot_id)
+                .join(InventoryPallet, InventoryPallet.id == InventoryPalletItem.pallet_id)
+                .where(
+                    InventoryPalletItem.inventory_lot_id.is_not(None),
+                    InventoryPallet.is_current.is_(True),
+                    pallet_condition,
+                )
+            )
+        )
     if keyword:
         text = keyword.strip()
         pattern = f"%{text}%"
@@ -4400,12 +4559,48 @@ def list_lots(
             )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     total = db.scalar(count_query) or 0
+    sort_orders = {
+        "last_movement_at_desc": (
+            InventoryLot.last_movement_at.desc(),
+            InventoryLot.id.desc(),
+        ),
+        "created_at_desc": (InventoryLot.created_at.desc(), InventoryLot.id.desc()),
+    }
+    if sort not in sort_orders:
+        raise HTTPException(status_code=422, detail="库存排序方式无效")
     rows = db.scalars(
-        query.order_by(InventoryLot.last_movement_at.desc(), InventoryLot.id.desc())
+        query.order_by(*sort_orders[sort])
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    return {"items": [_lot_dict(row) for row in rows], "total": total}
+    return {
+        "items": [_lot_dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "sort": sort,
+        "filters": {
+            "inventory_type": inventory_type,
+            "customer_ids": sorted(requested_customer_ids),
+            "statuses": normalized_statuses or ([status] if status else []),
+            "finished_product_code": (finished_product_code or "").strip() or None,
+            "finished_product_name": (finished_product_name or "").strip() or None,
+            "finished_spec": (finished_spec or "").strip() or None,
+            "semi_supplier": (semi_supplier or "").strip() or None,
+            "semi_material_code": (semi_material_code or "").strip() or None,
+            "semi_flute_type": (semi_flute_type or "").strip() or None,
+            "semi_board_length_mm": semi_board_length_mm,
+            "semi_board_width_mm": semi_board_width_mm,
+            "semi_allowed_product": (semi_allowed_product or "").strip() or None,
+            "location_keyword": (location_keyword or "").strip() or None,
+            "pallet_keyword": (pallet_keyword or "").strip() or None,
+            "location_id": location_id,
+            "warehouse_floor": warehouse_floor,
+            "area_code": (area_code or "").strip().upper() or None,
+            "keyword": (keyword or "").strip() or None,
+            "stale_level": stale_level,
+        },
+    }
 
 
 _INSIGHT_OPERATIONAL_TOP_FIELDS = frozenset(

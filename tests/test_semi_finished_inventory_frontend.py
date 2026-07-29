@@ -261,6 +261,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
   const draft = {{matched_customer_id:5,order_date:"2026-07-17",delivery_date:"2026-07-24",items:[{{matched_product_id:99,quantity:7,unit_price:"1",product_name:"PDF产品",_inventory:confirmedState,_inventory_product:{{id:99}},client_line_id:"pdf-line"}}]}};
   const pdfContext = {{
     orderImportDrafts:[draft], orderForm:{{items:[]}}, newOrderInventoryState:methods.newOrderInventoryState,
+    isImportDraftLocked:() => false,
     inventoryStateMatchesLine:methods.inventoryStateMatchesLine, searchOrderProducts:async () => {{}},
     loadOrderDraftBom:async () => {{}},
     loadOrderLineInventory:async () => {{ reloads += 1; }}, reallocateAllDraftInventory() {{}}, refreshOrderNumberPreview:async () => {{}},

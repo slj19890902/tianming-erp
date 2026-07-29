@@ -12,6 +12,7 @@ from alembic.script import ScriptDirectory
 ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "cu77v8x9z66"
 TARGET_REVISION = "ct76v8x9z65"
+NEXT_REVISION = "cv78v8x9z67"
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
@@ -50,14 +51,15 @@ def _assert_database(database: Path, revision: str) -> None:
         _assert_delivery_void_columns(connection)
 
 
-def test_ct76_is_the_unique_linear_head(
+def test_ct76_is_linear_parent_of_the_unique_q0_02_head(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(monkeypatch, tmp_path / "lineage.sqlite3")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET_REVISION]
+    assert script.get_heads() == [NEXT_REVISION]
     assert script.get_revision(TARGET_REVISION).down_revision == PARENT_REVISION
+    assert script.get_revision(NEXT_REVISION).down_revision == TARGET_REVISION
 
 
 def test_ct76_round_trip_preserves_old_receipt_structure(

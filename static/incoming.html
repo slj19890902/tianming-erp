@@ -104,6 +104,10 @@
       activeTab: "pending",
       pending: [],
       received: [],
+      receivedLoaded: false,
+      receivedLoading: false,
+      receivedError: "",
+      locationsLoading: false,
       locations: [],
       user: null,
       permissions: [],
@@ -113,8 +117,20 @@
     };
 
     const $ = (id) => document.getElementById(id);
+    const requestControllers = new Map();
     const hasPermission = (code) => state.user?.role === "admin" || state.permissions.includes(code);
     const canOperate = () => hasPermission("incoming.execute");
+
+    function beginLatestRequest(key) {
+      requestControllers.get(key)?.abort();
+      const controller = new AbortController();
+      requestControllers.set(key, controller);
+      return controller;
+    }
+
+    function finishLatestRequest(key, controller) {
+      if (requestControllers.get(key) === controller) requestControllers.delete(key);
+    }
 
     function createIdempotencyKey() {
       const cryptoApi = globalThis.crypto;
@@ -168,6 +184,7 @@
           headers: { "Content-Type": "application/json", ...(options.headers || {}) },
         });
       } catch (networkError) {
+        if (networkError?.name === "AbortError") throw networkError;
         throw new Error("网络连接失败，请检查网络后重试");
       }
       const data = await response.json().catch(() => ({}));
@@ -384,32 +401,32 @@
       const items = state[state.activeTab];
       $("pendingCount").textContent = state.pending.length;
       $("receivedCount").textContent = state.received.length;
-      $("emptyState").hidden = items.length !== 0;
-      $("cardList").innerHTML = items.map(renderCard).join("");
+      const receivedPending = state.activeTab === "received" && state.receivedLoading && !items.length;
+      const receivedFailed = state.activeTab === "received" && state.receivedError && !items.length;
+      $("emptyState").hidden = items.length !== 0 || receivedPending || receivedFailed;
+      if (receivedPending) {
+        $("cardList").innerHTML = '<div class="empty">正在读取今日已收记录…</div>';
+      } else if (receivedFailed) {
+        $("cardList").innerHTML = `<div class="empty">${escapeHtml(state.receivedError)}</div>`;
+      } else {
+        $("cardList").innerHTML = items.map(renderCard).join("");
+      }
       applyIncomingPrimarySpecLayout(items);
     }
 
-    async function loadData() {
+    async function loadPending() {
+      const controller = beginLatestRequest("incoming:pending");
       $("loadingState").hidden = false;
       $("errorState").hidden = true;
       $("cardList").innerHTML = "";
       $("emptyState").hidden = true;
       try {
-        // v0.23.0 P0-2：每次加载都强制向服务器要最新数据（api() 已附带 no-store + 时间戳），
-        // 不复用上一次页面渲染的旧状态。
-        const [pending, received, locations] = await Promise.all([
-          api("/api/incoming/pending"),
-          api("/api/incoming/received"),
-          canOperate()
-            ? api("/api/incoming/surplus-locations")
-            : Promise.resolve({items: []}),
-        ]);
+        const pending = await api("/api/incoming/pending", {signal: controller.signal});
         state.pending = pending.items.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
-        state.received = received.items;
-        state.locations = locations.items || [];
         state.expandedIds = new Set();
         render();
       } catch (error) {
+        if (error?.name === "AbortError") return;
         if (error?.status === 401) {
           $("errorState").hidden = true;
           $("authNotice").hidden = false;
@@ -419,7 +436,61 @@
         }
       } finally {
         $("loadingState").hidden = true;
+        finishLatestRequest("incoming:pending", controller);
       }
+    }
+
+    async function loadReceived({force = false} = {}) {
+      if (!force && state.receivedLoaded) return;
+      const controller = beginLatestRequest("incoming:received");
+      state.receivedLoading = true;
+      state.receivedError = "";
+      render();
+      try {
+        const received = await api("/api/incoming/received", {signal: controller.signal});
+        state.received = received.items || [];
+        state.receivedLoaded = true;
+        render();
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          state.receivedError = `读取今日实收失败：${toChineseMessage(error)}`;
+          render();
+          showToast(state.receivedError, true);
+        }
+      } finally {
+        if (requestControllers.get("incoming:received") === controller) {
+          state.receivedLoading = false;
+          render();
+        }
+        finishLatestRequest("incoming:received", controller);
+      }
+    }
+
+    async function ensureSurplusLocations() {
+      if (!canOperate() || state.locations.length || state.locationsLoading) return;
+      const controller = beginLatestRequest("incoming:surplus-locations");
+      state.locationsLoading = true;
+      try {
+        const locations = await api("/api/incoming/surplus-locations", {signal: controller.signal});
+        state.locations = locations.items || [];
+        render();
+      } catch (error) {
+        if (error?.name !== "AbortError") showToast("半成品库位读取失败，请重试后再确认余量入库", true);
+      } finally {
+        if (requestControllers.get("incoming:surplus-locations") === controller) state.locationsLoading = false;
+        finishLatestRequest("incoming:surplus-locations", controller);
+      }
+    }
+
+    async function loadData() {
+      if (state.activeTab === "received") return loadReceived({force: true});
+      return loadPending();
+    }
+
+    async function refreshAfterIncomingWrite() {
+      const tasks = [loadPending()];
+      if (state.receivedLoaded) tasks.push(loadReceived({force: true}));
+      await Promise.all(tasks);
     }
 
     function findItem(itemId) {
@@ -474,6 +545,10 @@
         showToast("超收时请选择全部投入生产或余量转半成品库存", true);
         return;
       }
+      if (action === "transfer_to_semi_inventory" && state.locationsLoading) {
+        showToast("正在读取半成品库位，请稍候再确认", true);
+        return;
+      }
       if (action === "transfer_to_semi_inventory" && !Number(item.surplus_location_id)) {
         showToast("余量转半成品库存时必须选择库位", true);
         return;
@@ -493,7 +568,7 @@
           }),
         });
         showToast(result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功");
-        await loadData();
+        await refreshAfterIncomingWrite();
       } catch (error) {
         showToast(toChineseMessage(error), true);
       } finally {
@@ -514,7 +589,7 @@
           body: JSON.stringify({}),
         });
         showToast("已按当前实收数量完成短收结单");
-        await loadData();
+        await refreshAfterIncomingWrite();
       } catch (error) {
         showToast(toChineseMessage(error), true);
       } finally {
@@ -531,13 +606,14 @@
     }
 
     document.querySelectorAll(".tab-button").forEach((button) => {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
         state.activeTab = button.dataset.tab;
         document.querySelectorAll(".tab-button").forEach((item) => {
           const active = item.dataset.tab === state.activeTab;
           item.className = `tab-button min-h-14 rounded-lg px-3 text-lg font-bold ${active ? "bg-blue-700 text-white" : "bg-slate-200 text-slate-700"}`;
         });
         render();
+        if (state.activeTab === "received") await loadReceived();
       });
     });
 
@@ -581,7 +657,7 @@
         if (item) item.resolution_reason = reasonInput.value;
       }
     });
-    $("cardList").addEventListener("change", (event) => {
+    $("cardList").addEventListener("change", async (event) => {
       const quantityInput = event.target.closest("[data-quantity]");
       const actionSelect = event.target.closest("[data-resolution]");
       const locationSelect = event.target.closest("[data-surplus-location]");
@@ -596,6 +672,7 @@
           if (item.resolution_action !== "accept_short") item.resolution_reason = "";
           if (item.resolution_action !== "transfer_to_semi_inventory") item.surplus_location_id = null;
           render();
+          if (item.resolution_action === "transfer_to_semi_inventory") await ensureSurplusLocations();
         }
       } else if (locationSelect) {
         const item = findItem(locationSelect.dataset.surplusLocation);

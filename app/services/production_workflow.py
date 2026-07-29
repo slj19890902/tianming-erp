@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date
 from hashlib import sha256
 import json
 from math import ceil
@@ -10,7 +11,12 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
+from app.core.time_contract import (
+    beijing_date_bounds_utc_naive,
+    beijing_today,
+    utc_naive_to_api,
+    utc_now_naive,
+)
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
@@ -2208,6 +2214,166 @@ def _active_customer_board_preparation_sources(
     return result
 
 
+@dataclass(frozen=True)
+class _PendingProductionReadContext:
+    """Read-only fast-path eligibility for ordinary pending tasks.
+
+    This context is intentionally conservative.  It only bypasses the legacy
+    per-row serializer when batched preflight proves that no fact which the
+    detailed production workflow reads exists for the order line.  Components,
+    double-splice orders, receipts, completions and every reservation remain on
+    the existing exact path.
+    """
+
+    fast_order_item_ids: frozenset[int]
+
+    def is_fast_path(
+        self,
+        *,
+        task: ProductionTask,
+        item: OrderItem,
+        product: Product,
+    ) -> bool:
+        return (
+            task.sales_order_item_bom_component_id is None
+            and item.id in self.fast_order_item_ids
+            and product.box_category != "die_cut"
+            and (item.snapshot_splice_mode or "").strip().lower() != "double"
+        )
+
+
+def _pending_production_read_context(
+    db: Session,
+    rows: Sequence[tuple[ProductionTask, OrderItem, Order, Customer, Product]],
+) -> _PendingProductionReadContext:
+    """Batch-prove which rows have no detailed workflow facts to calculate.
+
+    The four preflight reads deliberately use existence only.  A positive
+    result is never simplified: it sends the row through the original
+    serializer, preserving component demand, receipt variance, completion,
+    finished-reservation and customer-board calculations exactly.
+    """
+
+    candidate_item_ids = {
+        item.id
+        for task, item, _order, _customer, product in rows
+        if task.sales_order_item_bom_component_id is None
+        and product.box_category != "die_cut"
+        and (item.snapshot_splice_mode or "").strip().lower() != "double"
+    }
+    if not candidate_item_ids:
+        return _PendingProductionReadContext(frozenset())
+
+    candidate_task_ids = {
+        task.id
+        for task, item, _order, _customer, product in rows
+        if item.id in candidate_item_ids
+    }
+    component_item_ids = set(
+        db.scalars(
+            select(SalesOrderItemBomComponent.sales_order_item_id).where(
+                SalesOrderItemBomComponent.sales_order_item_id.in_(candidate_item_ids)
+            )
+        ).all()
+    )
+    receipt_item_ids = set(
+        db.scalars(
+            select(IncomingReceiptItem.order_item_id).where(
+                IncomingReceiptItem.order_item_id.in_(candidate_item_ids),
+                IncomingReceiptItem.status == "posted",
+            )
+        ).all()
+    )
+    completion_task_ids = set(
+        db.scalars(
+            select(ProductionCompletion.task_id).where(
+                ProductionCompletion.task_id.in_(candidate_task_ids)
+            )
+        ).all()
+    )
+    reservation_item_ids = set(
+        db.scalars(
+            select(InventoryReservation.order_item_id).where(
+                InventoryReservation.order_item_id.in_(candidate_item_ids)
+            )
+        ).all()
+    )
+    complex_item_ids = (
+        component_item_ids
+        | receipt_item_ids
+        | reservation_item_ids
+        | {
+            task.order_item_id
+            for task, item, _order, _customer, _product in rows
+            if task.id in completion_task_ids and item.id in candidate_item_ids
+        }
+    )
+    return _PendingProductionReadContext(
+        frozenset(candidate_item_ids - complex_item_ids)
+    )
+
+
+def _ordinary_pending_task_fast_payload(
+    *,
+    task: ProductionTask,
+    item: OrderItem,
+    order: Order,
+    customer: Customer,
+    product: Product,
+) -> dict:
+    """Exact serializer result when preflight proves all detailed facts absent."""
+
+    target_quantity = int(item.quantity or 0)
+    factor = cutting_output_factor(item.special_process)
+    pieces_per_box = production_pieces_per_box(item)
+    material_input = max(int(task.material_input_quantity or 0), 0)
+    finished_coverage = int(task.finished_coverage_snapshot or 0)
+    return {
+        "id": task.id,
+        "order_item_id": item.id,
+        "order_id": order.id,
+        "order_number": order.order_number,
+        "item_order_number": item.item_order_number,
+        "customer_id": order.customer_id,
+        "customer_name": customer.name,
+        **_item_product_snapshot(item, product),
+        "is_component_task": False,
+        "bom_component_snapshot_id": None,
+        "production_quantity_unit": "sets",
+        "order_quantity": target_quantity,
+        "parent_order_quantity": int(item.quantity),
+        "component_required_quantity": None,
+        "delivered_quantity": int(item.delivered_quantity or 0),
+        "material_status": item.material_status,
+        "status": task.status,
+        "planned_quantity": int(task.planned_quantity),
+        "ordered_quantity": target_quantity,
+        "material_received_quantity": max(
+            0,
+            int(task.material_received_quantity or 0),
+        ),
+        "material_input_quantity": material_input,
+        "available_material_input_quantity": material_input,
+        "output_factor": factor,
+        "pieces_per_box": pieces_per_box,
+        "planned_output_quantity": production_output_quantity(
+            material_input,
+            factor,
+            pieces_per_box,
+        ),
+        "actual_output_quantity": 0,
+        "order_reserved_quantity": min(finished_coverage, target_quantity),
+        "surplus_finished_quantity": max(finished_coverage - target_quantity, 0),
+        "can_supplement": False,
+        "finished_coverage_snapshot": finished_coverage,
+        "readiness_basis": task.readiness_basis,
+        "ready_at": utc_naive_to_api(task.ready_at) if task.ready_at else None,
+        "version": int(task.version),
+        "production_ready_quantity": 0,
+        "customer_board_preparation_sources": [],
+    }
+
+
 def list_production_tasks(
     db: Session,
     *,
@@ -2221,8 +2387,24 @@ def list_production_tasks(
     if status:
         query = query.where(ProductionTask.status == status)
     rows = db.execute(query.order_by(Order.delivery_date, Order.id, OrderItem.id)).all()
+    pending_context = (
+        _pending_production_read_context(db, rows)
+        if status == PENDING
+        else _PendingProductionReadContext(frozenset())
+    )
     result: list[dict] = []
     for task, item, order, customer, product in rows:
+        if pending_context.is_fast_path(task=task, item=item, product=product):
+            result.append(
+                _ordinary_pending_task_fast_payload(
+                    task=task,
+                    item=item,
+                    order=order,
+                    customer=customer,
+                    product=product,
+                )
+            )
+            continue
         is_component_task = task.sales_order_item_bom_component_id is not None
         component_demand = None
         if is_component_task:
@@ -2351,6 +2533,15 @@ def _completion_rows(
     *,
     allowed_customer_ids: set[int] | None,
     completion_ids: Sequence[int] | None = None,
+    customer_id: int | None = None,
+    order_keyword: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    completed_date_from: date | None = None,
+    completed_date_to: date | None = None,
+    status: str | None = None,
+    page: int | None = None,
+    page_size: int | None = None,
 ):
     query = (
         select(
@@ -2378,20 +2569,115 @@ def _completion_rows(
         query = query.where(Order.customer_id.in_(allowed_customer_ids))
     if completion_ids is not None:
         query = query.where(ProductionCompletion.id.in_(completion_ids))
-    return db.execute(query.order_by(ProductionCompletion.id.desc())).all()
+    if customer_id is not None:
+        query = query.where(Order.customer_id == customer_id)
+    if normalized_keyword := (order_keyword or "").strip():
+        pattern = f"%{normalized_keyword}%"
+        query = query.where(
+            or_(
+                Order.order_number.like(pattern),
+                Order.customer_po.like(pattern),
+                OrderItem.item_order_number.like(pattern),
+            )
+        )
+    if normalized_product_code := (product_code or "").strip():
+        pattern = f"%{normalized_product_code}%"
+        query = query.where(
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                OrderItem.snapshot_product_code.like(pattern),
+            )
+        )
+    if normalized_product_name := (product_name or "").strip():
+        pattern = f"%{normalized_product_name}%"
+        query = query.where(
+            or_(
+                Product.product_name.like(pattern),
+                OrderItem.snapshot_product_name.like(pattern),
+            )
+        )
+    if completed_date_from is not None:
+        start_at, _ = beijing_date_bounds_utc_naive(completed_date_from)
+        query = query.where(ProductionCompletion.completed_at >= start_at)
+    if completed_date_to is not None:
+        _, end_at = beijing_date_bounds_utc_naive(completed_date_to)
+        query = query.where(ProductionCompletion.completed_at < end_at)
+    if status is not None:
+        query = query.where(ProductionCompletion.status == status)
+
+    query = query.order_by(
+        ProductionCompletion.completed_at.desc(),
+        ProductionCompletion.id.desc(),
+    )
+    if page is not None and page_size is not None:
+        query = query.offset((page - 1) * page_size).limit(page_size)
+    return db.execute(query).all()
 
 
-def list_production_completions(
+def _production_completion_total(
     db: Session,
     *,
     allowed_customer_ids: set[int] | None,
-    completion_ids: Sequence[int] | None = None,
-) -> list[dict]:
-    rows = _completion_rows(
-        db,
-        allowed_customer_ids=allowed_customer_ids,
-        completion_ids=completion_ids,
+    customer_id: int | None,
+    order_keyword: str | None,
+    product_code: str | None,
+    product_name: str | None,
+    completed_date_from: date | None,
+    completed_date_to: date | None,
+    status: str | None,
+) -> int:
+    """Count the same customer-scoped completion set as the history page."""
+
+    query = (
+        select(ProductionCompletion.id)
+        .join(ProductionTask, ProductionTask.id == ProductionCompletion.task_id)
+        .join(OrderItem, OrderItem.id == ProductionCompletion.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
     )
+    if allowed_customer_ids is not None:
+        query = query.where(Order.customer_id.in_(allowed_customer_ids))
+    if customer_id is not None:
+        query = query.where(Order.customer_id == customer_id)
+    if normalized_keyword := (order_keyword or "").strip():
+        pattern = f"%{normalized_keyword}%"
+        query = query.where(
+            or_(
+                Order.order_number.like(pattern),
+                Order.customer_po.like(pattern),
+                OrderItem.item_order_number.like(pattern),
+            )
+        )
+    if normalized_product_code := (product_code or "").strip():
+        pattern = f"%{normalized_product_code}%"
+        query = query.where(
+            or_(
+                Product.product_code.like(pattern),
+                Product.customer_material_code.like(pattern),
+                OrderItem.snapshot_product_code.like(pattern),
+            )
+        )
+    if normalized_product_name := (product_name or "").strip():
+        pattern = f"%{normalized_product_name}%"
+        query = query.where(
+            or_(
+                Product.product_name.like(pattern),
+                OrderItem.snapshot_product_name.like(pattern),
+            )
+        )
+    if completed_date_from is not None:
+        start_at, _ = beijing_date_bounds_utc_naive(completed_date_from)
+        query = query.where(ProductionCompletion.completed_at >= start_at)
+    if completed_date_to is not None:
+        _, end_at = beijing_date_bounds_utc_naive(completed_date_to)
+        query = query.where(ProductionCompletion.completed_at < end_at)
+    if status is not None:
+        query = query.where(ProductionCompletion.status == status)
+    return int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
+
+
+def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dict]:
     dispatched_item_ids = _dispatched_delivery_order_item_ids(
         db,
         [item.id for _completion, _task, item, *_rest in rows],
@@ -2517,6 +2803,65 @@ def list_production_completions(
             }
         )
     return result
+
+
+def list_production_completions(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    completion_ids: Sequence[int] | None = None,
+) -> list[dict]:
+    """Return the full legacy completion history for existing workflow callers."""
+
+    rows = _completion_rows(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        completion_ids=completion_ids,
+    )
+    return _production_completion_dicts(db, rows)
+
+
+def list_production_completions_page(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    customer_id: int | None = None,
+    order_keyword: str | None = None,
+    product_code: str | None = None,
+    product_name: str | None = None,
+    completed_date_from: date | None = None,
+    completed_date_to: date | None = None,
+    status: Literal["posted", "reversed"] | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> tuple[list[dict], int]:
+    """Return a stable, customer-scoped page for the production history list."""
+
+    total = _production_completion_total(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        customer_id=customer_id,
+        order_keyword=order_keyword,
+        product_code=product_code,
+        product_name=product_name,
+        completed_date_from=completed_date_from,
+        completed_date_to=completed_date_to,
+        status=status,
+    )
+    rows = _completion_rows(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        customer_id=customer_id,
+        order_keyword=order_keyword,
+        product_code=product_code,
+        product_name=product_name,
+        completed_date_from=completed_date_from,
+        completed_date_to=completed_date_to,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    return _production_completion_dicts(db, rows), total
 
 
 def completion_customer_id(db: Session, completion_id: int) -> int | None:

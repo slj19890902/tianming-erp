@@ -140,9 +140,9 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     start = INDEX.index("async loadProduction()")
     end = INDEX.index("async loadIncoming()", start)
     logic = INDEX[start:end]
-    assert 'axios.get("/api/production/tasks", { params: { status: "pending" } })' in logic
-    assert 'axios.get("/api/production/completions")' in logic
-    assert 'axios.get("/api/production/temporary-locations")' in logic
+    assert 'axios.get("/api/production/tasks", { params: { status: "pending" }, signal:controller.signal })' in logic
+    assert 'axios.get("/api/production/completions", { params })' in logic
+    assert 'axios.get("/api/production/temporary-locations", {signal:controller.signal})' in logic
     assert 'axios.post("/api/production/completion-batches"' in logic
     assert 'axios.post(`/api/production/completions/${row.id}/stock-transfers`' in logic
     assert "if (this.productionBusy) return" in logic
@@ -174,11 +174,11 @@ def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll
     for merged_heading in (
         "订单 / 客户",
         "存货编码 / 产品",
-        "订单 / 收料 / 计划",
-        "实际投入 / 合格 / 损耗",
-        "覆盖 / 余货",
+        "数量情况",
+        "本次生产",
+        "订单 / 多出",
         "数量 / 操作人",
-        "完工去向 / 库位",
+        "完工去向",
     ):
         assert merged_heading in page
 
@@ -228,7 +228,7 @@ def test_incoming_mobile_cards_show_crease_in_primary_view() -> None:
 
 def test_product_drawing_upload_and_mobile_page_support_pdf() -> None:
     assert "application/pdf,.pdf" in INDEX
-    assert "查看图纸(PDF)" in INDEX
+    assert 'title="查看图纸">图纸</a>' in INDEX
     assert "isPdfDrawing" in INDEX
     assert "打开图纸" in INCOMING
     assert "item.drawing_is_pdf" in INCOMING
@@ -374,7 +374,7 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert '/api/incoming/surplus-locations' in INCOMING
     assert 'api("/api/warehouse/locations")' not in INCOMING
     assert 'this.hasPermission("incoming.execute")' in INDEX
-    assert 'axios.get("/api/incoming/surplus-locations")' in INDEX
+    assert '"/api/incoming/surplus-locations"' in INDEX
 
 
 def test_delivery_variance_ui_separates_return_difference_and_authorized_over_delivery() -> None:

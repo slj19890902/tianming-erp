@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -33,6 +34,7 @@ from app.services.production_workflow import (
     batch_customer_ids,
     complete_production_batch,
     completion_customer_id,
+    list_production_completions_page,
     list_production_completions,
     list_production_tasks,
     list_temporary_locations,
@@ -180,14 +182,62 @@ def get_production_tasks(
 
 @router.get("/completions")
 def get_production_completions(
+    customer_id: int | None = Query(default=None, gt=0),
+    order_keyword: str | None = Query(default=None, max_length=150),
+    product_code: str | None = Query(default=None, max_length=150),
+    product_name: str | None = Query(default=None, max_length=250),
+    completed_date_from: date | None = Query(default=None),
+    completed_date_to: date | None = Query(default=None),
+    completion_status: Literal["posted", "reversed"] | None = Query(
+        default=None,
+        alias="status",
+    ),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
     user: User = Depends(can_read),
     db: Session = Depends(get_db),
 ) -> dict:
-    return {
-        "items": list_production_completions(
-            db,
-            allowed_customer_ids=_allowed_customer_ids(user, db),
+    allowed_customer_ids = _allowed_customer_ids(user, db)
+    # Keep the existing unpaged request compatible with the production page
+    # until its UI is switched to the paged contract.
+    if page is None and page_size is None and not any(
+        (
+            customer_id,
+            order_keyword,
+            product_code,
+            product_name,
+            completed_date_from,
+            completed_date_to,
+            completion_status,
         )
+    ):
+        return {
+            "items": list_production_completions(
+                db,
+                allowed_customer_ids=allowed_customer_ids,
+            )
+        }
+
+    resolved_page = page or 1
+    resolved_page_size = page_size or 50
+    items, total = list_production_completions_page(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        customer_id=customer_id,
+        order_keyword=order_keyword,
+        product_code=product_code,
+        product_name=product_name,
+        completed_date_from=completed_date_from,
+        completed_date_to=completed_date_to,
+        status=completion_status,
+        page=resolved_page,
+        page_size=resolved_page_size,
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": resolved_page,
+        "page_size": resolved_page_size,
     }
 
 

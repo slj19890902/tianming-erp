@@ -151,7 +151,7 @@ def test_selected_scope_filters_incoming_rows_and_empty_scope_returns_none(
         _login(client, "n028-empty-incoming-workshop")
         empty_scope_response = client.get(f"/api/incoming/{endpoint}")
     assert empty_scope_response.status_code == 200
-    assert empty_scope_response.json() == {"items": []}
+    assert empty_scope_response.json()["items"] == []
 
 
 @pytest.mark.parametrize("item_key", ["b_pending", "b_pending_component"])

@@ -1,0 +1,55 @@
+from pathlib import Path
+
+
+INDEX = Path("static/index.html").read_text(encoding="utf-8")
+
+
+def _block(start_marker: str, end_marker: str) -> str:
+    start = INDEX.index(start_marker)
+    return INDEX[start:INDEX.index(end_marker, start)]
+
+
+def test_product_cold_entry_only_loads_customer_options() -> None:
+    load_page = _block("async loadPage(page", "refreshCurrent()")
+
+    assert 'if (page === "products") {' in load_page
+    assert "await this.loadCustomerOptions(force);" in load_page
+    assert 'if (this.productTab === "products" && this.selectedProductCustomer) await this.loadProducts();' in load_page
+    assert 'if (this.productTab === "materials") await this.loadMaterials();' in load_page
+    assert "loadMoldTools()" not in load_page
+
+
+def test_product_list_is_customer_scoped_and_cancels_stale_requests() -> None:
+    products = _block("async loadProducts()", "async loadMoldTools()")
+
+    assert "!this.selectedProductCustomer" in products
+    assert 'this.beginLatestRequest("products:list")' in products
+    assert 'axios.get("/api/master/products", { params, signal:controller.signal })' in products
+    assert 'this.finishLatestRequest("products:list", controller)' in products
+    assert "async selectProductCustomer(row)" in INDEX
+
+
+def test_material_list_is_tab_driven_and_cancels_stale_requests() -> None:
+    tab = _block("async selectProductTab(tab)", "resetProductFilters()")
+    materials = _block("async loadMaterials()", "async openMaterialCandidateMaintenance()")
+
+    assert 'if (tab === "materials") await this.loadMaterials();' in tab
+    assert 'this.beginLatestRequest("materials:list")' in materials
+    assert 'this.fetchAllMaterials(params, controller.signal)' in materials
+    assert 'this.finishLatestRequest("materials:list", controller)' in materials
+
+
+def test_product_editor_loads_materials_and_molds_only_when_opened() -> None:
+    options = _block("async ensureProductEditorOptions({force=false} = {})", "moldToolSelectOptions()")
+    open_product = _block("async openProduct(row=null)", "async loadProductMaterialContext")
+
+    assert "const needsMaterials = force || !this.allMaterials.length;" in options
+    assert "const needsMolds = !this.isWorkshop && (force || !this.moldTools.length);" in options
+    assert "if (needsMaterials) tasks.push(this.loadMaterials());" in options
+    assert "if (needsMolds) tasks.push(this.loadMoldTools());" in options
+    assert "productEditorOptionsLoading = true" in options
+    assert 'this.productEditorOptionsError = "";' in options
+    assert 'this.productEditorOptionsError = "材质与模具选择数据读取失败，请重试";' in options
+    assert "await this.ensureProductEditorOptions();" in open_product
+    assert "正在读取材质与模具选择数据" in INDEX
+    assert "ensureProductEditorOptions({force:true})" in INDEX

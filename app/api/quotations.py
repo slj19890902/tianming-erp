@@ -16,11 +16,19 @@ from app.api.deps import (
 )
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
+from app.models.customer_quote_preference import CustomerQuotePreference
 from app.models.material import Material
 from app.models.product import Product
 from app.models.quotation import QuotationItem, QuotationOrder
 from app.models.user import User
 from app.services import material_pricing
+from app.services.customer_quote_pricing import (
+    CustomerQuotePricingError,
+    a1_area_m2,
+    canonical_quote_box_type,
+    estimate_a1_unit_price,
+    resolve_customer_square_price,
+)
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
 from app.services.pricing import PricingError, calculate_price
 from app.services.report_crease import crease_width_error
@@ -38,6 +46,7 @@ INTERNAL_PRICING_FIELDS = frozenset(
         "estimated_gross_profit",
         "margin_rate",
         "material_square_price",
+        "material_effective_square_price",
         "suggested_unit_price",
     }
 )
@@ -51,6 +60,7 @@ STATUS_LABELS = {
 
 
 class QuotationPreviewPayload(BaseModel):
+    customer_id: int | None = Field(default=None, gt=0)
     box_type: str
     length_mm: Decimal | None = Field(default=None, gt=0)
     width_mm: Decimal | None = Field(default=None, gt=0)
@@ -294,6 +304,77 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
             "margin_rate": payload.margin_rate,
             "message": "请选择材质后计算建议单价",
         }
+    if payload.customer_id is not None:
+        preference = db.scalar(
+            select(CustomerQuotePreference)
+            .where(
+                CustomerQuotePreference.customer_id == payload.customer_id,
+                CustomerQuotePreference.box_type
+                == canonical_quote_box_type(payload.box_type),
+                CustomerQuotePreference.material_id == material.id,
+                CustomerQuotePreference.flute_type == flute_type,
+                CustomerQuotePreference.is_active.is_(True),
+            )
+            .order_by(CustomerQuotePreference.id.desc())
+        )
+        effective = material_pricing.get_effective_material_price(
+            db, material=material, flute_type=flute_type
+        )
+        material_square_price = effective.get("effective_price")
+        if material_square_price is None:
+            return {
+                "auto_calculated": False,
+                "estimated_unit_cost": None,
+                "suggested_unit_price": None,
+                "margin_rate": payload.margin_rate,
+                "message": "当前材质缺少平方价，请手工填写最终单价",
+            }
+        try:
+            customer_square = resolve_customer_square_price(
+                db,
+                material=material,
+                flute_type=flute_type or "",
+                saved_square_price=(
+                    preference.tax_included_square_price
+                    if preference is not None
+                    else None
+                ),
+            )
+            area = a1_area_m2(
+                length_mm=Decimal(payload.length_mm),
+                width_mm=Decimal(payload.width_mm),
+                height_mm=Decimal(payload.height_mm),
+            )
+            suggested = estimate_a1_unit_price(
+                length_mm=Decimal(payload.length_mm),
+                width_mm=Decimal(payload.width_mm),
+                height_mm=Decimal(payload.height_mm),
+                customer_square_price=customer_square["customer_square_price"],
+            )
+        except (CustomerQuotePricingError, TypeError) as error:
+            return {
+                "auto_calculated": False,
+                "estimated_unit_cost": None,
+                "suggested_unit_price": None,
+                "margin_rate": payload.margin_rate,
+                "message": str(error),
+            }
+        cost = (area * Decimal(str(material_square_price))).quantize(
+            PRICE, rounding=ROUND_HALF_UP
+        )
+        return {
+            "auto_calculated": True,
+            "estimated_unit_cost": cost,
+            "suggested_unit_price": suggested["estimated_unit_price"],
+            "margin_rate": payload.margin_rate,
+            "area_m2": area,
+            "material_square_price": material_square_price,
+            "material_effective_square_price": material_square_price,
+            "customer_square_price": customer_square["customer_square_price"],
+            "price_source": customer_square["price_source"],
+            "preference_id": preference.id if preference is not None else None,
+            "message": "已按客户尺寸报价偏好计算，最终单价可手工修改",
+        }
     effective = material_pricing.get_effective_material_price(
         db,
         material=material,
@@ -362,6 +443,8 @@ def _replace_items(
     db: Session,
     quotation: QuotationOrder,
     payloads: list[QuotationItemPayload],
+    *,
+    customer_id: int | None = None,
 ) -> None:
     quotation.items.clear()
     total = Decimal("0")
@@ -372,7 +455,10 @@ def _replace_items(
             if material is not None
             else None
         )
-        preview = _preview(db, payload)
+        preview = _preview(
+            db,
+            payload.model_copy(update={"customer_id": customer_id}),
+        )
         suggested = preview["suggested_unit_price"]
         final_price = payload.final_unit_price
         if final_price is None:
@@ -483,6 +569,8 @@ def preview_quotation_item(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    if payload.customer_id is not None:
+        require_customer_access(payload.customer_id, current_user=user, db=db)
     return _redact_internal_pricing(_preview(db, payload), user)
 
 
@@ -544,7 +632,7 @@ def create_quotation(
         remarks=(payload.remarks or "").strip() or None,
         created_by=user.id,
     )
-    _replace_items(db, quotation, payload.items)
+    _replace_items(db, quotation, payload.items, customer_id=quotation.customer_id)
     db.add(quotation)
     db.commit()
     db.refresh(quotation)
@@ -576,7 +664,7 @@ def update_quotation(
     quotation.quotation_date = payload.quotation_date
     quotation.remarks = (payload.remarks or "").strip() or None
     quotation.status = "draft"
-    _replace_items(db, quotation, payload.items)
+    _replace_items(db, quotation, payload.items, customer_id=quotation.customer_id)
     db.commit()
     return _quotation_dict(_quotation_or_404(db, quotation.id), user)
 

@@ -3212,5 +3212,8 @@ legacy_ruida_* 原始层
   与本任务修改文件和新接口无关，本任务未为消除无关失败而改代码。
 - 本任务无 migration；正式更新需要重启 ERP，但不需要迁移正式库。老板已于
   2026-07-30 完成家庭人工验收并明确回复“Q1-09验收通过”。当前状态更新为
-  “家庭人工验收通过，待授权提交与推送”，仍未提交、未推送、未更新
-  `origin/factory-current-baseline` 或 `origin/main`，未连接或写入工厂正式库。
+  “家庭人工验收通过，独立候选已提交推送”。功能提交为
+  `da0ce00b819bc1b04a7ee4c41df7b23e42de76c3`，远端分支为
+  `codex/q1-09-pdf-inventory-three-state-20260729`。仍未更新
+  `origin/factory-current-baseline` 或 `origin/main`，未连接或写入工厂正式库；
+  工厂发布仍须另行授权。

@@ -211,6 +211,23 @@ def test_picker_permission_and_snapshot_contract(pick_app) -> None:
         )
 
 
+def test_delivery_list_includes_pick_task_summary(pick_app) -> None:
+    app, _, ids, _ = pick_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        task = _create_task(client, ids["delivery"])
+
+        listed = client.get("/api/deliveries", params={"page": 1, "page_size": 50})
+
+        assert listed.status_code == 200, listed.text
+        delivery = next(
+            row for row in listed.json()["items"] if row["id"] == ids["delivery"]
+        )
+        assert delivery["pick_task"]["id"] == task["id"]
+        assert delivery["pick_task"]["status"] == "pushed"
+        assert delivery["pick_task"]["exceptions"] == []
+
+
 def test_partial_and_no_stock_apply_only_changes_delivery_draft(pick_app) -> None:
     from app.models.delivery import Delivery, DeliveryItem, DeliveryPickTask, DeliveryPickTaskItem
     from app.models.order import OrderItem

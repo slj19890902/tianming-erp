@@ -1858,10 +1858,10 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     if pick_task_ids:
         for item in db.scalars(
             select(DeliveryPickTaskItem)
-            .where(DeliveryPickTaskItem.pick_task_id.in_(pick_task_ids))
+            .where(DeliveryPickTaskItem.task_id.in_(pick_task_ids))
             .order_by(DeliveryPickTaskItem.id)
         ).all():
-            pick_items_by_task.setdefault(int(item.pick_task_id), []).append(item)
+            pick_items_by_task.setdefault(int(item.task_id), []).append(item)
     internal_remarks = _tianhua_internal_remarks_by_delivery_item(
         db, [int(row["id"]) for row in item_rows]
     )

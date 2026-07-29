@@ -61,7 +61,11 @@ def test_manual_replenishment_uses_common_box_and_material_supplier() -> None:
 def test_saved_replenishment_is_reopenable_from_reported_history() -> None:
     assert 'row.source_type === "stock_replenishment"' in INDEX
     assert 'return "库存补库单"' in INDEX
-    assert 'stockReportedReplenishment(row)' in INDEX
+    assert "去仓库来料入库" in INDEX
+    assert "voidReportedReplenishment(row)" in INDEX
+    assert "/stock-replenishment/orders/\"+row.id+\"/void" in INDEX
+    assert "stockReportedReplenishment(row)" not in INDEX
+    assert "/stock-replenishment/orders/\"+row.id+\"/stock" not in INDEX
     assert "this.openStockReplenishmentPrint(data)" in INDEX
 
 

@@ -33,6 +33,10 @@ from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
 from app.models.product import Product
 from app.models.requisition import Requisition, RequisitionItem
+from app.models.stock_replenishment import (
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
@@ -48,6 +52,7 @@ from app.services.incoming_receipts import (
     receive_one,
     revert_receipt_item,
     source_summary_for_item,
+    stock_source_summary,
 )
 from app.services.production_workflow import (
     ProductionWorkflowError,
@@ -182,6 +187,11 @@ def _is_component_key(value: int | str) -> bool:
     return isinstance(value, str) and value.startswith("r") and value[1:].isdigit()
 
 
+def _is_stock_replenishment_key(value: int | str) -> bool:
+    text = str(value)
+    return text.startswith("sr") and text[2:].isdigit()
+
+
 def _component_id(value: int | str) -> int:
     if _is_component_key(value):
         return int(str(value)[1:])
@@ -247,6 +257,15 @@ def _preflight_item_customer_access(
     item_id: int | str,
     user: User,
 ) -> None:
+    if _is_stock_replenishment_key(item_id):
+        customer_id = db.scalar(
+            select(StockReplenishmentOrderItem.customer_id).where(
+                StockReplenishmentOrderItem.id == int(str(item_id)[2:])
+            )
+        )
+        if customer_id is not None:
+            require_customer_access(customer_id, user, db)
+        return
     if _is_component_key(item_id):
         order_item_id = db.scalar(
             select(RequisitionItem.order_item_id).where(
@@ -264,6 +283,108 @@ def _preflight_item_customer_access(
             order_item_id=order_item_id,
             user=user,
         )
+
+
+def _stock_replenishment_pending_rows(
+    db: Session,
+    *,
+    user: User,
+) -> list[dict]:
+    query = (
+        select(StockReplenishmentOrderItem, StockReplenishmentOrder)
+        .join(
+            StockReplenishmentOrder,
+            StockReplenishmentOrder.id
+            == StockReplenishmentOrderItem.replenishment_order_id,
+        )
+        .options(
+            selectinload(StockReplenishmentOrderItem.customer),
+            selectinload(StockReplenishmentOrderItem.product),
+        )
+        .where(
+            StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
+            StockReplenishmentOrderItem.stocked_quantity
+            < StockReplenishmentOrderItem.quantity,
+        )
+        .order_by(
+            StockReplenishmentOrder.created_at.desc(),
+            StockReplenishmentOrderItem.id.desc(),
+        )
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(
+            StockReplenishmentOrderItem.customer_id.in_(visible_customer_ids)
+        )
+    rows: list[dict] = []
+    for item, order in db.execute(query):
+        summary = stock_source_summary(db, f"sr{item.id}")
+        customer_name = item.customer.name if item.customer else ""
+        rows.append(
+            {
+                "item_id": f"sr{item.id}",
+                "stock_replenishment_order_id": order.id,
+                "stock_replenishment_item_id": item.id,
+                "source_type": "stock_replenishment",
+                "product_id": item.product_id,
+                "order_id": None,
+                "customer_id": item.customer_id,
+                "order_number": order.order_number,
+                "display_order_number": order.order_number,
+                "customer_po": None,
+                "created_at": order.created_at,
+                "customer_name": customer_name,
+                "product_name": item.product_name_snapshot,
+                "product_code": item.product_code_snapshot,
+                "specification": (
+                    f"{item.report_length_mm or '-'}×{item.report_width_mm or '-'}"
+                ),
+                "material": item.material_code_snapshot,
+                "material_code": item.material_code_snapshot,
+                "flute_type": item.flute_type,
+                "material_display": " / ".join(
+                    value
+                    for value in (
+                        (item.material_code_snapshot or "").strip(),
+                        (item.flute_type or "").strip(),
+                    )
+                    if value
+                ),
+                "quantity": item.quantity,
+                "delivery_date": None,
+                "order_status": order.status,
+                "material_status": "pending",
+                "requisition_status": "已报料",
+                "requisition_qty": item.quantity,
+                "incoming_quantity": summary["remaining_quantity"],
+                "requisition_date": order.confirmed_at or order.created_at,
+                "requisition_spec": None,
+                "cardboard_len": item.report_length_mm,
+                "cardboard_width": item.report_width_mm,
+                "snapshot_crease_type": item.crease_type,
+                "snapshot_crease_left_mm": item.crease_left_mm,
+                "snapshot_crease_middle_mm": item.crease_middle_mm,
+                "snapshot_crease_right_mm": item.crease_right_mm,
+                "snapshot_base_crease_type": None,
+                "snapshot_base_crease_left_mm": None,
+                "snapshot_base_crease_middle_mm": None,
+                "snapshot_base_crease_right_mm": None,
+                "snapshot_supplier_name": order.supplier_name,
+                "requisition_remark": item.remark or order.remark,
+                "special_process": None,
+                "supplier_delivery_time": None,
+                "supplier_order_number": order.order_number,
+                "material_received_at": None,
+                "material_received_by": None,
+                "received_by_name": None,
+                "component_type": item.component_type,
+                "drawing_path": None,
+                "drawing_is_pdf": False,
+                "can_revert_receipt": False,
+                **summary,
+            }
+        )
+    return rows
 
 
 def _confirmed_supplier_order_item_ids(
@@ -698,6 +819,8 @@ def _rows(
                     "surplus_inventory_lot_id": None,
                 }
             )
+    if received_since is None:
+        rows.extend(_stock_replenishment_pending_rows(db, user=user))
     return rows
 
 
@@ -1016,6 +1139,101 @@ def _receive_material(
     return _item_response(db, current.id)
 
 
+def _stock_replenishment_receipt_row(
+    db: Session,
+    fact: IncomingReceiptItem,
+) -> dict | None:
+    item = (
+        db.get(StockReplenishmentOrderItem, fact.stock_replenishment_item_id)
+        if fact.stock_replenishment_item_id
+        else None
+    )
+    order = db.get(StockReplenishmentOrder, item.replenishment_order_id) if item else None
+    if item is None or order is None:
+        return None
+    customer = db.get(Customer, item.customer_id) if item.customer_id else None
+    receiver = db.get(User, fact.receipt.received_by) if fact.receipt.received_by else None
+    return {
+        "history_key": f"receipt-{fact.id}",
+        "item_id": f"sr{item.id}",
+        "stock_replenishment_order_id": order.id,
+        "stock_replenishment_item_id": item.id,
+        "source_type": "stock_replenishment",
+        "order_item_id": None,
+        "requisition_item_id": None,
+        "receipt_id": fact.receipt_id,
+        "receipt_item_id": fact.id,
+        "receipt_number": fact.receipt.receipt_number,
+        "receipt_status": fact.status,
+        "product_id": item.product_id,
+        "order_id": None,
+        "order_number": order.order_number,
+        "display_order_number": order.order_number,
+        "customer_po": None,
+        "customer_name": customer.name if customer else "",
+        "product_name": item.product_name_snapshot,
+        "product_code": item.product_code_snapshot,
+        "specification": (
+            f"{item.report_length_mm or '-'}×{item.report_width_mm or '-'}"
+        ),
+        "material": item.material_code_snapshot or "",
+        "material_code": item.material_code_snapshot or "",
+        "flute_type": item.flute_type,
+        "material_display": " / ".join(
+            value
+            for value in (
+                (item.material_code_snapshot or "").strip(),
+                (item.flute_type or "").strip(),
+            )
+            if value
+        ),
+        "quantity": item.quantity,
+        "delivery_date": None,
+        "order_status": order.status,
+        "material_status": "received",
+        "requisition_status": "已入库",
+        "requisition_qty": fact.planned_quantity,
+        "incoming_quantity": fact.received_quantity,
+        "planned_quantity": fact.planned_quantity,
+        "received_quantity_this_time": fact.received_quantity,
+        "cumulative_received_quantity": fact.cumulative_received_quantity,
+        "remaining_quantity": max(
+            fact.planned_quantity - fact.cumulative_received_quantity, 0
+        ),
+        "variance_quantity": fact.variance_quantity,
+        "variance_type": fact.variance_type,
+        "resolution_status": fact.resolution_status,
+        "resolution_action": fact.resolution_action,
+        "resolution_reason": fact.resolution_reason,
+        "received_inventory_lot_id": fact.received_inventory_lot_id,
+        "surplus_inventory_lot_id": None,
+        "requisition_date": order.confirmed_at or order.created_at,
+        "requisition_spec": None,
+        "cardboard_len": item.report_length_mm,
+        "cardboard_width": item.report_width_mm,
+        "snapshot_crease_type": item.crease_type,
+        "snapshot_crease_left_mm": item.crease_left_mm,
+        "snapshot_crease_middle_mm": item.crease_middle_mm,
+        "snapshot_crease_right_mm": item.crease_right_mm,
+        "snapshot_base_crease_type": None,
+        "snapshot_base_crease_left_mm": None,
+        "snapshot_base_crease_middle_mm": None,
+        "snapshot_base_crease_right_mm": None,
+        "snapshot_supplier_name": order.supplier_name,
+        "requisition_remark": item.remark or order.remark,
+        "special_process": None,
+        "supplier_delivery_time": None,
+        "supplier_order_number": order.order_number,
+        "material_received_at": fact.receipt.received_at,
+        "material_received_by": fact.receipt.received_by,
+        "received_by_name": receiver.real_name if receiver else None,
+        "component_type": item.component_type,
+        "drawing_path": None,
+        "drawing_is_pdf": False,
+        "can_revert_receipt": False,
+    }
+
+
 def _receipt_fact_rows(
     db: Session,
     *,
@@ -1031,6 +1249,22 @@ def _receipt_fact_rows(
         received_since=received_since,
         include_reversed=include_reversed,
     ):
+        if fact.stock_replenishment_item_id is not None:
+            stock_row = _stock_replenishment_receipt_row(db, fact)
+            if stock_row is None:
+                continue
+            if (
+                visible_customer_ids is not None
+                and stock_row.get("customer_name")
+                and db.get(
+                    StockReplenishmentOrderItem,
+                    fact.stock_replenishment_item_id,
+                ).customer_id
+                not in visible_customer_ids
+            ):
+                continue
+            rows.append(stock_row)
+            continue
         item = db.get(OrderItem, fact.order_item_id)
         order = db.get(Order, fact.order_id)
         if item is None or order is None:
@@ -1304,6 +1538,13 @@ def mobile_entry(
 
 
 def _new_receipt_response(db: Session, fact: IncomingReceiptItem) -> dict:
+    if fact.stock_replenishment_item_id is not None:
+        response = _stock_replenishment_receipt_row(db, fact)
+        if response is None:
+            raise HTTPException(status_code=409, detail="补库来料收货事实关联不完整")
+        response.update(receipt_item_dict(fact))
+        response.update(stock_source_summary(db, f"sr{fact.stock_replenishment_item_id}"))
+        return response
     item_key: int | str = (
         f"r{fact.requisition_item_id}"
         if fact.requisition_item_id
@@ -1339,6 +1580,14 @@ def _preflight_receipt_item_customer_access(
 ) -> None:
     fact = db.get(IncomingReceiptItem, receipt_item_id)
     if fact is not None:
+        if fact.stock_replenishment_item_id is not None:
+            item = db.get(
+                StockReplenishmentOrderItem,
+                fact.stock_replenishment_item_id,
+            )
+            if item is not None and item.customer_id is not None:
+                require_customer_access(item.customer_id, user, db)
+            return
         _require_order_item_customer_access(
             db,
             order_item_id=fact.order_item_id,

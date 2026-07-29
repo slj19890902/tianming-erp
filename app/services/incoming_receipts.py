@@ -18,6 +18,10 @@ from app.models.audit import OperationLog
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.requisition import Requisition, RequisitionItem
+from app.models.stock_replenishment import (
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
@@ -30,6 +34,10 @@ from app.services.production_workflow import (
     lock_order_rows_for_production_transition,
     refresh_order_production_status,
     refresh_production_task,
+)
+from app.services.stock_replenishment import (
+    StockReplenishmentError,
+    receive_replenishment_item,
 )
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -52,6 +60,99 @@ class IncomingTarget:
     requisition_item: RequisitionItem | None
     planned_quantity: int
     component_type: str
+
+
+def _stock_item_id(item_key: int | str) -> int | None:
+    text = str(item_key)
+    return int(text[2:]) if text.startswith("sr") and text[2:].isdigit() else None
+
+
+def _stock_target(
+    db: Session,
+    item_key: int | str,
+    *,
+    allow_closed: bool = False,
+) -> tuple[StockReplenishmentOrder, StockReplenishmentOrderItem]:
+    item_id = _stock_item_id(item_key)
+    if item_id is None:
+        raise IncomingReceiptError("补库来料明细ID无效")
+    row = db.execute(
+        select(StockReplenishmentOrderItem, StockReplenishmentOrder)
+        .join(
+            StockReplenishmentOrder,
+            StockReplenishmentOrder.id
+            == StockReplenishmentOrderItem.replenishment_order_id,
+        )
+        .where(StockReplenishmentOrderItem.id == item_id)
+    ).one_or_none()
+    if row is None:
+        raise IncomingReceiptError("补库来料明细不存在", 404)
+    item, order = row
+    if not allow_closed and order.status not in {"confirmed", "partially_stocked"}:
+        raise IncomingReceiptError(
+            "该补库明细当前不可收货，可能已入库或已作废", 409
+        )
+    if not allow_closed and int(item.stocked_quantity or 0) >= int(item.quantity or 0):
+        raise IncomingReceiptError("该补库明细已经全部入库", 409)
+    return order, item
+
+
+def _stock_source_filter(item_id: int):
+    return IncomingReceiptItem.stock_replenishment_item_id == item_id
+
+
+def stock_source_summary(
+    db: Session,
+    item_key: int | str,
+    *,
+    allow_closed: bool = True,
+) -> dict:
+    _order, item = _stock_target(db, item_key, allow_closed=allow_closed)
+    received = int(
+        db.scalar(
+            select(
+                func.coalesce(func.sum(IncomingReceiptItem.received_quantity), 0)
+            ).where(
+                _stock_source_filter(item.id),
+                IncomingReceiptItem.status == "posted",
+            )
+        )
+        or 0
+    )
+    latest = db.scalar(
+        select(IncomingReceiptItem)
+        .where(
+            _stock_source_filter(item.id),
+            IncomingReceiptItem.status == "posted",
+        )
+        .order_by(IncomingReceiptItem.id.desc())
+    )
+    planned = int(item.quantity or 0)
+    variance = received - planned
+    return {
+        "planned_quantity": planned,
+        "cumulative_received_quantity": received,
+        "remaining_quantity": max(planned - received, 0),
+        "variance_quantity": variance,
+        "variance_type": (
+            "matched" if variance == 0 else "short" if variance < 0 else "over"
+        ),
+        "resolution_status": latest.resolution_status if latest else "not_required",
+        "resolution_action": latest.resolution_action if latest else None,
+        "pending_receipt_item_id": (
+            latest.id
+            if latest
+            and latest.resolution_status == "pending"
+            and latest.resolution_action == "await_supplier"
+            else None
+        ),
+        "latest_receipt_item_id": latest.id if latest else None,
+        "latest_receipt_id": latest.receipt_id if latest else None,
+        "received_inventory_lot_id": (
+            latest.received_inventory_lot_id if latest else None
+        ),
+        "surplus_inventory_lot_id": None,
+    }
 
 
 def _number(prefix: str) -> str:
@@ -256,6 +357,12 @@ def source_summary(db: Session, target: IncomingTarget) -> dict:
 def source_summary_for_item(
     db: Session, item_key: int | str
 ) -> dict | None:
+    if _stock_item_id(item_key) is not None:
+        try:
+            summary = stock_source_summary(db, item_key)
+        except IncomingReceiptError:
+            return None
+        return summary if summary["latest_receipt_item_id"] is not None else None
     try:
         target = _target(db, item_key, allow_closed=True)
     except IncomingReceiptError:
@@ -518,19 +625,35 @@ def _idempotent_receipt_item(
         raise IncomingReceiptError("幂等键已用于其他入库操作", 409)
     row = receipt.items[0]
     text = str(item_key)
+    requested_stock_item_id = _stock_item_id(text)
     requested_requisition_id = (
-        int(text[1:]) if text.startswith("r") and text[1:].isdigit() else None
+        int(text[1:])
+        if requested_stock_item_id is None
+        and text.startswith("r")
+        and text[1:].isdigit()
+        else None
     )
     try:
-        requested_order_item_id = None if requested_requisition_id else int(text)
+        requested_order_item_id = (
+            None
+            if requested_stock_item_id is not None or requested_requisition_id
+            else int(text)
+        )
     except ValueError as error:
         raise IncomingReceiptError("入库明细ID无效") from error
-    same_target = (
-        row.requisition_item_id == requested_requisition_id
-        if requested_requisition_id is not None
-        else row.requisition_item_id is None
-        and row.order_item_id == requested_order_item_id
-    )
+    if requested_stock_item_id is not None:
+        same_target = (
+            row.stock_replenishment_item_id == requested_stock_item_id
+            and row.order_item_id is None
+        )
+    elif requested_requisition_id is not None:
+        same_target = row.requisition_item_id == requested_requisition_id
+    else:
+        same_target = (
+            row.requisition_item_id is None
+            and row.stock_replenishment_item_id is None
+            and row.order_item_id == requested_order_item_id
+        )
     normalized_action = (resolution_action or "").strip() or None
     normalized_reason = (resolution_reason or "").strip() or None
     expected_quantity = (
@@ -559,6 +682,125 @@ def _idempotent_receipt_item(
     return row
 
 
+def _receive_stock_replenishment_one(
+    db: Session,
+    *,
+    user: User,
+    item_key: int | str,
+    received_quantity: int | None,
+    resolution_action: str | None,
+    resolution_reason: str | None,
+    surplus_location_id: int | None,
+    idempotency_key: str,
+) -> IncomingReceiptItem:
+    order, item = _stock_target(db, item_key)
+    planned = int(item.quantity or 0)
+    before = int(
+        db.scalar(
+            select(
+                func.coalesce(func.sum(IncomingReceiptItem.received_quantity), 0)
+            ).where(
+                _stock_source_filter(item.id),
+                IncomingReceiptItem.status == "posted",
+            )
+        )
+        or 0
+    )
+    quantity = planned - before if received_quantity is None else int(received_quantity)
+    if quantity <= 0:
+        raise IncomingReceiptError("入库数量必须大于0")
+    cumulative = before + quantity
+    if cumulative > planned:
+        raise IncomingReceiptError(
+            "补库来料实收不能超过原报料数量；请核对后另建补库单处理超收。",
+            409,
+        )
+    action = (resolution_action or "").strip() or None
+    reason = (resolution_reason or "").strip() or None
+    if cumulative < planned:
+        if action != "await_supplier":
+            raise IncomingReceiptError(
+                "补库来料短收时请选择“继续等待供应商补货”。"
+            )
+        resolution_status = "pending"
+        variance_type = "short"
+    else:
+        if action:
+            raise IncomingReceiptError("补库来料等量收货不需要选择差异处理方式")
+        resolution_status = "not_required"
+        variance_type = "matched"
+    if surplus_location_id is not None:
+        raise IncomingReceiptError("补库来料使用报料单指定库位，无需另选余量库位")
+
+    now = utc_now_naive()
+    receipt = IncomingReceipt(
+        receipt_number=_number("IR"),
+        status="posted",
+        received_at=now,
+        received_by=user.id,
+        idempotency_key=idempotency_key,
+        remarks=reason,
+    )
+    db.add(receipt)
+    db.flush()
+    receipt_item = IncomingReceiptItem(
+        receipt_id=receipt.id,
+        order_id=None,
+        order_item_id=None,
+        stock_replenishment_item_id=item.id,
+        planned_quantity=planned,
+        received_quantity=quantity,
+        cumulative_received_quantity=cumulative,
+        variance_quantity=cumulative - planned,
+        variance_type=variance_type,
+        resolution_status=resolution_status,
+        resolution_action=action,
+        resolution_reason=reason,
+        status="posted",
+    )
+    receipt.items.append(receipt_item)
+    db.flush()
+    try:
+        lot = receive_replenishment_item(
+            db,
+            order=order,
+            item=item,
+            quantity=quantity,
+            operator_id=user.id,
+            receipt_item_id=receipt_item.id,
+        )
+    except StockReplenishmentError as error:
+        raise IncomingReceiptError(str(error), error.status_code) from error
+    receipt_item.received_inventory_lot_id = lot.id
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="RECEIVE_STOCK_REPLENISHMENT",
+            resource="IncomingReceiptItem",
+            details=__import__("json").dumps(
+                {
+                    "incoming_receipt_id": receipt.id,
+                    "incoming_receipt_item_id": receipt_item.id,
+                    "stock_replenishment_order_id": order.id,
+                    "stock_replenishment_item_id": item.id,
+                    "planned_quantity": planned,
+                    "received_quantity": quantity,
+                    "cumulative_received_quantity": cumulative,
+                    "received_inventory_lot_id": lot.id,
+                },
+                ensure_ascii=False,
+            ),
+            username=user.username,
+            role=user.role,
+            entity_type="stock_replenishment_item",
+            entity_id=item.id,
+            description="补库来料实际收货",
+        )
+    )
+    db.flush()
+    return receipt_item
+
+
 def receive_one(
     db: Session,
     *,
@@ -583,6 +825,18 @@ def receive_one(
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
             surplus_location_id=surplus_location_id,
+        )
+
+    if _stock_item_id(item_key) is not None:
+        return _receive_stock_replenishment_one(
+            db,
+            user=user,
+            item_key=item_key,
+            received_quantity=received_quantity,
+            resolution_action=resolution_action,
+            resolution_reason=resolution_reason,
+            surplus_location_id=surplus_location_id,
+            idempotency_key=key,
         )
 
     target = _target(db, item_key)
@@ -695,6 +949,11 @@ def accept_short(
     row = db.get(IncomingReceiptItem, receipt_item_id)
     if row is None or row.status != "posted":
         raise IncomingReceiptError("来料实收记录不存在或已撤销", 404)
+    if row.stock_replenishment_item_id is not None:
+        raise IncomingReceiptError(
+            "补库来料短收请继续等待供应商补货，暂不支持按短收数量直接结单。",
+            409,
+        )
     target = _target(db, f"r{row.requisition_item_id}" if row.requisition_item_id else row.order_item_id)
     latest = db.scalar(
         select(IncomingReceiptItem)
@@ -797,6 +1056,12 @@ def revert_receipt_item(
     receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
     if receipt_item is None:
         raise IncomingReceiptError("来料实收记录不存在", 404)
+    if receipt_item.stock_replenishment_item_id is not None:
+        raise IncomingReceiptError(
+            "补库来料已经形成客户专用纸板备料，不能用普通撤销；"
+            "请走后续受控库存调整流程。",
+            409,
+        )
     try:
         locked_orders = lock_order_rows_for_production_transition(
             db, [receipt_item.order_id]
@@ -902,6 +1167,7 @@ def receipt_item_dict(row: IncomingReceiptItem) -> dict:
         "received_by": row.receipt.received_by,
         "order_id": row.order_id,
         "order_item_id": row.order_item_id,
+        "stock_replenishment_item_id": row.stock_replenishment_item_id,
         "requisition_id": row.requisition_id,
         "requisition_item_id": row.requisition_item_id,
         "planned_quantity": row.planned_quantity,
@@ -916,5 +1182,6 @@ def receipt_item_dict(row: IncomingReceiptItem) -> dict:
         "resolution_action": row.resolution_action,
         "resolution_reason": row.resolution_reason,
         "surplus_inventory_lot_id": row.surplus_inventory_lot_id,
+        "received_inventory_lot_id": row.received_inventory_lot_id,
         "status": row.status,
     }

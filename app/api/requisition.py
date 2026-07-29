@@ -23,6 +23,7 @@ from app.api.deps import (
     require_customer_access,
 )
 from app.models.historical_purchase import HistoricalPurchaseEntry
+from app.models.incoming_receipt import IncomingReceiptItem
 from app.core.time_contract import (
     beijing_naive_to_api,
     beijing_now_naive,
@@ -6757,6 +6758,15 @@ def stock_saved_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, user, relationships_loaded=True
     )
+    if (
+        order.status in {"confirmed", "partially_stocked"}
+        and order.source_type != "manual_history"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="补库报料必须到“仓库 → 来料入库 → 待入库”确认实际收货，"
+            "不能从已报料页面直接增加库存。",
+        )
     try:
         stock_replenishment_order(db, order=order, operator_id=user.id)
         db.commit()
@@ -6770,6 +6780,78 @@ def stock_saved_replenishment_order(
         raise HTTPException(
             status_code=getattr(error, "status_code", 400), detail=str(error)
         ) from error
+
+
+@router.put("/stock-replenishment/orders/{order_id}/void")
+def void_stock_replenishment_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    order = db.scalar(
+        _replenishment_order_query().where(StockReplenishmentOrder.id == order_id)
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="库存补库单不存在。")
+    _require_stock_replenishment_order_access(
+        db, order, user, relationships_loaded=True
+    )
+    if order.status == "voided":
+        return replenishment_order_dict(order)
+    received_quantity = sum(int(item.stocked_quantity or 0) for item in order.items)
+    receipt_fact_count = int(
+        db.scalar(
+            select(func.count(IncomingReceiptItem.id))
+            .join(
+                StockReplenishmentOrderItem,
+                StockReplenishmentOrderItem.id
+                == IncomingReceiptItem.stock_replenishment_item_id,
+            )
+            .where(
+                StockReplenishmentOrderItem.replenishment_order_id == order.id,
+                IncomingReceiptItem.status == "posted",
+            )
+        )
+        or 0
+    )
+    if (
+        order.status != "confirmed"
+        or received_quantity > 0
+        or receipt_fact_count > 0
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该补库单已经部分或全部实际收货，不能直接撤销报料。",
+        )
+    order.status = "voided"
+    order.voided_at = utc_now_naive()
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action="VOID_STOCK_REPLENISHMENT",
+            resource="StockReplenishmentOrder",
+            details=json.dumps(
+                {
+                    "stock_replenishment_order_id": order.id,
+                    "order_number": order.order_number,
+                    "received_quantity": 0,
+                    "inventory_created": False,
+                },
+                ensure_ascii=False,
+            ),
+            username=user.username,
+            role=user.role,
+            entity_type="stock_replenishment_order",
+            entity_id=order.id,
+            description="补库报料在实际收货前撤销",
+        )
+    )
+    db.commit()
+    order = db.scalar(
+        _replenishment_order_query().where(StockReplenishmentOrder.id == order_id)
+    )
+    assert order is not None
+    return replenishment_order_dict(order)
 
 
 @router.get("/historical-purchases/search")
@@ -8683,6 +8765,10 @@ def list_reported_documents(
                 "customer_names": customer_names,
                 "requisition_qty": sum(item.quantity for item in order.items),
                 "pdf_url": f"/api/requisition/stock-replenishment/orders/{order.id}/print",
+                "can_void": (
+                    order.status == "confirmed"
+                    and all(int(item.stocked_quantity or 0) == 0 for item in order.items)
+                ),
             }
         )
 

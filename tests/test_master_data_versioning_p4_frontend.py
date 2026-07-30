@@ -24,8 +24,14 @@ def test_existing_master_save_builds_readable_diff_and_versioned_payload() -> No
     assert 'payload.expected_version = expectedVersion' in INDEX
     assert 'payload.change_reason = options.change_reason' in INDEX
     assert 'payload.confirmation_token = options.confirmation_token' in INDEX
-    for entity in ("customer", "product", "material"):
+    for entity in ("customer", "material"):
         assert f'attachMasterUpdateMetadata("{entity}",payload,masterOptions)' in save
+    assert "buildProductWritePayload(masterOptions)" in save
+    product_payload = _method_block(
+        "buildProductWritePayload(options = null)",
+        "async prepareProductChangeConfirmation(",
+    )
+    assert 'attachMasterUpdateMetadata("product",payload,options)' in product_payload
 
 
 def test_confirmation_required_keeps_shared_modal_reason_and_requires_ack() -> None:

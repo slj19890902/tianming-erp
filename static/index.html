@@ -5713,8 +5713,8 @@
                 </div>
               </div>
             </template>
-            <div class="field" style="margin-top:12px"><label>{{ masterChangeConfirm.mode === 'restore' ? '恢复原因 *' : '修改原因 *' }}</label><textarea class="textarea" rows="3" v-model.trim="masterChangeConfirm.reason" placeholder="请填写可追溯的业务原因"></textarea></div>
-            <label v-if="masterChangeConfirm.requireAcknowledgement" style="display:flex;align-items:flex-start;gap:8px;margin-top:12px"><input type="checkbox" v-model="masterChangeConfirm.acknowledged" /><span>{{ masterChangeConfirm.mode === 'restore' ? '我已核对恢复差异' : '我已核对异常修改' }}</span></label>
+            <div v-if="!masterSingleConfirmProductUpdate" class="field" style="margin-top:12px"><label>{{ masterChangeConfirm.mode === 'restore' ? '恢复原因 *' : '修改原因 *' }}</label><textarea class="textarea" rows="3" v-model.trim="masterChangeConfirm.reason" placeholder="请填写可追溯的业务原因"></textarea></div>
+            <label v-if="masterChangeConfirm.requireAcknowledgement && !masterSingleConfirmProductUpdate" style="display:flex;align-items:flex-start;gap:8px;margin-top:12px"><input type="checkbox" v-model="masterChangeConfirm.acknowledged" /><span>{{ masterChangeConfirm.mode === 'restore' ? '我已核对恢复差异' : '我已核对异常修改' }}</span></label>
             <div v-if="masterChangeConfirm.error" class="notice danger" style="margin-top:12px">{{ masterChangeConfirm.error }}</div>
           </div>
           <div class="modal-foot">
@@ -6660,10 +6660,16 @@
             if (!this.modal || this.modal.type !== "delivery") return "";
             return this.validateDeliveryForm();
           },
+          masterSingleConfirmProductUpdate() {
+            const state = this.masterChangeConfirm;
+            return state.visible && state.mode === "update" && state.entity === "product";
+          },
           masterChangeCanSubmit() {
             const state = this.masterChangeConfirm;
-            if (!state.visible || state.loading || state.conflict || !String(state.reason || "").trim()) return false;
-            if (state.requireAcknowledgement && !state.acknowledged) return false;
+            const singleProductUpdate = this.masterSingleConfirmProductUpdate;
+            if (!state.visible || state.loading || state.conflict) return false;
+            if (!singleProductUpdate && !String(state.reason || "").trim()) return false;
+            if (state.requireAcknowledgement && !singleProductUpdate && !state.acknowledged) return false;
             if ((state.mode === "restore" || state.requireAcknowledgement) && !state.confirmationToken) return false;
             return true;
           },
@@ -7224,6 +7230,87 @@
               changes:this.cloneMasterRecord(changes), reason:keepReason ? previous.reason : ""
             };
           },
+          buildProductWritePayload(options = null) {
+            const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
+            if (productCreaseError) throw new Error(productCreaseError);
+            if (this.productMoldError) throw new Error(this.productMoldError);
+            const payload = { ...this.productForm };
+            delete payload.id;
+            payload.production_process = this.serializeProductionProcesses(
+              payload._production_processes,
+              payload._production_process_legacy
+            );
+            if (!String(payload.production_process || "").split(/[,，、]/).map(value=>value.trim()).includes("模切")) payload.mold_tool_id=null;
+            delete payload._production_processes;
+            delete payload._production_process_legacy;
+            delete payload._material_supplier;
+            delete payload._report_dims_manual;
+            delete payload._crease_dims_manual;
+            delete payload._crease_type_manual;
+            delete payload._base_report_dims_manual;
+            delete payload._base_crease_dims_manual;
+            delete payload._base_crease_type_manual;
+            delete payload._recommendation_message;
+            delete payload.drawings;
+            delete payload.mold_tool;
+            delete payload.manual_modified;
+            delete payload.manual_modified_at;
+            if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
+            [
+              "length_mm", "width_mm", "height_mm",
+              "pieces_per_box", "flap_mm",
+              "report_length_mm", "report_width_mm",
+              "crease_left_mm", "crease_middle_mm", "crease_right_mm",
+              "base_report_length_mm", "base_report_width_mm",
+              "base_crease_left_mm", "base_crease_middle_mm", "base_crease_right_mm",
+            ].forEach(key => {
+              if (payload[key] === "") payload[key] = null;
+              else if (payload[key] !== null && payload[key] !== undefined) {
+                payload[key] = this.normalizeMmInteger(payload[key]);
+              }
+            });
+            if (payload.sale_unit_price === "") payload.sale_unit_price = null;
+            payload.print_content = payload.print_content || "无印刷";
+            return this.attachMasterUpdateMetadata("product",payload,options);
+          },
+          async prepareProductChangeConfirmation(changes) {
+            const productId = Number(this.productForm?.id);
+            const expectedVersion = this.masterCurrentVersion("product");
+            if (!Number.isInteger(productId) || productId <= 0) return false;
+            this.loading = true;
+            try {
+              const payload = this.buildProductWritePayload({expected_version:expectedVersion});
+              const {data} = await axios.post(
+                `/api/master/products/${encodeURIComponent(productId)}/update-preview`,
+                payload
+              );
+              const warnings = Array.isArray(data.warnings) ? data.warnings : (data.warnings ? [data.warnings] : []);
+              const hasRelatedWrite = !!this.drawingFile || this._productBomDirty();
+              if (!data.can_update && !hasRelatedWrite) {
+                this.closeModal();
+                this.showToast("未检测到可保存的变化");
+                return true;
+              }
+              this.masterVersionConflict = null;
+              this.masterChangeConfirm = {
+                ...blankMasterChangeConfirm(), visible:true, mode:"update", entity:"product", entityId:productId,
+                expectedVersion, currentVersion:data.current_version ?? expectedVersion,
+                changes:this.cloneMasterRecord(changes),
+                backendChanges:this.normalizeMasterChanges(data.changes || data.diff || data.changed_fields,"product"),
+                warnings:Array.isArray(data.warnings) ? data.warnings : warnings,
+                confirmationToken:data.confirmation_token || null,
+                requireAcknowledgement:warnings.length > 0
+              };
+              return false;
+            } catch (error) {
+              if (!this.handleMaster409(error,"product",{entityId:productId,expectedVersion})) {
+                this.showToast(`保存预检失败：${this.errorMessage(error)}`,true);
+              }
+              return false;
+            } finally {
+              this.loading = false;
+            }
+          },
           attachMasterUpdateMetadata(entity, payload, options = null) {
             delete payload.version;
             delete payload.expected_version;
@@ -7233,7 +7320,7 @@
             if (!form?.id) return payload;
             const expectedVersion = options?.expected_version ?? this.masterCurrentVersion(entity);
             if (expectedVersion !== null && expectedVersion !== undefined) payload.expected_version = expectedVersion;
-            if (options?.change_reason) payload.change_reason = options.change_reason;
+            if (options?.change_reason !== undefined) payload.change_reason = options.change_reason;
             if (options?.confirmation_token) payload.confirmation_token = options.confirmation_token;
             return payload;
           },
@@ -7287,6 +7374,14 @@
               const current = this.masterChangeConfirm.entity === entity
                 ? this.masterChangeConfirm
                 : {...blankMasterChangeConfirm(), entity, entityId};
+              if (entity === "product" && context.previewed) {
+                this.masterChangeConfirm = {
+                  ...current, visible:true, loading:false, confirmationToken:null,
+                  requireAcknowledgement:true, acknowledged:false, conflict:null,
+                  error:"确认信息已过期或内容已变化，请返回编辑后重新保存。"
+                };
+                return true;
+              }
               const warnings = Array.isArray(detail.warnings) ? detail.warnings : (detail.warnings ? [detail.warnings] : []);
               this.masterVersionConflict = null;
               this.masterChangeConfirm = {
@@ -7343,9 +7438,10 @@
             const state = this.masterChangeConfirm;
             const options = {
               expected_version:state.currentVersion ?? state.expectedVersion,
-              change_reason:String(state.reason || "").trim(),
               confirmation_token:state.confirmationToken || undefined
             };
+            if (!this.masterSingleConfirmProductUpdate) options.change_reason = String(state.reason || "").trim();
+            else options._previewed = true;
             this.masterChangeConfirm.loading = true;
             this.masterChangeConfirm.error = "";
             this.masterPendingSaveOptions = options;
@@ -17529,7 +17625,8 @@
             if (masterEntity && masterForm?.id && !masterOptions) {
               const changes = this.masterLocalChanges(masterEntity);
               if (changes.length) {
-                this.openMasterChangeConfirmation(masterEntity,changes);
+                if (masterEntity === "product") await this.prepareProductChangeConfirmation(changes);
+                else this.openMasterChangeConfirmation(masterEntity,changes);
                 return false;
               }
               if (!(masterEntity === "product" && this._productBomDirty())) {
@@ -17581,47 +17678,7 @@
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();
                 const bomDirty = this._productBomDirty();
-                const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
-                if (productCreaseError) throw new Error(productCreaseError);
-                if (this.productMoldError) throw new Error(this.productMoldError);
-                const payload = { ...this.productForm };
-                delete payload.id;
-                payload.production_process = this.serializeProductionProcesses(
-                  payload._production_processes,
-                  payload._production_process_legacy
-                );
-                if (!String(payload.production_process || "").split(/[,，、]/).map(value=>value.trim()).includes("模切")) payload.mold_tool_id=null;
-                delete payload._production_processes;
-                delete payload._production_process_legacy;
-                delete payload._material_supplier;
-                delete payload._report_dims_manual;
-                delete payload._crease_dims_manual;
-                delete payload._crease_type_manual;
-                delete payload._base_report_dims_manual;
-                delete payload._base_crease_dims_manual;
-                delete payload._base_crease_type_manual;
-                delete payload._recommendation_message;
-                delete payload.drawings;
-                delete payload.mold_tool;
-                delete payload.manual_modified;
-                delete payload.manual_modified_at;
-                if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
-                [
-                  "length_mm", "width_mm", "height_mm",
-                  "pieces_per_box", "flap_mm",
-                  "report_length_mm", "report_width_mm",
-                  "crease_left_mm", "crease_middle_mm", "crease_right_mm",
-                  "base_report_length_mm", "base_report_width_mm",
-                  "base_crease_left_mm", "base_crease_middle_mm", "base_crease_right_mm",
-                ].forEach(key => {
-                  if (payload[key] === "") payload[key] = null;
-                  else if (payload[key] !== null && payload[key] !== undefined) {
-                    payload[key] = this.normalizeMmInteger(payload[key]);
-                  }
-                });
-                if (payload.sale_unit_price === "") payload.sale_unit_price = null;
-                payload.print_content = payload.print_content || "无印刷";
-                this.attachMasterUpdateMetadata("product",payload,masterOptions);
+                const payload = this.buildProductWritePayload(masterOptions);
                 let saved;
                 if (this.productForm.id) {
                   saved = { id: this.productForm.id };
@@ -17941,7 +17998,8 @@
             } catch (error) {
               if (masterEntity && masterForm?.id && this.handleMaster409(error,masterEntity,{
                 entityId:masterForm.id,
-                expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion(masterEntity)
+                expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion(masterEntity),
+                previewed:!!(masterOptions?._previewed)
               })) return false;
               if (this.modal?.type === "orderItem" && this.handleIndirectProduct409(error,this.orderItemForm)) return false;
               if (this.modal?.type === "requisitionMaterial" && this.handleIndirectProduct409(error,this.requisitionMaterialForm)) return false;

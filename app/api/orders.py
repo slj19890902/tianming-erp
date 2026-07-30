@@ -4357,6 +4357,135 @@ def rollback_order_workflow(
         raise
 
 
+@router.get("/group-detail")
+def get_order_group_detail(
+    customer_id: int,
+    anchor_order_id: int,
+    customer_po: str | None = None,
+    scope: Literal["active", "completed", "cancelled", "history", "all"] = "active",
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return the complete, permission-checked customer + customer-PO group.
+
+    Orders without a customer PO intentionally remain one-order groups so
+    unrelated no-PO orders are never combined merely because the list page
+    happens to show them together.
+    """
+
+    require_customer_access(customer_id, current_user=user, db=db)
+    anchor = db.scalar(
+        select(Order).where(
+            Order.id == anchor_order_id,
+            Order.customer_id == customer_id,
+        )
+    )
+    if anchor is None:
+        raise HTTPException(status_code=404, detail="订单汇总不存在，请刷新后重试")
+
+    anchor_customer_po = (anchor.customer_po or "").strip()
+    requested_customer_po = (customer_po or "").strip()
+    if requested_customer_po:
+        if anchor_customer_po != requested_customer_po:
+            raise HTTPException(
+                status_code=409,
+                detail="订单汇总信息已变化，请刷新订单列表后重试",
+            )
+        group_condition = and_(
+            Order.customer_id == customer_id,
+            func.trim(Order.customer_po) == requested_customer_po,
+        )
+    else:
+        if anchor_customer_po:
+            raise HTTPException(
+                status_code=409,
+                detail="订单汇总信息已变化，请刷新订单列表后重试",
+            )
+        group_condition = Order.id == anchor.id
+
+    candidate_orders = list(
+        db.scalars(
+            select(Order)
+            .options(
+                selectinload(Order.items)
+                .selectinload(OrderItem.product)
+                .selectinload(Product.drawings),  # type: ignore[attr-defined]
+                selectinload(Order.items)
+                .selectinload(OrderItem.product)
+                .selectinload(Product.mold_tool),  # type: ignore[attr-defined]
+            )
+            .where(group_condition)
+            .order_by(Order.created_at, Order.id)
+        ).all()
+    )
+    if not candidate_orders:
+        raise HTTPException(status_code=404, detail="订单汇总不存在，请刷新后重试")
+
+    business_projections = build_order_business_statuses(
+        db,
+        candidate_orders,
+        include_finance=has_permission(user, "finance.view"),
+    )
+    if scope == "history":
+        orders = [
+            order
+            for order in candidate_orders
+            if order.order_number.startswith("RUIDA-")
+        ]
+    elif scope == "cancelled":
+        orders = [
+            order
+            for order in candidate_orders
+            if order.status in _BUSINESS_EXCLUDED_STATUSES
+        ]
+    elif scope in {"active", "completed"}:
+        orders = [
+            order
+            for order in candidate_orders
+            if not order.order_number.startswith("RUIDA-")
+            and order.status not in _BUSINESS_EXCLUDED_STATUSES
+            and (
+                business_projections.get(int(order.id), {}).get("business_status")
+                == "completed"
+            )
+            == (scope == "completed")
+        ]
+    else:
+        orders = candidate_orders
+    if anchor.id not in {order.id for order in orders}:
+        raise HTTPException(
+            status_code=409,
+            detail="订单已不在当前业务范围，请刷新订单列表后重试",
+        )
+
+    item_ids = [item.id for order in orders for item in order.items]
+    completion_dates = _completion_dates_by_item(db, item_ids)
+    bom_components_by_item_id = get_order_item_bom_components_by_item_ids(
+        db, item_ids
+    )
+    customer = db.get(Customer, customer_id)
+    display_registry = build_display_registry(db)
+    return {
+        "customer_id": customer_id,
+        "customer_name": customer.name if customer is not None else "-",
+        "customer_po": requested_customer_po or None,
+        "scope": scope,
+        "orders": [
+            _order_response(
+                order,
+                user,
+                db=db,
+                customer_name=customer.name if customer is not None else None,
+                display_registry=display_registry,
+                completion_dates=completion_dates,
+                bom_components_by_item_id=bom_components_by_item_id,
+                business_projection=business_projections.get(int(order.id)),
+            )
+            for order in orders
+        ],
+    }
+
+
 @router.get("/{order_id}")
 def get_order_detail(
     order_id: int,

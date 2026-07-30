@@ -152,7 +152,35 @@ def order_trace_app(tmp_path: Path):
             total_amount=Decimal("10"),
             created_at=base_time + timedelta(minutes=2),
         )
-        db.add_all([order_a, order_a_same_po, order_b])
+        order_a_without_po = Order(
+            order_number="TMTRACE-A-NO-PO-1",
+            customer_id=customer_a.id,
+            customer_po=None,
+            order_date=date(2026, 7, 29),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("5"),
+            created_at=base_time + timedelta(minutes=3),
+        )
+        order_a_without_po_other = Order(
+            order_number="TMTRACE-A-NO-PO-2",
+            customer_id=customer_a.id,
+            customer_po="",
+            order_date=date(2026, 7, 29),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("6"),
+            created_at=base_time + timedelta(minutes=4),
+        )
+        db.add_all(
+            [
+                order_a,
+                order_a_same_po,
+                order_b,
+                order_a_without_po,
+                order_a_without_po_other,
+            ]
+        )
         db.flush()
         item_a = OrderItem(
             order_id=order_a.id,
@@ -195,7 +223,41 @@ def order_trace_app(tmp_path: Path):
             snapshot_product_code="TRACE-B",
             snapshot_product_name="追溯纸箱乙",
         )
-        db.add_all([item_a, item_a_same_po, item_b])
+        item_a_without_po = OrderItem(
+            order_id=order_a_without_po.id,
+            product_id=product_a.id,
+            item_order_number="TMTRACE-A-NO-PO-1-001",
+            item_sequence=1,
+            quantity=5,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("5"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_code="TRACE-NO-PO-1",
+            snapshot_product_name="无客户单号订单一",
+        )
+        item_a_without_po_other = OrderItem(
+            order_id=order_a_without_po_other.id,
+            product_id=product_a.id,
+            item_order_number="TMTRACE-A-NO-PO-2-001",
+            item_sequence=1,
+            quantity=6,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("6"),
+            material_status="pending",
+            requisition_status="未报料",
+            snapshot_product_code="TRACE-NO-PO-2",
+            snapshot_product_name="无客户单号订单二",
+        )
+        db.add_all(
+            [
+                item_a,
+                item_a_same_po,
+                item_b,
+                item_a_without_po,
+                item_a_without_po_other,
+            ]
+        )
         db.flush()
         requisition = Requisition(
             requisition_number="REQ-TRACE-A",
@@ -300,12 +362,18 @@ def order_trace_app(tmp_path: Path):
         )
         db.commit()
         ids = {
+            "customer_a": customer_a.id,
+            "customer_b": customer_b.id,
             "order_a": order_a.id,
             "item_a": item_a.id,
             "order_a_same_po": order_a_same_po.id,
             "item_a_same_po": item_a_same_po.id,
             "order_b": order_b.id,
             "item_b": item_b.id,
+            "order_a_without_po": order_a_without_po.id,
+            "item_a_without_po": item_a_without_po.id,
+            "order_a_without_po_other": order_a_without_po_other.id,
+            "item_a_without_po_other": item_a_without_po_other.id,
         }
 
     app = FastAPI()
@@ -393,3 +461,216 @@ def test_item_must_belong_to_order(order_trace_app) -> None:
             f"/api/orders/{ids['order_a']}/items/{ids['item_b']}/documents"
         )
     assert response.status_code == 404
+
+
+def test_group_detail_returns_all_same_customer_po_orders_across_pages(
+    order_trace_app,
+) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        response = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "anchor_order_id": ids["order_a"],
+                "scope": "all",
+            },
+        )
+        first_page = client.get(
+            "/api/orders",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "scope": "all",
+                "page": 1,
+                "page_size": 1,
+            },
+        )
+        second_page = client.get(
+            "/api/orders",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "scope": "all",
+                "page": 2,
+                "page_size": 1,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert first_page.status_code == 200, first_page.text
+    assert second_page.status_code == 200, second_page.text
+    assert first_page.json()["total"] == second_page.json()["total"] == 2
+    assert {
+        first_page.json()["items"][0]["id"],
+        second_page.json()["items"][0]["id"],
+    } == {ids["order_a"], ids["order_a_same_po"]}
+    body = response.json()
+    assert {row["id"] for row in body["orders"]} == {
+        ids["order_a"],
+        ids["order_a_same_po"],
+    }
+    assert {
+        item["snapshot_product_code"]
+        for row in body["orders"]
+        for item in row["items"]
+    } == {"TRACE-A"}
+    assert ids["order_b"] not in {row["id"] for row in body["orders"]}
+
+
+def test_group_detail_without_customer_po_is_exactly_one_anchor_order(
+    order_trace_app,
+) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        response = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "anchor_order_id": ids["order_a_without_po"],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [row["id"] for row in body["orders"]] == [ids["order_a_without_po"]]
+    assert body["orders"][0]["items"][0]["snapshot_product_code"] == "TRACE-NO-PO-1"
+
+
+def test_group_detail_respects_current_business_scope(order_trace_app) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        active = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "anchor_order_id": ids["order_a_same_po"],
+                "scope": "active",
+            },
+        )
+        stale_anchor = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "anchor_order_id": ids["order_a"],
+                "scope": "active",
+            },
+        )
+
+    assert active.status_code == 200, active.text
+    assert [row["id"] for row in active.json()["orders"]] == [
+        ids["order_a_same_po"]
+    ]
+    assert stale_anchor.status_code == 409
+
+
+def test_group_detail_rechecks_customer_scope(order_trace_app) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-sales")
+        allowed = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "anchor_order_id": ids["order_a"],
+                "scope": "all",
+            },
+        )
+        denied = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_b"],
+                "customer_po": "SAME-PO",
+                "anchor_order_id": ids["order_b"],
+            },
+        )
+
+    assert allowed.status_code == 200, allowed.text
+    assert denied.status_code == 403
+    assert "estimated_cost" not in str(allowed.json())
+    assert "total_estimated_cost" not in str(allowed.json())
+
+
+def test_group_detail_rejects_mismatched_anchor_identity(order_trace_app) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        wrong_customer = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "SAME-PO",
+                "anchor_order_id": ids["order_b"],
+                "scope": "all",
+            },
+        )
+        wrong_po = client.get(
+            "/api/orders/group-detail",
+            params={
+                "customer_id": ids["customer_a"],
+                "customer_po": "OTHER-PO",
+                "anchor_order_id": ids["order_a"],
+                "scope": "all",
+            },
+        )
+
+    assert wrong_customer.status_code == 404
+    assert wrong_po.status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("stage", "source_type", "status", "expected"),
+    [
+        ("order", "sales_order", "pending_production", "待生产"),
+        ("order", "sales_order", "waiting_material", "待收料"),
+        ("order", "sales_order", "production", "生产中"),
+        ("order", "sales_order", "delivered", "已送完"),
+        ("order", "sales_order", "pending_material", "待报料"),
+        ("order", "sales_order", "pending_incoming", "待收料"),
+        ("order", "sales_order", "pending_delivery", "待送货"),
+        ("order", "sales_order", "partially_delivered", "部分送完"),
+        ("order", "sales_order", "waiting_receipt", "待回单"),
+        ("order", "sales_order", "pending_reconciliation", "待对账"),
+        ("order", "sales_order", "pending_invoice", "待开票"),
+        ("order", "sales_order", "pending_payment", "待结款"),
+        ("order", "sales_order", "completed", "订单完成"),
+        ("production", "production_task", "waiting_material", "待收料"),
+        ("production", "production_task", "pending", "待生产"),
+        ("production", "production_task", "completed", "已完成"),
+        ("production", "production_task", "not_required", "无需生产"),
+        ("inventory", "inventory_movement", "reserve", "预占库存"),
+        ("inventory", "inventory_movement", "release_reserve", "释放预占"),
+        ("inventory", "inventory_movement", "manual_in", "手工入库"),
+        ("inventory", "inventory_movement", "adjust", "库存调整"),
+        ("inventory", "inventory_movement", "freeze", "冻结"),
+        ("inventory", "inventory_movement", "unfreeze", "解冻"),
+        ("inventory", "inventory_movement", "damage", "报损"),
+        ("inventory", "inventory_movement", "scrap", "报废"),
+        ("inventory", "inventory_movement", "consume", "出库扣减"),
+        ("inventory", "inventory_movement", "reverse_consume", "撤销出库"),
+        ("inventory", "inventory_reservation", "active", "预占中"),
+        ("inventory", "inventory_lot", "active", "正常在库"),
+        ("inventory", "inventory_lot", "frozen", "已冻结"),
+        ("delivery", "delivery_dispatch", "closed", "已关闭"),
+        ("inventory", "inventory_lot", "future_status", "状态待确认"),
+    ],
+)
+def test_trace_status_labels_are_contextual_chinese(
+    stage: str,
+    source_type: str,
+    status: str,
+    expected: str,
+) -> None:
+    from app.services.order_document_trace import _status_label
+
+    assert (
+        _status_label(status, stage=stage, source_type=source_type)
+        == expected
+    )

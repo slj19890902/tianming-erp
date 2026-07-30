@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.32"
-    assert APP_VERSION_NAME == "常用箱一次确认与自动审计"
+    assert APP_VERSION == "v0.22.33"
+    assert APP_VERSION_NAME == "订单整组详情与追溯中文化"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,20 +50,20 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "一次确认" in item and "修改原因" in item
+        "本次更新｜" in item and "整组详情" in item and "全部存货编码" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "关键字段" in item and "第二次提交" in item
+        "本次更新｜" in item and "追溯" in item and "图纸" in item
         for item in current_release
     )
-    assert any("本次更新｜" in item and "操作人" in item and "前后差异" in item for item in current_release)
+    assert any("本次更新｜" in item and "业务语义" in item and "英文状态码" in item for item in current_release)
     assert any(
-        "如何验证｜" in item and "修改备注" in item and "修改原因" in item
+        "如何验证｜" in item and "汇总行" in item and "全部系统订单" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "没有可保存变化" in item and "操作记录" in item
+        "如何验证｜" in item and "预占库存" in item and "正常在库" in item
         for item in current_release
     )
     assert any(

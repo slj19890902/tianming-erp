@@ -27,31 +27,42 @@ def test_legacy_update_entry_is_fail_closed() -> None:
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import (
         APP_BUILD_DATE,
+        APP_CHANGES,
         APP_CHANGELOG,
+        APP_EXTERNAL_ACCEPTANCE_REQUIRED,
+        APP_VERIFICATION_STEPS,
         APP_VERSION,
         APP_VERSION_NAME,
+        current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.17"
-    assert APP_VERSION_NAME == "三楼半成品待布局登记"
-    assert APP_BUILD_DATE == "2026-07-29"
+    assert APP_VERSION == "v0.22.18"
+    assert APP_VERSION_NAME == "供应商、箱型审计与受控送货"
+    assert APP_BUILD_DATE == "2026-07-30"
+    assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
+    metadata = current_release_metadata(expected_version=APP_VERSION)
+    assert metadata["external_acceptance_required"] is True
+    assert metadata["changes"] == APP_CHANGES
+    assert metadata["verification_steps"] == APP_VERIFICATION_STEPS
+    assert 1 <= len(metadata["changes"]) <= 5
+    assert 1 <= len(metadata["verification_steps"]) <= 5
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "三楼半成品库位" in item and "待布局" in item
+        "本次更新｜" in item and "供应商主档" in item and "启用" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "不会进入" in item and "补货" in item
+        "本次更新｜" in item and "组合 A3" in item and "物理来源" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "库位台账" in item and "提示成功" in item
+        "如何验证｜" in item and "系统版本" in item and "v0.22.18" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "body输入有误" in item
+        "如何验证｜" in item and "送货与回单" in item and "正式发货" in item
         for item in current_release
     )
     assert any(
@@ -119,6 +130,7 @@ def test_release_script_is_two_phase_and_requires_exact_approval() -> None:
         "-Apply",
         "ExpectedCodeSha",
         "ExpectedRevision",
+        "ExpectedAppVersion",
         "ApprovalToken",
         "factory-current-baseline",
         "Stop-ErpService",
@@ -126,8 +138,14 @@ def test_release_script_is_two_phase_and_requires_exact_approval() -> None:
         "ERP_ENVIRONMENT=production",
         "release_erp.py",
         "mark-started",
+        "check-release-metadata",
     ):
         assert marker in RELEASE_SCRIPT
+    prepare_block = RELEASE_SCRIPT.index("if ($Prepare)")
+    assert RELEASE_SCRIPT.index(
+        '"check-release-metadata",',
+        prepare_block,
+    ) < RELEASE_SCRIPT.index("Stop-ErpService", prepare_block)
     assert RELEASE_SCRIPT.index("Stop-ErpService") < RELEASE_SCRIPT.index(
         '"prepare",'
     )
@@ -145,6 +163,10 @@ def test_release_helper_contains_backup_rehearsal_and_fail_closed_checks() -> No
         "awaiting_human_approval",
         "apply_failed_service_must_remain_stopped",
         "approval_token",
+        "release_metadata",
+        "expected_app_version",
+        "human_acceptance_status",
+        "check-release-metadata",
         '"alembic", "upgrade", revision',
     ):
         assert marker in RELEASE_HELPER

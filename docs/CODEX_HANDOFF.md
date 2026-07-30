@@ -3339,3 +3339,62 @@ legacy_ruida_* 原始层
 - 按老板 2026-07-30 规则，开发验证通过后直接提交、推送独立候选；当前状态为
   “开发验证通过、正式 ERP 人工验收待完成”。该授权不包含修改正式分支、迁移
   正式库、发布或重启工厂 ERP。
+## 101. 2026-07-29 Q1-08 / P1-17B 结构化版本说明与发布门禁候选
+
+- 独立 worktree：
+  `D:\tm-worktrees\erp-q1-08-version-release-metadata-replay-20260730`；分支：
+  `codex/q1-08-version-release-metadata-replay-20260730`；已从 2026-07-30
+  最新正式基线
+  `origin/factory-current-baseline@4ba48e59c20bfe23509814b7caec46d0b791a107`
+  重新线性重放，保留该基线中的供应商主档和三楼搜索修复。
+- `app/version.py` 新增只读结构化
+  `APP_CHANGES`、`APP_VERIFICATION_STEPS` 和严格校验函数；版本号、名称、日期、
+  更新说明和验证步骤缺失、类型错误、空白或超过 5 条均拒绝。当前版本的旧
+  `APP_CHANGELOG` 由同一结构化来源反向生成，历史列表及旧接口保持兼容。
+- 登录后的 `/api/system/version` 在原三字段基础上增加
+  `changes[]`、`verification_steps[]`；两个版本接口继续要求登录，没有扩大
+  `system.backup` 权限，也没有新增正式环境编辑入口。
+- “系统备份 → 系统版本”优先读取结构化字段；旧后端仍可回退解析历史字符串。
+  默认只显示当前版本的“本次更新”和“如何验证”，历史版本收进单一折叠入口，
+  且历史分组排除当前版本，避免重复。
+- 两阶段发布脚本 Prepare 新增必填 `-ExpectedAppVersion`。停服前、Prepare、
+  Apply 和服务健康启动后均复检版本说明；结构化清单及 SHA-256 摘要写入
+  schema 2 发布计划并绑定授权口令。缺少更新说明、验证步骤、版本不符或阶段间
+  内容变化时 fail closed，不能写 `completed`。
+- 自动门禁只记录
+  `completion_scope=technical_release_only` 和
+  `human_acceptance_status=not_recorded`；不会把“存在验证步骤”伪装成人工验收。
+  `/api/system/version` 继续保持登录门禁，发布脚本不保存正式账号密码、Cookie
+  或增加匿名后门；工厂发布后仍须由登录用户进行页面回读。
+- 本任务无数据库 migration；重放后 Alembic 单一 head 为
+  `cw79v8x9z68`。在最新正式基线上重新运行发布安全、工厂更新脚本、版本接口、
+  系统版本页面和整页前端回归，共 `138 passed`；Python compileall、
+  `git diff --check` 均通过。
+- 老板于 2026-07-30 明确授权：开发完成并通过自动验证后直接提交、推送独立
+  候选分支，统一在正式 ERP 验收。该授权不包含修改
+  `origin/factory-current-baseline`、`origin/main`、迁移正式数据库或重启工厂服务。
+
+## 102. 2026-07-30 工厂 Q1-01～Q1-03 与 P1-17B/C 正式整合候选
+
+- 独立整合 worktree：
+  `D:\tm-worktrees\erp-factory-q1-01-03-version-20260730`；分支：
+  `codex/factory-integrate-q1-01-03-version-20260730`。整合线保留正式基线
+  `4ba48e59c20bfe23509814b7caec46d0b791a107` 的供应商主档与 Q1-10，
+  并线性包含 Q1-01 `b2e3f28`、Q1-02 `4e88c03`、Q1-03 `07ea65b`。
+- 合并 P1-17B 结构化版本说明门禁，并按 2026-07-30 最新 A 级 P1-17C 口径
+  增加显式 `external_acceptance_required`。标记为 `true` 时，本次更新和
+  验收步骤各 1～5 条必填；标记为 `false` 时两组内容可为空且页面不显示虚假
+  占位。标记必须明确填写，不能从数组是否为空推断。
+- 本次混合更新改变供应商、仓库搜索、箱型与 A3 报料、审计和送货业务行为，
+  因此明确声明 `external_acceptance_required=true`。系统版本更新为
+  `v0.22.18 / 供应商、箱型审计与受控送货 / 2026-07-30`，补录此前
+  Q0-04/Q1-10 漏记内容，并覆盖 Q1-01～Q1-03 的简短更新与验收步骤。
+- 发布计划冻结同一外部验收声明、结构化清单和摘要；Prepare、Apply 及服务启动后
+  内容变化均 fail closed。版本接口继续要求登录，不新增正式环境编辑入口，也不把
+  自动验证冒充人工业务验收。
+- Alembic 只有一个 head：`da83v8x9z72`。版本、发布、接口和前端门禁回归
+  `142 passed`；Q1-01～Q1-03 全部改动测试文件回归 `235 passed`；Python
+  compileall 和 `git diff --check` 通过。
+- 正式发布仍须使用两阶段发布脚本完成最新正式库备份、隔离迁移演练、人工授权
+  口令绑定、正式迁移、重启、健康检查及登录后的系统版本页面回读；这些运行时事实
+  以本次工厂发布报告和 NAS 任务回执为准。

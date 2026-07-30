@@ -16,6 +16,9 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 CORE_COUNT_TABLES = (
     "customers",
     "products",
@@ -95,6 +98,27 @@ def git_sha(project_root: Path = PROJECT_ROOT) -> str:
     if result.returncode != 0:
         raise ReleaseGateError(f"无法读取当前 Git SHA：{result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def release_metadata(*, expected_version: str | None = None) -> dict[str, Any]:
+    """Read and validate the exact metadata serialized by /api/system/version."""
+
+    try:
+        from app.version import current_release_metadata
+
+        return current_release_metadata(expected_version=expected_version)
+    except Exception as error:
+        raise ReleaseGateError(f"正式版本说明门禁失败：{error}") from error
+
+
+def release_metadata_sha256(metadata: dict[str, Any]) -> str:
+    material = json.dumps(
+        metadata,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 def inspect_database(path: Path) -> dict[str, Any]:
@@ -247,6 +271,8 @@ def _approval_token(plan: dict[str, Any]) -> str:
             "backup_sha256": plan["backup"]["sha256"],
             "rehearsal_path": plan["rehearsal"]["path"],
             "rehearsal_sha256": plan["rehearsal"]["sha256"],
+            "release_metadata": plan["release_metadata"],
+            "release_metadata_sha256": plan["release_metadata_sha256"],
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -274,6 +300,7 @@ def prepare_release(
     report_path: Path,
     expected_code_sha: str,
     expected_revision: str,
+    expected_app_version: str,
     project_root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
     actual_sha = git_sha(project_root)
@@ -287,6 +314,8 @@ def prepare_release(
             f"代码 Alembic head 不匹配：actual={actual_revision}，"
             f"expected={expected_revision}"
         )
+    metadata = release_metadata(expected_version=expected_app_version)
+    metadata_sha256 = release_metadata_sha256(metadata)
 
     source = inspect_database(database)
     assert_healthy(source, label="正式数据库预检")
@@ -311,11 +340,18 @@ def prepare_release(
         raise ReleaseGateError("隔离迁移改变了核心业务表计数，禁止进入正式授权阶段")
 
     plan: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "awaiting_human_approval",
         "prepared_at": utc_now(),
         "code_sha": actual_sha,
         "expected_revision": expected_revision,
+        "expected_app_version": expected_app_version,
+        "external_acceptance_required": metadata["external_acceptance_required"],
+        "release_metadata": metadata,
+        "release_metadata_sha256": metadata_sha256,
+        "automated_release_metadata_gate": "passed",
+        "completion_scope": "technical_release_only",
+        "human_acceptance_status": "not_recorded",
         "source": source,
         "backup": backup,
         "rehearsal_before": rehearsal_before,
@@ -335,6 +371,8 @@ def apply_release(
 ) -> dict[str, Any]:
     plan_path = plan_path.resolve()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if plan.get("schema_version") != 2:
+        raise ReleaseGateError("发布计划版本过旧，必须重新执行 Prepare")
     if plan.get("status") != "awaiting_human_approval":
         raise ReleaseGateError(f"发布计划状态不可执行：{plan.get('status')}")
     if approval_token != plan.get("approval_token"):
@@ -343,6 +381,13 @@ def apply_release(
         raise ReleaseGateError("准备与应用阶段之间代码 SHA 已变化")
     if code_revision(project_root) != plan["expected_revision"]:
         raise ReleaseGateError("准备与应用阶段之间 Alembic head 已变化")
+    current_metadata = release_metadata(
+        expected_version=plan["expected_app_version"],
+    )
+    if current_metadata != plan["release_metadata"]:
+        raise ReleaseGateError("准备与应用阶段之间正式版本说明已变化")
+    if release_metadata_sha256(current_metadata) != plan["release_metadata_sha256"]:
+        raise ReleaseGateError("准备与应用阶段之间正式版本说明摘要已变化")
 
     database = Path(plan["source"]["path"])
     current = inspect_database(database)
@@ -377,10 +422,27 @@ def apply_release(
 def mark_service_started(plan_path: Path) -> dict[str, Any]:
     plan_path = plan_path.resolve()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if plan.get("schema_version") != 2:
+        raise ReleaseGateError("发布计划版本过旧，不能标记发布完成")
     if plan.get("status") != "applied_pending_service_start":
         raise ReleaseGateError(f"发布计划尚不可标记启动：{plan.get('status')}")
+    try:
+        current_metadata = release_metadata(
+            expected_version=plan["expected_app_version"],
+        )
+        if current_metadata != plan["release_metadata"]:
+            raise ReleaseGateError("服务启动后的正式版本说明与发布计划不一致")
+        if release_metadata_sha256(current_metadata) != plan["release_metadata_sha256"]:
+            raise ReleaseGateError("服务启动后的正式版本说明摘要与发布计划不一致")
+    except Exception as error:
+        plan["status"] = "service_started_release_metadata_failed"
+        plan["release_metadata_failed_at"] = utc_now()
+        plan["release_metadata_error"] = str(error)
+        _write_plan(plan_path, plan)
+        raise
     plan["status"] = "completed"
     plan["service_started_at"] = utc_now()
+    plan["verified_release_metadata"] = current_metadata
     _write_plan(plan_path, plan)
     return plan
 
@@ -392,6 +454,12 @@ def build_parser() -> argparse.ArgumentParser:
     startup = subparsers.add_parser("check-startup", help="只读检查 DB current == 代码 head")
     startup.add_argument("--database", type=Path, required=True)
 
+    metadata = subparsers.add_parser(
+        "check-release-metadata",
+        help="只读核对版本号、更新说明和验证步骤",
+    )
+    metadata.add_argument("--expected-version", required=True)
+
     prepare = subparsers.add_parser("prepare", help="备份并在隔离副本演练，不写正式库")
     prepare.add_argument("--database", type=Path, required=True)
     prepare.add_argument("--backup-dir", type=Path, required=True)
@@ -399,6 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--report", type=Path, required=True)
     prepare.add_argument("--expected-code-sha", required=True)
     prepare.add_argument("--expected-revision", required=True)
+    prepare.add_argument("--expected-app-version", required=True)
 
     apply = subparsers.add_parser("apply", help="验证计划与人工口令后迁移正式库")
     apply.add_argument("--plan", type=Path, required=True)
@@ -414,6 +483,8 @@ def main() -> int:
     try:
         if args.command == "check-startup":
             result = check_startup(args.database)
+        elif args.command == "check-release-metadata":
+            result = release_metadata(expected_version=args.expected_version)
         elif args.command == "prepare":
             result = prepare_release(
                 database=args.database,
@@ -422,6 +493,7 @@ def main() -> int:
                 report_path=args.report,
                 expected_code_sha=args.expected_code_sha,
                 expected_revision=args.expected_revision,
+                expected_app_version=args.expected_app_version,
             )
         elif args.command == "apply":
             result = apply_release(

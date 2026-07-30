@@ -1054,13 +1054,9 @@ def get_version(
     _user: User = Depends(get_current_user),
 ):
     """Return the exact ERP release fingerprint to an authenticated user."""
-    from app.version import APP_BUILD_DATE, APP_VERSION, APP_VERSION_NAME
+    from app.version import current_release_metadata
 
-    return {
-        "version": APP_VERSION,
-        "version_name": APP_VERSION_NAME,
-        "build_date": APP_BUILD_DATE,
-    }
+    return current_release_metadata()
 
 
 @router.get("/version/changelog")

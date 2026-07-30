@@ -24,8 +24,10 @@
 - 聚焦 API、权限、跨分页、状态映射和前端新契约，以及独立审查扩大回归最终
   `66 passed`；首页内联 JavaScript 语法、Python compileall、
   `git diff --check` 均通过，独立审查结论为 GO、无 P0/P1 阻断。
-- 本轮未启动浏览器隔离 UAT，未连接、复制、迁移或写入工厂正式数据库，也未
-  commit、push、更新 `origin/factory-current-baseline` 或 `origin/main`。
+- 本轮未启动浏览器隔离 UAT，未连接、复制、迁移或写入工厂正式数据库。已形成并
+  推送独立候选提交
+  `8ab9855c3451c336c1c5a040c176acce0fb16c4f`；远端同名 `codex/` 分支已核对
+  一致，`origin/factory-current-baseline` 和 `origin/main` 均未修改。
   工厂人工验收需覆盖 1920×1080 标准/大字/车间账号：汇总行单一详情、跨分页
   整组订单和全部明细、明细操作仅追溯/编辑、旧核心字段与图纸仍可达、追溯状态
   中文化及页面无横向滚动。

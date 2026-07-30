@@ -1,5 +1,34 @@
 # Codex 项目交接
 
+## 2026-07-30 Q0-03 手工尺寸订单库存过期误判按 4ba48e 正式基线重放（开发验证通过，正式 ERP 待验收）
+
+- 新独立 worktree：
+  `D:\tm-worktrees\erp-q0-03-manual-order-inventory-stale-replay-20260730`；分支：
+  `codex/q0-03-manual-order-inventory-stale-replay-20260730`；精确基线：
+  `origin/factory-current-baseline@4ba48e59c20bfe23509814b7caec46d0b791a107`。
+- 旧 `a3410ab...` 候选不能直接套到新正式基线；本轮已按业务语义重放，并保留
+  `4ba48e...` 已整合的供应商主档、Q1-10 仓库搜索和最新 Alembic 链。
+- 修复范围仍只针对“尚未建档且没有正式产品 ID 的手工尺寸行”：清除空白行遗留
+  的库存状态和刷新 timer，不请求、不显示、不校验库存候选，保存载荷明确使用
+  `reservation_plan=null`。已有常用箱、PDF 匹配产品及其他正式产品继续执行
+  stale、版本、候选确认和库存预占门禁。
+- 手工尺寸报价来源内部值 `estimated` 只显示为“系统估价”，未修改报价公式、
+  平方价或最终单价。
+- 新基线定向联合回归 `44 passed`；供应商主档静态页交叉回归 `6 passed`。
+  PDF 扩大回归 `37 passed, 1 failed`，唯一失败
+  `test_manual_pdf_customer_product_and_quantity_confirmation_allows_save_and_logs`
+  已在未修改的 `4ba48e...` 对照 worktree 原样复现，原因是该旧 fixture 未创建
+  新供应商主档，不属于 Q0-03。
+- `python -m compileall -q app tests`、整页 JavaScript 语法和
+  `git diff --check` 均通过；本任务无 migration，Alembic 唯一 head 保持
+  `cw79v8x9z68`。
+- 按老板 2026-07-30 最新口径，家庭端不再等待人工 UAT；开发验证通过后直接形成并
+  推送独立 `codex/` 候选，状态保留为“正式 ERP 人工验收待完成”。本提交完整 SHA
+  与远端核对结果记录在 NAS 任务回执。
+- 未连接、复制、迁移或写入工厂正式数据库，未修改
+  `origin/factory-current-baseline` 或 `origin/main`。工厂部署需要重启 ERP，
+  不需要迁移正式库。
+
 ## 2026-07-30 Q0-04 / P0-08 供应商主档紧急候选（老板人工验收通过，已授权提交推送）
 
 - 从最新正式远端基线

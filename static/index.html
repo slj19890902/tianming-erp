@@ -3848,8 +3848,8 @@
 	                    <td class="order-entry-quantity">
 	                      <input :id="`order-quantity-${index}`" class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="onOrderDraftQuantityInput(item)" />
 	                      <div v-if="item._validation_error" class="order-entry-error">{{ item._validation_error }}</div>
-	                      <div v-if="item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
-	                      <button v-if="item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryNeedsAttention(item)?'danger':'']" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起库存安排' : (orderLineInventoryNeedsAttention(item) ? '处理库存例外' : '查看库存安排') }}</button>
+	                      <div v-if="inventoryPlanApplies(item) && item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
+	                      <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryNeedsAttention(item)?'danger':'']" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起库存安排' : (orderLineInventoryNeedsAttention(item) ? '处理库存例外' : '查看库存安排') }}</button>
 	                    </td>
 	                    <td class="order-entry-price sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
 	                    <td class="order-entry-total sensitive-price"><span class="order-entry-total-value">¥ {{ money(orderItemSaleAmount(item)) }}</span></td>
@@ -7512,6 +7512,10 @@
             const draft = this.orderImportDrafts.find(row => (row.items || []).includes(line));
             return draft?.matched_customer_id || null;
           },
+          inventoryPlanApplies(line) {
+            const productId = Number(line?.product_id || line?.matched_product_id || 0);
+            return !(line?.manual_size_entry && !productId);
+          },
           inventoryComponents(line) {
             const product = line._inventory_product || line;
             const style = String(product.box_style || "").toUpperCase();
@@ -7786,12 +7790,28 @@
             return !!context && !state.loading && !state.stale && !state.api_error && Number(context.product_id) === Number(line.product_id || line.matched_product_id) && Number(context.customer_id) === Number(customerId || this.inventoryCustomerForLine(line)) && Number(context.quantity) === Number(line.quantity || 0);
           },
           invalidateLineInventory(line) {
+            if (!this.inventoryPlanApplies(line)) {
+              if (line._inventory_refresh_timer) clearTimeout(line._inventory_refresh_timer);
+              line._inventory_refresh_timer = null;
+              line._inventory = null;
+              line._inventory_product = null;
+              line._show_inventory_details = false;
+              return;
+            }
             const state = line._inventory || this.newOrderInventoryState();
             state.stale = true; state.error = ""; state.api_error = false;
             [state.finished, ...Object.values(state.semi)].forEach(part => { part.selected = null; part.selected_candidates = []; part.allocations = []; part.skipped = false; part.manual_override = false; part.general_confirmation = false; });
             line._inventory = state;
           },
           scheduleOrderLineInventoryRefresh(line, customerId) {
+            if (!this.inventoryPlanApplies(line)) {
+              if (line._inventory_refresh_timer) clearTimeout(line._inventory_refresh_timer);
+              line._inventory_refresh_timer = null;
+              line._inventory = null;
+              line._inventory_product = null;
+              line._show_inventory_details = false;
+              return;
+            }
             this.invalidateLineInventory(line);
             if (line._inventory_refresh_timer) clearTimeout(line._inventory_refresh_timer);
             line._inventory_refresh_timer = setTimeout(() => {
@@ -7800,6 +7820,14 @@
             }, 250);
           },
           refreshOrderLineInventory(line, customerId) {
+            if (!this.inventoryPlanApplies(line)) {
+              if (line._inventory_refresh_timer) clearTimeout(line._inventory_refresh_timer);
+              line._inventory_refresh_timer = null;
+              line._inventory = null;
+              line._inventory_product = null;
+              line._show_inventory_details = false;
+              return;
+            }
             if (line._inventory_refresh_timer) {
               clearTimeout(line._inventory_refresh_timer);
               line._inventory_refresh_timer = null;
@@ -7808,6 +7836,12 @@
             if (line.product_id || line.matched_product_id) this.loadOrderLineInventory(line, customerId);
           },
           async loadOrderLineInventory(line, customerId) {
+            if (!this.inventoryPlanApplies(line)) {
+              line._inventory = null;
+              line._inventory_product = null;
+              line._show_inventory_details = false;
+              return;
+            }
             this.invalidatePdfDraftForItem?.(line);
             const productId = Number(line.product_id || line.matched_product_id || 0);
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
@@ -7925,6 +7959,7 @@
             this.orderImportDrafts.forEach(draft => this.reallocateDraftInventorySequentially(draft.items));
           },
           buildReservationPlan(line) {
+            if (!this.inventoryPlanApplies(line)) return { finished:[], semi:[] };
             const state = line._inventory || this.newOrderInventoryState();
             const finished = state.finished.allocations.map(({candidate, requested_qty}) => ({ lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, recommendation_source:"dedicated", confirmed:true }));
             const finishedQty = finished.reduce((sum, entry) => sum + entry.requested_qty, 0);
@@ -7943,6 +7978,7 @@
             return { finished, semi };
           },
           inventoryDecisionRequired(line) {
+            if (!this.inventoryPlanApplies(line)) return "";
             const state = line?._inventory;
             if (!state || state.loading) return "库存候选正在加载，请稍候。";
             if (state.api_error) return state.error || "库存候选加载失败，请刷新后重试。";
@@ -13688,6 +13724,7 @@
             if (!reuseBlankLine) this.addOrderItem(false, false);
             const item = this.orderForm.items[index];
             const preference = this.manualSizePreferenceOptions[0] || null;
+            if (item._inventory_refresh_timer) clearTimeout(item._inventory_refresh_timer);
             Object.assign(item, {
               manual_size_entry: true,
               product_id: null,
@@ -13703,6 +13740,10 @@
               _manual_unit_price: false,
               _quote_preview: null,
               _quote_preview_loading: false,
+              _inventory_refresh_timer: null,
+              _inventory: null,
+              _inventory_product: null,
+              _show_inventory_details: false,
             });
             if (preference) this.applyManualSizePreference(item);
             this.refreshOrderNumberPreview();
@@ -13748,7 +13789,8 @@
             if (item?._quote_preview_loading) return "正在计算客户报价…";
             const preview = item?._quote_preview;
             if (!preview) return "选择材质、楞型并填写尺寸后自动试算";
-            const source = preview.final_price_source || preview.price_source || "客户报价偏好";
+            const rawSource = preview.final_price_source || preview.price_source || "客户报价偏好";
+            const source = rawSource === "estimated" ? "系统估价" : rawSource;
             const price = preview.customer_square_price;
             const estimate = preview.estimated_unit_price;
             return `${source}${price == null ? "" : `｜平方价 ￥${this.money(price)}/㎡`}${estimate == null ? "" : `｜估价 ￥${this.money(estimate)}`}`;
@@ -13869,7 +13911,7 @@
           orderFormItemPayload(item) {
             const payload = {
               client_line_id: item.client_line_id || createIdempotencyKey(),
-              reservation_plan: this.buildReservationPlan(item),
+              reservation_plan: this.inventoryPlanApplies(item) ? this.buildReservationPlan(item) : null,
               product_id: item.product_id,
               product_code: item.product_code,
               product_name: item.product_name,

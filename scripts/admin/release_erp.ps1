@@ -23,6 +23,10 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = "Prepare")]
     [string]$ExpectedRevision,
 
+    [Parameter(Mandatory = $true, ParameterSetName = "Prepare")]
+    [ValidatePattern("^v[0-9]+\.[0-9]+\.[0-9]+$")]
+    [string]$ExpectedAppVersion,
+
     [Parameter(Mandatory = $true, ParameterSetName = "Apply")]
     [switch]$Apply,
 
@@ -304,7 +308,8 @@ try {
     if ($PSCmdlet.ParameterSetName -eq "Help") {
         throw (
             "旧的一键更新已停用。先运行 release_erp.ps1 -Prepare " +
-            "-ExpectedCodeSha <40位SHA> -ExpectedRevision <revision>；" +
+            "-ExpectedCodeSha <40位SHA> -ExpectedRevision <revision> " +
+            "-ExpectedAppVersion <v0.x.x>；" +
             "人工核对报告后，再运行 -Apply -PlanPath <报告> -ApprovalToken <口令>。"
         )
     }
@@ -314,7 +319,14 @@ try {
 
     if ($Prepare) {
         Assert-ApprovedCheckout -ApprovedSha $ExpectedCodeSha
-        Write-Log "已确认生产配置、正式路径和代码 SHA；准备停服。"
+        $releaseMetadata = Invoke-ReleaseHelper -Arguments @(
+            "check-release-metadata",
+            "--expected-version", $ExpectedAppVersion
+        )
+        Write-Log (
+            "已确认生产配置、正式路径、代码 SHA 和版本说明；" +
+            "version=$($releaseMetadata.version)，准备停服。"
+        )
         Stop-ErpService
 
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -326,7 +338,8 @@ try {
             "--rehearsal-dir", $rehearsalDir,
             "--report", $reportPath,
             "--expected-code-sha", $ExpectedCodeSha,
-            "--expected-revision", $ExpectedRevision
+            "--expected-revision", $ExpectedRevision,
+            "--expected-app-version", $ExpectedAppVersion
         )
         Write-Log "备份与隔离迁移演练通过；正式数据库尚未迁移。"
         Write-Log "发布报告：$($plan.report_path)"
@@ -362,8 +375,18 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "数据库已完成迁移，但 ERP 启动失败；保持现场并查看日志。"
     }
+    $verifiedRelease = Invoke-ReleaseHelper -Arguments @(
+        "check-release-metadata",
+        "--expected-version", $planBeforeApply.expected_app_version
+    )
+    Write-Log (
+        "服务启动后正式版本说明复检通过；" +
+        "version=$($verifiedRelease.version)，更新 $($verifiedRelease.changes.Count) 条，" +
+        "验证步骤 $($verifiedRelease.verification_steps.Count) 条。"
+    )
     Invoke-ReleaseHelper -Arguments @("mark-started", "--plan", $resolvedPlanPath) | Out-Null
-    Write-Log "========== ERP 发布完成，服务健康检查通过 =========="
+    Write-Log "========== ERP 技术发布完成，服务与版本说明门禁通过 =========="
+    Write-Log "人工业务验收尚未由自动门禁记录；请登录“系统备份 → 系统版本”回读。"
     Write-Log "发布报告：$resolvedPlanPath"
     exit 0
 } catch {

@@ -3244,3 +3244,38 @@ legacy_ruida_* 原始层
 - 本任务无 migration，Alembic 单一 head 保持 `cu77v8x9z66`。老板于
   2026-07-29 确认人工验收通过；未连接或写入工厂正式数据库，未提交、未推送、
   未更新正式分支。提交和推送仍等待老板明确授权，不与下一任务混合。
+
+## 98. 2026-07-29 Q1-08 / P1-17B 结构化版本说明与发布门禁候选
+
+- 独立 worktree：
+  `D:\tm-worktrees\erp-q1-08-version-release-metadata-replay-20260730`；分支：
+  `codex/q1-08-version-release-metadata-replay-20260730`；已从 2026-07-30
+  最新正式基线
+  `origin/factory-current-baseline@4ba48e59c20bfe23509814b7caec46d0b791a107`
+  重新线性重放，保留该基线中的供应商主档和三楼搜索修复。
+- `app/version.py` 新增只读结构化
+  `APP_CHANGES`、`APP_VERIFICATION_STEPS` 和严格校验函数；版本号、名称、日期、
+  更新说明和验证步骤缺失、类型错误、空白或超过 5 条均拒绝。当前版本的旧
+  `APP_CHANGELOG` 由同一结构化来源反向生成，历史列表及旧接口保持兼容。
+- 登录后的 `/api/system/version` 在原三字段基础上增加
+  `changes[]`、`verification_steps[]`；两个版本接口继续要求登录，没有扩大
+  `system.backup` 权限，也没有新增正式环境编辑入口。
+- “系统备份 → 系统版本”优先读取结构化字段；旧后端仍可回退解析历史字符串。
+  默认只显示当前版本的“本次更新”和“如何验证”，历史版本收进单一折叠入口，
+  且历史分组排除当前版本，避免重复。
+- 两阶段发布脚本 Prepare 新增必填 `-ExpectedAppVersion`。停服前、Prepare、
+  Apply 和服务健康启动后均复检版本说明；结构化清单及 SHA-256 摘要写入
+  schema 2 发布计划并绑定授权口令。缺少更新说明、验证步骤、版本不符或阶段间
+  内容变化时 fail closed，不能写 `completed`。
+- 自动门禁只记录
+  `completion_scope=technical_release_only` 和
+  `human_acceptance_status=not_recorded`；不会把“存在验证步骤”伪装成人工验收。
+  `/api/system/version` 继续保持登录门禁，发布脚本不保存正式账号密码、Cookie
+  或增加匿名后门；工厂发布后仍须由登录用户进行页面回读。
+- 本任务无数据库 migration；重放后 Alembic 单一 head 为
+  `cw79v8x9z68`。在最新正式基线上重新运行发布安全、工厂更新脚本、版本接口、
+  系统版本页面和整页前端回归，共 `138 passed`；Python compileall、
+  `git diff --check` 均通过。
+- 老板于 2026-07-30 明确授权：开发完成并通过自动验证后直接提交、推送独立
+  候选分支，统一在正式 ERP 验收。该授权不包含修改
+  `origin/factory-current-baseline`、`origin/main`、迁移正式数据库或重启工厂服务。

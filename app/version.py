@@ -3,15 +3,104 @@ ERP 系统版本信息。
 每次发布更新此文件，不依赖数据库。
 """
 
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from datetime import date
+from typing import Any
+
+
 APP_VERSION = "v0.22.17"
 APP_VERSION_NAME = "三楼半成品待布局登记"
 APP_BUILD_DATE = "2026-07-29"
 
+APP_CHANGES = [
+    "三楼半成品库位现在可以先登记为待布局，保存失败时会显示具体原因。",
+    "待布局库位不会进入余料转存、补货或正式库存候选。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入仓库的库位台账，选择三楼、已登记区域、半成品和临时过道位，使用“区域编码-”开头的库位编码保存，应提示成功并显示待布局。",
+    "新建三楼库位时删除所属区域或填写错误的区域编码前缀，应看到具体中文原因，不再显示“body输入有误”。",
+]
+
+
+def _validated_text_items(value: Any, *, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} 必须是列表")
+    if any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} 只能包含文字")
+    items = [item.strip() for item in value]
+    if not 1 <= len(items) <= 5:
+        raise ValueError(f"{field_name} 必须包含 1～5 条")
+    if any(not item for item in items):
+        raise ValueError(f"{field_name} 不能包含空白内容")
+    return items
+
+
+def validate_release_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    expected_version: str | None = None,
+) -> dict[str, Any]:
+    """Validate the read-only release card used by the API and release gate."""
+
+    version = str(metadata.get("version") or "").strip()
+    version_name = str(metadata.get("version_name") or "").strip()
+    build_date = str(metadata.get("build_date") or "").strip()
+    if not version:
+        raise ValueError("version 不能为空")
+    if re.fullmatch(r"v\d+\.\d+\.\d+", version) is None:
+        raise ValueError("version 必须使用 v主版本.次版本.修订号")
+    if expected_version is not None and version != str(expected_version).strip():
+        raise ValueError(
+            f"版本号不匹配：actual={version}，expected={str(expected_version).strip()}"
+        )
+    if not version_name:
+        raise ValueError("version_name 不能为空")
+    if not build_date:
+        raise ValueError("build_date 不能为空")
+    try:
+        date.fromisoformat(build_date)
+    except ValueError as error:
+        raise ValueError("build_date 必须使用 YYYY-MM-DD") from error
+    return {
+        "version": version,
+        "version_name": version_name,
+        "build_date": build_date,
+        "changes": _validated_text_items(
+            metadata.get("changes"),
+            field_name="changes",
+        ),
+        "verification_steps": _validated_text_items(
+            metadata.get("verification_steps"),
+            field_name="verification_steps",
+        ),
+    }
+
+
+def current_release_metadata(
+    *,
+    expected_version: str | None = None,
+) -> dict[str, Any]:
+    """Return a validated copy so callers cannot mutate module constants."""
+
+    return validate_release_metadata(
+        {
+            "version": APP_VERSION,
+            "version_name": APP_VERSION_NAME,
+            "build_date": APP_BUILD_DATE,
+            "changes": APP_CHANGES,
+            "verification_steps": APP_VERIFICATION_STEPS,
+        },
+        expected_version=expected_version,
+    )
+
+
 APP_CHANGELOG = [
-    "v0.22.17：本次更新｜三楼半成品库位现在可以先登记为待布局，保存失败时会显示具体原因。",
-    "v0.22.17：本次更新｜待布局库位不会进入余料转存、补货或正式库存候选。",
-    "v0.22.17：如何验证｜进入仓库的库位台账，选择三楼、已登记区域、半成品和临时过道位，使用“区域编码-”开头的库位编码保存，应提示成功并显示待布局。",
-    "v0.22.17：如何验证｜新建三楼库位时删除所属区域或填写错误的区域编码前缀，应看到具体中文原因，不再显示“body输入有误”。",
+    *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
     "v0.22.16：N039 复合产品从订单、报料、来料、生产到库存和送货按 BOM 组件闭环执行；组件数量只允许正整数，并保留合并/分开处理选项及数量调整记录。",
     "v0.22.16：订单明细新增不可覆盖的客户原始材质快照；待报料更换实际材质后仍保留客户原单事实，历史旧单明确标记为低可信回退。",
     "v0.22.16：客户材质候选按客户、原始代码、层数和楞型隔离，结合人工优先级、历史次数、最近使用和参考价给出可解释排序；最终仍须人工确认。",

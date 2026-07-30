@@ -373,6 +373,8 @@ def test_version_changelog_requires_login(system_api_app) -> None:
     assert denied_version.status_code == 401
     assert denied.status_code == 401
     assert version.status_code == 200
-    assert set(version.json()) == {"version", "version_name", "build_date"}
+    from app.version import current_release_metadata
+
+    assert version.json() == current_release_metadata()
     assert allowed.status_code == 200
     assert isinstance(allowed.json()["changelog"], list)

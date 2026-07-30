@@ -27,14 +27,22 @@ def test_legacy_update_entry_is_fail_closed() -> None:
 def test_factory_update_reports_current_release_version() -> None:
     from app.version import (
         APP_BUILD_DATE,
+        APP_CHANGES,
         APP_CHANGELOG,
+        APP_VERIFICATION_STEPS,
         APP_VERSION,
         APP_VERSION_NAME,
+        current_release_metadata,
     )
 
     assert APP_VERSION == "v0.22.17"
     assert APP_VERSION_NAME == "三楼半成品待布局登记"
     assert APP_BUILD_DATE == "2026-07-29"
+    metadata = current_release_metadata(expected_version=APP_VERSION)
+    assert metadata["changes"] == APP_CHANGES
+    assert metadata["verification_steps"] == APP_VERIFICATION_STEPS
+    assert 1 <= len(metadata["changes"]) <= 5
+    assert 1 <= len(metadata["verification_steps"]) <= 5
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
@@ -119,6 +127,7 @@ def test_release_script_is_two_phase_and_requires_exact_approval() -> None:
         "-Apply",
         "ExpectedCodeSha",
         "ExpectedRevision",
+        "ExpectedAppVersion",
         "ApprovalToken",
         "factory-current-baseline",
         "Stop-ErpService",
@@ -126,8 +135,14 @@ def test_release_script_is_two_phase_and_requires_exact_approval() -> None:
         "ERP_ENVIRONMENT=production",
         "release_erp.py",
         "mark-started",
+        "check-release-metadata",
     ):
         assert marker in RELEASE_SCRIPT
+    prepare_block = RELEASE_SCRIPT.index("if ($Prepare)")
+    assert RELEASE_SCRIPT.index(
+        '"check-release-metadata",',
+        prepare_block,
+    ) < RELEASE_SCRIPT.index("Stop-ErpService", prepare_block)
     assert RELEASE_SCRIPT.index("Stop-ErpService") < RELEASE_SCRIPT.index(
         '"prepare",'
     )
@@ -145,6 +160,10 @@ def test_release_helper_contains_backup_rehearsal_and_fail_closed_checks() -> No
         "awaiting_human_approval",
         "apply_failed_service_must_remain_stopped",
         "approval_token",
+        "release_metadata",
+        "expected_app_version",
+        "human_acceptance_status",
+        "check-release-metadata",
         '"alembic", "upgrade", revision',
     ):
         assert marker in RELEASE_HELPER

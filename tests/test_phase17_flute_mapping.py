@@ -308,7 +308,9 @@ def test_version_endpoint_requires_auth(flute_api):
     assert denied_version.status_code == 401
     assert denied.status_code == 401
     assert version.status_code == 200
-    assert set(version.json()) == {"version", "version_name", "build_date"}
+    from app.version import current_release_metadata
+
+    assert version.json() == current_release_metadata()
     assert changelog.status_code == 200
     assert isinstance(changelog.json()["changelog"], list)
     assert len(changelog.json()["changelog"]) > 0

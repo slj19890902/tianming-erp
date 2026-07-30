@@ -151,6 +151,135 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
         assert session.scalar(select(func.count()).select_from(OrderItem)) == 2
 
 
+def test_new_order_rejects_disabled_or_unknown_supplier_from_legacy_material_id(
+    order_api_app,
+) -> None:
+    from app.models.material import Material
+    from app.models.order import Order
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        session.add(
+            Supplier(
+                standard_name="苏州佳丰",
+                normalized_name=normalize_supplier_identity("苏州佳丰"),
+                display_name="佳丰",
+                sort_order=900,
+                is_active=False,
+                version=1,
+            )
+        )
+        material = session.get(Material, 1)
+        assert material is not None
+        material.supplier_name = "苏州佳丰"
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        disabled = client.post("/api/orders", json=_payload())
+        with session_factory() as session:
+            material = session.get(Material, 1)
+            assert material is not None
+            material.supplier_name = "未建档纸板厂"
+            session.commit()
+        unknown = client.post(
+            "/api/orders",
+            json={**_payload(), "customer_po": "PO-CUSTOMER-UNKNOWN"},
+        )
+
+    assert disabled.status_code == 400
+    assert "已停用" in disabled.text
+    assert unknown.status_code == 400
+    assert "尚未建档" in unknown.text
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Order)) == 0
+
+
+def test_order_item_material_edit_only_gates_actual_material_change(
+    order_api_app,
+) -> None:
+    from app.models.material import Material
+    from app.models.supplier import Supplier, SupplierAlias
+    from app.services.supplier_master import normalize_supplier_identity
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        payload = _payload()
+        payload["items"] = [payload["items"][0]]
+        created = client.post("/api/orders", json=payload)
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+
+        with session_factory() as session:
+            disabled = Supplier(
+                standard_name="苏州佳丰",
+                normalized_name=normalize_supplier_identity("苏州佳丰"),
+                display_name="佳丰",
+                sort_order=900,
+                is_active=False,
+                version=1,
+            )
+            session.add(disabled)
+            session.flush()
+            session.add(
+                SupplierAlias(
+                    supplier_id=disabled.id,
+                    alias_name="佳丰",
+                    normalized_alias=normalize_supplier_identity("佳丰"),
+                )
+            )
+            current_material = session.get(Material, 1)
+            assert current_material is not None
+            current_material.supplier_name = "苏州佳丰"
+            disabled_material = Material(
+                code="ORDER-EDIT-JF",
+                layer_count=5,
+                flute_type="BC",
+                supplier_name="佳丰",
+            )
+            unknown_material = Material(
+                code="ORDER-EDIT-UNKNOWN",
+                layer_count=5,
+                flute_type="BC",
+                supplier_name="未建档纸板厂",
+            )
+            session.add_all([disabled_material, unknown_material])
+            session.commit()
+            disabled_material_id = disabled_material.id
+            unknown_material_id = unknown_material.id
+
+        edit_payload = {
+            "quantity": 200,
+            "unit_price": "3.60",
+            "product_code": "SME-001",
+            "product_name": "五层加强纸箱",
+            "material": "K=A-BC",
+            "specification": "520×350×300mm",
+            "material_id": 1,
+        }
+        unchanged = client.put(
+            f"/api/orders/items/{item_id}",
+            json=edit_payload,
+        )
+        disabled_change = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**edit_payload, "material_id": disabled_material_id},
+        )
+        unknown_change = client.put(
+            f"/api/orders/items/{item_id}",
+            json={**edit_payload, "material_id": unknown_material_id},
+        )
+
+    assert unchanged.status_code == 200, unchanged.text
+    assert disabled_change.status_code == 400
+    assert "已停用" in disabled_change.text
+    assert unknown_change.status_code == 400
+    assert "尚未建档" in unknown_change.text
+
+
 def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
     order_api_app,
 ) -> None:

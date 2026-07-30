@@ -52,8 +52,10 @@ def supplier_workbook_app(tmp_path):
     from app.core.security import hash_password
     from app.models import Base
     from app.models.material import Material
+    from app.models.supplier import Supplier, SupplierAlias
     from app.models.supplier_paper_code import SupplierPaperCode
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "supplier-material-workbook.sqlite3")
     Base.metadata.create_all(engine)
@@ -74,6 +76,66 @@ def supplier_workbook_app(tmp_path):
                     role="sales",
                     real_name="销售",
                     must_change_password=False,
+                ),
+                Supplier(
+                    standard_name="苏州嘉林亿",
+                    normalized_name=normalize_supplier_identity("苏州嘉林亿"),
+                    display_name="嘉林亿",
+                    business_code="JLY",
+                    normalized_business_code="JLY",
+                    sort_order=10,
+                    is_active=True,
+                    version=1,
+                    aliases=[
+                        SupplierAlias(
+                            alias_name="嘉林亿",
+                            normalized_alias=normalize_supplier_identity("嘉林亿"),
+                        ),
+                        SupplierAlias(
+                            alias_name="苏州嘉林亿纸业有限公司",
+                            normalized_alias=normalize_supplier_identity(
+                                "苏州嘉林亿纸业有限公司"
+                            ),
+                        ),
+                    ],
+                ),
+                Supplier(
+                    standard_name="昆山鸣朋",
+                    normalized_name=normalize_supplier_identity("昆山鸣朋"),
+                    display_name="鸣朋",
+                    business_code="MP",
+                    normalized_business_code="MP",
+                    sort_order=20,
+                    is_active=True,
+                    version=1,
+                    aliases=[
+                        SupplierAlias(
+                            alias_name="鸣朋",
+                            normalized_alias=normalize_supplier_identity("鸣朋"),
+                        ),
+                        SupplierAlias(
+                            alias_name="昆山鸣朋纸业有限公司",
+                            normalized_alias=normalize_supplier_identity(
+                                "昆山鸣朋纸业有限公司"
+                            ),
+                        ),
+                    ],
+                ),
+                Supplier(
+                    standard_name="苏州佳丰",
+                    normalized_name=normalize_supplier_identity("苏州佳丰"),
+                    display_name="佳丰",
+                    business_code="JF",
+                    normalized_business_code="JF",
+                    sort_order=90,
+                    is_active=False,
+                    version=1,
+                    aliases=[
+                        SupplierAlias(
+                            alias_name="佳丰",
+                            normalized_alias=normalize_supplier_identity("佳丰"),
+                        )
+                    ],
                 ),
                 SupplierPaperCode(
                     supplier_name="苏州嘉林亿",
@@ -137,12 +199,14 @@ def _upload(client: TestClient, content: bytes):
     )
 
 
-def test_supplier_aliases_normalize_but_unknown_supplier_is_preserved() -> None:
+def test_supplier_input_cleaning_does_not_hardcode_aliases() -> None:
     from app.services.supplier_material_workbook import normalize_supplier_name
 
-    assert normalize_supplier_name("鸣朋") == "昆山鸣朋"
-    assert normalize_supplier_name("昆山鸣朋纸业有限公司") == "昆山鸣朋"
-    assert normalize_supplier_name("嘉林亿") == "苏州嘉林亿"
+    assert normalize_supplier_name(" 鸣朋 ") == "鸣朋"
+    assert normalize_supplier_name("昆山鸣朋纸业有限公司") == (
+        "昆山鸣朋纸业有限公司"
+    )
+    assert normalize_supplier_name("嘉林亿") == "嘉林亿"
     assert normalize_supplier_name("未来纸板供应商") == "未来纸板供应商"
 
 
@@ -188,7 +252,7 @@ def test_template_exports_blank_two_sheet_entry_form_and_is_admin_only(
             )
             assert workbook["基础纸种"].max_row == 1
             assert workbook["组合材质"].max_row == 1
-            assert "鸣朋、嘉林亿" in workbook["基础纸种"]["B1"].comment.text
+            assert "主档中维护的别名" in workbook["基础纸种"]["B1"].comment.text
             assert "元/平方米" in workbook["组合材质"]["F1"].comment.text
         finally:
             workbook.close()
@@ -444,6 +508,471 @@ def test_formula_workbook_and_non_admin_are_rejected(
         assert rejected.json()["detail"]["code"] == (
             "SUPPLIER_MATERIAL_UPLOAD_INVALID"
         )
+
+
+def test_unknown_and_inactive_suppliers_are_rejected_before_preview_token(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    from app.models.material import Material
+    from app.models.supplier_paper_code import SupplierPaperCode
+
+    factory = supplier_workbook_app.state.session_factory
+    unknown = _workbook_bytes(
+        paper_rows=[
+            (
+                None,
+                "未来纸板供应商",
+                "X",
+                "测试纸",
+                120,
+                None,
+                None,
+                None,
+                "是",
+            )
+        ]
+    )
+    inactive = _workbook_bytes(
+        paper_rows=[
+            (
+                None,
+                "佳丰",
+                "Y",
+                "停用供应商测试纸",
+                120,
+                None,
+                None,
+                None,
+                "是",
+            )
+        ]
+    )
+
+    with TestClient(supplier_workbook_app) as client:
+        _login(client, "workbook-admin")
+        unknown_response = _upload(client, unknown)
+        assert unknown_response.status_code == 200
+        unknown_body = unknown_response.json()
+        assert unknown_body["valid"] is False
+        assert "preview_token" not in unknown_body
+        assert any(
+            "尚未建档" in error["message"]
+            for error in unknown_body["errors"]
+        )
+
+        inactive_response = _upload(client, inactive)
+        assert inactive_response.status_code == 200
+        inactive_body = inactive_response.json()
+        assert inactive_body["valid"] is False
+        assert "preview_token" not in inactive_body
+        assert any(
+            "已停用" in error["message"]
+            for error in inactive_body["errors"]
+        )
+
+    with factory() as db:
+        assert db.scalar(
+            select(SupplierPaperCode).where(
+                SupplierPaperCode.code_char.in_(["X", "Y"])
+            )
+        ) is None
+        assert db.scalar(
+            select(Material).where(Material.code.in_(["X", "Y"]))
+        ) is None
+
+
+def test_enabled_dynamic_alias_resolves_to_supplier_standard_name(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    content = _workbook_bytes(
+        paper_rows=[
+            (
+                None,
+                "苏州嘉林亿纸业有限公司",
+                "6",
+                "高强瓦纸6",
+                130,
+                None,
+                None,
+                None,
+                "是",
+            )
+        ]
+    )
+
+    with TestClient(supplier_workbook_app) as client:
+        _login(client, "workbook-admin")
+        response = _upload(client, content)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["valid"] is True
+        assert body["paper_codes"][0]["supplier_name"] == "苏州嘉林亿"
+
+
+def test_existing_historical_material_keeps_inactive_or_unknown_supplier(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    from app.models.material import Material
+    from app.models.supplier_paper_code import SupplierPaperCode
+
+    factory = supplier_workbook_app.state.session_factory
+    with factory() as db:
+        db.add_all(
+            [
+                SupplierPaperCode(
+                    supplier_name="苏州佳丰",
+                    code_char="J",
+                    paper_name="佳丰面纸",
+                    gram_weight=120,
+                    is_active=True,
+                ),
+                SupplierPaperCode(
+                    supplier_name="苏州佳丰",
+                    code_char="4",
+                    paper_name="佳丰瓦纸",
+                    gram_weight=100,
+                    is_active=True,
+                ),
+                SupplierPaperCode(
+                    supplier_name="历史未建档供应商",
+                    code_char="U",
+                    paper_name="历史面纸",
+                    gram_weight=130,
+                    is_active=True,
+                ),
+                SupplierPaperCode(
+                    supplier_name="历史未建档供应商",
+                    code_char="5",
+                    paper_name="历史瓦纸",
+                    gram_weight=105,
+                    is_active=True,
+                ),
+                Material(
+                    code="J4J",
+                    supplier_name="苏州佳丰",
+                    layer_count=3,
+                    quote_price=Decimal("1.1000"),
+                    price_unit="元/㎡",
+                    is_active=True,
+                    version=1,
+                ),
+                Material(
+                    code="U5U",
+                    supplier_name="历史未建档供应商",
+                    layer_count=3,
+                    quote_price=Decimal("1.3000"),
+                    price_unit="元/㎡",
+                    is_active=True,
+                    version=1,
+                ),
+            ]
+        )
+        db.commit()
+        jiafeng = db.scalar(select(Material).where(Material.code == "J4J"))
+        unknown = db.scalar(select(Material).where(Material.code == "U5U"))
+        rows = [
+            (
+                jiafeng.id,
+                jiafeng.version,
+                "佳丰",
+                "J4J",
+                3,
+                1.1,
+                "2026-07-30",
+                "元/㎡",
+                "仅更新历史备注",
+                "是",
+            ),
+            (
+                unknown.id,
+                unknown.version,
+                "历史未建档供应商",
+                "U5U",
+                3,
+                1.3,
+                "2026-07-30",
+                "元/㎡",
+                "未建档历史备注",
+                "是",
+            ),
+        ]
+
+    with TestClient(supplier_workbook_app) as client:
+        _login(client, "workbook-admin")
+        preview = _upload(client, _workbook_bytes(material_rows=rows))
+        assert preview.status_code == 200
+        body = preview.json()
+        assert body["valid"] is True
+        assert body["summary"]["material_update"] == 2
+        applied = client.post(
+            "/api/master/materials/import/apply",
+            json={"preview_token": body["preview_token"]},
+        )
+        assert applied.status_code == 200
+        assert applied.json()["material_updated"] == 2
+
+    with factory() as db:
+        jiafeng = db.scalar(select(Material).where(Material.code == "J4J"))
+        unknown = db.scalar(select(Material).where(Material.code == "U5U"))
+        assert jiafeng.supplier_name == "苏州佳丰"
+        assert jiafeng.remarks == "仅更新历史备注"
+        assert jiafeng.version == 2
+        assert unknown.supplier_name == "历史未建档供应商"
+        assert unknown.remarks == "未建档历史备注"
+        assert unknown.version == 2
+
+
+def test_existing_historical_paper_code_can_be_maintained_only_by_system_id(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    from app.models.supplier_paper_code import SupplierPaperCode
+
+    factory = supplier_workbook_app.state.session_factory
+    with factory() as db:
+        inactive = SupplierPaperCode(
+            supplier_name="苏州佳丰",
+            code_char="J",
+            paper_name="佳丰历史纸",
+            gram_weight=120,
+            remark="旧备注",
+            is_active=True,
+        )
+        unknown = SupplierPaperCode(
+            supplier_name="历史未建档供应商",
+            code_char="U",
+            paper_name="未建档历史纸",
+            gram_weight=130,
+            remark="旧备注",
+            is_active=True,
+        )
+        db.add_all([inactive, unknown])
+        db.commit()
+        rows = [
+            (
+                inactive.id,
+                "苏州佳丰",
+                "J",
+                "佳丰历史纸",
+                120,
+                None,
+                None,
+                "新备注",
+                "是",
+            ),
+            (
+                unknown.id,
+                "历史未建档供应商",
+                "U",
+                "未建档历史纸",
+                130,
+                None,
+                None,
+                "未建档新备注",
+                "是",
+            ),
+        ]
+
+    with TestClient(supplier_workbook_app) as client:
+        _login(client, "workbook-admin")
+        preview = _upload(client, _workbook_bytes(paper_rows=rows))
+        assert preview.status_code == 200
+        body = preview.json()
+        assert body["valid"] is True
+        assert body["summary"]["paper_update"] == 2
+        applied = client.post(
+            "/api/master/materials/import/apply",
+            json={"preview_token": body["preview_token"]},
+        )
+        assert applied.status_code == 200
+        assert applied.json()["paper_updated"] == 2
+
+    with factory() as db:
+        inactive = db.scalar(
+            select(SupplierPaperCode).where(
+                SupplierPaperCode.supplier_name == "苏州佳丰",
+                SupplierPaperCode.code_char == "J",
+            )
+        )
+        unknown = db.scalar(
+            select(SupplierPaperCode).where(
+                SupplierPaperCode.supplier_name == "历史未建档供应商",
+                SupplierPaperCode.code_char == "U",
+            )
+        )
+        assert inactive.remark == "新备注"
+        assert unknown.remark == "未建档新备注"
+
+
+def test_historical_paper_code_cannot_be_created_or_change_supplier(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    from app.models.supplier_paper_code import SupplierPaperCode
+
+    factory = supplier_workbook_app.state.session_factory
+    with factory() as db:
+        historical = SupplierPaperCode(
+            supplier_name="苏州佳丰",
+            code_char="J",
+            paper_name="佳丰历史纸",
+            gram_weight=120,
+            is_active=True,
+        )
+        db.add(historical)
+        db.commit()
+        historical_id = historical.id
+
+    cases = [
+        (
+            historical_id,
+            "历史未建档供应商",
+            "J",
+            "供应商变更必须拒绝",
+        ),
+        (
+            None,
+            "苏州佳丰",
+            "N",
+            "停用供应商新增必须拒绝",
+        ),
+    ]
+    for system_id, supplier_name, code_char, paper_name in cases:
+        content = _workbook_bytes(
+            paper_rows=[
+                (
+                    system_id,
+                    supplier_name,
+                    code_char,
+                    paper_name,
+                    120,
+                    None,
+                    None,
+                    None,
+                    "是",
+                )
+            ]
+        )
+        with TestClient(supplier_workbook_app) as client:
+            _login(client, "workbook-admin")
+            response = _upload(client, content)
+            assert response.status_code == 200
+            body = response.json()
+            assert body["valid"] is False
+            assert "preview_token" not in body
+
+    with factory() as db:
+        historical = db.get(SupplierPaperCode, historical_id)
+        assert historical.supplier_name == "苏州佳丰"
+        assert historical.paper_name == "佳丰历史纸"
+        assert db.scalar(
+            select(SupplierPaperCode).where(
+                SupplierPaperCode.supplier_name == "苏州佳丰",
+                SupplierPaperCode.code_char == "N",
+            )
+        ) is None
+
+
+def test_historical_material_cannot_change_to_unknown_or_inactive_supplier(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    from app.models.material import Material
+
+    factory = supplier_workbook_app.state.session_factory
+    with factory() as db:
+        material = db.scalar(select(Material).where(Material.code == "C4C"))
+        material_id = material.id
+        version = material.version
+
+    for supplier_name in ("佳丰", "未来纸板供应商"):
+        content = _workbook_bytes(
+            material_rows=[
+                (
+                    material_id,
+                    version,
+                    supplier_name,
+                    "C4C",
+                    3,
+                    1.2,
+                    "2026-07-30",
+                    "元/㎡",
+                    "禁止改供应商",
+                    "是",
+                )
+            ]
+        )
+        with TestClient(supplier_workbook_app) as client:
+            _login(client, "workbook-admin")
+            response = _upload(client, content)
+            assert response.status_code == 200
+            body = response.json()
+            assert body["valid"] is False
+            assert "preview_token" not in body
+            assert any(
+                marker in error["message"]
+                for error in body["errors"]
+                for marker in ("已停用", "尚未建档")
+            )
+
+    with factory() as db:
+        material = db.get(Material, material_id)
+        assert material.supplier_name == "苏州嘉林亿"
+        assert material.version == version
+
+
+def test_supplier_change_after_preview_blocks_apply_before_any_write(
+    supplier_workbook_app: FastAPI,
+) -> None:
+    from app.models.material import Material
+    from app.models.supplier import Supplier
+    from app.models.supplier_paper_code import SupplierPaperCode
+
+    factory = supplier_workbook_app.state.session_factory
+    content = _workbook_bytes(
+        paper_rows=[
+            (
+                None,
+                "鸣朋",
+                "M",
+                "鸣朋测试纸",
+                110,
+                None,
+                None,
+                None,
+                "是",
+            )
+        ]
+    )
+
+    with TestClient(supplier_workbook_app) as client:
+        _login(client, "workbook-admin")
+        preview = _upload(client, content)
+        assert preview.status_code == 200
+        token = preview.json()["preview_token"]
+
+        with factory() as db:
+            supplier = db.scalar(
+                select(Supplier).where(Supplier.standard_name == "昆山鸣朋")
+            )
+            supplier.is_active = False
+            supplier.version += 1
+            db.commit()
+
+        applied = client.post(
+            "/api/master/materials/import/apply",
+            json={"preview_token": token},
+        )
+        assert applied.status_code == 409
+        assert applied.json()["detail"]["code"] == (
+            "SUPPLIER_MATERIAL_SUPPLIER_STALE"
+        )
+
+    with factory() as db:
+        assert db.scalar(
+            select(SupplierPaperCode).where(
+                SupplierPaperCode.supplier_name == "昆山鸣朋",
+                SupplierPaperCode.code_char == "M",
+            )
+        ) is None
+        assert db.scalar(select(Material).where(Material.code == "M")) is None
 
 
 def test_stale_material_version_blocks_entire_apply_before_paper_write(

@@ -66,10 +66,12 @@ def test_corrugated_structure_prices_and_save(tmp_path):
     from app.core.security import hash_password
     from app.models import Base
     from app.models.material import Material
+    from app.models.supplier import Supplier
     from app.models.supplier_paper_code import SupplierPaperCode
     from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
     from app.models.user import User
     from app.services.corrugated_material_pricing import estimate_material_price
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "rules.sqlite3")
     Base.metadata.create_all(engine)
@@ -82,6 +84,16 @@ def test_corrugated_structure_prices_and_save(tmp_path):
                 role="admin",
                 real_name="规则管理员",
                 must_change_password=False,
+            )
+        )
+        db.add(
+            Supplier(
+                standard_name=SUPPLIER,
+                normalized_name=normalize_supplier_identity(SUPPLIER),
+                display_name="嘉林亿",
+                sort_order=10,
+                is_active=True,
+                version=1,
             )
         )
         for code, weight, name in (

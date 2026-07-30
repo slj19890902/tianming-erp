@@ -93,6 +93,11 @@ from app.services.stock_replenishment import (
     theoretical_requisition_quantity,
     validate_stock_policy,
 )
+from app.services.supplier_master import (
+    SupplierLookupError,
+    normalize_supplier_identity,
+    resolve_supplier,
+)
 from app.services.flute_mapping import (
     normalize_flute_type,
     seven_layer_code_error,
@@ -143,6 +148,38 @@ can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
+
+
+def _require_active_supplier(
+    db: Session,
+    supplier_name: object,
+    *,
+    detail_prefix: str = "",
+) -> str:
+    try:
+        supplier = resolve_supplier(db, supplier_name, require_active=True)
+    except SupplierLookupError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{detail_prefix}{error.message}",
+        ) from error
+    return supplier.standard_name
+
+
+def _require_active_material_supplier(
+    db: Session,
+    material: Material | None,
+    *,
+    detail_prefix: str = "",
+) -> None:
+    if material is not None and (material.supplier_name or "").strip():
+        _require_active_supplier(
+            db,
+            material.supplier_name,
+            detail_prefix=detail_prefix,
+        )
+
+
 CUTTING_MODE_FACTORS = {
     "一开一": 1,
     "一开二": 2,
@@ -3387,9 +3424,11 @@ def _create_supplier_order_for_pending_entries(
     entries: list[dict],
     user: User,
 ) -> SupplierRequisitionOrder:
+    supplier_name = _require_active_supplier(db, supplier_name)
     first = entries[0]
     first_item: OrderItem = first["order_item"]
     material = db.get(Material, first_item.material_id) if first_item.material_id else None
+    _require_active_material_supplier(db, material)
     layer_count = material.layer_count if material else first_item.layer_count
     flute_type, flute_error = _business_flute_error(
         layer_count,
@@ -4615,6 +4654,7 @@ def create_material_candidate(
         raise HTTPException(status_code=404, detail="客户不存在或已停用")
     require_customer_access(customer.id, user, db)
     material = _candidate_material_or_404(db, payload.material_id)
+    _require_active_material_supplier(db, material)
     original_code = payload.original_material_code.strip()
     supplier_name = (material.supplier_name or "未设置供应商").strip()
     candidate = CustomerMaterialCandidate(
@@ -4680,6 +4720,8 @@ def update_material_candidate(
         )
     if "material_id" in payload.model_fields_set and payload.material_id is not None:
         material = _candidate_material_or_404(db, payload.material_id)
+        if material.id != candidate.actual_material_id:
+            _require_active_material_supplier(db, material)
         supplier_name = (material.supplier_name or "未设置供应商").strip()
         candidate.actual_material_id = material.id
         candidate.actual_material_code_snapshot = material.code
@@ -4741,6 +4783,8 @@ def update_pending_material(
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=404, detail="所选材质不存在或已停用")
+    if material.id != item.material_id:
+        _require_active_material_supplier(db, material)
     candidate: CustomerMaterialCandidate | None = None
     original_code = (
         item.snapshot_original_material_code or item.snapshot_material or ""
@@ -5015,10 +5059,13 @@ def create_batch(
 ) -> dict:
     requisition_date = beijing_today()
     try:
+        supplier_name = (payload.supplier_name or "").strip()
+        if supplier_name:
+            supplier_name = _require_active_supplier(db, supplier_name)
         batch = Requisition(
             requisition_number=_next_number(db, requisition_date),
             requisition_date=requisition_date,
-            supplier_name=(payload.supplier_name or "").strip() or None,
+            supplier_name=supplier_name or None,
             status="已报料",
             created_by=user.id,
         )
@@ -5039,6 +5086,22 @@ def create_batch(
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
             item, product, order = row
+            selected_material = (
+                db.get(Material, item.material_id)
+                if item.material_id is not None
+                else None
+            )
+            _require_active_material_supplier(
+                db,
+                selected_material,
+                detail_prefix=f"订单明细 {item.id}：",
+            )
+            if selected_material is None and (item.snapshot_supplier_name or "").strip():
+                _require_active_supplier(
+                    db,
+                    item.snapshot_supplier_name,
+                    detail_prefix=f"订单明细 {item.id}：",
+                )
             _require_order_item_customer_access(db, item, user)
             _require_late_finished_inventory_resolved(
                 db,
@@ -5165,6 +5228,14 @@ def create_batch(
                         raise HTTPException(
                             status_code=400,
                             detail="所选复合产品组件不属于当前订单明细",
+                        )
+                    if (snapshot.snapshot_component_supplier_name or "").strip():
+                        _require_active_supplier(
+                            db,
+                            snapshot.snapshot_component_supplier_name,
+                            detail_prefix=(
+                                f"组件“{snapshot.snapshot_component_product_name}”："
+                            ),
                         )
                     if _bom_snapshot_has_active_requisition(db, snapshot.id):
                         raise HTTPException(
@@ -6939,13 +7010,18 @@ def create_stock_replenishment_order(
                 "一张库存补库单只能包含同一供应商的材质，请分开保存。"
             )
         derived_supplier = next(iter(material_suppliers), None)
+        for supplier_name in material_suppliers:
+            _require_active_supplier(db, supplier_name)
+        payload_supplier = (payload.supplier_name or "").strip()
+        if payload_supplier:
+            payload_supplier = _require_active_supplier(db, payload_supplier)
         order = StockReplenishmentOrder(
             order_number=(
                 stock_warning_order_number
                 or next_replenishment_order_number()
             ),
             supplier_name=derived_supplier
-            or (payload.supplier_name or "").strip()
+            or payload_supplier
             or None,
             customer_id=payload.customer_id,
             source_type=payload.source_type,
@@ -6967,6 +7043,9 @@ def create_stock_replenishment_order(
         )
         assert order is not None
         return replenishment_order_dict(order)
+    except HTTPException:
+        db.rollback()
+        raise
     except (StockReplenishmentError, WarehouseInventoryError) as error:
         db.rollback()
         raise HTTPException(
@@ -7449,12 +7528,15 @@ def create_merge_group(
     reservation_map = active_finished_reservations_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
+    supplier_name = (payload.supplier_name or "").strip()
+    if supplier_name:
+        supplier_name = _require_active_supplier(db, supplier_name)
     requisition_date = beijing_today()
     try:
         group = Requisition(
             requisition_number=_next_number(db, requisition_date),
             requisition_date=requisition_date,
-            supplier_name=(payload.supplier_name or "").strip() or None,
+            supplier_name=supplier_name or None,
             status="merged_pending",
             created_by=user.id,
         )
@@ -7528,7 +7610,16 @@ def update_merge_group(
         raise HTTPException(status_code=409, detail="该合并组已生成供应商报料单，不能修改")
     try:
         if payload.supplier_name is not None:
-            group.supplier_name = payload.supplier_name.strip() or None
+            requested_supplier = payload.supplier_name.strip()
+            current_supplier = (group.supplier_name or "").strip()
+            if normalize_supplier_identity(
+                requested_supplier
+            ) != normalize_supplier_identity(current_supplier):
+                group.supplier_name = (
+                    _require_active_supplier(db, requested_supplier)
+                    if requested_supplier
+                    else None
+                )
         updates = {
             key: value
             for key, value in {
@@ -7589,6 +7680,7 @@ def create_supplier_order_from_merge_group(
     supplier_name = (group.supplier_name or "").strip()
     if not supplier_name:
         raise HTTPException(status_code=400, detail="请先为合并组选择供应商")
+    supplier_name = _require_active_supplier(db, supplier_name)
     rows = _merge_group_rows(db, group.id)
     if not rows:
         raise HTTPException(status_code=400, detail="合并组没有来源明细")
@@ -7641,6 +7733,7 @@ def create_supplier_order_from_merge_group(
 
     first_req_item, first_order_item, *_ = current_rows[0]
     material = db.get(Material, first_order_item.material_id) if first_order_item.material_id else None
+    _require_active_material_supplier(db, material)
     layer_count = material.layer_count if material else first_order_item.layer_count
     flute_type, flute_error = _business_flute_error(
         layer_count,
@@ -8771,7 +8864,9 @@ def create_supplier_order(
     if not payload.members:
         raise HTTPException(status_code=400, detail="至少需要一条明细")
 
+    supplier_name = _require_active_supplier(db, payload.supplier_name)
     material = db.get(Material, payload.material_id) if payload.material_id else None
+    _require_active_material_supplier(db, material)
     effective_layer_count = (
         material.layer_count
         if material is not None
@@ -8890,7 +8985,7 @@ def create_supplier_order(
 
     order = SupplierRequisitionOrder(
         order_number=order_number,
-        supplier_name=payload.supplier_name,
+        supplier_name=supplier_name,
         material_id=payload.material_id,
         layer_count=effective_layer_count,
         flute_type=normalized_flute,

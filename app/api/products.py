@@ -65,6 +65,7 @@ from app.services.product_lifecycle import (
 )
 from app.services.report_crease import crease_width_error
 from app.services.product_readiness import product_readiness
+from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.master_data_versioning import (
     apply_versioned_update,
     normalize_json_value,
@@ -755,11 +756,29 @@ def _validate_references(
     customer_id: int,
     material_id: int | None,
     mold_tool_id: int | None,
+    historical_material_id: int | None = None,
 ) -> None:
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
-    if material_id is not None and db.get(Material, material_id) is None:
-        raise HTTPException(status_code=400, detail="材质不存在")
+    if material_id is not None:
+        material = db.get(Material, material_id)
+        if material is None:
+            raise HTTPException(status_code=400, detail="材质不存在")
+        # Editing an existing common box must stay possible when its historical
+        # material link is unchanged.  A new link, however, is new business and
+        # may only use a currently active supplier.
+        if (
+            material_id != historical_material_id
+            and (material.supplier_name or "").strip()
+        ):
+            try:
+                resolve_supplier(
+                    db,
+                    material.supplier_name,
+                    require_active=True,
+                )
+            except SupplierLookupError as error:
+                raise HTTPException(status_code=400, detail=error.message) from error
     if mold_tool_id is not None:
         mold_tool = db.get(MoldTool, mold_tool_id)
         if mold_tool is None:
@@ -1264,6 +1283,7 @@ def update_product(
         customer_id=payload.customer_id,
         material_id=payload.material_id,
         mold_tool_id=payload.mold_tool_id,
+        historical_material_id=product.material_id,
     )
     _validate_product_material_flute(db, payload)
     _validate_changed_product_crease_widths(payload, product)
@@ -1534,6 +1554,19 @@ def sync_product_fields(
     )
     if selected_material_id is not None and selected_material is None:
         raise HTTPException(status_code=400, detail="材质不存在")
+    if (
+        selected_material is not None
+        and selected_material_id != product.material_id
+        and (selected_material.supplier_name or "").strip()
+    ):
+        try:
+            resolve_supplier(
+                db,
+                selected_material.supplier_name,
+                require_active=True,
+            )
+        except SupplierLookupError as error:
+            raise HTTPException(status_code=400, detail=error.message) from error
     if (
         selected_material is not None
         and "layer_count" in fields

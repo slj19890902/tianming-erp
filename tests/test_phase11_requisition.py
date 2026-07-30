@@ -12,7 +12,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -29,7 +29,9 @@ def requisition_app(tmp_path: Path):
     from app.models.customer import Customer
     from app.models.order import Order, OrderItem
     from app.models.product import Product
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "requisition.sqlite3")
     Base.metadata.create_all(engine)
@@ -54,6 +56,28 @@ def requisition_app(tmp_path: Path):
             credit_limit=Decimal("100000"),
         )
         session.add_all([*users, customer])
+        for index, supplier_name in enumerate(
+            (
+                "苏州纸板供应商",
+                "更新后的供应商",
+                "昆山鸣明",
+                "嘉林亿",
+                "鸣朋",
+                "苏州嘉林亿",
+                "N005测试供应商",
+            ),
+            start=1,
+        ):
+            session.add(
+                Supplier(
+                    standard_name=supplier_name,
+                    normalized_name=normalize_supplier_identity(supplier_name),
+                    display_name=supplier_name,
+                    sort_order=index * 10,
+                    is_active=True,
+                    version=1,
+                )
+            )
         session.flush()
         sales = next(user for user in users if user.role == "sales")
         session.add_all(
@@ -145,6 +169,248 @@ def _batch_payload() -> dict:
             }
         ],
     }
+
+
+def test_requisition_batch_rejects_disabled_and_unknown_payload_supplier(
+    requisition_app,
+) -> None:
+    from app.models.requisition import Requisition
+    from app.models.supplier import Supplier, SupplierAlias
+    from app.services.supplier_master import normalize_supplier_identity
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        supplier = Supplier(
+            standard_name="苏州佳丰",
+            normalized_name=normalize_supplier_identity("苏州佳丰"),
+            display_name="佳丰",
+            sort_order=900,
+            is_active=False,
+            version=1,
+        )
+        session.add(supplier)
+        session.flush()
+        session.add(
+            SupplierAlias(
+                supplier_id=supplier.id,
+                alias_name="佳丰",
+                normalized_alias=normalize_supplier_identity("佳丰"),
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        disabled_payload = _batch_payload()
+        disabled_payload["supplier_name"] = "佳丰"
+        disabled = client.post(
+            "/api/requisition/batches",
+            json=disabled_payload,
+        )
+        unknown_payload = _batch_payload()
+        unknown_payload["supplier_name"] = "未建档纸板厂"
+        unknown = client.post(
+            "/api/requisition/batches",
+            json=unknown_payload,
+        )
+
+    assert disabled.status_code == 400
+    assert "已停用" in disabled.text
+    assert unknown.status_code == 400
+    assert "尚未建档" in unknown.text
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Requisition)) == 0
+
+
+def test_material_candidate_and_pending_material_gate_only_actual_changes(
+    requisition_app,
+) -> None:
+    from app.models.material import Material
+    from app.models.order import OrderItem
+    from app.models.supplier import Supplier, SupplierAlias
+    from app.services.supplier_master import normalize_supplier_identity
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        active_material = Material(
+            code="CANDIDATE-ACTIVE",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="嘉林亿",
+        )
+        disabled_supplier = Supplier(
+            standard_name="苏州佳丰",
+            normalized_name=normalize_supplier_identity("苏州佳丰"),
+            display_name="佳丰",
+            sort_order=900,
+            is_active=False,
+            version=1,
+        )
+        disabled_material = Material(
+            code="CANDIDATE-JF",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="佳丰",
+        )
+        unknown_material = Material(
+            code="CANDIDATE-UNKNOWN",
+            layer_count=3,
+            flute_type="E",
+            supplier_name="未建档纸板厂",
+        )
+        session.add_all(
+            [
+                active_material,
+                disabled_supplier,
+                disabled_material,
+                unknown_material,
+            ]
+        )
+        session.flush()
+        session.add(
+            SupplierAlias(
+                supplier_id=disabled_supplier.id,
+                alias_name="佳丰",
+                normalized_alias=normalize_supplier_identity("佳丰"),
+            )
+        )
+        session.commit()
+        active_material_id = active_material.id
+        disabled_material_id = disabled_material.id
+        unknown_material_id = unknown_material.id
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post(
+            "/api/requisition/material-candidates",
+            json={
+                "customer_id": 1,
+                "original_material_code": "客户原材质",
+                "material_id": active_material_id,
+            },
+        )
+        assert created.status_code == 201, created.text
+        candidate_id = created.json()["id"]
+
+        with session_factory() as session:
+            active_supplier = session.scalar(
+                select(Supplier).where(Supplier.standard_name == "嘉林亿")
+            )
+            assert active_supplier is not None
+            active_supplier.is_active = False
+            item = session.get(OrderItem, 1)
+            disabled_material = session.get(Material, disabled_material_id)
+            assert item is not None and disabled_material is not None
+            item.material_id = disabled_material.id
+            item.snapshot_material = disabled_material.code
+            item.snapshot_supplier_name = disabled_material.supplier_name
+            item.snapshot_weight = disabled_material.basis_weight_description
+            item.layer_count = disabled_material.layer_count
+            item.flute_type = disabled_material.flute_type
+            session.commit()
+
+        unchanged_candidate = client.put(
+            f"/api/requisition/material-candidates/{candidate_id}",
+            json={
+                "material_id": active_material_id,
+                "notes": "仅补历史备注",
+            },
+        )
+        disabled_candidate = client.put(
+            f"/api/requisition/material-candidates/{candidate_id}",
+            json={"material_id": disabled_material_id},
+        )
+        unknown_candidate = client.put(
+            f"/api/requisition/material-candidates/{candidate_id}",
+            json={"material_id": unknown_material_id},
+        )
+        unchanged_pending = client.put(
+            "/api/requisition/pending/1/material",
+            json={
+                "material_id": disabled_material_id,
+                "layer_count": 3,
+                "flute_type": "E",
+            },
+        )
+        unknown_pending = client.put(
+            "/api/requisition/pending/1/material",
+            json={
+                "material_id": unknown_material_id,
+                "layer_count": 3,
+                "flute_type": "E",
+            },
+        )
+
+    assert unchanged_candidate.status_code == 200, unchanged_candidate.text
+    assert disabled_candidate.status_code == 400
+    assert "已停用" in disabled_candidate.text
+    assert unknown_candidate.status_code == 400
+    assert "尚未建档" in unknown_candidate.text
+    assert unchanged_pending.status_code == 200, unchanged_pending.text
+    assert unknown_pending.status_code == 400
+    assert "尚未建档" in unknown_pending.text
+
+
+def test_merge_group_same_historical_supplier_allows_non_supplier_edit(
+    requisition_app,
+) -> None:
+    from app.models.supplier import Supplier, SupplierAlias
+    from app.services.supplier_master import normalize_supplier_identity
+
+    app, session_factory = requisition_app
+    second_id = _add_second_merge_candidate(session_factory)
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = _create_merge_group(client, [1, second_id])
+
+        with session_factory() as session:
+            current_supplier = session.scalar(
+                select(Supplier).where(
+                    Supplier.standard_name == "苏州纸板供应商"
+                )
+            )
+            assert current_supplier is not None
+            current_supplier.is_active = False
+            disabled_supplier = Supplier(
+                standard_name="苏州佳丰",
+                normalized_name=normalize_supplier_identity("苏州佳丰"),
+                display_name="佳丰",
+                sort_order=900,
+                is_active=False,
+                version=1,
+            )
+            session.add(disabled_supplier)
+            session.flush()
+            session.add(
+                SupplierAlias(
+                    supplier_id=disabled_supplier.id,
+                    alias_name="佳丰",
+                    normalized_alias=normalize_supplier_identity("佳丰"),
+                )
+            )
+            session.commit()
+
+        unchanged = client.put(
+            f"/api/requisition/merge-groups/{created['id']}",
+            json={
+                "supplier_name": "苏州纸板供应商",
+                "remark": "只改历史合并组备注",
+            },
+        )
+        disabled_change = client.put(
+            f"/api/requisition/merge-groups/{created['id']}",
+            json={"supplier_name": "佳丰"},
+        )
+        unknown_change = client.put(
+            f"/api/requisition/merge-groups/{created['id']}",
+            json={"supplier_name": "未建档纸板厂"},
+        )
+
+    assert unchanged.status_code == 200, unchanged.text
+    assert disabled_change.status_code == 400
+    assert "已停用" in disabled_change.text
+    assert unknown_change.status_code == 400
+    assert "尚未建档" in unknown_change.text
 
 
 def _add_pending_candidate(

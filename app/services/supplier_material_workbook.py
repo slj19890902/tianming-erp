@@ -23,6 +23,7 @@ from app.api.master_data_common import audit_master_change
 from app.models.material import Material
 from app.models.material_price_history import MaterialPriceHistory
 from app.models.supplier_paper_code import SupplierPaperCode
+from app.models.supplier import Supplier
 from app.models.user import User
 from app.services.inventory_onboarding_uploads import _preflight_xlsx_container
 from app.services.master_data_versioning import (
@@ -34,6 +35,11 @@ from app.services.secure_uploads import (
     EXCEL_POLICY,
     UploadValidationError,
     read_validated_upload,
+)
+from app.services.supplier_master import (
+    SupplierLookupError,
+    normalize_supplier_identity,
+    resolve_supplier,
 )
 
 
@@ -66,20 +72,6 @@ MAX_ROWS_PER_SHEET = 5_000
 PREVIEW_TTL_SECONDS = 5 * 60
 MAX_PREVIEWS = 64
 
-SUPPLIER_ALIASES = {
-    "鸣朋": "昆山鸣朋",
-    "昆山鸣朋": "昆山鸣朋",
-    "昆山鸣朋纸板": "昆山鸣朋",
-    "昆山鸣朋纸业有限公司": "昆山鸣朋",
-    "嘉林亿": "苏州嘉林亿",
-    "苏州嘉林亿": "苏州嘉林亿",
-    "苏州嘉林亿包装科技有限公司": "苏州嘉林亿",
-    "佳丰": "苏州佳丰",
-    "苏州佳丰": "苏州佳丰",
-    "苏州佳丰纸业有限公司": "苏州佳丰",
-}
-
-
 class SupplierMaterialWorkbookError(ValueError):
     def __init__(self, code: str, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
@@ -95,6 +87,7 @@ class _WorkbookPreview:
     source_sha256: str
     paper_items: tuple[dict[str, Any], ...]
     material_items: tuple[dict[str, Any], ...]
+    supplier_references: tuple[dict[str, Any], ...]
     summary: dict[str, int]
 
 
@@ -103,16 +96,8 @@ _PREVIEW_LOCK = RLock()
 
 
 def normalize_supplier_name(value: object) -> str:
-    name = str(value or "").strip()
-    if not name:
-        return ""
-    compact = re.sub(r"\s+", "", name)
-    if compact in SUPPLIER_ALIASES:
-        return SUPPLIER_ALIASES[compact]
-    for alias, canonical in SUPPLIER_ALIASES.items():
-        if alias in compact:
-            return canonical
-    return name
+    """Only clean workbook input; canonicalization belongs to SupplierAlias."""
+    return str(value or "").strip()
 
 
 def _actor(user: User) -> str:
@@ -192,7 +177,7 @@ def build_supplier_material_workbook(db: Session) -> bytes:
     paper_sheet.append(PAPER_HEADERS)
     paper_notes = (
         "新增时留空；修改已有资料时也可留空，系统按供应商+基础代码匹配。",
-        "填写供应商标准名；鸣朋、嘉林亿可直接填写简称。",
+        "填写已启用的供应商标准名或主档中维护的别名。",
         "单个字母或数字，例如 C、4、6。",
         "该基础代码对应的纸种名称。",
         "只填数字，例如 130。",
@@ -210,7 +195,7 @@ def build_supplier_material_workbook(db: Session) -> bytes:
     material_notes = (
         "新增时留空；修改已有资料时也可留空，系统按组合代码匹配。",
         "通常留空；使用旧导出表修改时可保留版本号。",
-        "填写供应商标准名；鸣朋、嘉林亿可直接填写简称。",
+        "填写已启用的供应商标准名或主档中维护的别名。",
         "填写3位、5位或7位组合代码；代码中的基础字符必须已存在或在本文件基础纸种表同时新增。",
         "只填3、5或7。",
         "当前平方报价，单位元/平方米。",
@@ -484,18 +469,130 @@ def _resolve_plan(
     paper_rows: list[dict],
     material_rows: list[dict],
     errors: list[dict],
-) -> tuple[list[dict], list[dict], dict[str, int]]:
+) -> tuple[list[dict], list[dict], tuple[dict[str, Any], ...], dict[str, int]]:
     current_papers = list(db.scalars(select(SupplierPaperCode)).all())
     papers_by_id = {row.id: row for row in current_papers}
     papers_by_key = {
-        (row.supplier_name, row.code_char.upper()): row for row in current_papers
+        (row.supplier_name, row.code_char.upper()): row
+        for row in current_papers
     }
+    current_materials = list(db.scalars(select(Material)).all())
+    materials_by_id = {row.id: row for row in current_materials}
+    materials_by_code = {row.code.upper(): row for row in current_materials}
+
+    def existing_material_for(raw: dict[str, Any]) -> Material | None:
+        if raw["system_id"] is not None:
+            return materials_by_id.get(raw["system_id"])
+        return materials_by_code.get(raw["code"])
+
+    def historical_supplier_is_unchanged(
+        raw: dict[str, Any],
+        existing: Material | None,
+    ) -> bool:
+        if existing is None or not existing.supplier_name:
+            return False
+        if normalize_supplier_identity(raw["supplier_name"]) == (
+            normalize_supplier_identity(existing.supplier_name)
+        ):
+            return True
+        try:
+            requested = resolve_supplier(
+                db,
+                raw["supplier_name"],
+                require_active=False,
+            )
+            stored = resolve_supplier(
+                db,
+                existing.supplier_name,
+                require_active=False,
+            )
+        except SupplierLookupError:
+            return False
+        return requested.id == stored.id
+
+    def historical_paper_supplier_is_unchanged(
+        raw: dict[str, Any],
+    ) -> bool:
+        if raw["system_id"] is None:
+            return False
+        existing = papers_by_id.get(raw["system_id"])
+        if existing is None:
+            return False
+        return normalize_supplier_identity(raw["supplier_name"]) == (
+            normalize_supplier_identity(existing.supplier_name)
+        )
+
+    supplier_references: dict[int, dict[str, Any]] = {}
+    for sheet_name, rows in (
+        (PAPER_SHEET, paper_rows),
+        (MATERIAL_SHEET, material_rows),
+    ):
+        for raw in rows:
+            try:
+                supplier = resolve_supplier(
+                    db,
+                    raw["supplier_name"],
+                    require_active=True,
+                )
+            except SupplierLookupError as error:
+                if (
+                    sheet_name == PAPER_SHEET
+                    and historical_paper_supplier_is_unchanged(raw)
+                ):
+                    existing = papers_by_id[raw["system_id"]]
+                    raw["supplier_name"] = existing.supplier_name
+                    raw["_historical_supplier_unchanged"] = True
+                    continue
+                existing = (
+                    existing_material_for(raw)
+                    if sheet_name == MATERIAL_SHEET
+                    else None
+                )
+                if historical_supplier_is_unchanged(raw, existing):
+                    # Historical rows may keep an inactive or not-yet-mastered
+                    # supplier while other fields are maintained. This does not
+                    # authorize creating a row or changing its supplier.
+                    raw["supplier_name"] = existing.supplier_name
+                    raw["_historical_supplier_unchanged"] = True
+                    continue
+                raw["_supplier_invalid"] = True
+                _append_error(
+                    errors,
+                    sheet=sheet_name,
+                    row_number=raw["row_number"],
+                    message=error.message,
+                )
+                continue
+            raw["supplier_name"] = supplier.standard_name
+            raw["supplier_id"] = supplier.id
+            raw["supplier_version"] = supplier.version
+            supplier_references[supplier.id] = {
+                "id": supplier.id,
+                "standard_name": supplier.standard_name,
+                "version": supplier.version,
+            }
+
     paper_items: list[dict] = []
     resolved_paper_ids: set[int] = set()
+    planned_paper_keys: set[tuple[str, str]] = set()
 
     for raw in paper_rows:
+        if raw.get("_supplier_invalid"):
+            continue
         row_number = raw["row_number"]
         target_key = (raw["supplier_name"], raw["code_char"])
+        if target_key in planned_paper_keys:
+            _append_error(
+                errors,
+                sheet=PAPER_SHEET,
+                row_number=row_number,
+                message=(
+                    f"供应商 {target_key[0]} 的基础代码 {target_key[1]}"
+                    " 在表内重复"
+                ),
+            )
+            continue
+        planned_paper_keys.add(target_key)
         existing = (
             papers_by_id.get(raw["system_id"])
             if raw["system_id"] is not None
@@ -582,14 +679,13 @@ def _resolve_plan(
             "is_active": updates["is_active"],
         }
 
-    current_materials = list(db.scalars(select(Material)).all())
-    materials_by_id = {row.id: row for row in current_materials}
-    materials_by_code = {row.code.upper(): row for row in current_materials}
     material_items: list[dict] = []
     target_codes: dict[str, int | None] = {}
     resolved_material_ids: set[int] = set()
 
     for raw in material_rows:
+        if raw.get("_supplier_invalid"):
+            continue
         row_number = raw["row_number"]
         existing = (
             materials_by_id.get(raw["system_id"])
@@ -781,7 +877,15 @@ def _resolve_plan(
             not item["changed"] for item in material_items
         ),
     }
-    return paper_items, material_items, summary
+    return (
+        paper_items,
+        material_items,
+        tuple(
+            supplier_references[key]
+            for key in sorted(supplier_references)
+        ),
+        summary,
+    )
 
 
 async def preview_supplier_material_workbook(
@@ -798,7 +902,7 @@ async def preview_supplier_material_workbook(
             "SUPPLIER_MATERIAL_UPLOAD_INVALID",
             str(error),
         ) from error
-    paper_items, material_items, summary = _resolve_plan(
+    paper_items, material_items, supplier_references, summary = _resolve_plan(
         db,
         paper_rows=paper_rows,
         material_rows=material_rows,
@@ -838,6 +942,7 @@ async def preview_supplier_material_workbook(
         source_sha256=validated.sha256,
         paper_items=tuple(paper_items),
         material_items=tuple(material_items),
+        supplier_references=supplier_references,
         summary=summary,
     )
     result["preview_token"] = _store_preview(preview)
@@ -886,6 +991,23 @@ def apply_supplier_material_workbook(
 
     # Fail closed before the first write. This also guarantees that a stale
     # material version cannot leave earlier paper-code updates behind.
+    for reference in preview.supplier_references:
+        supplier = db.get(Supplier, reference["id"])
+        if (
+            supplier is None
+            or not supplier.is_active
+            or supplier.version != reference["version"]
+            or supplier.standard_name != reference["standard_name"]
+        ):
+            raise SupplierMaterialWorkbookError(
+                "SUPPLIER_MATERIAL_SUPPLIER_STALE",
+                (
+                    f"供应商“{reference['standard_name']}”已停用或资料已变化，"
+                    "请重新导入预览"
+                ),
+                status_code=409,
+            )
+
     for item in preview.paper_items:
         existing_id = item["existing_id"]
         updates = item["updates"]

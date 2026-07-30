@@ -149,6 +149,7 @@ from app.services.composite_bom_workflow import (
     is_composite_order_item,
 )
 from app.services.report_crease import crease_width_error, product_crease_width_error
+from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.product_drawings import (
     DrawingValidationError,
     remove_drawing_files,
@@ -4372,6 +4373,21 @@ def _create_order_impl(
                 )
             if (
                 selected_material is not None
+                and (selected_material.supplier_name or "").strip()
+            ):
+                try:
+                    resolve_supplier(
+                        db,
+                        selected_material.supplier_name,
+                        require_active=True,
+                    )
+                except SupplierLookupError as error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"第{index}条明细{error.message}",
+                    ) from error
+            if (
+                selected_material is not None
                 and item_payload.layer_count is not None
                 and item_payload.layer_count != selected_material.layer_count
             ):
@@ -5037,11 +5053,27 @@ def update_order_item(
     )
     if payload.sync_product and not item.product_id:
         raise HTTPException(status_code=409, detail="当前订单明细未关联常用箱")
-    material_changed = bool(
-        item.product_id
-        and payload.material_id is not None
+    material_reference_changed = bool(
+        payload.material_id is not None
         and payload.material_id != item.material_id
     )
+    if material_reference_changed:
+        requested_material = db.get(Material, payload.material_id)
+        if requested_material is None:
+            raise HTTPException(status_code=400, detail="订单明细材质不存在")
+        if (requested_material.supplier_name or "").strip():
+            try:
+                resolve_supplier(
+                    db,
+                    requested_material.supplier_name,
+                    require_active=True,
+                )
+            except SupplierLookupError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"订单明细{error.message}",
+                ) from error
+    material_changed = bool(item.product_id and material_reference_changed)
     effective_sync_product = bool(
         item.product_id and (payload.sync_product or material_changed)
     )
@@ -5164,6 +5196,22 @@ def update_order_item(
     )
     if selected_material_id is not None and selected_material is None:
         raise HTTPException(status_code=400, detail="订单明细材质不存在")
+    if (
+        selected_material is not None
+        and selected_material_id != item.material_id
+        and (selected_material.supplier_name or "").strip()
+    ):
+        try:
+            resolve_supplier(
+                db,
+                selected_material.supplier_name,
+                require_active=True,
+            )
+        except SupplierLookupError as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"订单明细{error.message}",
+            ) from error
     if (
         selected_material is not None
         and payload.layer_count is not None

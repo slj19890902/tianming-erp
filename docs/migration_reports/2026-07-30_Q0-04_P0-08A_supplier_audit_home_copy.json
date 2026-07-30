@@ -1,0 +1,1478 @@
+{
+  "audit": {
+    "task": "Q0-04 / P0-08A",
+    "collected_at_utc": "2026-07-30T03:21:23.540547+00:00",
+    "source_label": "2026-07-28工厂来源隔离副本再复制件；非2026-07-30工厂当前正式库；正式发布前须在工厂最新隔离副本重跑",
+    "context_notes": [
+      "项目根目录旧副本 revision=t68n0r1s7u50、大小=222134272、SHA-256=E3A97229B754A60FFA10FF13F56A679C7D27446E12196E4E2DF0E01C76B1F058，仅用于早期脚本冒烟，不作为本报告主证据。"
+    ],
+    "target_terms": [
+      "佳丰"
+    ],
+    "read_only": true,
+    "factory_currentness_confirmed": false,
+    "warning": "This evidence does not confirm the 2026-07-30 factory formal database. Rerun against a fresh isolated factory copy before migration, supplier deactivation or release."
+  },
+  "database": {
+    "path": "D:\\tm-uat\\q0-04-supplier-master-20260730\\carton_erp_before_q0_04.sqlite3",
+    "size": 219447296,
+    "mtime_utc": "2026-07-28T04:29:41.536685+00:00",
+    "sha256_before": "9C7A90F37D60521DE36723D9BA9B0C36EB7A47EE35C2F1E04AF93AC4016FEC42",
+    "sqlite_version": "3.49.1",
+    "uri_mode": "ro",
+    "query_only": true,
+    "write_authorizer_installed": true,
+    "sidecars_before": {
+      "-journal": {
+        "exists": false,
+        "size": null,
+        "mtime_ns": null
+      },
+      "-wal": {
+        "exists": false,
+        "size": null,
+        "mtime_ns": null
+      },
+      "-shm": {
+        "exists": false,
+        "size": null,
+        "mtime_ns": null
+      }
+    },
+    "sha256_after": "9C7A90F37D60521DE36723D9BA9B0C36EB7A47EE35C2F1E04AF93AC4016FEC42",
+    "sidecars_after": {
+      "-journal": {
+        "exists": false,
+        "size": null,
+        "mtime_ns": null
+      },
+      "-wal": {
+        "exists": false,
+        "size": null,
+        "mtime_ns": null
+      },
+      "-shm": {
+        "exists": false,
+        "size": null,
+        "mtime_ns": null
+      }
+    },
+    "unchanged_during_audit": true
+  },
+  "checks": {
+    "alembic_revisions": [
+      "cr74v8x9z63"
+    ],
+    "integrity_check": [
+      "ok"
+    ],
+    "integrity_check_truncated": false,
+    "foreign_key_error_count": 0,
+    "foreign_key_errors": [],
+    "foreign_key_errors_truncated": false
+  },
+  "schema": {
+    "table_count": 143,
+    "tables": [
+      "accounts_payable",
+      "accounts_receivable",
+      "alembic_version",
+      "attachments",
+      "bom_component_direct_delivery_allocations",
+      "box_type_rules",
+      "common_box_update_logs",
+      "company_config",
+      "company_file_index",
+      "contract_daily_sequences",
+      "customer_contract_items",
+      "customer_contracts",
+      "customer_material_candidates",
+      "customer_material_selection_history",
+      "customers",
+      "cutting_width_rules",
+      "database_migrations",
+      "deliveries",
+      "delivery_daily_sequences",
+      "delivery_inventory_allocations",
+      "delivery_items",
+      "delivery_notes",
+      "delivery_pick_task_items",
+      "delivery_pick_tasks",
+      "finance_invoices",
+      "finance_return_receipt_items",
+      "finance_return_receipts",
+      "finance_settlement_records",
+      "finance_statement_items",
+      "finance_statements",
+      "finished_goods_inventory_details",
+      "floor3_location_layouts",
+      "flute_types",
+      "historical_purchase_entries",
+      "historical_requisition_maps",
+      "incoming_receipt_items",
+      "incoming_receipts",
+      "inventory_location_movements",
+      "inventory_lots",
+      "inventory_movements",
+      "inventory_onboarding_batches",
+      "inventory_onboarding_lines",
+      "inventory_onboarding_postings",
+      "inventory_pallet_items",
+      "inventory_pallets",
+      "inventory_reservations",
+      "inventory_stock_policies",
+      "invoices",
+      "legacy_common_box_import_batches",
+      "legacy_common_box_import_candidates",
+      "legacy_ruida_customers",
+      "legacy_ruida_order_items",
+      "legacy_ruida_orders",
+      "master_data_object_versions",
+      "material_code_mapping_candidates",
+      "material_price_adjustment_batches",
+      "material_price_history",
+      "material_report_items",
+      "material_reports",
+      "material_requisition_items",
+      "material_requisitions",
+      "materials",
+      "migration_entity_map",
+      "migration_ruida_sales_item_map",
+      "migration_ruida_sales_order_map",
+      "mold_location_movements",
+      "mold_tools",
+      "operation_logs",
+      "order_daily_sequences",
+      "order_item_number_sequences",
+      "order_item_semi_requirements",
+      "order_items",
+      "order_status_events",
+      "order_warnings",
+      "orders",
+      "payable_payments",
+      "pdf_order_correction_logs",
+      "pdf_order_customer_templates",
+      "pdf_order_template_lifecycle_legacy_baseline",
+      "pdf_order_training_batches",
+      "pdf_order_training_samples",
+      "permissions",
+      "product_archives",
+      "product_bom_components",
+      "product_drawings",
+      "production_completion_batches",
+      "production_completions",
+      "production_stock_transfers",
+      "production_tasks",
+      "products",
+      "quotation_daily_sequences",
+      "quotation_items",
+      "quotation_orders",
+      "quotations",
+      "receivable_payments",
+      "requisition_daily_sequences",
+      "requisition_item_bom_sources",
+      "requisition_items",
+      "requisitions",
+      "return_confirmations",
+      "return_receipt_items",
+      "return_receipts",
+      "role_permissions",
+      "roles",
+      "sales_deliveries",
+      "sales_delivery_items",
+      "sales_order_item_bom_components",
+      "sales_order_item_bom_demand_adjustments",
+      "sales_order_items",
+      "sales_orders",
+      "score_line_rules",
+      "semi_finished_inventory_details",
+      "semi_finished_lot_allowed_products",
+      "semi_finished_match_rule_products",
+      "semi_finished_match_rules",
+      "statement_items",
+      "statement_monthly_sequences",
+      "statements",
+      "stock_replenishment_order_items",
+      "stock_replenishment_orders",
+      "stocktake_items",
+      "stocktake_orders",
+      "stocktake_reviews",
+      "supplier_flute_price_rules",
+      "supplier_material_base_prices",
+      "supplier_material_rule_configs",
+      "supplier_material_substitution_rules",
+      "supplier_paper_codes",
+      "supplier_requisition_order_items",
+      "supplier_requisition_orders",
+      "suppliers",
+      "system_settings",
+      "tianhua_pre_delivery_draft_items",
+      "tianhua_pre_delivery_drafts",
+      "tianhua_pre_delivery_import_batches",
+      "tianhua_pre_delivery_import_items",
+      "user_customer_scopes",
+      "user_permission_overrides",
+      "users",
+      "warehouse_areas",
+      "warehouse_floors",
+      "warehouse_locations",
+      "wms_receive_logs"
+    ],
+    "supplier_relevant_columns": [
+      {
+        "table": "accounts_payable",
+        "columns": [
+          "supplier_id"
+        ]
+      },
+      {
+        "table": "customer_material_candidates",
+        "columns": [
+          "actual_material_id",
+          "normalized_supplier_name",
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "customer_material_selection_history",
+        "columns": [
+          "selected_material_id",
+          "selected_supplier_name_snapshot"
+        ]
+      },
+      {
+        "table": "historical_purchase_entries",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "incoming_receipt_items",
+        "columns": [
+          "supplier_order_id",
+          "supplier_order_item_id"
+        ]
+      },
+      {
+        "table": "inventory_movements",
+        "columns": [
+          "related_supplier_order_id"
+        ]
+      },
+      {
+        "table": "inventory_onboarding_lines",
+        "columns": [
+          "material_id",
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "inventory_stock_policies",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "legacy_ruida_order_items",
+        "columns": [
+          "supplier_id",
+          "supplier_name",
+          "supplier_quote",
+          "supplier_quote_id"
+        ]
+      },
+      {
+        "table": "material_code_mapping_candidates",
+        "columns": [
+          "new_supplier",
+          "old_supplier"
+        ]
+      },
+      {
+        "table": "material_price_adjustment_batches",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "material_price_history",
+        "columns": [
+          "material_id",
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "material_reports",
+        "columns": [
+          "supplier_id"
+        ]
+      },
+      {
+        "table": "material_requisitions",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "materials",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "orders",
+        "columns": [
+          "supplier_id"
+        ]
+      },
+      {
+        "table": "payable_payments",
+        "columns": [
+          "supplier_id"
+        ]
+      },
+      {
+        "table": "product_archives",
+        "columns": [
+          "last_supplier_id"
+        ]
+      },
+      {
+        "table": "products",
+        "columns": [
+          "material_id"
+        ]
+      },
+      {
+        "table": "quotation_items",
+        "columns": [
+          "material_id",
+          "material_supplier"
+        ]
+      },
+      {
+        "table": "requisition_items",
+        "columns": [
+          "supplier_delivery_no"
+        ]
+      },
+      {
+        "table": "requisitions",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "sales_order_item_bom_components",
+        "columns": [
+          "snapshot_component_material_id",
+          "snapshot_component_supplier_name"
+        ]
+      },
+      {
+        "table": "sales_order_items",
+        "columns": [
+          "material_id",
+          "snapshot_supplier_name",
+          "supplier_delivery_time",
+          "supplier_order_number"
+        ]
+      },
+      {
+        "table": "semi_finished_inventory_details",
+        "columns": [
+          "material_id",
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "stock_replenishment_order_items",
+        "columns": [
+          "material_id"
+        ]
+      },
+      {
+        "table": "stock_replenishment_orders",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "supplier_flute_price_rules",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "supplier_material_base_prices",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "supplier_material_rule_configs",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "supplier_material_substitution_rules",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "supplier_paper_codes",
+        "columns": [
+          "supplier_name"
+        ]
+      },
+      {
+        "table": "supplier_requisition_order_items",
+        "columns": [
+          "material_id",
+          "supplier_name_snapshot",
+          "supplier_order_id"
+        ]
+      },
+      {
+        "table": "supplier_requisition_orders",
+        "columns": [
+          "material_id",
+          "supplier_name"
+        ]
+      }
+    ]
+  },
+  "legacy_supplier_table": {
+    "table_exists": true,
+    "classification": "legacy_history_table_readonly",
+    "label": "旧系统历史供应商表（只读保留）",
+    "columns": [
+      "address",
+      "contact_person",
+      "created_at",
+      "id",
+      "is_active",
+      "name",
+      "payment_note",
+      "phone",
+      "updated_at"
+    ],
+    "rows": [
+      {
+        "id": 1,
+        "standard_name": "苏州佳丰纸业有限公司",
+        "display_name": "佳丰",
+        "aliases": [
+          "佳丰"
+        ],
+        "business_code": "JF",
+        "legacy_supplier_id": 9,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 2,
+        "standard_name": "固丽纸业(上海)有限公司",
+        "display_name": "固丽",
+        "aliases": [
+          "固丽"
+        ],
+        "business_code": "GL",
+        "legacy_supplier_id": 10,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 3,
+        "standard_name": "苏州市科能纸品有限公司",
+        "display_name": "科能",
+        "aliases": [
+          "科能"
+        ],
+        "business_code": "KN",
+        "legacy_supplier_id": 12,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 4,
+        "standard_name": "苏州市金东浩纸业有限公司",
+        "display_name": "金东浩",
+        "aliases": [
+          "金东浩"
+        ],
+        "business_code": "JDH",
+        "legacy_supplier_id": 13,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 5,
+        "standard_name": "达成包装制品(苏州)有限公司",
+        "display_name": "达成",
+        "aliases": [
+          "达成"
+        ],
+        "business_code": "DC",
+        "legacy_supplier_id": 14,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 6,
+        "standard_name": "苏州一诺包装有限公司",
+        "display_name": "一诺包装",
+        "aliases": [
+          "一诺包装"
+        ],
+        "business_code": "YN",
+        "legacy_supplier_id": 15,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 7,
+        "standard_name": "昆山市诺尔特包装材料有限公司",
+        "display_name": "诺尔特",
+        "aliases": [
+          "诺尔特"
+        ],
+        "business_code": "NTE",
+        "legacy_supplier_id": 16,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 8,
+        "standard_name": "苏州聚晟达电子材料科技有限公司",
+        "display_name": "春山包装",
+        "aliases": [
+          "春山包装"
+        ],
+        "business_code": "CS",
+        "legacy_supplier_id": 17,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 9,
+        "standard_name": "永丰余纸业（上海）有限公司",
+        "display_name": "永丰余",
+        "aliases": [
+          "永丰余"
+        ],
+        "business_code": "YFY",
+        "legacy_supplier_id": 18,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 10,
+        "standard_name": "昆山鸣朋纸业有限公司",
+        "display_name": "鸣朋",
+        "aliases": [
+          "鸣朋"
+        ],
+        "business_code": "MP",
+        "legacy_supplier_id": 19,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      },
+      {
+        "id": 11,
+        "standard_name": "苏州顺厚金属制品有限公司",
+        "display_name": "顺厚金属",
+        "aliases": [
+          "顺厚金属"
+        ],
+        "business_code": "SH",
+        "legacy_supplier_id": 21,
+        "quote_uom": "平方米",
+        "is_active": 1,
+        "status": null
+      }
+    ],
+    "truncated": false,
+    "preservation_rule": "The suppliers table is a legacy history table. P0-08 must not overwrite, rename or clear it.",
+    "foreign_key_references": [
+      {
+        "from_table": "accounts_payable",
+        "from_column": "supplier_id",
+        "to_table": "suppliers",
+        "to_column": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION"
+      },
+      {
+        "from_table": "legacy_ruida_order_items",
+        "from_column": "supplier_id",
+        "to_table": "suppliers",
+        "to_column": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION"
+      },
+      {
+        "from_table": "material_reports",
+        "from_column": "supplier_id",
+        "to_table": "suppliers",
+        "to_column": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION"
+      },
+      {
+        "from_table": "orders",
+        "from_column": "supplier_id",
+        "to_table": "suppliers",
+        "to_column": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION"
+      },
+      {
+        "from_table": "payable_payments",
+        "from_column": "supplier_id",
+        "to_table": "suppliers",
+        "to_column": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION"
+      },
+      {
+        "from_table": "product_archives",
+        "from_column": "last_supplier_id",
+        "to_table": "suppliers",
+        "to_column": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION"
+      }
+    ]
+  },
+  "p0_08_supplier_master": {
+    "records_table_exists": false,
+    "aliases_table_exists": false,
+    "migration_status": "not_migrated",
+    "status_label": "P0-08 未迁移",
+    "record_columns": [],
+    "alias_columns": [],
+    "record_count": 0,
+    "alias_count": 0,
+    "records": [],
+    "aliases": [],
+    "records_truncated": false,
+    "aliases_truncated": false
+  },
+  "supplier_name_distribution": [
+    {
+      "category": "材质",
+      "table": "customer_material_candidates",
+      "column": "normalized_supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "customer_material_candidates",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "customer_material_selection_history",
+      "column": "selected_supplier_name_snapshot",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "报料/采购",
+      "table": "historical_purchase_entries",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "库存",
+      "table": "inventory_onboarding_lines",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "库存",
+      "table": "inventory_stock_policies",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "订单/历史",
+      "table": "legacy_ruida_order_items",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "JF   佳丰",
+          "row_count": 30125
+        },
+        {
+          "value": "MP   鸣朋",
+          "row_count": 927
+        },
+        {
+          "value": "GL   固丽",
+          "row_count": 239
+        },
+        {
+          "value": "YN   一诺包装",
+          "row_count": 126
+        },
+        {
+          "value": "NTE   诺尔特",
+          "row_count": 117
+        },
+        {
+          "value": "JDH   金东浩",
+          "row_count": 45
+        },
+        {
+          "value": "DC   达成",
+          "row_count": 24
+        },
+        {
+          "value": "KN   科能",
+          "row_count": 22
+        },
+        {
+          "value": "CS   春山包装",
+          "row_count": 20
+        },
+        {
+          "value": "YFY   永丰余",
+          "row_count": 2
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "material_code_mapping_candidates",
+      "column": "new_supplier",
+      "values": [
+        {
+          "value": "佳丰",
+          "row_count": 321
+        },
+        {
+          "value": "鸣朋",
+          "row_count": 245
+        },
+        {
+          "value": "嘉林亿",
+          "row_count": 51
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "material_code_mapping_candidates",
+      "column": "old_supplier",
+      "values": [
+        {
+          "value": "佳丰",
+          "row_count": 321
+        },
+        {
+          "value": "鸣朋",
+          "row_count": 245
+        },
+        {
+          "value": "嘉林亿",
+          "row_count": 51
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "报价/价格",
+      "table": "material_price_adjustment_batches",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州佳丰",
+          "row_count": 1
+        },
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 1
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "报价/价格",
+      "table": "material_price_history",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 129
+        },
+        {
+          "value": "苏州佳丰",
+          "row_count": 126
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "报料/采购",
+      "table": "material_requisitions",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 24
+        },
+        {
+          "value": "昆山鸣朋",
+          "row_count": 15
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "materials",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 137
+        },
+        {
+          "value": "昆山鸣朋",
+          "row_count": 126
+        },
+        {
+          "value": "苏州佳丰",
+          "row_count": 126
+        },
+        {
+          "value": "UAT测试纸板20260728",
+          "row_count": 1
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "报料/采购",
+      "table": "requisitions",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "订单/历史",
+      "table": "sales_order_item_bom_components",
+      "column": "snapshot_component_supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "订单/历史",
+      "table": "sales_order_items",
+      "column": "snapshot_supplier_name",
+      "values": [
+        {
+          "value": "昆山鸣朋",
+          "row_count": 104
+        },
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 103
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "库存",
+      "table": "semi_finished_inventory_details",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "库存",
+      "table": "stock_replenishment_orders",
+      "column": "supplier_name",
+      "values": [],
+      "truncated": false
+    },
+    {
+      "category": "报价/价格",
+      "table": "supplier_flute_price_rules",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "昆山鸣朋",
+          "row_count": 5
+        },
+        {
+          "value": "苏州佳丰",
+          "row_count": 5
+        },
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 5
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "报价/价格",
+      "table": "supplier_material_base_prices",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 86
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "supplier_material_rule_configs",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 7
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "supplier_material_substitution_rules",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 19
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "材质",
+      "table": "supplier_paper_codes",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 18
+        },
+        {
+          "value": "昆山鸣朋",
+          "row_count": 12
+        },
+        {
+          "value": "UAT测试纸板20260728",
+          "row_count": 2
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "报料/采购",
+      "table": "supplier_requisition_orders",
+      "column": "supplier_name",
+      "values": [
+        {
+          "value": "昆山鸣朋",
+          "row_count": 34
+        },
+        {
+          "value": "苏州嘉林亿",
+          "row_count": 13
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "category": "供应商主档/规则",
+      "table": "suppliers",
+      "column": "name",
+      "values": [
+        {
+          "value": "固丽纸业(上海)有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "昆山市诺尔特包装材料有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "昆山鸣朋纸业有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "永丰余纸业（上海）有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "苏州一诺包装有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "苏州佳丰纸业有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "苏州市科能纸品有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "苏州市金东浩纸业有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "苏州聚晟达电子材料科技有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "苏州顺厚金属制品有限公司",
+          "row_count": 1
+        },
+        {
+          "value": "达成包装制品(苏州)有限公司",
+          "row_count": 1
+        }
+      ],
+      "truncated": false
+    }
+  ],
+  "target_reference_summary": {
+    "p0_08_supplier_master_ids": [],
+    "legacy_supplier_table_ids": [
+      1
+    ],
+    "legacy_external_supplier_ids": [
+      9
+    ],
+    "material_ids": [
+      169,
+      170,
+      171,
+      172,
+      173,
+      174,
+      175,
+      176,
+      177,
+      178,
+      179,
+      180,
+      181,
+      182,
+      183,
+      184,
+      185,
+      186,
+      187,
+      188,
+      189,
+      190,
+      191,
+      192,
+      193,
+      194,
+      195,
+      196,
+      197,
+      198,
+      199,
+      200,
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      210,
+      211,
+      212,
+      213,
+      214,
+      215,
+      216,
+      217,
+      218,
+      219,
+      220,
+      221,
+      222,
+      223,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234,
+      235,
+      236,
+      237,
+      238,
+      239,
+      240,
+      241,
+      242,
+      243,
+      244,
+      245,
+      246,
+      247,
+      248,
+      249,
+      250,
+      251,
+      252,
+      253,
+      254,
+      255,
+      256,
+      257,
+      258,
+      259,
+      260,
+      261,
+      262,
+      263,
+      264,
+      265,
+      266,
+      267,
+      268,
+      269,
+      270,
+      271,
+      272,
+      273,
+      274,
+      275,
+      276,
+      277,
+      278,
+      279,
+      280,
+      281,
+      282,
+      283,
+      284,
+      285,
+      286,
+      287,
+      288,
+      289,
+      290,
+      291,
+      292,
+      293,
+      294
+    ],
+    "direct_references": [
+      {
+        "category": "订单/历史",
+        "table": "legacy_ruida_order_items",
+        "column": "supplier_name",
+        "kind": "supplier_text",
+        "row_count": 30125,
+        "matched_values": [
+          {
+            "value": "JF   佳丰",
+            "row_count": 30125
+          }
+        ]
+      },
+      {
+        "category": "材质",
+        "table": "material_code_mapping_candidates",
+        "column": "new_supplier",
+        "kind": "supplier_text",
+        "row_count": 321,
+        "matched_values": [
+          {
+            "value": "佳丰",
+            "row_count": 321
+          }
+        ]
+      },
+      {
+        "category": "材质",
+        "table": "material_code_mapping_candidates",
+        "column": "old_supplier",
+        "kind": "supplier_text",
+        "row_count": 321,
+        "matched_values": [
+          {
+            "value": "佳丰",
+            "row_count": 321
+          }
+        ]
+      },
+      {
+        "category": "报价/价格",
+        "table": "material_price_adjustment_batches",
+        "column": "supplier_name",
+        "kind": "supplier_text",
+        "row_count": 1,
+        "matched_values": [
+          {
+            "value": "苏州佳丰",
+            "row_count": 1
+          }
+        ]
+      },
+      {
+        "category": "报价/价格",
+        "table": "material_price_history",
+        "column": "material_id",
+        "kind": "material_linked_supplier",
+        "row_count": 126,
+        "matched_ids": {
+          "169": 1,
+          "170": 1,
+          "171": 1,
+          "172": 1,
+          "173": 1,
+          "174": 1,
+          "175": 1,
+          "176": 1,
+          "177": 1,
+          "178": 1,
+          "179": 1,
+          "180": 1,
+          "181": 1,
+          "182": 1,
+          "183": 1,
+          "184": 1,
+          "185": 1,
+          "186": 1,
+          "187": 1,
+          "188": 1,
+          "189": 1,
+          "190": 1,
+          "191": 1,
+          "192": 1,
+          "193": 1,
+          "194": 1,
+          "195": 1,
+          "196": 1,
+          "197": 1,
+          "198": 1,
+          "199": 1,
+          "200": 1,
+          "201": 1,
+          "202": 1,
+          "203": 1,
+          "204": 1,
+          "205": 1,
+          "206": 1,
+          "207": 1,
+          "208": 1,
+          "209": 1,
+          "210": 1,
+          "211": 1,
+          "212": 1,
+          "213": 1,
+          "214": 1,
+          "215": 1,
+          "216": 1,
+          "217": 1,
+          "218": 1,
+          "219": 1,
+          "220": 1,
+          "221": 1,
+          "222": 1,
+          "223": 1,
+          "224": 1,
+          "225": 1,
+          "226": 1,
+          "227": 1,
+          "228": 1,
+          "229": 1,
+          "230": 1,
+          "231": 1,
+          "232": 1,
+          "233": 1,
+          "234": 1,
+          "235": 1,
+          "236": 1,
+          "237": 1,
+          "238": 1,
+          "239": 1,
+          "240": 1,
+          "241": 1,
+          "242": 1,
+          "243": 1,
+          "244": 1,
+          "245": 1,
+          "246": 1,
+          "247": 1,
+          "248": 1,
+          "249": 1,
+          "250": 1,
+          "251": 1,
+          "252": 1,
+          "253": 1,
+          "254": 1,
+          "255": 1,
+          "256": 1,
+          "257": 1,
+          "258": 1,
+          "259": 1,
+          "260": 1,
+          "261": 1,
+          "262": 1,
+          "263": 1,
+          "264": 1,
+          "265": 1,
+          "266": 1,
+          "267": 1,
+          "268": 1,
+          "269": 1,
+          "270": 1,
+          "271": 1,
+          "272": 1,
+          "273": 1,
+          "274": 1,
+          "275": 1,
+          "276": 1,
+          "277": 1,
+          "278": 1,
+          "279": 1,
+          "280": 1,
+          "281": 1,
+          "282": 1,
+          "283": 1,
+          "284": 1,
+          "285": 1,
+          "286": 1,
+          "287": 1,
+          "288": 1,
+          "289": 1,
+          "290": 1,
+          "291": 1,
+          "292": 1,
+          "293": 1,
+          "294": 1
+        }
+      },
+      {
+        "category": "报价/价格",
+        "table": "material_price_history",
+        "column": "supplier_name",
+        "kind": "supplier_text",
+        "row_count": 126,
+        "matched_values": [
+          {
+            "value": "苏州佳丰",
+            "row_count": 126
+          }
+        ]
+      },
+      {
+        "category": "材质",
+        "table": "materials",
+        "column": "supplier_name",
+        "kind": "supplier_text",
+        "row_count": 126,
+        "matched_values": [
+          {
+            "value": "苏州佳丰",
+            "row_count": 126
+          }
+        ]
+      },
+      {
+        "category": "审计",
+        "table": "operation_logs",
+        "column": "details",
+        "kind": "audit_text_redacted",
+        "row_count": 7,
+        "matched_values": []
+      },
+      {
+        "category": "报价/价格",
+        "table": "supplier_flute_price_rules",
+        "column": "supplier_name",
+        "kind": "supplier_text",
+        "row_count": 5,
+        "matched_values": [
+          {
+            "value": "苏州佳丰",
+            "row_count": 5
+          }
+        ]
+      },
+      {
+        "category": "供应商主档/规则",
+        "table": "suppliers",
+        "column": "name",
+        "kind": "supplier_text",
+        "row_count": 1,
+        "matched_values": [
+          {
+            "value": "苏州佳丰纸业有限公司",
+            "row_count": 1
+          }
+        ]
+      }
+    ],
+    "relationship_references": [
+      {
+        "name": "incoming_by_requisition",
+        "category": "来料/收料",
+        "row_count": 0
+      },
+      {
+        "name": "incoming_by_supplier_order",
+        "category": "来料/收料",
+        "row_count": 0
+      },
+      {
+        "name": "inventory_movements_by_requisition",
+        "category": "库存",
+        "row_count": 0
+      },
+      {
+        "name": "inventory_movements_by_supplier_order",
+        "category": "库存",
+        "row_count": 0
+      }
+    ],
+    "skipped_relationship_checks": [],
+    "total_direct_rows": 31159,
+    "total_relationship_rows": 0,
+    "counting_note": "Counts are reference hits, not deduplicated business rows. The same row can appear through more than one supplier or material-linked column."
+  }
+}

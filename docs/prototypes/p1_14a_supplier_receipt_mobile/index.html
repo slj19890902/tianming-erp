@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>P1-14A 手机收料离线演示</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f6f4;
+      --card: #ffffff;
+      --ink: #17221b;
+      --muted: #66736b;
+      --line: #d7e0da;
+      --green: #16794d;
+      --green-soft: #e7f6ed;
+      --orange: #a95708;
+      --orange-soft: #fff1dc;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --blue: #1769aa;
+      --blue-soft: #e9f3fb;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-width: 0; background: var(--bg); color: var(--ink); }
+    body { overflow-x: hidden; }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid #80bfff; outline-offset: 2px; }
+    .app { width: min(100%, 430px); min-height: 100vh; margin: 0 auto; padding-bottom: 88px; }
+    .top {
+      position: sticky; top: 0; z-index: 5;
+      padding: 14px 14px 10px;
+      background: rgba(243, 246, 244, .96);
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow { margin: 0 0 3px; color: var(--green); font-size: 12px; font-weight: 800; }
+    h1 { margin: 0; font-size: 21px; line-height: 1.3; }
+    .offline {
+      display: inline-flex; margin-top: 8px; padding: 4px 8px;
+      border-radius: 99px; background: var(--orange-soft);
+      color: #74410c; font-size: 12px; font-weight: 700;
+    }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 14px 0; }
+    .tab {
+      min-height: 42px; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--card); color: #455249; font-weight: 700;
+    }
+    .tab.active { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+    main { padding: 12px 14px; }
+    .panel, .card {
+      margin-bottom: 10px; padding: 13px;
+      border: 1px solid var(--line); border-radius: 13px; background: var(--card);
+      box-shadow: 0 3px 10px rgba(39, 65, 49, .05);
+    }
+    .panel h2, .card h2 { margin: 0 0 6px; font-size: 17px; }
+    .panel p, .card p { margin: 4px 0; font-size: 14px; line-height: 1.55; }
+    .muted { color: var(--muted); }
+    .notice {
+      margin-bottom: 10px; padding: 10px 12px; border-radius: 10px;
+      background: var(--blue-soft); color: #174f7a; font-size: 13px; line-height: 1.5;
+    }
+    .notice.warning { background: var(--orange-soft); color: #74410c; }
+    .notice.success { background: var(--green-soft); color: #145f3e; }
+    .camera-box {
+      display: grid; min-height: 158px; place-items: center; padding: 18px;
+      border: 2px dashed #a9b7ae; border-radius: 12px; background: #fafcfb;
+      text-align: center;
+    }
+    .camera-icon { font-size: 38px; }
+    .photo {
+      display: none; width: 100%; padding: 16px 10px; border-radius: 9px;
+      background: #f8f0dc; color: #5a4a2b; text-align: left;
+    }
+    .photo.ready { display: block; }
+    .paper-title { padding-bottom: 7px; border-bottom: 1px solid #c8b992; font-weight: 800; }
+    .paper-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding-top: 7px; font-size: 12px; }
+    .actions { display: grid; gap: 8px; margin-top: 10px; }
+    .actions.two { grid-template-columns: 1fr 1fr; }
+    .btn {
+      min-height: 44px; padding: 9px 12px; border: 1px solid var(--line);
+      border-radius: 10px; background: #fff; color: #304038; font-weight: 800;
+    }
+    .btn.primary { border-color: var(--green); background: var(--green); color: #fff; }
+    .btn.orange { border-color: var(--orange); background: var(--orange); color: #fff; }
+    .btn.red { border-color: var(--red); background: var(--red-soft); color: var(--red); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .step { display: none; }
+    .step.active { display: block; }
+    .summary {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 9px 0;
+    }
+    .metric { padding: 9px 5px; border-radius: 9px; background: #f3f6f4; text-align: center; }
+    .metric strong { display: block; font-size: 20px; }
+    .metric span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .normal-row {
+      display: flex; justify-content: space-between; gap: 8px;
+      padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px;
+    }
+    .tag {
+      display: inline-flex; align-items: center; padding: 3px 7px;
+      border-radius: 99px; white-space: nowrap; font-size: 11px; font-weight: 800;
+    }
+    .tag.green { background: var(--green-soft); color: var(--green); }
+    .tag.orange { background: var(--orange-soft); color: var(--orange); }
+    .tag.red { background: var(--red-soft); color: var(--red); }
+    .exception { border-left: 5px solid var(--orange); }
+    .exception.done { border-left-color: var(--green); background: #fbfffc; }
+    .line-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .line-title strong { font-size: 15px; line-height: 1.45; }
+    .facts { margin: 8px 0; padding: 9px; border-radius: 9px; background: #f6f8f7; font-size: 13px; line-height: 1.6; }
+    .choice { display: grid; gap: 7px; margin-top: 9px; }
+    .choice .btn { min-height: 40px; font-size: 13px; }
+    .resolution { margin-top: 8px; color: var(--green); font-size: 13px; font-weight: 800; }
+    .candidate { text-align: left; line-height: 1.45; }
+    .bottom {
+      position: fixed; right: 0; bottom: 0; left: 0; z-index: 6;
+      padding: 10px max(14px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+      border-top: 1px solid var(--line); background: rgba(255, 255, 255, .97);
+    }
+    .bottom-inner { width: min(100%, 402px); margin: 0 auto; }
+    .bottom .btn { width: 100%; }
+    .recent {
+      display: grid; width: 100%; gap: 6px; padding: 12px;
+      border: 1px solid var(--line); border-left: 5px solid var(--green);
+      border-radius: 12px; background: var(--card); color: var(--ink); text-align: left;
+    }
+    .recent.partial { border-left-color: var(--orange); }
+    .recent-top { display: flex; justify-content: space-between; gap: 8px; }
+    .recent strong { font-size: 15px; }
+    .recent span { color: var(--muted); font-size: 12px; }
+    .modal {
+      position: fixed; inset: 0; z-index: 20; display: none;
+      place-items: end center; padding: 16px; background: rgba(17, 29, 21, .48);
+    }
+    .modal.open { display: grid; }
+    .sheet {
+      width: min(100%, 430px); max-height: 82vh; overflow-y: auto;
+      padding: 16px; border-radius: 16px; background: #fff;
+    }
+    .sheet h2 { margin: 0 0 8px; font-size: 19px; }
+    .sheet ul { padding-left: 20px; font-size: 14px; line-height: 1.65; }
+    .toast {
+      position: fixed; right: 16px; bottom: 80px; left: 16px; z-index: 30;
+      display: none; width: min(calc(100% - 32px), 398px); margin: auto;
+      padding: 10px 12px; border-radius: 9px; background: #20352a; color: #fff;
+      font-size: 13px; text-align: center;
+    }
+    .toast.show { display: block; }
+    [hidden] { display: none !important; }
+    @media (max-width: 360px) {
+      .actions.two { grid-template-columns: 1fr; }
+      .summary { gap: 4px; }
+      .metric { padding-inline: 2px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <p class="eyebrow">P1-14A · 匿名离线原型</p>
+      <h1>手机供应商送货单核对</h1>
+      <span class="offline">纯演示 · 不上传 · 不入库</span>
+    </header>
+
+    <nav class="tabs" aria-label="原型页面">
+      <button type="button" class="tab active" data-tab="receive">拍单核对</button>
+      <button type="button" class="tab" data-tab="recent">近期来料</button>
+    </nav>
+
+    <main>
+      <section id="receivePane">
+        <div class="notice warning">
+          当前 ERP 批量收料是逐行处理，可能部分成功。本页没有连接 ERP，只演示员工核对步骤。
+        </div>
+
+        <div class="step active" id="photoStep">
+          <article class="panel">
+            <h2>1. 载入送货单示例</h2>
+            <p class="muted">正式拍照和上传尚未开发，本轮使用匿名固定数据。</p>
+            <div class="camera-box">
+              <div id="emptyPhoto">
+                <div class="camera-icon" aria-hidden="true">▣</div>
+                <p>尚未载入演示照片</p>
+              </div>
+              <div class="photo" id="demoPhoto" aria-label="匿名供应商送货单演示">
+                <div class="paper-title">匿名纸板供应商 · 送货单（演示）</div>
+                <div class="paper-row"><span>客户甲 · 外箱 A</span><strong>100 张</strong></div>
+                <div class="paper-row"><span>客户甲 · 隔板 B</span><strong>80 张</strong></div>
+                <div class="paper-row"><span>客户乙 · 内盒 C</span><strong>120 张</strong></div>
+              </div>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn primary" id="loadPhoto">载入匿名照片演示</button>
+              <button type="button" class="btn" id="clearPhoto" disabled>清除演示照片</button>
+              <button type="button" class="btn orange" id="recognize" disabled>开始识别演示</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="step" id="reviewStep">
+          <article class="panel">
+            <h2>2. 只处理异常</h2>
+            <p class="muted">正常 2 款已收起；下面 4 款需要选择。</p>
+            <div class="summary">
+              <div class="metric"><strong>6</strong><span>识别明细</span></div>
+              <div class="metric"><strong>2</strong><span>数量一致</span></div>
+              <div class="metric"><strong id="pendingCount">4</strong><span>待处理</span></div>
+            </div>
+            <div class="normal-row">
+              <span>客户甲 · A-1001 · 100 张</span>
+              <span class="tag green">一致</span>
+            </div>
+            <div class="normal-row">
+              <span>客户乙 · C-2003 · 60 张</span>
+              <span class="tag green">一致</span>
+            </div>
+          </article>
+
+          <article class="card exception" data-exception="short">
+            <div class="line-title">
+              <strong>客户甲 · B-1002</strong>
+              <span class="tag orange">少到 20 张</span>
+            </div>
+            <div class="facts">ERP 待收 100｜单据 80｜现场 80</div>
+            <div class="choice">
+              <button type="button" class="btn" data-resolve="short" data-answer="已收 80，剩余 20 继续等">剩余 20 继续等</button>
+              <button type="button" class="btn orange" data-resolve="short" data-answer="按本次 80 张结束（仅演示）">按本次 80 张结束</button>
+            </div>
+            <div class="resolution" hidden></div>
+          </article>
+
+          <article class="card exception" data-exception="surplus">
+            <div class="line-title">
+              <strong>客户乙 · C-2004</strong>
+              <span class="tag orange">多到 20 张</span>
+            </div>
+            <div class="facts">ERP 待收 100｜单据 120｜现场 120</div>
+            <div class="choice">
+              <button type="button" class="btn" data-resolve="surplus" data-answer="120 张全部用于本单（仅演示）">全部用于本单</button>
+              <button type="button" class="btn orange" data-resolve="surplus" data-answer="多余 20 张放客户专用纸板备料（仅演示）">多余放客户备料</button>
+            </div>
+            <div class="resolution" hidden></div>
+          </article>
+
+          <article class="card exception" data-exception="missing">
+            <div class="line-title">
+              <strong>客户丙 · D-3001</strong>
+              <span class="tag red">现场未送</span>
+            </div>
+            <div class="facts">ERP 待收 50｜单据 0｜现场 0</div>
+            <div class="choice">
+              <button type="button" class="btn red" data-resolve="missing" data-answer="本次未送，继续留在待收">本次未送，继续等</button>
+            </div>
+            <div class="resolution" hidden></div>
+          </article>
+
+          <article class="card exception" data-exception="candidate">
+            <div class="line-title">
+              <strong>客户甲 · A-1005</strong>
+              <span class="tag orange">找到 2 条</span>
+            </div>
+            <div class="facts">不能只凭尺寸和数量决定，请选对应报料。</div>
+            <div class="choice">
+              <button type="button" class="btn candidate" data-resolve="candidate" data-answer="已选 BL-DEMO-01">
+                <strong>BL-DEMO-01</strong><br>客户甲｜A-1005｜待收 200
+              </button>
+              <button type="button" class="btn candidate" data-resolve="candidate" data-answer="已选 BL-DEMO-02">
+                <strong>BL-DEMO-02</strong><br>客户甲｜A-1005｜待收 80
+              </button>
+              <button type="button" class="btn" data-resolve="candidate" data-answer="已交给办公室处理">交给办公室处理</button>
+            </div>
+            <div class="resolution" hidden></div>
+          </article>
+
+          <article class="panel">
+            <h2>阻断提示演示</h2>
+            <div class="actions two">
+              <button type="button" class="btn red" data-guard="duplicate">疑似重复</button>
+              <button type="button" class="btn red" data-guard="blur">照片模糊</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="step" id="doneStep">
+          <article class="panel">
+            <div class="notice success">核对演示完成，没有上传照片，也没有增加库存。</div>
+            <h2>本次演示汇总</h2>
+            <p>正常 2 款，异常选择 4 款。</p>
+            <p>这些结果只保存在当前页面内存中，刷新后清空。</p>
+            <p class="muted">未来正式功能必须再次经过权限、客户范围、版本、幂等、数量和实物来源校验。</p>
+            <div class="actions">
+              <button type="button" class="btn primary" id="showRecent">查看近期来料演示</button>
+              <button type="button" class="btn" id="restart">重新演示</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="recentPane" hidden>
+        <div class="notice">这里只展示正式收料后的只读资料；OCR 草稿不能成为“可生产”事实。</div>
+        <button type="button" class="recent" data-recent="ready">
+          <div class="recent-top"><strong>客户甲 · A-1001</strong><span class="tag green">材料已齐</span></div>
+          <span>今天 09:20｜匿名供应商｜实收 100 张</span>
+          <span>规格 520×380｜模具位置 M-03</span>
+        </button>
+        <button type="button" class="recent partial" data-recent="partial">
+          <div class="recent-top"><strong>客户乙 · C-2004</strong><span class="tag orange">材料未齐</span></div>
+          <span>昨天 15:40｜匿名供应商｜实收 80 / 待收 100</span>
+          <span>规格 430×310｜模具位置 M-07</span>
+        </button>
+      </section>
+    </main>
+  </div>
+
+  <div class="bottom" id="reviewBar" hidden>
+    <div class="bottom-inner">
+      <button type="button" class="btn primary" id="openSummary" disabled>还有 4 款待处理</button>
+    </div>
+  </div>
+
+  <div class="modal" id="summaryModal" role="dialog" aria-modal="true" aria-labelledby="summaryTitle">
+    <div class="sheet">
+      <h2 id="summaryTitle">提交前汇总（演示）</h2>
+      <div class="notice warning">这不是正式入库。当前 ERP 正式批量收料可能逐行部分成功。</div>
+      <ul id="resolutionList"></ul>
+      <div class="actions">
+        <button type="button" class="btn" data-close="summaryModal">返回检查</button>
+        <button type="button" class="btn primary" id="finishDemo">完成演示（不入库）</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="guardModal" role="dialog" aria-modal="true" aria-labelledby="guardTitle">
+    <div class="sheet">
+      <h2 id="guardTitle">不能继续</h2>
+      <p id="guardText"></p>
+      <button type="button" class="btn primary" data-close="guardModal">我知道了</button>
+    </div>
+  </div>
+
+  <div class="modal" id="recentModal" role="dialog" aria-modal="true" aria-labelledby="recentTitle">
+    <div class="sheet">
+      <h2 id="recentTitle">近期来料详情（只读）</h2>
+      <p id="recentText"></p>
+      <ul>
+        <li>来源：正式收料事实</li>
+        <li>可查看送货单缩略图和产品图纸（本页仅演示）</li>
+        <li>不提供生产、移动库存、扣料或完工按钮</li>
+      </ul>
+      <button type="button" class="btn primary" data-close="recentModal">关闭</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      "use strict";
+      const answers = new Map();
+      const exceptionKeys = ["short", "surplus", "missing", "candidate"];
+      const photoStep = document.getElementById("photoStep");
+      const reviewStep = document.getElementById("reviewStep");
+      const doneStep = document.getElementById("doneStep");
+      const reviewBar = document.getElementById("reviewBar");
+      const pendingCount = document.getElementById("pendingCount");
+      const openSummary = document.getElementById("openSummary");
+      const demoPhoto = document.getElementById("demoPhoto");
+      const emptyPhoto = document.getElementById("emptyPhoto");
+      const recognize = document.getElementById("recognize");
+      const clearPhoto = document.getElementById("clearPhoto");
+      const toast = document.getElementById("toast");
+      let toastTimer = 0;
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+      }
+
+      function openModal(id) {
+        document.getElementById(id).classList.add("open");
+      }
+
+      function closeModal(id) {
+        document.getElementById(id).classList.remove("open");
+      }
+
+      function setTab(name) {
+        document.querySelectorAll("[data-tab]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.tab === name);
+        });
+        document.getElementById("receivePane").hidden = name !== "receive";
+        document.getElementById("recentPane").hidden = name !== "recent";
+        reviewBar.hidden = name !== "receive" || !reviewStep.classList.contains("active");
+      }
+
+      function setStep(name) {
+        photoStep.classList.toggle("active", name === "photo");
+        reviewStep.classList.toggle("active", name === "review");
+        doneStep.classList.toggle("active", name === "done");
+        reviewBar.hidden = name !== "review";
+        window.scrollTo({ top: 0, behavior: "instant" });
+      }
+
+      function updateProgress() {
+        const remaining = exceptionKeys.length - answers.size;
+        pendingCount.textContent = String(remaining);
+        openSummary.disabled = remaining !== 0;
+        openSummary.textContent = remaining ? `还有 ${remaining} 款待处理` : "查看提交前汇总（演示）";
+      }
+
+      function resolve(key, answer) {
+        answers.set(key, answer);
+        const card = document.querySelector(`[data-exception="${key}"]`);
+        card.classList.add("done");
+        card.querySelector(".choice").hidden = true;
+        const result = card.querySelector(".resolution");
+        result.hidden = false;
+        result.textContent = `已选：${answer}`;
+        updateProgress();
+        showToast("已记录演示选择");
+      }
+
+      function reset() {
+        answers.clear();
+        demoPhoto.classList.remove("ready");
+        emptyPhoto.hidden = false;
+        recognize.disabled = true;
+        clearPhoto.disabled = true;
+        document.querySelectorAll("[data-exception]").forEach((card) => {
+          card.classList.remove("done");
+          card.querySelector(".choice").hidden = false;
+          card.querySelector(".resolution").hidden = true;
+        });
+        updateProgress();
+        setTab("receive");
+        setStep("photo");
+      }
+
+      document.querySelectorAll("[data-tab]").forEach((button) => {
+        button.addEventListener("click", () => setTab(button.dataset.tab));
+      });
+
+      document.getElementById("loadPhoto").addEventListener("click", () => {
+        demoPhoto.classList.add("ready");
+        emptyPhoto.hidden = true;
+        recognize.disabled = false;
+        clearPhoto.disabled = false;
+        showToast("匿名照片已载入，没有上传");
+      });
+
+      clearPhoto.addEventListener("click", () => {
+        demoPhoto.classList.remove("ready");
+        emptyPhoto.hidden = false;
+        recognize.disabled = true;
+        clearPhoto.disabled = true;
+      });
+
+      recognize.addEventListener("click", () => {
+        setStep("review");
+        showToast("已生成匿名识别演示");
+      });
+
+      document.querySelectorAll("[data-resolve]").forEach((button) => {
+        button.addEventListener("click", () => resolve(button.dataset.resolve, button.dataset.answer));
+      });
+
+      document.querySelectorAll("[data-guard]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const duplicate = button.dataset.guard === "duplicate";
+          document.getElementById("guardTitle").textContent = duplicate ? "可能已经收过" : "照片看不清";
+          document.getElementById("guardText").textContent = duplicate
+            ? "正式功能必须先查看原收料记录并通过幂等门禁。本演示不会写入数据。"
+            : "请重新拍照。模糊图片不能进入正式匹配和收料。";
+          openModal("guardModal");
+        });
+      });
+
+      openSummary.addEventListener("click", () => {
+        const list = document.getElementById("resolutionList");
+        list.replaceChildren(...exceptionKeys.map((key) => {
+          const item = document.createElement("li");
+          item.textContent = answers.get(key);
+          return item;
+        }));
+        openModal("summaryModal");
+      });
+
+      document.getElementById("finishDemo").addEventListener("click", () => {
+        closeModal("summaryModal");
+        setStep("done");
+      });
+
+      document.getElementById("showRecent").addEventListener("click", () => setTab("recent"));
+      document.getElementById("restart").addEventListener("click", reset);
+
+      document.querySelectorAll("[data-close]").forEach((button) => {
+        button.addEventListener("click", () => closeModal(button.dataset.close));
+      });
+
+      document.querySelectorAll("[data-recent]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.getElementById("recentText").textContent = button.dataset.recent === "ready"
+            ? "材料已齐：演示已收 100 张，可查看生产资料。"
+            : "材料未齐：目前实收 80 张，仍有 20 张待收。";
+          openModal("recentModal");
+        });
+      });
+
+      updateProgress();
+    })();
+  </script>
+</body>
+</html>

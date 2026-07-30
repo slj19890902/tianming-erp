@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import and_, delete, func, select, text, update
+from sqlalchemy import and_, case, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -40,8 +40,14 @@ from app.models.finance import (
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
-from app.services.history_orders import build_display_registry, display_order_number
+from app.models.warehouse_inventory import UnorderedFinishedDeliveryReversal
 from app.services.audit_log import append_audit_event
+from app.services.history_orders import build_display_registry, display_order_number
+from app.services.unordered_finished_delivery import (
+    reconsume_unordered_finished_receipt_returns,
+    restore_unordered_finished_receipt_shortage,
+)
+from app.services.warehouse_inventory import WarehouseInventoryError
 
 
 router = APIRouter()
@@ -429,10 +435,23 @@ def _statement_detail_response(
             StatementItem.return_receipt_item_id,
             ReturnReceipt.actual_received_date,
             Delivery.delivery_number,
-            Order.customer_po,
-            Product.product_code,
-            OrderItem.snapshot_product_name.label("product_name"),
-            OrderItem.snapshot_spec.label("specification"),
+            case(
+                (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
+                else_=Order.customer_po,
+            ).label("customer_po"),
+            func.coalesce(
+                DeliveryItem.product_code_snapshot,
+                Product.product_code,
+            ).label("product_code"),
+            func.coalesce(
+                DeliveryItem.product_name_snapshot,
+                OrderItem.snapshot_product_name,
+                Product.product_name,
+            ).label("product_name"),
+            func.coalesce(
+                DeliveryItem.specification_snapshot,
+                OrderItem.snapshot_spec,
+            ).label("specification"),
             OrderItem.snapshot_material.label("material"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
@@ -455,9 +474,13 @@ def _statement_detail_response(
         )
         .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .join(Product, Product.id == OrderItem.product_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .outerjoin(
+            Product,
+            Product.id
+            == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+        )
         .where(StatementItem.statement_id == statement.id)
         .order_by(StatementItem.id)
     ).all()
@@ -531,10 +554,22 @@ def export_statement_excel(
         select(
             Delivery.delivery_date,
             Delivery.delivery_number,
-            Order.customer_po,
-            OrderItem.snapshot_product_code,
-            OrderItem.snapshot_product_name,
-            OrderItem.snapshot_spec,
+            case(
+                (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
+                else_=Order.customer_po,
+            ).label("customer_po"),
+            func.coalesce(
+                DeliveryItem.product_code_snapshot,
+                OrderItem.snapshot_product_code,
+            ).label("snapshot_product_code"),
+            func.coalesce(
+                DeliveryItem.product_name_snapshot,
+                OrderItem.snapshot_product_name,
+            ).label("snapshot_product_name"),
+            func.coalesce(
+                DeliveryItem.specification_snapshot,
+                OrderItem.snapshot_spec,
+            ).label("snapshot_spec"),
             OrderItem.snapshot_material,
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
@@ -553,8 +588,8 @@ def export_statement_excel(
             DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
         )
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
         .where(StatementItem.statement_id == statement.id)
         .order_by(Delivery.delivery_date, Delivery.delivery_number)
     ).all()
@@ -822,6 +857,11 @@ def _validated_receipt_resolution(
         )
     if actual == delivered:
         return None, reason
+    if delivery_item.source_type == "unordered_finished" and actual > delivered:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无订单库存送货明细{delivery_item.id}实收数量不能超过实际发货数量",
+        )
     if actual < delivered and action not in {"continue_delivery", "accept_short"}:
         raise HTTPException(
             status_code=400,
@@ -843,6 +883,8 @@ def _apply_receipt_order_effect(
     resolution_action: str | None,
     direction: int,
 ) -> int | None:
+    if delivery_item.source_type == "unordered_finished":
+        return None
     if resolution_action not in {"continue_delivery", "accept_short", "accept_over"}:
         return None
     order_item = db.get(OrderItem, delivery_item.order_item_id)
@@ -873,6 +915,7 @@ def _assert_no_later_dispatched_deliveries(
         for item in receipt_items
         if item.resolution_action == "continue_delivery"
         and item.delivery_item_id in delivery_items
+        and delivery_items[item.delivery_item_id].order_item_id is not None
     }
     if not relevant_order_item_ids:
         return
@@ -1034,6 +1077,25 @@ def create_return_receipt(
         )
         if receipt is not None and receipt.status == "confirmed":
             raise HTTPException(status_code=409, detail="该送货单已经提交回单")
+        if receipt is not None and receipt.status == "cancelled":
+            has_unordered_reversal = db.scalar(
+                select(UnorderedFinishedDeliveryReversal.id)
+                .join(
+                    ReturnReceiptItem,
+                    ReturnReceiptItem.id
+                    == UnorderedFinishedDeliveryReversal.return_receipt_item_id,
+                )
+                .where(ReturnReceiptItem.return_receipt_id == receipt.id)
+                .limit(1)
+            )
+            if has_unordered_reversal is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"该送货单已有已取消回单（ID {receipt.id}）及原批次库存冲回审计，"
+                        "请编辑原回单，不能再次创建回单"
+                    ),
+                )
         if receipt is None:
             receipt = ReturnReceipt(
                 delivery_id=delivery.id,
@@ -1058,15 +1120,25 @@ def create_return_receipt(
         for item in delivery_items:
             line = requested[item.id]
             action, reason = _validated_receipt_resolution(item, line)
-            db.add(
-                ReturnReceiptItem(
-                    return_receipt_id=receipt.id,
-                    delivery_item_id=item.id,
-                    actual_received_quantity=line.actual_received_quantity,
-                    resolution_action=action,
-                    difference_reason=reason,
-                )
+            receipt_item = ReturnReceiptItem(
+                return_receipt_id=receipt.id,
+                delivery_item_id=item.id,
+                actual_received_quantity=line.actual_received_quantity,
+                resolution_action=action,
+                difference_reason=reason,
             )
+            db.add(receipt_item)
+            db.flush()
+            if item.source_type == "unordered_finished":
+                restore_unordered_finished_receipt_shortage(
+                    db,
+                    delivery=delivery,
+                    delivery_item=item,
+                    return_receipt_item_id=receipt_item.id,
+                    actual_received_quantity=line.actual_received_quantity,
+                    operator_id=user.id,
+                    reason=reason,
+                )
             order_id = _apply_receipt_order_effect(
                 db,
                 delivery_item=item,
@@ -1108,6 +1180,12 @@ def create_return_receipt(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="该送货单已经提交回单") from error
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
     except Exception:
         db.rollback()
         raise
@@ -1162,6 +1240,18 @@ def update_return_receipt(
     before = _receipt_response(db, receipt.id)
     affected_order_ids: set[int] = set()
     if claimed_status == "confirmed":
+        try:
+            reconsume_unordered_finished_receipt_returns(
+                db,
+                return_receipt_item_ids=receipt_item_ids,
+                operator_id=user.id,
+            )
+        except WarehouseInventoryError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
         for previous in receipt_items:
             order_id = _apply_receipt_order_effect(
                 db,
@@ -1179,6 +1269,26 @@ def update_return_receipt(
         target.actual_received_quantity = line.actual_received_quantity
         target.resolution_action = action
         target.difference_reason = reason
+        if delivery_item.source_type == "unordered_finished":
+            delivery = db.get(Delivery, delivery_item.delivery_id)
+            if delivery is None:
+                raise HTTPException(status_code=409, detail="回单关联送货单不存在")
+            try:
+                restore_unordered_finished_receipt_shortage(
+                    db,
+                    delivery=delivery,
+                    delivery_item=delivery_item,
+                    return_receipt_item_id=target.id,
+                    actual_received_quantity=line.actual_received_quantity,
+                    operator_id=user.id,
+                    reason=reason,
+                )
+            except WarehouseInventoryError as error:
+                db.rollback()
+                raise HTTPException(
+                    status_code=error.status_code,
+                    detail=str(error),
+                ) from error
         order_id = _apply_receipt_order_effect(
             db,
             delivery_item=delivery_item,
@@ -1211,6 +1321,13 @@ def _pending_statement_query(
     period_start: date | None = None,
     period_end: date | None = None,
 ):
+    effective_unit_price = case(
+        (
+            DeliveryItem.source_type == "unordered_finished",
+            DeliveryItem.unit_price_snapshot,
+        ),
+        else_=OrderItem.unit_price,
+    )
     query = (
         select(
             ReturnReceiptItem.id.label("return_receipt_item_id"),
@@ -1221,18 +1338,34 @@ def _pending_statement_query(
             Delivery.delivery_date,
             Delivery.customer_id,
             Order.id.label("order_id"),
-            Order.order_number,
-            Order.customer_po,
-            Product.product_code,
-            OrderItem.snapshot_product_name.label("product_name"),
-            OrderItem.snapshot_spec.label("specification"),
+            case(
+                (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
+                else_=Order.order_number,
+            ).label("order_number"),
+            case(
+                (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
+                else_=Order.customer_po,
+            ).label("customer_po"),
+            func.coalesce(
+                DeliveryItem.product_code_snapshot,
+                Product.product_code,
+            ).label("product_code"),
+            func.coalesce(
+                DeliveryItem.product_name_snapshot,
+                OrderItem.snapshot_product_name,
+                Product.product_name,
+            ).label("product_name"),
+            func.coalesce(
+                DeliveryItem.specification_snapshot,
+                OrderItem.snapshot_spec,
+            ).label("specification"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.delivered_quantity.label("actual_delivery_quantity"),
             DeliveryItem.over_delivery_quantity,
             ReturnReceiptItem.actual_received_quantity,
-            OrderItem.unit_price,
+            effective_unit_price.label("unit_price"),
             (
-                ReturnReceiptItem.actual_received_quantity * OrderItem.unit_price
+                ReturnReceiptItem.actual_received_quantity * effective_unit_price
             ).label("receivable_amount"),
             ReturnReceiptItem.difference_reason,
             StatementItem.id.label("statement_item_id"),
@@ -1244,9 +1377,13 @@ def _pending_statement_query(
         )
         .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .join(Product, Product.id == OrderItem.product_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .outerjoin(
+            Product,
+            Product.id
+            == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+        )
         .outerjoin(
             StatementItem,
             StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
@@ -1289,7 +1426,11 @@ def _pending_statement_groups(
         return []
 
     registry = build_display_registry(db)
-    order_ids = {row["order_id"] for row in raw_rows}
+    order_ids = {
+        row["order_id"]
+        for row in raw_rows
+        if row["order_id"] is not None
+    }
     orders = {
         order.id: order
         for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
@@ -1436,6 +1577,7 @@ def create_statement(
                 ReturnReceiptItem,
                 ReturnReceipt,
                 Delivery,
+                DeliveryItem,
                 OrderItem,
                 Product,
                 StatementItem.id.label("existing_statement_item_id"),
@@ -1449,8 +1591,12 @@ def create_statement(
                 DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
             )
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .join(Product, Product.id == OrderItem.product_id)
+            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .outerjoin(
+                Product,
+                Product.id
+                == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+            )
             .outerjoin(
                 StatementItem,
                 StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
@@ -1472,7 +1618,15 @@ def create_statement(
             )
         claimed_receipt_ids: set[int] = set()
         for row in selected_rows:
-            receipt_item, receipt, delivery, _order_item, _product, existing_id = row
+            (
+                receipt_item,
+                receipt,
+                delivery,
+                _delivery_item,
+                _order_item,
+                _product,
+                existing_id,
+            ) = row
             require_customer_access(delivery.customer_id, user, db)
             if delivery.customer_id != payload.customer_id:
                 raise HTTPException(status_code=400, detail="送货单客户不匹配")
@@ -1518,8 +1672,34 @@ def create_statement(
         total_receivable = Decimal("0")
         total_profit = Decimal("0")
         for row in selected_rows:
-            receipt_item, _receipt, _delivery, order_item, product, _existing_id = row
-            unit_price = Decimal(str(order_item.unit_price))
+            (
+                receipt_item,
+                _receipt,
+                _delivery,
+                delivery_item,
+                order_item,
+                product,
+                _existing_id,
+            ) = row
+            if delivery_item.source_type == "unordered_finished":
+                if delivery_item.unit_price_snapshot is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="无订单库存送货缺少冻结单价，不能生成对账单",
+                    )
+                unit_price = Decimal(str(delivery_item.unit_price_snapshot))
+            else:
+                if order_item is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="订单送货明细缺少订单关联，不能生成对账单",
+                    )
+                unit_price = Decimal(str(order_item.unit_price))
+            if product is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="送货明细缺少产品资料，不能生成对账单",
+                )
             unit_cost = Decimal(str(product.cost_unit_price or 0))
             quantity = Decimal(receipt_item.actual_received_quantity)
             receivable = (quantity * unit_price).quantize(
@@ -1795,6 +1975,18 @@ def cancel_return_receipt(
         receipt_items=receipt_items,
         delivery_items=delivery_items,
     )
+    try:
+        reconsume_unordered_finished_receipt_returns(
+            db,
+            return_receipt_item_ids=receipt_item_ids,
+            operator_id=user.id,
+        )
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
     affected_order_ids: set[int] = set()
     for item in receipt_items:
         order_id = _apply_receipt_order_effect(

@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, case, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -45,10 +46,12 @@ from app.models.tianhua_pre_delivery import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
+    FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
     InventoryReservation,
     OrderItemSemiRequirement,
+    UnorderedFinishedDeliveryAllocation,
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
@@ -84,6 +87,10 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
     inventory_fifo_order_columns,
+)
+from app.services.unordered_finished_delivery import (
+    cancel_unordered_finished_dispatch,
+    dispatch_unordered_finished_inventory,
 )
 
 
@@ -308,9 +315,18 @@ def _normalized_delivery_address(address: str | None) -> str:
     return re.sub(r"[\s,，/]+", "", str(address or "").strip()).lower()
 
 
+class UnorderedFinishedAllocationCreate(BaseModel):
+    inventory_lot_id: int
+    quantity: int
+
+
 class DeliveryLineCreate(BaseModel):
-    order_item_id: int
+    source_type: str = "order"
+    order_item_id: int | None = None
+    product_id: int | None = None
     delivered_quantity: int
+    unit_price: Decimal | None = None
+    allocations: list[UnorderedFinishedAllocationCreate] = Field(default_factory=list)
     over_delivery_confirmed: bool = False
     over_delivery_reason: str | None = None
     remarks: str | None = None
@@ -320,33 +336,93 @@ class DeliveryCreate(BaseModel):
     customer_id: int
     delivery_date: date | None = None
     vehicle_number: str | None = None
-    items: list[DeliveryLineCreate]
+    source_mode: str = "order"
+    items: list[DeliveryLineCreate] = Field(default_factory=list)
+    lines: list[DeliveryLineCreate] = Field(default_factory=list)
 
-    @field_validator("items")
-    @classmethod
-    def validate_items(cls, value: list[DeliveryLineCreate]):
-        if not value:
+    @model_validator(mode="after")
+    def validate_delivery_lines(self):
+        if self.items and self.lines:
+            raise ValueError("送货明细只能使用 items 或 lines 其中一种格式")
+        selected = self.items or self.lines
+        if not selected:
             raise ValueError("送货单至少需要一条明细")
-        ids = [item.order_item_id for item in value]
-        if len(ids) != len(set(ids)):
-            raise ValueError("同一订单明细不能重复选择")
-        return value
+        self.items = selected
+        self.lines = []
+        if self.source_mode == "unordered_finished":
+            for line in selected:
+                if line.source_type == "finished_stock":
+                    line.source_type = "unordered_finished"
+        return self
 
 
 class DeliveryUpdate(BaseModel):
     delivery_date: date | None = None
     vehicle_number: str | None = None
-    items: list[DeliveryLineCreate]
+    source_mode: str = "order"
+    items: list[DeliveryLineCreate] = Field(default_factory=list)
+    lines: list[DeliveryLineCreate] = Field(default_factory=list)
 
-    @field_validator("items")
-    @classmethod
-    def validate_items(cls, value: list[DeliveryLineCreate]):
-        if not value:
+    @model_validator(mode="after")
+    def validate_delivery_lines(self):
+        if self.items and self.lines:
+            raise ValueError("送货明细只能使用 items 或 lines 其中一种格式")
+        selected = self.items or self.lines
+        if not selected:
             raise ValueError("送货单至少需要一条明细")
-        ids = [item.order_item_id for item in value]
-        if len(ids) != len(set(ids)):
-            raise ValueError("同一订单明细不能重复选择")
-        return value
+        self.items = selected
+        self.lines = []
+        if self.source_mode == "unordered_finished":
+            for line in selected:
+                if line.source_type == "finished_stock":
+                    line.source_type = "unordered_finished"
+        return self
+
+
+def _validate_delivery_source_contract(
+    source_mode: str,
+    lines: list[DeliveryLineCreate],
+) -> None:
+    if source_mode not in {"order", "unordered_finished"}:
+        raise ValueError("送货来源必须是订单待送或无订单成品库存")
+    seen_order_items: set[int] = set()
+    seen_products: set[int] = set()
+    seen_lots: set[int] = set()
+    for index, line in enumerate(lines, start=1):
+        normalized = (line.source_type or "order").strip()
+        if source_mode == "unordered_finished" and normalized == "finished_stock":
+            normalized = "unordered_finished"
+            line.source_type = normalized
+        if normalized != source_mode:
+            raise ValueError(f"第 {index} 条送货明细来源不一致，禁止混合送货")
+        if source_mode == "order":
+            if line.order_item_id is None or line.product_id is not None:
+                raise ValueError(f"第 {index} 条订单待送明细缺少订单关联")
+            if line.order_item_id in seen_order_items:
+                raise ValueError("同一订单明细不能重复选择")
+            seen_order_items.add(line.order_item_id)
+            if line.allocations:
+                raise ValueError("订单待送不能提交无订单库存批次")
+            continue
+        if line.order_item_id is not None or line.product_id is None:
+            raise ValueError(f"第 {index} 条无订单库存明细缺少产品")
+        if line.product_id in seen_products:
+            raise ValueError("同一产品在一张无订单送货单中只能出现一行")
+        seen_products.add(line.product_id)
+        if line.unit_price is None or line.unit_price <= 0:
+            raise ValueError(f"第 {index} 条无订单库存明细必须填写大于零的单价")
+        if not line.allocations:
+            raise ValueError(f"第 {index} 条无订单库存明细必须选择库存批次")
+        allocated = 0
+        for allocation in line.allocations:
+            if allocation.quantity <= 0:
+                raise ValueError(f"第 {index} 条库存批次数量必须大于零")
+            if allocation.inventory_lot_id in seen_lots:
+                raise ValueError("同一库存批次不能在一张送货单中重复使用")
+            seen_lots.add(allocation.inventory_lot_id)
+            allocated += allocation.quantity
+        if allocated != line.delivered_quantity:
+            raise ValueError(f"第 {index} 条送货数量必须等于批次分配数量")
 
 
 class DeliveryPickItemUpdate(BaseModel):
@@ -1712,8 +1788,12 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
             select(
                 DeliveryItem.id,
                 DeliveryItem.delivery_id,
+                DeliveryItem.source_type,
                 DeliveryItem.order_item_id,
+                DeliveryItem.product_id,
                 DeliveryItem.delivered_quantity,
+                DeliveryItem.unit_price_snapshot.label("unit_price"),
+                DeliveryItem.price_source,
                 DeliveryItem.ordered_quantity_snapshot,
                 DeliveryItem.order_remaining_snapshot,
                 DeliveryItem.over_delivery_quantity,
@@ -1723,14 +1803,29 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 Order.id.label("order_id"),
                 Order.order_number,
                 Order.customer_po,
-                Product.product_code,
-                OrderItem.snapshot_product_name.label("product_name"),
-                OrderItem.snapshot_spec.label("specification"),
+                func.coalesce(
+                    DeliveryItem.product_code_snapshot,
+                    Product.product_code,
+                ).label("product_code"),
+                func.coalesce(
+                    DeliveryItem.product_name_snapshot,
+                    OrderItem.snapshot_product_name,
+                    Product.product_name,
+                ).label("product_name"),
+                func.coalesce(
+                    DeliveryItem.specification_snapshot,
+                    OrderItem.snapshot_spec,
+                ).label("specification"),
+                DeliveryItem.unit_snapshot,
                 OrderItem.snapshot_production_notes.label("production_notes"),
             )
-            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .join(Order, Order.id == OrderItem.order_id)
-            .join(Product, Product.id == OrderItem.product_id)
+            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .outerjoin(Order, Order.id == OrderItem.order_id)
+            .outerjoin(
+                Product,
+                Product.id
+                == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+            )
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
         ).all()
@@ -1808,12 +1903,20 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     rows_by_delivery: dict[int, list[dict]] = {}
     for row in item_rows:
         rows_by_delivery.setdefault(int(row["delivery_id"]), []).append(row)
-    order_ids = {int(row["order_id"]) for row in item_rows}
+    order_ids = {
+        int(row["order_id"])
+        for row in item_rows
+        if row.get("order_id") is not None
+    }
     orders = {
         order.id: order
         for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
     } if order_ids else {}
-    order_item_ids = {int(row["order_item_id"]) for row in item_rows}
+    order_item_ids = {
+        int(row["order_item_id"])
+        for row in item_rows
+        if row.get("order_item_id") is not None
+    }
     order_items = {
         item.id: item
         for item in db.scalars(select(OrderItem).where(OrderItem.id.in_(order_item_ids))).all()
@@ -1880,6 +1983,36 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     }
 
 
+def _unordered_finished_allocation_response(
+    db: Session,
+    delivery_item_id: int,
+) -> list[dict]:
+    rows = db.scalars(
+        select(UnorderedFinishedDeliveryAllocation)
+        .where(
+            UnorderedFinishedDeliveryAllocation.delivery_item_id
+            == delivery_item_id
+        )
+        .order_by(UnorderedFinishedDeliveryAllocation.id)
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "inventory_lot_id": row.inventory_lot_id,
+            "lot_number": row.lot_number_snapshot,
+            "location_id": row.warehouse_location_id_snapshot,
+            "location_code": row.warehouse_location_code_snapshot,
+            "pallet_code": row.pallet_code_snapshot,
+            "quantity": int(row.planned_quantity or 0),
+            "planned_quantity": int(row.planned_quantity or 0),
+            "consumed_quantity": int(row.consumed_quantity or 0),
+            "restored_quantity": int(row.restored_quantity or 0),
+            "status": row.status,
+        }
+        for row in rows
+    ]
+
+
 def _delivery_response(
     db: Session,
     delivery_id: int,
@@ -1908,39 +2041,13 @@ def _delivery_response(
     items = (
         list_context["rows_by_delivery"].get(delivery_id, [])
         if list_context is not None
-        else [
-            dict(row._mapping)
-            for row in db.execute(
-        select(
-            DeliveryItem.id,
-            DeliveryItem.order_item_id,
-            DeliveryItem.delivered_quantity,
-            DeliveryItem.ordered_quantity_snapshot,
-            DeliveryItem.order_remaining_snapshot,
-            DeliveryItem.over_delivery_quantity,
-            DeliveryItem.over_delivery_confirmed_by,
-            DeliveryItem.over_delivery_reason,
-            DeliveryItem.remarks,
-            Order.id.label("order_id"),
-            Order.order_number,
-            Order.customer_po,
-            Product.product_code,
-            OrderItem.snapshot_product_name.label("product_name"),
-            OrderItem.snapshot_spec.label("specification"),
-            OrderItem.snapshot_production_notes.label("production_notes"),
-        )
-        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .join(Product, Product.id == OrderItem.product_id)
-        .where(DeliveryItem.delivery_id == delivery_id)
-        .order_by(DeliveryItem.id)
-            ).all()
-        ]
+        else _delivery_item_rows(db, [delivery_id])
     )
     registry = list_context["registry"] if list_context is not None else build_display_registry(db)
     order_ids = {
         row["order_id"]
         for row in items
+        if row.get("order_id") is not None
     }
     orders = (
         {order_id: list_context["orders"][order_id] for order_id in order_ids if order_id in list_context["orders"]}
@@ -1977,10 +2084,15 @@ def _delivery_response(
     total_actual_goods_quantity = 0
     for row in items:
         mapping = row
+        is_unordered = mapping.get("source_type") == "unordered_finished"
         order_item = (
             list_context["order_items"].get(mapping["order_item_id"])
             if list_context is not None
-            else db.get(OrderItem, mapping["order_item_id"])
+            else (
+                db.get(OrderItem, mapping["order_item_id"])
+                if mapping.get("order_item_id") is not None
+                else None
+            )
         )
         skip_inventory_lookup = bool(
             list_context is not None
@@ -2005,13 +2117,31 @@ def _delivery_response(
                 dispatched=has_dispatch_history,
             )
         )
-        actual_goods_lines = _actual_goods_lines(
-            order_item_id=mapping["order_item_id"],
-            product_code=mapping["product_code"],
-            product_name=mapping["product_name"],
-            specification=mapping["specification"],
-            parent_quantity=mapping["delivered_quantity"],
-            component_lines=kit_metadata["component_lines"],
+        actual_goods_lines = (
+            [
+                {
+                    "line_type": "parent",
+                    "order_item_id": None,
+                    "component_snapshot_id": None,
+                    "product_code": mapping["product_code"],
+                    "product_name": mapping["product_name"],
+                    "specification": mapping["specification"],
+                    "unit": mapping.get("unit_snapshot") or "PCS",
+                    "quantity": int(mapping["delivered_quantity"] or 0),
+                    "pricing_included": True,
+                    "independent_return_receipt": True,
+                    "independent_statement": True,
+                }
+            ]
+            if is_unordered
+            else _actual_goods_lines(
+                order_item_id=mapping["order_item_id"],
+                product_code=mapping["product_code"],
+                product_name=mapping["product_name"],
+                specification=mapping["specification"],
+                parent_quantity=mapping["delivered_quantity"],
+                component_lines=kit_metadata["component_lines"],
+            )
         )
         actual_goods_quantity = sum(
             int(line["quantity"] or 0) for line in actual_goods_lines
@@ -2026,23 +2156,37 @@ def _delivery_response(
                     internal_remarks,
                 ),
                 "actual_delivery_quantity": mapping["delivered_quantity"],
-                "order_number": display_order_number(
-                    orders.get(mapping["order_id"]),
-                    registry,
-                )
-                if "order_id" in mapping
-                else mapping["order_number"],
-                "display_order_number": display_order_number(
-                    orders.get(mapping["order_id"]),
-                    registry,
-                )
-                if "order_id" in mapping
-                else mapping["order_number"],
+                "order_number": (
+                    "无订单库存"
+                    if is_unordered
+                    else display_order_number(
+                        orders.get(mapping["order_id"]),
+                        registry,
+                    )
+                ),
+                "display_order_number": (
+                    "无订单库存"
+                    if is_unordered
+                    else display_order_number(
+                        orders.get(mapping["order_id"]),
+                        registry,
+                    )
+                ),
+                "customer_po": (
+                    "无订单库存" if is_unordered else mapping.get("customer_po")
+                ),
                 **kit_metadata,
                 "actual_goods_lines": actual_goods_lines,
                 "actual_goods_quantity": actual_goods_quantity,
+                "allocations": (
+                    _unordered_finished_allocation_response(db, mapping["id"])
+                    if is_unordered
+                    else []
+                ),
                 "inventory_sources": (
-                    []
+                    _unordered_finished_allocation_response(db, mapping["id"])
+                    if is_unordered
+                    else []
                     if skip_inventory_lookup
                     else _inventory_sources_for_order_item(
                         db,
@@ -2062,6 +2206,7 @@ def _delivery_response(
         "customer_name": customer.name if customer else None,
         "delivery_date": delivery.delivery_date,
         "vehicle_number": delivery.vehicle_number,
+        "source_mode": delivery.source_mode,
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
         "total_actual_goods_quantity": total_actual_goods_quantity,
@@ -2212,6 +2357,17 @@ def _delivery_deletion_facts(
         if item_ids
         else []
     )
+    unordered_allocations = (
+        db.scalars(
+            select(UnorderedFinishedDeliveryAllocation).where(
+                UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(
+                    item_ids
+                )
+            )
+        ).all()
+        if item_ids
+        else []
+    )
     receipt = db.scalar(
         select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery.id)
     )
@@ -2244,11 +2400,17 @@ def _delivery_deletion_facts(
         receipt.created_at if receipt is not None else None,
         *(row.created_at for row in inventory_allocations),
         *(row.created_at for row in component_allocations),
+        *(
+            row.dispatched_at or row.created_at
+            for row in unordered_allocations
+            if int(row.consumed_quantity or 0) > 0
+        ),
     ]
     history_times = [value for value in history_times if value is not None]
     return {
         "inventory_allocations": inventory_allocations,
         "component_allocations": component_allocations,
+        "unordered_allocations": unordered_allocations,
         "receipt": receipt,
         "statement_item_id": statement_item_id,
         "history_at": min(history_times) if history_times else None,
@@ -2264,6 +2426,11 @@ def _build_pick_task(
 ) -> DeliveryPickTask:
     if delivery.status != "pending":
         raise HTTPException(status_code=409, detail="已发货送货单不能创建拿货任务")
+    if delivery.source_mode == "unordered_finished":
+        raise HTTPException(
+            status_code=409,
+            detail="无订单成品库存已指定原批次，本版本不创建移动拿货任务",
+        )
     previous = _delivery_pick_task(db, delivery.id)
     if previous is not None:
         # The normal button is idempotent.  Editing the delivery explicitly
@@ -2768,6 +2935,263 @@ def _collect_delivery_lines(
         built.append((order_item, line))
         total_quantity += line.delivered_quantity
     return built, total_quantity, warnings
+
+
+def _collect_unordered_finished_lines(
+    db: Session,
+    *,
+    customer_id: int,
+    lines: list[DeliveryLineCreate],
+) -> tuple[list[dict], int]:
+    built: list[dict] = []
+    total_quantity = 0
+    for index, line in enumerate(lines, start=1):
+        product = db.get(Product, line.product_id)
+        if (
+            product is None
+            or product.deleted_at is not None
+            or not product.is_active
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"第 {index} 条产品不存在或已停用",
+            )
+        if product.customer_id != customer_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"第 {index} 条产品不属于当前客户",
+            )
+        unit_price = Decimal(str(line.unit_price or 0)).quantize(
+            Decimal("0.0001")
+        )
+        if unit_price <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 条无订单库存明细必须填写大于零的单价",
+            )
+        allocation_rows: list[dict] = []
+        for planned in line.allocations:
+            row = db.execute(
+                select(
+                    InventoryLot,
+                    FinishedGoodsInventoryDetail,
+                    WarehouseLocation,
+                )
+                .join(
+                    FinishedGoodsInventoryDetail,
+                    FinishedGoodsInventoryDetail.inventory_lot_id
+                    == InventoryLot.id,
+                )
+                .join(
+                    WarehouseLocation,
+                    WarehouseLocation.id
+                    == InventoryLot.warehouse_location_id,
+                )
+                .where(InventoryLot.id == planned.inventory_lot_id)
+            ).one_or_none()
+            if row is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"第 {index} 条所选成品库存批次不存在",
+                )
+            lot, detail, location = row
+            if (
+                lot.inventory_type != "finished"
+                or lot.status != "active"
+                or int(lot.quantity_reserved or 0) != 0
+                or int(lot.quantity_available or 0) < planned.quantity
+                or detail.is_general
+                or detail.owner_customer_id != customer_id
+                or detail.product_id != product.id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"批次 {lot.lot_number} 已不可用于当前客户和产品，"
+                        "请刷新库存后重试"
+                    ),
+                )
+            pallet = lot.pallet_item.pallet if lot.pallet_item else None
+            allocation_rows.append(
+                {
+                    "lot": lot,
+                    "quantity": int(planned.quantity),
+                    "location": location,
+                    "pallet_code": pallet.pallet_code if pallet else None,
+                }
+            )
+        built.append(
+            {
+                "product": product,
+                "line": line,
+                "unit_price": unit_price,
+                "price_source": (
+                    "product_default"
+                    if product.sale_unit_price is not None
+                    and Decimal(str(product.sale_unit_price)).quantize(
+                        Decimal("0.0001")
+                    )
+                    == unit_price
+                    else "manual"
+                ),
+                "allocations": allocation_rows,
+            }
+        )
+        total_quantity += int(line.delivered_quantity)
+    return built, total_quantity
+
+
+def _store_unordered_finished_items(
+    db: Session,
+    *,
+    delivery: Delivery,
+    built: list[dict],
+    user: User,
+) -> None:
+    for entry in built:
+        product: Product = entry["product"]
+        line: DeliveryLineCreate = entry["line"]
+        delivery_item = DeliveryItem(
+            delivery_id=delivery.id,
+            source_type="unordered_finished",
+            order_item_id=None,
+            product_id=product.id,
+            product_code_snapshot=product.product_code,
+            product_name_snapshot=product.product_name,
+            specification_snapshot=_product_specification(product),
+            unit_snapshot=product.unit or "只",
+            unit_price_snapshot=entry["unit_price"],
+            price_source=entry["price_source"],
+            delivered_quantity=int(line.delivered_quantity),
+            ordered_quantity_snapshot=0,
+            order_remaining_snapshot=0,
+            over_delivery_quantity=0,
+            remarks=(line.remarks or "").strip() or None,
+        )
+        db.add(delivery_item)
+        db.flush()
+        for planned in entry["allocations"]:
+            lot: InventoryLot = planned["lot"]
+            location: WarehouseLocation = planned["location"]
+            db.add(
+                UnorderedFinishedDeliveryAllocation(
+                    delivery_item_id=delivery_item.id,
+                    inventory_lot_id=lot.id,
+                    planned_quantity=planned["quantity"],
+                    consumed_quantity=0,
+                    restored_quantity=0,
+                    status="planned",
+                    lot_number_snapshot=lot.lot_number,
+                    warehouse_location_id_snapshot=location.id,
+                    warehouse_location_code_snapshot=location.location_code,
+                    pallet_code_snapshot=planned["pallet_code"],
+                    created_by=user.id,
+                )
+            )
+
+
+def _product_specification(product: Product) -> str | None:
+    dimensions = [
+        value
+        for value in (product.length_mm, product.width_mm, product.height_mm)
+        if value is not None
+    ]
+    if not dimensions:
+        return None
+    return "×".join(
+        str(int(value)) if value == int(value) else str(value)
+        for value in dimensions
+    )
+
+
+@router.get("/unordered-finished-candidates")
+def unordered_finished_candidates(
+    customer_id: int = Query(gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    require_customer_access(customer_id, user, db)
+    customer = db.get(Customer, customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="客户不存在")
+    active_reservation = exists(
+        select(1).where(
+            InventoryReservation.inventory_lot_id == InventoryLot.id,
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > (
+                InventoryReservation.consumed_stock_quantity
+                + InventoryReservation.released_stock_quantity
+            ),
+        )
+    )
+    rows = db.execute(
+        select(
+            InventoryLot,
+            FinishedGoodsInventoryDetail,
+            Product,
+            WarehouseLocation,
+        )
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .where(
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.quantity_available > 0,
+            InventoryLot.quantity_reserved == 0,
+            FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            Product.customer_id == customer_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            ~active_reservation,
+        )
+        .order_by(Product.product_code, *inventory_fifo_order_columns())
+    ).all()
+    items: list[dict] = []
+    for lot, detail, product, location in rows:
+        pallet = lot.pallet_item.pallet if lot.pallet_item else None
+        items.append(
+            {
+                "inventory_lot_id": lot.id,
+                "inventory_lot_number": lot.lot_number,
+                "lot_number": lot.lot_number,
+                "inventory_version": lot.version,
+                "product_id": product.id,
+                "product_code": detail.inventory_code_snapshot
+                or product.product_code,
+                "product_name": detail.product_name_snapshot
+                or product.product_name,
+                "specification": _product_specification(product),
+                "unit": product.unit,
+                "owner_customer_id": customer_id,
+                "customer_id": customer_id,
+                "is_general": False,
+                "available_quantity": int(lot.quantity_available or 0),
+                "unit_price": (
+                    str(product.sale_unit_price)
+                    if product.sale_unit_price is not None
+                    and product.sale_unit_price > 0
+                    else None
+                ),
+                "price_required": not bool(
+                    product.sale_unit_price is not None
+                    and product.sale_unit_price > 0
+                ),
+                "location_id": location.id,
+                "location_code": location.location_code,
+                "location_name": location.location_name,
+                "pallet_code": pallet.pallet_code if pallet else None,
+            }
+        )
+    return {"customer_id": customer_id, "items": items}
 
 
 @router.get("/route-suggestions")
@@ -3312,6 +3736,10 @@ def create_delivery(
     user: User = Depends(can_operate),
 ) -> dict:
     require_customer_access(payload.customer_id, user, db)
+    try:
+        _validate_delivery_source_contract(payload.source_mode, payload.items)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
@@ -3326,42 +3754,58 @@ def create_delivery(
             customer_id=payload.customer_id,
             delivery_date=delivery_date,
             vehicle_number=(payload.vehicle_number or "").strip() or None,
+            source_mode=payload.source_mode,
             status="pending",
             total_quantity=0,
             created_by=user.id,
         )
         db.add(delivery)
         db.flush()
-        built, total_quantity, warnings = _collect_delivery_lines(
-            db,
-            customer_id=payload.customer_id,
-            lines=payload.items,
-            user=user,
-        )
-        for order_item, line in built:
-            order_remaining = max(
-                int(order_item.quantity or 0)
-                - int(order_item.delivered_quantity or 0),
-                0,
+        warnings: list[dict] = []
+        if payload.source_mode == "unordered_finished":
+            built_unordered, total_quantity = _collect_unordered_finished_lines(
+                db,
+                customer_id=payload.customer_id,
+                lines=payload.items,
             )
-            over_delivery = max(line.delivered_quantity - order_remaining, 0)
-            db.add(
-                DeliveryItem(
-                    delivery_id=delivery.id,
-                    order_item_id=order_item.id,
-                    delivered_quantity=line.delivered_quantity,
-                    ordered_quantity_snapshot=int(order_item.quantity or 0),
-                    order_remaining_snapshot=order_remaining,
-                    over_delivery_quantity=over_delivery,
-                    over_delivery_confirmed_by=(
-                        user.id if over_delivery > 0 else None
-                    ),
-                    over_delivery_reason=(
-                        (line.over_delivery_reason or "").strip() or None
-                    ),
-                    remarks=(line.remarks or "").strip() or None,
+            _store_unordered_finished_items(
+                db,
+                delivery=delivery,
+                built=built_unordered,
+                user=user,
+            )
+        else:
+            built, total_quantity, warnings = _collect_delivery_lines(
+                db,
+                customer_id=payload.customer_id,
+                lines=payload.items,
+                user=user,
+            )
+            for order_item, line in built:
+                order_remaining = max(
+                    int(order_item.quantity or 0)
+                    - int(order_item.delivered_quantity or 0),
+                    0,
                 )
-            )
+                over_delivery = max(line.delivered_quantity - order_remaining, 0)
+                db.add(
+                    DeliveryItem(
+                        delivery_id=delivery.id,
+                        source_type="order",
+                        order_item_id=order_item.id,
+                        delivered_quantity=line.delivered_quantity,
+                        ordered_quantity_snapshot=int(order_item.quantity or 0),
+                        order_remaining_snapshot=order_remaining,
+                        over_delivery_quantity=over_delivery,
+                        over_delivery_confirmed_by=(
+                            user.id if over_delivery > 0 else None
+                        ),
+                        over_delivery_reason=(
+                            (line.over_delivery_reason or "").strip() or None
+                        ),
+                        remarks=(line.remarks or "").strip() or None,
+                    )
+                )
         delivery.total_quantity = total_quantity
         _write_audit(
             db,
@@ -3371,6 +3815,7 @@ def create_delivery(
             entity_id=delivery.id,
             details={
                 "delivery_number": delivery.delivery_number,
+                "source_mode": delivery.source_mode,
                 "item_count": len(payload.items),
                 "total_quantity": total_quantity,
             },
@@ -3400,33 +3845,43 @@ def dispatch_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    _delivery_for_user(db, delivery_id, user)
+    delivery = _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
     try:
         pick_task = _delivery_pick_task(db, delivery_id)
+        if delivery.source_mode == "unordered_finished" and pick_task is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="无订单成品库存送货不进入移动拿货任务，请删除异常任务后重试",
+            )
         if pick_task and pick_task.status == "exception":
             raise HTTPException(
                 status_code=409,
                 detail="拿货任务存在异常，请先在电脑端应用拿货结果后再发货",
             )
-        order_ids = list(
-            db.scalars(
-                select(OrderItem.order_id)
-                .join(DeliveryItem, DeliveryItem.order_item_id == OrderItem.id)
-                .where(DeliveryItem.delivery_id == delivery_id)
-                .distinct()
-                .order_by(OrderItem.order_id)
-            ).all()
+        order_ids = (
+            []
+            if delivery.source_mode == "unordered_finished"
+            else list(
+                db.scalars(
+                    select(OrderItem.order_id)
+                    .join(DeliveryItem, DeliveryItem.order_item_id == OrderItem.id)
+                    .where(DeliveryItem.delivery_id == delivery_id)
+                    .distinct()
+                    .order_by(OrderItem.order_id)
+                ).all()
+            )
         )
-        try:
-            # Global transition order: Order -> Delivery -> OrderItem.  Workflow
-            # rollback also starts from Order before touching Delivery rows.
-            lock_order_rows_for_production_transition(db, order_ids)
-        except ProductionWorkflowError as error:
-            raise HTTPException(
-                status_code=error.status_code,
-                detail=str(error),
-            ) from error
+        if order_ids:
+            try:
+                # Global transition order: Order -> Delivery -> OrderItem.  Workflow
+                # rollback also starts from Order before touching Delivery rows.
+                lock_order_rows_for_production_transition(db, order_ids)
+            except ProductionWorkflowError as error:
+                raise HTTPException(
+                    status_code=error.status_code,
+                    detail=str(error),
+                ) from error
         claimed = db.execute(
             update(Delivery)
             .where(
@@ -3469,6 +3924,41 @@ def dispatch_delivery(
                 status_code=409,
                 detail="本次送货单已无可发货明细，请删除送货草稿或重新编辑",
             )
+        if delivery.source_mode == "unordered_finished":
+            if any(
+                line.source_type != "unordered_finished"
+                or line.order_item_id is not None
+                for line in lines
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="无订单成品库存送货单来源异常，禁止发货",
+                )
+            dispatch_unordered_finished_inventory(
+                db,
+                delivery=delivery,
+                delivery_items=lines,
+                operator_id=user.id,
+                dispatched_at=dispatched_at,
+            )
+            _write_audit(
+                db,
+                user=user,
+                action="DISPATCH",
+                resource="Delivery",
+                entity_id=delivery_id,
+                details={
+                    "source_mode": "unordered_finished",
+                    "dispatched_at": dispatched_at,
+                    "item_count": len(lines),
+                    "total_quantity": sum(
+                        int(line.delivered_quantity or 0) for line in lines
+                    ),
+                },
+                description="确认无订单客户专用成品正式发货",
+            )
+            db.commit()
+            return _delivery_response(db, delivery_id)
         current_order_ids = set(
             db.scalars(
                 select(OrderItem.order_id)
@@ -3691,6 +4181,10 @@ def update_delivery(
 ) -> dict:
     _delivery_for_user(db, delivery_id, user)
     try:
+        _validate_delivery_source_contract(payload.source_mode, payload.items)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    try:
         # 先以条件写取得 SQLite 写锁。这样编辑与发货并发时，
         # 只有先取得 pending 状态的一方继续，避免按过期状态替换明细。
         claimed = db.execute(
@@ -3717,46 +4211,79 @@ def update_delivery(
                 detail="送货单已确认发货，不能编辑，请先取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        if payload.source_mode != delivery.source_mode:
+            raise HTTPException(
+                status_code=409,
+                detail="送货单保存后不能切换订单待送与无订单库存来源",
+            )
         _discard_delivery_pick_task(
             db,
             delivery_id=delivery_id,
             user=user,
             reason="delivery_draft_updated",
         )
-        built, total_quantity, warnings = _collect_delivery_lines(
-            db,
-            customer_id=delivery.customer_id,
-            lines=payload.items,
-            user=user,
-        )
+        warnings: list[dict] = []
+        if delivery.source_mode == "unordered_finished":
+            built_unordered, total_quantity = _collect_unordered_finished_lines(
+                db,
+                customer_id=delivery.customer_id,
+                lines=payload.items,
+            )
+        else:
+            built, total_quantity, warnings = _collect_delivery_lines(
+                db,
+                customer_id=delivery.customer_id,
+                lines=payload.items,
+                user=user,
+            )
+        if delivery.source_mode == "unordered_finished":
+            delivery_item_ids = select(DeliveryItem.id).where(
+                DeliveryItem.delivery_id == delivery_id
+            )
+            db.execute(
+                delete(UnorderedFinishedDeliveryAllocation).where(
+                    UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(
+                        delivery_item_ids
+                    )
+                )
+            )
         db.execute(
             delete(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
         )
         db.flush()
-        for order_item, line in built:
-            order_remaining = max(
-                int(order_item.quantity or 0)
-                - int(order_item.delivered_quantity or 0),
-                0,
+        if delivery.source_mode == "unordered_finished":
+            _store_unordered_finished_items(
+                db,
+                delivery=delivery,
+                built=built_unordered,
+                user=user,
             )
-            over_delivery = max(line.delivered_quantity - order_remaining, 0)
-            db.add(
-                DeliveryItem(
-                    delivery_id=delivery.id,
-                    order_item_id=order_item.id,
-                    delivered_quantity=line.delivered_quantity,
-                    ordered_quantity_snapshot=int(order_item.quantity or 0),
-                    order_remaining_snapshot=order_remaining,
-                    over_delivery_quantity=over_delivery,
-                    over_delivery_confirmed_by=(
-                        user.id if over_delivery > 0 else None
-                    ),
-                    over_delivery_reason=(
-                        (line.over_delivery_reason or "").strip() or None
-                    ),
-                    remarks=(line.remarks or "").strip() or None,
+        else:
+            for order_item, line in built:
+                order_remaining = max(
+                    int(order_item.quantity or 0)
+                    - int(order_item.delivered_quantity or 0),
+                    0,
                 )
-            )
+                over_delivery = max(line.delivered_quantity - order_remaining, 0)
+                db.add(
+                    DeliveryItem(
+                        delivery_id=delivery.id,
+                        source_type="order",
+                        order_item_id=order_item.id,
+                        delivered_quantity=line.delivered_quantity,
+                        ordered_quantity_snapshot=int(order_item.quantity or 0),
+                        order_remaining_snapshot=order_remaining,
+                        over_delivery_quantity=over_delivery,
+                        over_delivery_confirmed_by=(
+                            user.id if over_delivery > 0 else None
+                        ),
+                        over_delivery_reason=(
+                            (line.over_delivery_reason or "").strip() or None
+                        ),
+                        remarks=(line.remarks or "").strip() or None,
+                    )
+                )
         if payload.delivery_date is not None:
             delivery.delivery_date = payload.delivery_date
         if payload.vehicle_number is not None:
@@ -3770,7 +4297,8 @@ def update_delivery(
             entity_id=delivery.id,
             details={
                 "delivery_number": delivery.delivery_number,
-                "item_count": len(built),
+                "source_mode": delivery.source_mode,
+                "item_count": len(payload.items),
                 "total_quantity": total_quantity,
             },
             description="编辑待发货送货单",
@@ -3881,6 +4409,15 @@ def delete_delivery(
                 status_code=409,
                 detail="送货单组件成品抵扣尚未全部冲回，不能作废；请先取消发货并刷新后重试",
             )
+        if any(
+            int(row.restored_quantity or 0)
+            != int(row.consumed_quantity or 0)
+            for row in facts["unordered_allocations"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="无订单成品送货库存尚未全部退回原批次，不能作废",
+            )
         _discard_delivery_pick_task(
             db,
             delivery_id=delivery_id,
@@ -3943,6 +4480,9 @@ def delete_delivery(
                     "component_allocation_count": len(
                         facts["component_allocations"]
                     ),
+                    "unordered_allocation_count": len(
+                        facts["unordered_allocations"]
+                    ),
                     "return_receipt_status": (
                         receipt.status if receipt is not None else None
                     ),
@@ -3968,6 +4508,17 @@ def delete_delivery(
             },
             description="删除待发货送货单",
         )
+        if delivery.source_mode == "unordered_finished":
+            delivery_item_ids = select(DeliveryItem.id).where(
+                DeliveryItem.delivery_id == delivery.id
+            )
+            db.execute(
+                delete(UnorderedFinishedDeliveryAllocation).where(
+                    UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(
+                        delivery_item_ids
+                    )
+                )
+            )
         db.delete(delivery)
         db.commit()
         return {
@@ -4069,6 +4620,44 @@ def cancel_delivery(
             .where(DeliveryItem.delivery_id == delivery_id)
             .order_by(DeliveryItem.id)
         ).all()
+        if delivery.source_mode == "unordered_finished":
+            cancel_unordered_finished_dispatch(
+                db,
+                delivery=delivery,
+                delivery_items=lines,
+                operator_id=user.id,
+            )
+            # Once an unordered-stock dispatch has been reversed, its immutable
+            # allocation/reversal audit must remain attached to the original
+            # document.  Archive it immediately instead of presenting a
+            # misleading editable pending draft that cannot safely reuse those
+            # allocations.
+            delivery.status = "voided"
+            delivery.voided_by = user.id
+            delivery.voided_at = cancelled_at
+            _discard_delivery_pick_task(
+                db,
+                delivery_id=delivery_id,
+                user=user,
+                reason="unordered_finished_delivery_dispatch_cancelled",
+            )
+            _write_audit(
+                db,
+                user=user,
+                action="CANCEL_DISPATCH",
+                resource="Delivery",
+                entity_id=delivery_id,
+                details={
+                    "source_mode": "unordered_finished",
+                    "delivery_number": delivery.delivery_number,
+                    "item_count": len(lines),
+                    "restored_quantity": delivery.total_quantity,
+                    "disposition": "voided_after_dispatch_cancel",
+                },
+                description="取消无订单成品送货、退回原库存批次并归档",
+            )
+            db.commit()
+            return _delivery_response(db, delivery_id)
         affected_order_ids: set[int] = set()
         for line in lines:
             order_item = db.get(OrderItem, line.order_item_id)
@@ -4305,19 +4894,38 @@ def get_delivery_print_data(
     rows = db.execute(
         select(
             DeliveryItem.id.label("delivery_item_id"),
+            DeliveryItem.source_type,
             DeliveryItem.order_item_id,
-            Order.customer_po,
-            Product.product_code,
-            OrderItem.snapshot_product_name.label("product_name"),
-            OrderItem.snapshot_spec.label("specification"),
+            case(
+                (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
+                else_=Order.customer_po,
+            ).label("customer_po"),
+            func.coalesce(
+                DeliveryItem.product_code_snapshot,
+                Product.product_code,
+            ).label("product_code"),
+            func.coalesce(
+                DeliveryItem.product_name_snapshot,
+                OrderItem.snapshot_product_name,
+                Product.product_name,
+            ).label("product_name"),
+            func.coalesce(
+                DeliveryItem.specification_snapshot,
+                OrderItem.snapshot_spec,
+            ).label("specification"),
+            DeliveryItem.unit_snapshot,
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.over_delivery_quantity,
             DeliveryItem.remarks,
         )
-        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .join(Product, Product.id == OrderItem.product_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .outerjoin(
+            Product,
+            Product.id
+            == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+        )
         .where(DeliveryItem.delivery_id == delivery_id)
         .order_by(DeliveryItem.id)
     ).all()
@@ -4334,7 +4942,12 @@ def get_delivery_print_data(
     print_items: list[dict] = []
     actual_goods_items: list[dict] = []
     for row in rows:
-        order_item = db.get(OrderItem, row.order_item_id)
+        is_unordered = row.source_type == "unordered_finished"
+        order_item = (
+            db.get(OrderItem, row.order_item_id)
+            if row.order_item_id is not None
+            else None
+        )
         kit_metadata = _delivery_kit_metadata(
             db,
             order_item,
@@ -4342,13 +4955,31 @@ def get_delivery_print_data(
             delivery_item_id=row.delivery_item_id,
             dispatched=delivery.status == "dispatched",
         )
-        actual_goods_lines = _actual_goods_lines(
-            order_item_id=row.order_item_id,
-            product_code=_print_product_code(row.product_code),
-            product_name=row.product_name,
-            specification=row.specification,
-            parent_quantity=row.quantity,
-            component_lines=kit_metadata["component_lines"],
+        actual_goods_lines = (
+            [
+                {
+                    "line_type": "parent",
+                    "order_item_id": None,
+                    "component_snapshot_id": None,
+                    "product_code": row.product_code,
+                    "product_name": row.product_name,
+                    "specification": row.specification,
+                    "unit": row.unit_snapshot or "PCS",
+                    "quantity": int(row.quantity or 0),
+                    "pricing_included": True,
+                    "independent_return_receipt": True,
+                    "independent_statement": True,
+                }
+            ]
+            if is_unordered
+            else _actual_goods_lines(
+                order_item_id=row.order_item_id,
+                product_code=_print_product_code(row.product_code),
+                product_name=row.product_name,
+                specification=row.specification,
+                parent_quantity=row.quantity,
+                component_lines=kit_metadata["component_lines"],
+            )
         )
         document_goods_lines = [
             {
@@ -4368,7 +4999,7 @@ def get_delivery_print_data(
                 "product_code": _print_product_code(row.product_code),
                 "product_name": row.product_name,
                 "specification": row.specification,
-                "unit": "PCS",
+                "unit": row.unit_snapshot or "PCS",
                 "quantity": row.quantity,
                 "ordered_quantity": row.ordered_quantity_snapshot,
                 "over_delivery_quantity": row.over_delivery_quantity,

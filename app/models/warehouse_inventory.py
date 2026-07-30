@@ -1138,3 +1138,174 @@ class DeliveryInventoryAllocation(Base):
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
     reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class UnorderedFinishedDeliveryAllocation(Base):
+    """Planned and posted lot effects for one order-less finished-goods delivery line.
+
+    This deliberately does not use ``InventoryReservation`` or
+    ``DeliveryInventoryAllocation``.  A draft records the intended lots only;
+    the formal dispatch service must later create the inventory movement.
+    """
+
+    __tablename__ = "unordered_finished_delivery_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            "planned_quantity > 0",
+            name="ck_unordered_finished_delivery_allocations_planned_quantity",
+        ),
+        CheckConstraint(
+            "consumed_quantity >= 0 AND consumed_quantity <= planned_quantity "
+            "AND restored_quantity >= 0 AND restored_quantity <= consumed_quantity",
+            name="ck_unordered_finished_delivery_allocations_quantity_progress",
+        ),
+        CheckConstraint(
+            "status IN ('planned', 'dispatched', 'partial_restored', 'restored')",
+            name="ck_unordered_finished_delivery_allocations_status",
+        ),
+        UniqueConstraint(
+            "delivery_item_id",
+            "inventory_lot_id",
+            name="uq_unordered_finished_delivery_allocations_item_lot",
+        ),
+        UniqueConstraint(
+            "consume_movement_id",
+            name="uq_unordered_finished_delivery_allocations_consume_movement",
+        ),
+        Index(
+            "ix_unordered_finished_delivery_allocations_item_status",
+            "delivery_item_id",
+            "status",
+        ),
+        Index(
+            "ix_unordered_finished_delivery_allocations_lot_status",
+            "inventory_lot_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    delivery_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_delivery_items.id", ondelete="RESTRICT"), nullable=False
+    )
+    inventory_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    planned_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumed_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    restored_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(24), default="planned", server_default="planned", nullable=False
+    )
+    lot_number_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    warehouse_location_id_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    warehouse_location_code_snapshot: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    pallet_code_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    consume_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    dispatched_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    delivery_item: Mapped["DeliveryItem"] = relationship()
+    inventory_lot: Mapped["InventoryLot"] = relationship()
+
+
+class UnorderedFinishedDeliveryReversal(Base):
+    """Immutable audit row for an order-less delivery lot restoration."""
+
+    __tablename__ = "unordered_finished_delivery_reversals"
+    __table_args__ = (
+        CheckConstraint(
+            "reversal_kind IN ('dispatch_cancel', 'receipt_short_return', "
+            "'receipt_refusal_return')",
+            name="ck_unordered_finished_delivery_reversals_kind",
+        ),
+        CheckConstraint(
+            "reversal_quantity > 0",
+            name="ck_unordered_finished_delivery_reversals_quantity",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND reconsumed_movement_id IS NULL "
+            "AND reconsumed_at IS NULL) OR "
+            "(status = 'reconsumed' AND reconsumed_movement_id IS NOT NULL "
+            "AND reconsumed_at IS NOT NULL)",
+            name="ck_unordered_finished_delivery_reversals_reconsumed",
+        ),
+        UniqueConstraint(
+            "inventory_movement_id",
+            name="uq_unordered_finished_delivery_reversals_movement",
+        ),
+        UniqueConstraint(
+            "reconsumed_movement_id",
+            name="uq_unordered_finished_delivery_reversals_reconsumed_movement",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_unordered_finished_delivery_reversals_idempotency",
+        ),
+        Index(
+            "ix_unordered_finished_delivery_reversals_allocation",
+            "allocation_id",
+        ),
+        Index(
+            "ix_unordered_finished_delivery_reversals_receipt_item",
+            "return_receipt_item_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    allocation_id: Mapped[int] = mapped_column(
+        ForeignKey("unordered_finished_delivery_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    return_receipt_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_return_receipt_items.id", ondelete="RESTRICT"), nullable=True
+    )
+    inventory_movement_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=False
+    )
+    reversal_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    reversal_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    reconsumed_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=True
+    )
+    reconsumed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reconsumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    allocation: Mapped["UnorderedFinishedDeliveryAllocation"] = relationship()
+    inventory_movement: Mapped["InventoryMovement"] = relationship(
+        foreign_keys=[inventory_movement_id]
+    )
+    reconsumed_movement: Mapped["InventoryMovement | None"] = relationship(
+        foreign_keys=[reconsumed_movement_id]
+    )

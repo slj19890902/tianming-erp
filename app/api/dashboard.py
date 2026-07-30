@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload, with_loader_criteria
 
 from app.api.deps import (
@@ -510,7 +510,13 @@ def dashboard_kpi(
                 func.coalesce(
                     func.sum(
                         ReturnReceiptItem.actual_received_quantity
-                        * OrderItem.unit_price
+                        * case(
+                            (
+                                DeliveryItem.source_type == "unordered_finished",
+                                DeliveryItem.unit_price_snapshot,
+                            ),
+                            else_=OrderItem.unit_price,
+                        )
                     ),
                     0,
                 )
@@ -522,7 +528,7 @@ def dashboard_kpi(
             )
             .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-            .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+            .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
             .where(
                 ReturnReceipt.status == "confirmed",
                 func.strftime(
@@ -857,7 +863,14 @@ def dashboard_overview(
             func.count(ReturnReceiptItem.id).label("item_count"),
             func.coalesce(
                 func.sum(
-                    ReturnReceiptItem.actual_received_quantity * OrderItem.unit_price
+                    ReturnReceiptItem.actual_received_quantity
+                    * case(
+                        (
+                            DeliveryItem.source_type == "unordered_finished",
+                            DeliveryItem.unit_price_snapshot,
+                        ),
+                        else_=OrderItem.unit_price,
+                    )
                 ),
                 0,
             ).label("amount"),
@@ -868,9 +881,8 @@ def dashboard_overview(
         .join(ReturnReceipt, ReturnReceipt.id == ReturnReceiptItem.return_receipt_id)
         .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .join(Customer, Customer.id == Order.customer_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .join(Customer, Customer.id == Delivery.customer_id)
         .where(
             ReturnReceipt.status == "confirmed",
             ~exists(
@@ -886,7 +898,14 @@ def dashboard_overview(
             func.count(ReturnReceiptItem.id).desc(),
             func.coalesce(
                 func.sum(
-                    ReturnReceiptItem.actual_received_quantity * OrderItem.unit_price
+                    ReturnReceiptItem.actual_received_quantity
+                    * case(
+                        (
+                            DeliveryItem.source_type == "unordered_finished",
+                            DeliveryItem.unit_price_snapshot,
+                        ),
+                        else_=OrderItem.unit_price,
+                    )
                 ),
                 0,
             ).desc(),

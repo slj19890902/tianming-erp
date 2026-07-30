@@ -140,6 +140,8 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     SemiFinishedLotAllowedProduct,
     SemiFinishedMatchRule,
     SemiFinishedMatchRuleProduct,
+    UnorderedFinishedDeliveryAllocation,
+    UnorderedFinishedDeliveryReversal,
     WarehouseArea,
     WarehouseFloor,
     WarehouseLocation,

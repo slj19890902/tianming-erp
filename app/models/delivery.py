@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -22,6 +24,7 @@ from app.models import Base
 if TYPE_CHECKING:
     from app.models.customer import Customer
     from app.models.order import OrderItem
+    from app.models.product import Product
 
 
 class DeliveryDailySequence(Base):
@@ -37,6 +40,10 @@ class Delivery(Base):
         CheckConstraint(
             "status IN ('pending', 'dispatched', 'voided')",
             name="ck_sales_deliveries_status",
+        ),
+        CheckConstraint(
+            "source_mode IN ('order', 'unordered_finished')",
+            name="ck_sales_deliveries_source_mode",
         ),
         UniqueConstraint(
             "delivery_number",
@@ -55,6 +62,12 @@ class Delivery(Base):
     )
     delivery_date: Mapped[date] = mapped_column(Date, nullable=False)
     vehicle_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source_mode: Mapped[str] = mapped_column(
+        String(30),
+        default="order",
+        server_default="order",
+        nullable=False,
+    )
     status: Mapped[str] = mapped_column(
         String(20),
         default="pending",
@@ -105,6 +118,19 @@ class DeliveryItem(Base):
             "delivered_quantity > 0",
             name="ck_sales_delivery_items_quantity",
         ),
+        CheckConstraint(
+            "source_type IN ('order', 'unordered_finished')",
+            name="ck_sales_delivery_items_source_type",
+        ),
+        CheckConstraint(
+            "(source_type = 'order' AND order_item_id IS NOT NULL AND product_id IS NULL "
+            "AND unit_price_snapshot IS NULL) OR "
+            "(source_type = 'unordered_finished' AND order_item_id IS NULL "
+            "AND product_id IS NOT NULL AND product_code_snapshot IS NOT NULL "
+            "AND product_name_snapshot IS NOT NULL AND unit_snapshot IS NOT NULL "
+            "AND unit_price_snapshot > 0 AND price_source IS NOT NULL)",
+            name="ck_sales_delivery_items_source_reference",
+        ),
         UniqueConstraint(
             "delivery_id",
             "order_item_id",
@@ -112,6 +138,7 @@ class DeliveryItem(Base):
         ),
         Index("ix_sales_delivery_items_delivery_id", "delivery_id"),
         Index("ix_sales_delivery_items_order_item_id", "order_item_id"),
+        Index("ix_sales_delivery_items_product_id", "product_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -119,10 +146,28 @@ class DeliveryItem(Base):
         ForeignKey("sales_deliveries.id", ondelete="CASCADE"),
         nullable=False,
     )
-    order_item_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_order_items.id", ondelete="RESTRICT"),
+    source_type: Mapped[str] = mapped_column(
+        String(30),
+        default="order",
+        server_default="order",
         nullable=False,
     )
+    order_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    product_code_snapshot: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    product_name_snapshot: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    specification_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unit_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    unit_price_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
+    )
+    price_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     delivered_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     ordered_quantity_snapshot: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
@@ -145,7 +190,8 @@ class DeliveryItem(Base):
     )
 
     delivery: Mapped["Delivery"] = relationship(back_populates="items")
-    order_item: Mapped["OrderItem"] = relationship()
+    order_item: Mapped["OrderItem | None"] = relationship()
+    product: Mapped["Product | None"] = relationship()
 
 
 class DeliveryPickTask(Base):

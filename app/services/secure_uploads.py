@@ -199,6 +199,22 @@ def _validate_content(
     )
 
 
+def validate_upload_bytes(
+    *,
+    content: bytes,
+    filename: str,
+    content_type: str,
+    policy: UploadPolicy,
+) -> ValidatedUpload:
+    """Validate already-loaded trusted-boundary bytes with the normal upload policy."""
+    return _validate_content(
+        content=content,
+        filename=filename,
+        content_type=content_type,
+        policy=policy,
+    )
+
+
 async def read_validated_upload(
     upload: UploadFile,
     policy: UploadPolicy,

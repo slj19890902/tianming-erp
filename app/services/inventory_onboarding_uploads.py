@@ -10,13 +10,16 @@ from io import BytesIO, StringIO
 import json
 import math
 from pathlib import Path, PurePath, PurePosixPath
+import posixpath
 import re
 from typing import Final, Literal
 import unicodedata
+import xml.etree.ElementTree as ET
 import zipfile
 
 from fastapi import UploadFile
 from openpyxl import load_workbook
+from PIL import Image, UnidentifiedImageError
 
 from app.services.secure_uploads import (
     CHUNK_SIZE,
@@ -361,7 +364,232 @@ def _inspect_xlsx_xml(name: str, payload: bytes) -> None:
         raise UploadValidationError("XLSX 包含宏")
 
 
-def _preflight_xlsx_container(content: bytes) -> None:
+def _xlsx_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _relationship_source_path(name: str) -> str:
+    prefix, filename = name.rsplit("/_rels/", 1)
+    if not filename.endswith(".rels"):
+        raise UploadValidationError("XLSX 关系文件路径无效")
+    return f"{prefix}/{filename[:-5]}"
+
+
+def _relationship_target(source: str, target: str) -> str:
+    if not target or "\\" in target or ":" in target:
+        raise UploadValidationError("XLSX 图片关系目标路径无效")
+    if target.startswith("/"):
+        resolved = posixpath.normpath(target.lstrip("/"))
+    else:
+        resolved = posixpath.normpath(
+            posixpath.join(posixpath.dirname(source), target)
+        )
+    if resolved.startswith("../") or resolved in {"", ".", ".."}:
+        raise UploadValidationError("XLSX 图片关系包含路径穿越")
+    return _safe_zip_member_name(resolved).casefold()
+
+
+def _inspect_worksheet_image_parts(
+    archive: zipfile.ZipFile,
+    normalized_infos: list[tuple[str, zipfile.ZipInfo]],
+) -> None:
+    names = {name for name, _ in normalized_infos}
+    drawing_names = {
+        name
+        for name in names
+        if re.fullmatch(r"xl/drawings/drawing[0-9]+\.xml", name)
+    }
+    drawing_relationship_names = {
+        name
+        for name in names
+        if re.fullmatch(
+            r"xl/drawings/_rels/drawing[0-9]+\.xml\.rels",
+            name,
+        )
+    }
+    media_names = {
+        name
+        for name in names
+        if re.fullmatch(r"xl/media/[^/]+\.(?:jpg|jpeg|png)", name)
+    }
+    for name in names:
+        if name.startswith("xl/drawings/") and (
+            name not in drawing_names and name not in drawing_relationship_names
+        ):
+            raise UploadValidationError("XLSX 包含不允许的绘图对象")
+        if name.startswith("xl/media/") and name not in media_names:
+            raise UploadValidationError("XLSX 图片只允许 JPG、JPEG 或 PNG")
+
+    relationships: dict[str, dict[str, tuple[str, str]]] = {}
+    for name, info in normalized_infos:
+        if not (
+            name.startswith("xl/worksheets/_rels/")
+            or name.startswith("xl/drawings/_rels/")
+        ):
+            continue
+        payload = archive.read(info)
+        try:
+            root = ET.fromstring(payload)
+        except ET.ParseError as error:
+            raise UploadValidationError("XLSX 关系 XML 无效") from error
+        source = _relationship_source_path(name)
+        entries: dict[str, tuple[str, str]] = {}
+        for node in root:
+            if _xlsx_local_name(node.tag) != "Relationship":
+                raise UploadValidationError("XLSX 关系文件包含未知节点")
+            relationship_id = str(node.attrib.get("Id") or "")
+            relationship_type = str(node.attrib.get("Type") or "")
+            if not relationship_id or relationship_id in entries:
+                raise UploadValidationError("XLSX 关系 ID 缺失或重复")
+            target = _relationship_target(source, str(node.attrib.get("Target") or ""))
+            if target not in names:
+                raise UploadValidationError("XLSX 关系指向不存在的包成员")
+            entries[relationship_id] = (relationship_type, target)
+        relationships[source] = entries
+
+    referenced_drawings: set[str] = set()
+    for name, info in normalized_infos:
+        if not re.fullmatch(r"xl/worksheets/sheet[0-9]+\.xml", name):
+            continue
+        try:
+            root = ET.fromstring(archive.read(info))
+        except ET.ParseError as error:
+            raise UploadValidationError("XLSX 工作表 XML 无效") from error
+        sheet_relationships = relationships.get(name, {})
+        for node in root.iter():
+            if _xlsx_local_name(node.tag) != "drawing":
+                continue
+            relationship_id = next(
+                (
+                    value
+                    for key, value in node.attrib.items()
+                    if _xlsx_local_name(key) == "id"
+                ),
+                "",
+            )
+            relationship = sheet_relationships.get(relationship_id)
+            if relationship is None:
+                raise UploadValidationError("XLSX 工作表图片关系缺失")
+            relationship_type, target = relationship
+            if not relationship_type.endswith("/drawing") or target not in drawing_names:
+                raise UploadValidationError("XLSX 工作表包含非图片绘图关系")
+            referenced_drawings.add(target)
+
+    referenced_media: set[str] = set()
+    allowed_anchor_children = {
+        "from",
+        "to",
+        "ext",
+        "pic",
+        "clientData",
+    }
+    for drawing_name in drawing_names:
+        info = next(info for name, info in normalized_infos if name == drawing_name)
+        try:
+            root = ET.fromstring(archive.read(info))
+        except ET.ParseError as error:
+            raise UploadValidationError("XLSX 绘图 XML 无效") from error
+        if _xlsx_local_name(root.tag) != "wsDr":
+            raise UploadValidationError("XLSX 绘图根节点无效")
+        drawing_relationships = relationships.get(drawing_name, {})
+        used_relationship_ids: set[str] = set()
+        forbidden_drawing_nodes = {
+            "sp",
+            "cxnSp",
+            "grpSp",
+            "graphicFrame",
+            "contentPart",
+            "control",
+            "oleObject",
+        }
+        if any(
+            _xlsx_local_name(node.tag) in forbidden_drawing_nodes
+            for node in root.iter()
+        ):
+            raise UploadValidationError("XLSX 包含形状、图表或其他绘图对象")
+        for anchor in root:
+            if _xlsx_local_name(anchor.tag) not in {"oneCellAnchor", "twoCellAnchor"}:
+                raise UploadValidationError("XLSX 只允许普通工作表图片锚点")
+            child_names = [_xlsx_local_name(child.tag) for child in anchor]
+            if any(name not in allowed_anchor_children for name in child_names):
+                raise UploadValidationError("XLSX 包含形状、图表或其他绘图对象")
+            if child_names.count("from") != 1 or child_names.count("pic") != 1:
+                raise UploadValidationError("XLSX 图片锚点结构无效")
+            if child_names.count("clientData") != 1:
+                raise UploadValidationError("XLSX 图片锚点缺少 clientData")
+            blips = [
+                node
+                for node in anchor.iter()
+                if _xlsx_local_name(node.tag) == "blip"
+            ]
+            if len(blips) != 1:
+                raise UploadValidationError("XLSX 图片引用结构无效")
+            blip = blips[0]
+            embedded_ids = [
+                value
+                for key, value in blip.attrib.items()
+                if _xlsx_local_name(key) == "embed"
+            ]
+            linked_ids = [
+                value
+                for key, value in blip.attrib.items()
+                if _xlsx_local_name(key) == "link"
+            ]
+            if len(embedded_ids) != 1 or linked_ids:
+                raise UploadValidationError("XLSX 图片必须内嵌，禁止外链")
+            relationship = drawing_relationships.get(embedded_ids[0])
+            if relationship is None:
+                raise UploadValidationError("XLSX 内嵌图片关系缺失")
+            relationship_type, target = relationship
+            if not relationship_type.endswith("/image") or target not in media_names:
+                raise UploadValidationError("XLSX 绘图引用了非图片资源")
+            used_relationship_ids.add(embedded_ids[0])
+            referenced_media.add(target)
+        if set(drawing_relationships) != used_relationship_ids:
+            raise UploadValidationError("XLSX 绘图包含未使用或非图片关系")
+
+    if drawing_names != referenced_drawings:
+        raise UploadValidationError("XLSX 包含未被工作表引用的绘图对象")
+    if media_names != referenced_media:
+        raise UploadValidationError("XLSX 包含未被产品行引用的孤立图片")
+    info_by_name = {name: info for name, info in normalized_infos}
+    for media_name in media_names:
+        payload = archive.read(info_by_name[media_name])
+        try:
+            with Image.open(BytesIO(payload)) as image:
+                expected = "PNG" if media_name.endswith(".png") else "JPEG"
+                if image.format != expected:
+                    raise UploadValidationError(
+                        "XLSX 图片扩展名与实际格式不一致"
+                    )
+                width, height = image.size
+                if (
+                    width <= 0
+                    or height <= 0
+                    or width > 20_000
+                    or height > 20_000
+                    or width * height > 40_000_000
+                ):
+                    raise UploadValidationError("XLSX 内嵌图片像素尺寸过大")
+                image.verify()
+            with Image.open(BytesIO(payload)) as image:
+                image.load()
+        except UploadValidationError:
+            raise
+        except (
+            Image.DecompressionBombError,
+            Image.DecompressionBombWarning,
+            UnidentifiedImageError,
+            OSError,
+        ) as error:
+            raise UploadValidationError("XLSX 内嵌图片损坏或无法识别") from error
+
+
+def _preflight_xlsx_container(
+    content: bytes,
+    *,
+    allow_worksheet_images: bool = False,
+) -> None:
     try:
         with zipfile.ZipFile(BytesIO(content)) as archive:
             infos = archive.infolist()
@@ -405,16 +633,25 @@ def _preflight_xlsx_container(content: bytes) -> None:
             if not required.issubset(seen_names):
                 raise UploadValidationError("XLSX 缺少 Office 工作簿结构")
             for name, info in normalized_infos:
+                allowed_image_part = allow_worksheet_images and (
+                    name.startswith("xl/drawings/")
+                    or name.startswith("xl/media/")
+                )
                 if (
                     "vbaproject" in name
                     or name.endswith(".bin")
-                    or name.startswith(_UNSAFE_XLSX_PREFIXES)
+                    or (
+                        name.startswith(_UNSAFE_XLSX_PREFIXES)
+                        and not allowed_image_part
+                    )
                 ):
                     raise UploadValidationError(
                         "XLSX 不允许宏、对象、图片、图表或外链资源"
                     )
                 if name.endswith((".xml", ".rels")):
                     _inspect_xlsx_xml(name, archive.read(info))
+            if allow_worksheet_images:
+                _inspect_worksheet_image_parts(archive, normalized_infos)
     except UploadValidationError:
         raise
     except (OSError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:

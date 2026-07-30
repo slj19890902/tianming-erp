@@ -1586,6 +1586,18 @@
                   <button :class="['btn', {primary: productTab === 'materials'}]" @click="selectProductTab('materials')">材质字典</button>
                   <button v-if="canAdmin" :class="['btn', {primary: productTab === 'suppliers'}]" @click="selectProductTab('suppliers')">供应商</button>
                   <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
+                  <button v-if="productTab === 'products' && selectedProductCustomer" class="btn" :disabled="productWorkbook.loading" @click="downloadProductWorkbook">下载样品 Excel</button>
+                  <label v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn success" :class="{disabled:productWorkbook.loading}">
+                    {{ productWorkbook.loading ? "正在预检…" : "预览样品 Excel" }}
+                    <input type="file" accept=".xlsx" style="display:none" :disabled="productWorkbook.loading" @change="previewProductWorkbook" />
+                  </label>
+                  <details v-if="canAdmin && productTab === 'products' && selectedProductCustomer" style="display:inline-block">
+                    <summary class="btn small">旧模板兼容</summary>
+                    <label class="btn small" :class="{disabled:productWorkbook.loading}">
+                      Excel + 外部图纸
+                      <input type="file" multiple accept=".xlsx,.jpg,.jpeg,.png,.webp,.pdf" style="display:none" :disabled="productWorkbook.loading" @change="previewProductWorkbook" />
+                    </label>
+                  </details>
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
@@ -1620,6 +1632,35 @@
                   <div class="toolbar">
                     <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
+                  </div>
+                  <div v-if="productWorkbook.preview" :class="['notice',productWorkbook.preview.valid ? 'success' : 'danger']" style="margin:8px 0">
+                    <div class="toolbar" style="margin-bottom:6px">
+                      <strong>{{ productWorkbook.preview.valid ? "整理预览检查通过" : "Excel 需要修正" }} · {{ productWorkbook.preview.filename }}</strong>
+                      <div class="toolbar-group">
+                        <button class="btn small" :disabled="productWorkbook.loading" @click="clearProductWorkbook">取消</button>
+                      </div>
+                    </div>
+                    <div class="notice warning" style="margin:6px 0">
+                      {{ productWorkbook.preview.write_blocked_reason || "存货编码映射未确认，当前禁止正式导入。" }}
+                    </div>
+                    <div>
+                      新增 {{ productWorkbook.preview.summary?.create || 0 }}，
+                      更新 {{ productWorkbook.preview.summary?.update || 0 }}，
+                      不变 {{ productWorkbook.preview.summary?.unchanged || 0 }}，
+                      待完善 {{ productWorkbook.preview.summary?.needs_completion || 0 }}；
+                      新模具 {{ productWorkbook.preview.summary?.mold_create || 0 }}，
+                      图纸 {{ productWorkbook.preview.summary?.drawing_files || 0 }} 个。
+                    </div>
+                    <div v-if="productWorkbook.preview.errors?.length" style="margin-top:6px">
+                      <div v-for="(error,index) in productWorkbook.preview.errors.slice(0,30)" :key="`${error.sheet}-${error.row_number}-${index}`">{{ error.sheet }} 第 {{ error.row_number }} 行：{{ error.message }}</div>
+                      <div v-if="productWorkbook.preview.errors.length > 30">另有 {{ productWorkbook.preview.errors.length - 30 }} 条错误，请修正后重新导入。</div>
+                    </div>
+                    <div v-else-if="productWorkbook.preview.items?.some(item => item.missing_fields?.length)" style="margin-top:6px">
+                      <div v-for="item in productWorkbook.preview.items.filter(item => item.missing_fields?.length).slice(0,20)" :key="item.row_number">
+                        第 {{ item.row_number }} 行 {{ item.product_code || "-" }}：待完善 {{ item.missing_fields.join("、") }}
+                      </div>
+                    </div>
+                    <div v-else class="muted" style="margin-top:6px">本页仅核对 Excel、图片、材质和模具；不会写入产品、图纸、模具或历史业务数据。</div>
                   </div>
                   <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
                   <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
@@ -5325,6 +5366,7 @@
             paperCodes: [],
             paperCodeForm: blankPaperCode(),
             supplierMaterialWorkbook: { loading:false, preview:null },
+            productWorkbook: { loading:false, preview:null },
             showMaterialComposer: false,
             materialComposer: blankMaterialComposer(),
             materialComposerPreview: null,
@@ -11401,7 +11443,86 @@
               this.showToast("图纸版本已删除");
             } catch(error) { this.showToast(this.errorMessage(error), true); }
           },
+          productWorkbookError(error) {
+            const detail = error?.response?.data?.detail;
+            if (detail && typeof detail === "object" && detail.message) return detail.message;
+            return this.errorMessage(error);
+          },
+          clearProductWorkbook() {
+            this.productWorkbook = {loading:false,preview:null};
+          },
+          async downloadProductWorkbook() {
+            const customer = this.selectedProductCustomer;
+            if (!customer?.id || this.productWorkbook.loading) return;
+            this.productWorkbook.loading = true;
+            try {
+              const response = await axios.get(
+                "/api/master/products/import-template.xlsx",
+                {params:{customer_id:customer.id},responseType:"blob"},
+              );
+              const blob = response.data instanceof Blob
+                ? response.data
+                : new Blob(
+                    [response.data],
+                    {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                  );
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement("a");
+              anchor.href = url;
+              anchor.download = `天明ERP_${customer.name}_样品常用箱整理预览.xlsx`;
+              document.body.appendChild(anchor);
+              anchor.click();
+              anchor.remove();
+              setTimeout(() => URL.revokeObjectURL(url),1000);
+              this.showToast("客户锁定的样品整理 Excel 已下载");
+            } catch(error) {
+              this.showToast(this.productWorkbookError(error),true);
+            } finally {
+              this.productWorkbook.loading = false;
+            }
+          },
+          async previewProductWorkbook(event) {
+            const input = event?.target;
+            const files = [...(input?.files || [])];
+            if (input) input.value = "";
+            if (!files.length || this.productWorkbook.loading) return;
+            const workbooks = files.filter(file => String(file.name || "").toLowerCase().endsWith(".xlsx"));
+            if (workbooks.length !== 1) {
+              this.showToast("请选择且只能选择 1 个 Excel；图纸可同时多选",true);
+              return;
+            }
+            const customer = this.selectedProductCustomer;
+            if (!customer?.id) {
+              this.showToast("请先选择客户",true);
+              return;
+            }
+            this.productWorkbook = {loading:true,preview:null};
+            try {
+              const form = new FormData();
+              form.append("customer_id",customer.id);
+              form.append("file",workbooks[0]);
+              for (const file of files) {
+                if (file !== workbooks[0]) form.append("drawing_files",file);
+              }
+              const {data} = await axios.post(
+                "/api/master/products/import/preview",
+                form,
+              );
+              this.productWorkbook.preview = data;
+              this.showToast(
+                data.valid
+                  ? "整理预览检查通过；当前不会写入 ERP"
+                  : `Excel 有 ${data.errors?.length || 0} 条错误，请修正后重试`,
+                !data.valid,
+              );
+            } catch(error) {
+              this.showToast(this.productWorkbookError(error),true);
+            } finally {
+              this.productWorkbook.loading = false;
+            }
+          },
           async selectProductCustomer(row) {
+            this.clearProductWorkbook();
             this.selectedProductCustomer = row;
             this.filters.productCustomer = row.id;
             this.filters.productKeyword = "";
@@ -11428,6 +11549,7 @@
             this.loadProducts();
           },
           backToProductCustomers() {
+            this.clearProductWorkbook();
             this.selectedProductCustomer = null;
             this.filters.productCustomer = "";
             this.filters.productKeyword = "";

@@ -1,5 +1,51 @@
 # Codex 项目交接
 
+## 2026-07-30 Q0-04 / P0-08 供应商主档紧急候选（老板人工验收通过，已授权提交推送）
+
+- 从最新正式远端基线
+  `origin/factory-current-baseline@a3410ab71fea34fc9f5e8b65853a98957f447277`
+  建立独立 worktree
+  `D:\tm-worktrees\erp-q0-04-supplier-master-20260730` 和分支
+  `codex/q0-04-supplier-master-20260730`。本轮只处理供应商主档、供应商业务候选
+  及既有材质 Excel 入口，没有混入新客户 XLSX 导入或其他 ERP 功能。
+- 新供应商主档使用 `supplier_master_records`、`supplier_master_aliases`，不复用、
+  改名、清空或迁移旧历史表 `suppliers`。迁移 `cw79v8x9z68` 线性接在
+  `cv78v8x9z67` 后，Alembic 只有一个 head。初始化启用嘉林亿、鸣朋、胜源、
+  森林阳光，佳丰仅保留历史并设为停用。
+- 管理员可在“常用箱与材质 → 供应商”维护主档；只有供应商全称必填，简称、业务
+  代码、联系人、电话、备注和排序均为选填。保存不要求填写原因或二次确认；停用
+  供应商不会出现在新业务候选中。材质代码、组合材质、楞型规则、供应商调价及
+  Excel 预览/应用均对未知或停用供应商 fail-closed。新建/更换常用箱材质、新建
+  订单、订单明细换材质、客户材质候选、合并/正式报料、库存补库等写入口使用
+  同一门禁；已有记录保持原供应商或 `material_id` 不变时，仍可编辑数量、备注、
+  尺寸等无关字段。
+- 隔离演练源为 2026-07-28 工厂副本链的再次复制件
+  `D:\tm-uat\q0-04-supplier-master-20260730\carton_erp_before_q0_04.sqlite3`，
+  revision=`cr74v8x9z63`、大小 219,447,296 字节、SHA-256
+  `9C7A90F37D60521DE36723D9BA9B0C36EB7A47EE35C2F1E04AF93AC4016FEC42`。
+  该副本完成 `cr74 → cu77 → ct76 → cv78 → cw79 → cv78 → cw79`，每一步
+  `integrity_check=ok`、外键异常 0；最终演练 SHA-256 为
+  `6D58643F007CAD94E18867361D5124AD69DB39D8A5271BF4F791806D5CD0A62D`。
+  旧 `suppliers` 及其 6 个关联历史表在升降级和 UAT 后逐表校验均未变化。
+- 开发侧浏览器 UAT 使用单独副本
+  `D:\tm-uat\q0-04-supplier-master-20260730\carton_erp_q0_04_uat.sqlite3`，
+  本地账号 `uat_supplier_admin / 123456`。已验证只填全称即可新增、后补简称与
+  业务代码、停用后从业务候选消失，以及胜源进入既有材质/Excel维护入口；页面
+  Console 无 error/warn。UAT 最终 revision=`cw79v8x9z68`、
+  `integrity_check=ok`、外键异常 0，SHA-256 为
+  `DE52E6A1C9F2F67AD51D719D95E41377DDDB3D44D0BF998908F453BD49076FBD`；
+  仅写入隔离测试账号、测试供应商及操作日志。初轮供应商及相邻回归
+  `101 passed, 8 skipped`；两轮独立审查补齐所有写入口、历史 Excel 兼容和并发
+  唯一键/版本门禁后，最终聚焦回归 `57 passed`、最终独立审查定向回归
+  `16 passed`，未发现 P0/P1 阻断。整页 JavaScript 语法、Python compileall、
+  Alembic 单 head 和 `git diff --check` 通过。
+- 老板已于 2026-07-30 明确确认供应商主档人工验收通过，并授权将当前独立
+  `codex/` 候选形成提交并推送；最终完整提交 SHA 以 NAS 任务回执为准。本授权
+  不包含更新 `origin/factory-current-baseline`、`origin/main`、工厂发布、重启
+  或正式数据库迁移。正式发布前，工厂端必须从最新正式数据库创建并
+  验证隔离副本，重新执行只读佳丰关联审计和 `upgrade/downgrade/upgrade`；
+  不得使用本次 2026-07-28 副本结论替代发布当日的正式库门禁。
+
 ## 2026-07-29 Q0-02 P1 统一候选重放（人工 UAT 通过，已授权提交推送）
 
 - Q0-01 已按老板授权提交并推送独立候选，完整 SHA 为

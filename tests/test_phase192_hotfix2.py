@@ -480,7 +480,7 @@ class TestAuditH1XlsxRead:
 
 from app.api.materials import (
     _sort_materials,
-    _supplier_rank,
+    _supplier_sort_key,
     _flute_rank,
     _parse_layer_weights,
 )
@@ -500,14 +500,23 @@ def _mat(code, supplier, layer, flute, weight, price):
 class TestMatSortHelpers:
     """排序辅助函数：供应商顺序 / 楞型顺序 / 逐层克重解析。"""
 
-    def test_supplier_rank_fixed_order(self):
-        assert _supplier_rank("苏州嘉林亿包装科技有限公司") == 0
-        assert _supplier_rank("昆山鸣朋纸业") == 1
-        assert _supplier_rank("苏州佳丰") == 2
-        # 其他供应商排在三家之后
-        assert _supplier_rank("某未知供应商") == 3
-        # 空值排最后
-        assert _supplier_rank(None) > 3
+    def test_supplier_sort_key_is_dynamic_and_empty_is_last(self):
+        names = ["胜源", "森林阳光", "昆山鸣朋", "苏州嘉林亿"]
+        assert sorted(names, key=_supplier_sort_key) == sorted(
+            names,
+            key=lambda value: value.casefold(),
+        )
+        supplier_order = {
+            "苏州嘉林亿": 10,
+            "昆山鸣朋": 20,
+            "胜源": 30,
+            "森林阳光": 40,
+        }
+        assert sorted(
+            names,
+            key=lambda value: _supplier_sort_key(value, supplier_order),
+        ) == ["苏州嘉林亿", "昆山鸣朋", "胜源", "森林阳光"]
+        assert _supplier_sort_key(None) > _supplier_sort_key("任意启用供应商")
 
     def test_flute_rank_three_layer_b_e_a(self):
         assert _flute_rank(3, "B") < _flute_rank(3, "E") < _flute_rank(3, "A")
@@ -539,11 +548,8 @@ class TestMatSortLogic:
 
     def test_common_supplier_first(self):
         ordered = _sort_materials(self._rows(), "common")
-        suppliers = [_supplier_rank(m.supplier_name) for m in ordered]
-        assert suppliers == sorted(suppliers), "common 应先按供应商固定顺序"
-        # 嘉林亿两条排最前
-        assert ordered[0].supplier_name.startswith("苏州嘉林亿")
-        assert ordered[1].supplier_name.startswith("苏州嘉林亿")
+        suppliers = [_supplier_sort_key(m.supplier_name) for m in ordered]
+        assert suppliers == sorted(suppliers), "common 应按当前供应商名称稳定排序"
 
     def test_common_within_supplier_weight_asc(self):
         ordered = _sort_materials(self._rows(), "common")

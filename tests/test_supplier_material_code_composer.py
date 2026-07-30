@@ -15,7 +15,9 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
     from app.models import Base
     from app.models.customer import Customer
     from app.models.material import Material
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "material-composer.sqlite3")
     Base.metadata.create_all(engine)
@@ -42,6 +44,22 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
                     role="workshop",
                     real_name="车间用户",
                     must_change_password=False,
+                ),
+                Supplier(
+                    standard_name="供应商A",
+                    normalized_name=normalize_supplier_identity("供应商A"),
+                    display_name="供应商A",
+                    sort_order=10,
+                    is_active=True,
+                    version=1,
+                ),
+                Supplier(
+                    standard_name="供应商B",
+                    normalized_name=normalize_supplier_identity("供应商B"),
+                    display_name="供应商B",
+                    sort_order=20,
+                    is_active=True,
+                    version=1,
                 ),
                 Material(
                     code="J616J",

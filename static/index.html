@@ -1584,6 +1584,7 @@
                 <div class="toolbar-group">
                   <button :class="['btn', {primary: productTab === 'products'}]" @click="selectProductTab('products')">产品资料</button>
                   <button :class="['btn', {primary: productTab === 'materials'}]" @click="selectProductTab('materials')">材质字典</button>
+                  <button v-if="canAdmin" :class="['btn', {primary: productTab === 'suppliers'}]" @click="selectProductTab('suppliers')">供应商</button>
                   <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                 </div>
@@ -1625,6 +1626,40 @@
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; loadProducts()"></pager>
+              <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
+                <div class="toolbar" style="margin-bottom:8px">
+                  <div class="toolbar-group">
+                    <input class="input" style="width:220px" v-model.trim="supplierSearch" placeholder="供应商名称 / 简称 / 业务代码" />
+                    <button class="btn primary" @click="openSupplier()">新增供应商</button>
+                  </div>
+                  <div class="toolbar-group">
+                    <button class="btn" :disabled="supplierMaterialWorkbook.loading" @click="downloadSupplierMaterialWorkbook">下载材质模板</button>
+                    <label class="btn" :class="{disabled:supplierMaterialWorkbook.loading}">
+                      导入材质 Excel
+                      <input type="file" accept=".xlsx" style="display:none" :disabled="supplierMaterialWorkbook.loading" @change="previewSupplierWorkbookFromSupplierTab" />
+                    </label>
+                  </div>
+                </div>
+                <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }}</div>
+                <div v-if="supplierLoading" class="muted" style="padding:18px;text-align:center">供应商正在加载…</div>
+                <div v-else-if="!filteredSuppliers.length" class="empty">暂无符合条件的供应商</div>
+                <div v-else class="table-wrap">
+                  <table class="compact-table">
+                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
+                    <tbody><tr v-for="row in filteredSuppliers" :key="row.id">
+                      <td><strong>{{ row.standard_name }}</strong></td>
+                      <td>{{ row.display_name || row.standard_name }}</td>
+                      <td>{{ row.business_code || "-" }}</td>
+                      <td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
+                      <td>{{ [row.contact_name,row.phone].filter(Boolean).join(" / ") || "-" }}</td>
+                      <td class="toolbar-group">
+                        <button class="btn small" @click="openSupplier(row)">编辑</button>
+                        <button class="btn small" @click="openSupplierMaterials(row)">材质 / Excel</button>
+                      </td>
+                    </tr></tbody>
+                  </table>
+                </div>
+              </data-panel>
               <data-panel v-else-if="productTab === 'materials'" :empty="false">
                 <!-- 供应商筛选（第一级：在层数按钮上方） -->
                 <div class="toolbar" style="margin-bottom:4px">
@@ -2951,6 +2986,23 @@
                   </tbody></table></div>
                 </template>
               </section>
+            </div>
+            <div v-else-if="modal.type === 'supplier'">
+              <div class="form-grid">
+                <div class="field wide"><label>供应商全称 *</label><input class="input" v-model.trim="supplierForm.standard_name" placeholder="用于单据和历史关联" /></div>
+                <div class="field"><label>显示简称</label><input class="input" v-model.trim="supplierForm.display_name" placeholder="例如：鸣朋" /></div>
+                <div class="field"><label>业务代码</label><input class="input" v-model.trim="supplierForm.business_code" placeholder="例如：MP" /></div>
+                <div class="field"><label>状态</label><select class="select" v-model="supplierForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div>
+                <div class="field"><label>排序</label><input class="input" type="number" min="0" step="1" v-model.number="supplierForm.sort_order" /></div>
+              </div>
+              <details class="panel" style="margin-top:12px">
+                <summary style="cursor:pointer;font-weight:600">选填：联系人、电话和备注</summary>
+                <div class="form-grid" style="margin-top:10px">
+                  <div class="field"><label>联系人</label><input class="input" v-model.trim="supplierForm.contact_name" /></div>
+                  <div class="field"><label>电话</label><input class="input" v-model.trim="supplierForm.phone" /></div>
+                  <div class="field wide"><label>备注</label><textarea class="textarea" v-model.trim="supplierForm.remarks"></textarea></div>
+                </div>
+              </details>
             </div>
             <div v-else-if="modal.type === 'quotationConvert'" class="product-edit-grid">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">
@@ -5100,6 +5152,10 @@
         phone: "", address: "", default_tax_rate: "0.13", invoice_title: "",
         tax_no: "", bank_account: "", remark: "", status: "active"
       });
+      const blankSupplier = () => ({
+        id:null, version:null, standard_name:"", display_name:"", business_code:"",
+        is_active:true, sort_order:100, contact_name:"", phone:"", remarks:"", aliases:[]
+      });
       const blankProduct = () => ({
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
@@ -5255,6 +5311,11 @@
             materialSupplierFilter: "",
             materialCodeFilter: "",
             materialWeightFilter: "",
+            suppliers: [],
+            supplierLoading: false,
+            supplierError: "",
+            supplierSearch: "",
+            supplierForm: blankSupplier(),
             materialSuppliers: [],
             productEditorOptionsLoading: false,
             productEditorOptionsError: "",
@@ -5274,7 +5335,7 @@
             compareGroups: [], compareFlute: "", compareKeyword: "", compareWeight: "", compareLoading: false, compareError: "",
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
-            fluteRuleForm: { id: null, supplier_name: "苏州嘉林亿", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
+            fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
             deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
@@ -5291,7 +5352,7 @@
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
-            priceAdjustForm: { supplier_name: "苏州嘉林亿", adjust_percent: "", effective_date: "", change_reason: "" },
+            priceAdjustForm: { supplier_name: "", adjust_percent: "", effective_date: "", change_reason: "" },
             priceAdjustPreview: null, priceAdjustPreviewKey: "",
             showPriceHistoryModal: false, priceHistory: { material_code: "", items: [] },
             productBoardCost: null,
@@ -5505,17 +5566,30 @@
             }
             return [{ value: "B", label: "B瓦" }, { value: "E", label: "E瓦" }, { value: "A", label: "A瓦" }];
           },
-          // 供应商值保留数据库标准名；新增供应商会从材质主数据自动进入下拉。
+          activeSuppliers() {
+            return (this.suppliers || [])
+              .filter(row => row && row.is_active !== false)
+              .slice()
+              .sort((a,b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)
+                || String(a.standard_name || "").localeCompare(String(b.standard_name || ""), "zh-CN"));
+          },
+          activeSupplierNames() {
+            return this.activeSuppliers.map(row => row.standard_name).filter(Boolean);
+          },
+          filteredSuppliers() {
+            const keyword = String(this.supplierSearch || "").trim().toLowerCase();
+            const rows = (this.suppliers || []).slice().sort((a,b) =>
+              Number(a.sort_order || 0) - Number(b.sort_order || 0)
+              || String(a.standard_name || "").localeCompare(String(b.standard_name || ""), "zh-CN")
+            );
+            if (!keyword) return rows;
+            return rows.filter(row => [
+              row.standard_name, row.display_name, row.business_code, row.contact_name, row.phone
+            ].some(value => String(value || "").toLowerCase().includes(keyword)));
+          },
+          // 新业务只允许选择供应商主数据中启用的标准名称。
           materialSupplierSelectOptions() {
-            const standard = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
-            const dynamic = (this.materialSuppliers || []).filter(Boolean);
-            // 首屏不再为供应商下拉全量拉材质时，仍需保留待报料合并组的既有供应商值。
-            // 新增供应商会在实际聚焦编辑控件时通过 ensureRequisitionMaterials 按需补齐。
-            const pendingGroupSuppliers = (this.requisitionPending || [])
-              .filter(row => row?.is_merge_group)
-              .map(row => row.supplier_name || row.snapshot_supplier_name)
-              .filter(Boolean);
-            return ["全部供应商", ...new Set([...standard, ...pendingGroupSuppliers, ...dynamic])];
+            return ["全部供应商", ...this.activeSupplierNames];
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
@@ -5532,9 +5606,7 @@
           },
           // 供应商调价可选供应商（标准名）
           priceAdjustSuppliers() {
-            const std = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
-            const extra = (this.materialSuppliers || []).filter(s => !std.includes(s));
-            return [...std, ...extra];
+            return this.activeSupplierNames;
           },
           // 常用箱纸板成本参考文本（实时计算，不保存）
           productBoardCostText() {
@@ -5814,6 +5886,7 @@
           canSaveModal() {
             if (!this.modal) return false;
             if (this.modal.type === "customer") return this.customerForm.id ? this.canEditCustomers : this.canCreateCustomers;
+            if (this.modal.type === "supplier") return this.canAdmin;
             if (this.modal.type === "product") return this.productForm.id ? this.canEditProducts : this.canCreateProducts;
             if (this.modal.type === "material") return this.canAdmin;
             if (this.modal.type === "materialCandidate") return this.canAdmin;
@@ -6637,6 +6710,11 @@
           supplierDisplayName(value) {
             const name = String(value || "").trim();
             if (!name) return "-";
+            const supplier = (this.suppliers || []).find(row =>
+              String(row.standard_name || "").trim() === name
+              || (row.aliases || []).some(alias => String(alias || "").trim() === name)
+            );
+            if (supplier?.display_name) return supplier.display_name;
             if (name.includes("嘉林亿")) return "嘉林亿";
             if (name.includes("鸣朋")) return "鸣朋";
             return name;
@@ -7942,6 +8020,7 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
+              await this.loadSuppliers();
               await this.loadPage(this.activePage, { force:true });
               if (this.user.must_change_password) this.openChangePassword(true);
             } catch (error) {
@@ -7962,6 +8041,7 @@
               const initialPage = this.initialPageFromLocation();
               this.activePage = initialPage;
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
+              await this.loadSuppliers();
               await this.loadPage(this.activePage, { force:true });
               if (this.user.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) { this.loginError = this.errorMessage(error); }
@@ -8052,6 +8132,7 @@
                 await this.loadCustomerOptions(force);
                 if (this.productTab === "products" && this.selectedProductCustomer) await this.loadProducts();
                 if (this.productTab === "materials") await this.loadMaterials();
+                if (this.productTab === "suppliers" && this.canAdmin) await this.loadSuppliers(true);
               }
               if (page === "orders") await Promise.all([this.loadCustomerOptions(force), this.loadOrderCustomerOptions(), this.loadOrders()]);
               if (page === "orders_legacy") await Promise.all([this.loadCustomerOptions(force), this.loadOrders()]);
@@ -8203,6 +8284,67 @@
             }
             return all;
           },
+          async loadSuppliers(includeInactive = this.canAdmin) {
+            this.supplierLoading = true;
+            this.supplierError = "";
+            try {
+              const {data} = includeInactive
+                ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}})
+                : await axios.get("/api/master/suppliers/candidates");
+              this.suppliers = Array.isArray(data) ? data : (data.items || []);
+              this.materialSuppliers = this.activeSupplierNames;
+            } catch(error) {
+              this.supplierError = this.errorMessage(error);
+              this.suppliers = [];
+              this.materialSuppliers = [];
+            } finally {
+              this.supplierLoading = false;
+            }
+          },
+          defaultSupplierName() {
+            return this.activeSupplierNames[0] || "";
+          },
+          openSupplier(row=null) {
+            if (!this.canAdmin) return;
+            this.supplierForm = row ? {
+              ...blankSupplier(),
+              ...JSON.parse(JSON.stringify(row)),
+              is_active:row.is_active !== false,
+              sort_order:Number(row.sort_order ?? 100),
+            } : blankSupplier();
+            this.modal = {type:"supplier", title:row ? "编辑供应商" : "新增供应商"};
+          },
+          supplierPayload() {
+            const form = this.supplierForm || {};
+            const sortOrder = form.sort_order === "" || form.sort_order == null ? 100 : Number(form.sort_order);
+            if (!String(form.standard_name || "").trim()) throw new Error("请填写供应商全称");
+            if (!Number.isInteger(sortOrder) || sortOrder < 0) throw new Error("排序必须是大于等于0的整数");
+            return {
+              standard_name:String(form.standard_name).trim(),
+              display_name:String(form.display_name || "").trim() || null,
+              business_code:String(form.business_code || "").trim() || null,
+              sort_order:sortOrder,
+              contact_name:String(form.contact_name || "").trim() || null,
+              phone:String(form.phone || "").trim() || null,
+              remarks:String(form.remarks || "").trim() || null,
+              aliases:Array.isArray(form.aliases) ? form.aliases : [],
+            };
+          },
+          async openSupplierMaterials(row) {
+            this.materialSupplierFilter = row?.standard_name || "";
+            this.paperCodeSupplierFilter = row?.standard_name || "";
+            this.productTab = "materials";
+            this.showPaperCodePanel = true;
+            await Promise.all([this.loadMaterials(),this.loadPaperCodes()]);
+            this.resetPaperCodeForm();
+          },
+          async previewSupplierWorkbookFromSupplierTab(event) {
+            await this.previewSupplierMaterialWorkbook(event);
+            if (!this.supplierMaterialWorkbook.preview) return;
+            this.productTab = "materials";
+            this.showPaperCodePanel = true;
+            await Promise.all([this.loadMaterials(),this.loadPaperCodes()]);
+          },
           async loadMaterials() {
             const controller = this.beginLatestRequest("materials:list");
             const params = { sort: this.materialSort };
@@ -8210,12 +8352,11 @@
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
             try {
               this.materials = await this.fetchAllMaterials(params, controller.signal);
-              // 维护全量材质（供所有材质选择器复用）+ 供应商下拉列表
-              if (!this.allMaterials.length || !this.materialSuppliers.length) {
+              // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
+              this.materialSuppliers = this.activeSupplierNames;
+              if (!this.allMaterials.length) {
                 const all = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
                 this.allMaterials = all;
-                const names = [...new Set(all.map(m => m.supplier_name).filter(Boolean))];
-                this.materialSuppliers = names.sort((a, b) => this.supplierRank(a) - this.supplierRank(b));
               }
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
@@ -8266,10 +8407,18 @@
             this.modal = { type:"materialCandidate", title: candidateId ? "编辑客户材质候选" : "新增客户材质候选" };
           },
           supplierRank(name) {
-            const order = ["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"];
-            if (!name) return order.length + 1;
-            for (let i = 0; i < order.length; i++) if (name.includes(order[i])) return i;
-            return order.length;
+            const exact = this.activeSupplierNames.indexOf(String(name || "").trim());
+            return exact >= 0 ? exact : this.activeSupplierNames.length;
+          },
+          // 新业务材质只能来自启用供应商；标准名和已登记别名均视为同一供应商。
+          // 历史单据仍使用各自快照文本展示，不经过本候选门禁。
+          isActiveMaterialSupplier(name) {
+            const target = String(name || "").trim();
+            if (!target) return false;
+            return this.activeSuppliers.some(row =>
+              String(row.standard_name || "").trim() === target
+              || (row.aliases || []).some(alias => String(alias || "").trim() === target)
+            );
           },
           // 组合楞匹配（含特价单组合楞）：
           //   三层 tab B/E/A：flute "B"/"E"/"A" 精确，或特价单组合 "B/E" 同时命中 B 与 E。
@@ -8350,9 +8499,13 @@
           filteredMaterialOptions(supplierName, layerCount, fluteType, keyword) {
             const source = this.allMaterials.length ? this.allMaterials : this.materials;
             let rows = source.filter(m => {
+              // 此 helper 被新建订单、常用箱、报料等新业务选择器共同复用。
+              // 停用供应商（如佳丰）和未登记供应商的旧材质只保留历史展示，
+              // 不再进入任何新业务候选。
+              if (!this.isActiveMaterialSupplier(m.supplier_name)) return false;
               if (supplierName && supplierName !== "全部供应商" && supplierName !== "") {
                 if (supplierName === "其他供应商") {
-                  if (this.supplierRank(m.supplier_name) < 3) return false;
+                  if (this.activeSupplierNames.includes(m.supplier_name)) return false;
                 } else if (!(m.supplier_name || "").includes(supplierName)) {
                   return false;
                 }
@@ -8451,7 +8604,7 @@
             this.priceAdjustPreview = null;
             this.priceAdjustPreviewKey = "";
             this.priceAdjustForm = {
-              supplier_name: this.materialSupplierFilter || this.priceAdjustSuppliers[0] || "苏州嘉林亿",
+              supplier_name: this.materialSupplierFilter || this.defaultSupplierName(),
               adjust_percent: "", effective_date: TmTime.beijingToday(), change_reason: ""
             };
             this.showPriceAdjustModal = true;
@@ -8568,7 +8721,7 @@
           },
           resetFluteRuleForm() {
             this.fluteRuleForm = {
-              id: null, supplier_name: this.materialSupplierFilter || "苏州嘉林亿",
+              id: null, supplier_name: this.materialSupplierFilter || this.defaultSupplierName(),
               layer_count: 3, flute_type: "A", price_delta: "0",
               effective_date: "", remark: "", is_active: true,
             };
@@ -11263,6 +11416,7 @@
             if (this.productTab === tab) return;
             this.productTab = tab;
             if (tab === "materials") await this.loadMaterials();
+            if (tab === "suppliers" && this.canAdmin) await this.loadSuppliers(true);
           },
           resetProductFilters() {
             this.filters.productKeyword = "";
@@ -15178,6 +15332,28 @@
                 if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
                 else await axios.post("/api/master/customers", payload);
                 await this.loadCustomers();
+              }
+              if (this.modal.type === "supplier") {
+                const desiredActive = this.supplierForm.is_active !== false;
+                const payload = this.supplierPayload();
+                let saved;
+                if (this.supplierForm.id) {
+                  if (!Number.isInteger(Number(this.supplierForm.version)) || Number(this.supplierForm.version) < 1) throw new Error("供应商版本读取失败，请刷新后重试");
+                  ({data:saved} = await axios.put(
+                    `/api/master/suppliers/${this.supplierForm.id}`,
+                    {...payload, expected_version:Number(this.supplierForm.version)},
+                  ));
+                } else {
+                  ({data:saved} = await axios.post("/api/master/suppliers",payload));
+                }
+                if (saved?.id && (saved.is_active !== false) !== desiredActive) {
+                  ({data:saved} = await axios.put(
+                    `/api/master/suppliers/${saved.id}/status`,
+                    {expected_version:Number(saved.version), is_active:desiredActive},
+                  ));
+                }
+                await this.loadSuppliers(true);
+                successMessage = this.supplierForm.id ? "供应商已更新" : "供应商已新增";
               }
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();

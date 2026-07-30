@@ -29,6 +29,7 @@ from app.api.finance import router as finance_router
 from app.api.incoming import router as incoming_router
 from app.api.master_data_versions import router as master_data_versions_router
 from app.api.materials import router as materials_router
+from app.api.suppliers import router as suppliers_router
 from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
 from app.api.products import router as products_router
@@ -383,6 +384,7 @@ def create_app() -> FastAPI:
         ("/api/customers", customers_router, "customers"),
         ("/api/master/customers", customers_router, "master-customers"),
         ("/api/master/materials", materials_router, "master-materials"),
+        ("/api/master/suppliers", suppliers_router, "master-suppliers"),
         ("/api/master/products", products_router, "master-products"),
     )
     existing_paths = {route.path for route in application.routes}

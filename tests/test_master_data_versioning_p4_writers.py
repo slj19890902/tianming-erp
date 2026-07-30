@@ -23,8 +23,10 @@ def writer_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     from app.api.products import router as products_router
     from app.core.database import create_sqlite_engine
     from app.models import Base
+    from app.models.supplier import Supplier
     from app.models.user import User
     from app.services import material_price_adjust
+    from app.services.supplier_master import normalize_supplier_identity
 
     monkeypatch.setenv("ERP_SECRET_KEY", "p4-writer-tests-only")
     engine = create_sqlite_engine(tmp_path / "p4-writers.sqlite3")
@@ -42,6 +44,26 @@ def writer_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
             customer_access_mode="all",
         )
         session.add(admin)
+        for index, supplier_name in enumerate(
+            (
+                "P4供应商A1",
+                "P4供应商LIF",
+                "P4批量供应商",
+                "P4成功调价供应商",
+                "P4事务供应商",
+            ),
+            start=1,
+        ):
+            session.add(
+                Supplier(
+                    standard_name=supplier_name,
+                    normalized_name=normalize_supplier_identity(supplier_name),
+                    display_name=supplier_name,
+                    sort_order=index * 10,
+                    is_active=True,
+                    version=1,
+                )
+            )
         session.commit()
         admin_id = admin.id
 
@@ -135,6 +157,105 @@ def _create_material(client: TestClient, suffix: str, **overrides) -> dict:
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_product_material_supplier_gate_blocks_new_links_but_keeps_unchanged_history(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.material import Material
+    from app.models.product import Product
+    from app.models.supplier import Supplier, SupplierAlias
+    from app.services.supplier_master import normalize_supplier_identity
+
+    with TestClient(writer_app) as client:
+        customer = _create_customer(client, "SUPGATE", 199)
+        with writer_app.state.session_factory() as session:
+            disabled_supplier = Supplier(
+                standard_name="苏州佳丰",
+                normalized_name=normalize_supplier_identity("苏州佳丰"),
+                display_name="佳丰",
+                sort_order=900,
+                is_active=False,
+                version=1,
+            )
+            disabled_material = Material(
+                code="P4-JF",
+                layer_count=3,
+                supplier_name="苏州佳丰",
+                is_active=True,
+            )
+            unknown_material = Material(
+                code="P4-UNKNOWN",
+                layer_count=3,
+                supplier_name="未建档纸板厂",
+                is_active=True,
+            )
+            session.add_all(
+                [disabled_supplier, disabled_material, unknown_material]
+            )
+            session.flush()
+            session.add(
+                SupplierAlias(
+                    supplier_id=disabled_supplier.id,
+                    alias_name="佳丰",
+                    normalized_alias=normalize_supplier_identity("佳丰"),
+                )
+            )
+            historical_product = Product(
+                customer_id=customer["id"],
+                product_code="P4-HISTORY-JF",
+                customer_material_code="P4-HISTORY-JF",
+                product_name="历史佳丰常用箱",
+                material_id=disabled_material.id,
+                box_category="normal",
+                layer_count=3,
+                splice_mode="single",
+                pieces_per_box=1,
+                version=1,
+            )
+            session.add(historical_product)
+            session.commit()
+            disabled_material_id = disabled_material.id
+            unknown_material_id = unknown_material.id
+            historical_product_id = historical_product.id
+
+        disabled = client.post(
+            "/api/master/products",
+            json=_product_payload(
+                customer["id"],
+                "JF-NEW",
+                material_id=disabled_material_id,
+            ),
+        )
+        unknown = client.post(
+            "/api/master/products",
+            json=_product_payload(
+                customer["id"],
+                "UNKNOWN-NEW",
+                material_id=unknown_material_id,
+            ),
+        )
+        unchanged_history = client.put(
+            f"/api/master/products/{historical_product_id}",
+            json={
+                **_product_payload(
+                    customer["id"],
+                    "HISTORY-JF",
+                    product_code="P4-HISTORY-JF",
+                    customer_material_code="P4-HISTORY-JF",
+                    product_name="历史佳丰常用箱（仅改备注）",
+                    material_id=disabled_material_id,
+                ),
+                "expected_version": 1,
+                "change_reason": "只补历史备注，不改变供应商",
+            },
+        )
+
+    assert disabled.status_code == 400
+    assert "已停用" in disabled.text
+    assert unknown.status_code == 400
+    assert "尚未建档" in unknown.text
+    assert unchanged_history.status_code == 200, unchanged_history.text
 
 
 def test_customer_product_material_create_v1_and_update_v2(

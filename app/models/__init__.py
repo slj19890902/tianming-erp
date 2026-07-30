@@ -20,6 +20,7 @@ from app.models.customer_material import (  # noqa: E402,F401
     CustomerMaterialSelectionHistory,
 )
 from app.models.material import Material  # noqa: E402,F401
+from app.models.supplier import Supplier, SupplierAlias  # noqa: E402,F401
 from app.models.master_data_object_version import (  # noqa: E402,F401
     MasterDataObjectVersion,
 )

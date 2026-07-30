@@ -19,7 +19,7 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import PermissionChecker, RoleChecker, get_db, has_permission
 from app.api.master_data_common import audit_master_change, clean_code
@@ -31,6 +31,7 @@ from app.models.material_price_history import (
     MaterialPriceHistory,
 )
 from app.models.supplier_paper_code import SupplierPaperCode
+from app.models.supplier import Supplier
 from app.models.user import User
 from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services import material_price_adjust as price_adjust
@@ -43,6 +44,12 @@ from app.services.master_data_versioning import (
     record_versioned_create,
 )
 from app.services import supplier_material_workbook
+from app.services.supplier_master import (
+    SupplierLookupError,
+    clean_supplier_name,
+    normalize_supplier_identity,
+    resolve_supplier,
+)
 
 
 router = APIRouter()
@@ -50,6 +57,35 @@ can_read = PermissionChecker("products.view")
 can_cost = PermissionChecker("cost.view")
 can_write = RoleChecker(["admin"])
 admin_only = RoleChecker(["admin"])
+_NO_CURRENT_SUPPLIER = object()
+
+
+def _canonical_supplier_for_write(
+    db: Session,
+    value: object,
+    *,
+    current_name: object = _NO_CURRENT_SUPPLIER,
+) -> str | None:
+    """Resolve new supplier facts through the active supplier master.
+
+    Existing historical rows whose supplier text is left unchanged remain
+    maintainable even when that old supplier is inactive or not yet mapped.
+    """
+    requested = clean_supplier_name(value)
+    if current_name is not _NO_CURRENT_SUPPLIER:
+        current = clean_supplier_name(current_name)
+        if normalize_supplier_identity(requested) == normalize_supplier_identity(
+            current
+        ):
+            return current or None
+    try:
+        return resolve_supplier(
+            db,
+            requested,
+            require_active=True,
+        ).standard_name
+    except SupplierLookupError as error:
+        raise HTTPException(status_code=400, detail=error.message) from error
 
 
 class MaterialPayload(BaseModel):
@@ -205,20 +241,22 @@ WORKSHOP_FIELDS = (
 )
 
 
-# v0.19.2-B 排序：供应商固定顺序 + 楞型顺序 + 逐层克重升序 + 平方报价 + 材质代码
-SUPPLIER_ORDER = ("苏州嘉林亿", "昆山鸣朋", "苏州佳丰")
 FLUTE_ORDER_3 = {"B": 0, "E": 1, "A": 2}
 FLUTE_ORDER_5 = {"AB": 0, "BE": 1}
 
 
-def _supplier_rank(name: str | None) -> int:
-    """按固定供应商顺序排名；未匹配（其他供应商）排在最后。"""
-    if not name:
-        return len(SUPPLIER_ORDER) + 1
-    for index, key in enumerate(SUPPLIER_ORDER):
-        if key in name:
-            return index
-    return len(SUPPLIER_ORDER)
+def _supplier_sort_key(
+    name: str | None,
+    supplier_order: dict[str, int] | None = None,
+) -> tuple[int, str]:
+    """优先使用供应商主档排序；无主档上下文时按名称稳定排序。"""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return (2_000_000, "")
+    if supplier_order is None:
+        return (0, cleaned.casefold())
+    rank = supplier_order.get(normalize_supplier_identity(cleaned), 1_000_000)
+    return (rank, cleaned.casefold())
 
 
 def _flute_rank(layer_count: int | None, flute_type: str | None) -> int:
@@ -252,7 +290,11 @@ def _material_search_haystack(m: Material) -> str:
     return " ".join(parts).lower().replace(" ", "")
 
 
-def _sort_materials(materials: list[Material], sort: str) -> list[Material]:
+def _sort_materials(
+    materials: list[Material],
+    sort: str,
+    supplier_order: dict[str, int] | None = None,
+) -> list[Material]:
     """统一排序逻辑，前后端一致。
 
     - common（常用优先）: 供应商顺序 → 楞型顺序 → 逐层克重升序 → 平方报价 → 材质代码
@@ -268,12 +310,12 @@ def _sort_materials(materials: list[Material], sort: str) -> list[Material]:
         return _parse_layer_weights(m.basis_weight_description) or (big,)
 
     if sort == "weight":
-        key = lambda m: (weights_of(m), price_of(m), _supplier_rank(m.supplier_name), m.code or "")
+        key = lambda m: (weights_of(m), price_of(m), _supplier_sort_key(m.supplier_name, supplier_order), m.code or "")
     elif sort == "price":
-        key = lambda m: (price_of(m), _supplier_rank(m.supplier_name), weights_of(m), m.code or "")
+        key = lambda m: (price_of(m), _supplier_sort_key(m.supplier_name, supplier_order), weights_of(m), m.code or "")
     else:  # common
         key = lambda m: (
-            _supplier_rank(m.supplier_name),
+            _supplier_sort_key(m.supplier_name, supplier_order),
             _flute_rank(m.layer_count, m.flute_type),
             weights_of(m),
             price_of(m),
@@ -381,7 +423,15 @@ def list_materials(
         kw = keyword.strip().lower().replace(" ", "")
         all_rows = [m for m in all_rows if kw in _material_search_haystack(m)]
     total = len(all_rows)
-    ordered = _sort_materials(all_rows, sort)
+    supplier_order: dict[str, int] = {}
+    suppliers = db.scalars(
+        select(Supplier).options(selectinload(Supplier.aliases))
+    ).all()
+    for supplier in suppliers:
+        supplier_order[supplier.normalized_name] = supplier.sort_order
+        for alias in supplier.aliases:
+            supplier_order[alias.normalized_alias] = supplier.sort_order
+    ordered = _sort_materials(all_rows, sort, supplier_order)
     items = ordered[(page - 1) * page_size : (page - 1) * page_size + page_size]
     return {
         "total": total,
@@ -473,10 +523,11 @@ def preview_price_adjustment(
     user: User = Depends(can_write),
 ) -> dict:
     """供应商调价 dry-run 预览：只读，绝不写库。"""
+    supplier_name = _canonical_supplier_for_write(db, payload.supplier_name)
     try:
         return price_adjust.preview(
             db,
-            supplier_name=payload.supplier_name,
+            supplier_name=supplier_name,
             adjust_percent_raw=payload.adjust_percent,
             effective_date=payload.effective_date,
         )
@@ -491,10 +542,11 @@ def apply_price_adjustment(
     user: User = Depends(can_write),
 ) -> dict:
     """供应商调价应用：先备份数据库，再写 materials + 批次 + 历史。"""
+    supplier_name = _canonical_supplier_for_write(db, payload.supplier_name)
     try:
         result = price_adjust.apply(
             db,
-            supplier_name=payload.supplier_name,
+            supplier_name=supplier_name,
             adjust_percent_raw=payload.adjust_percent,
             effective_date=payload.effective_date,
             expected_versions=payload.expected_versions,
@@ -632,8 +684,9 @@ def create_flute_price_rule(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    supplier_name = _canonical_supplier_for_write(db, payload.supplier_name)
     rule = SupplierFlutePriceRule(
-        supplier_name=payload.supplier_name.strip(),
+        supplier_name=supplier_name,
         layer_count=payload.layer_count,
         flute_type=payload.flute_type.strip().upper(),
         price_delta=payload.price_delta,
@@ -657,6 +710,8 @@ def update_flute_price_rule(
     rule = db.get(SupplierFlutePriceRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="楞型加价规则不存在")
+    if payload.is_active is not False:
+        _canonical_supplier_for_write(db, rule.supplier_name)
     if payload.price_delta is not None:
         rule.price_delta = payload.price_delta
     if payload.effective_date is not None:
@@ -952,7 +1007,12 @@ def create_supplier_paper_code(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
-    row = SupplierPaperCode(**payload.model_dump())
+    data = payload.model_dump()
+    data["supplier_name"] = _canonical_supplier_for_write(
+        db,
+        payload.supplier_name,
+    )
+    row = SupplierPaperCode(**data)
     try:
         db.add(row)
         db.flush()
@@ -962,7 +1022,7 @@ def create_supplier_paper_code(
             action="CREATE",
             resource="SupplierPaperCode",
             resource_id=row.id,
-            details=payload.model_dump(),
+            details=data,
         )
         db.commit()
     except IntegrityError as error:
@@ -986,7 +1046,13 @@ def update_supplier_paper_code(
     if row is None:
         raise HTTPException(status_code=404, detail="基础纸种代码不存在")
     before = _paper_code_dict(row)
-    for key, value in payload.model_dump().items():
+    data = payload.model_dump()
+    data["supplier_name"] = _canonical_supplier_for_write(
+        db,
+        payload.supplier_name,
+        current_name=row.supplier_name,
+    )
+    for key, value in data.items():
         setattr(row, key, value)
     try:
         audit_master_change(
@@ -995,7 +1061,7 @@ def update_supplier_paper_code(
             action="UPDATE",
             resource="SupplierPaperCode",
             resource_id=row.id,
-            details={"before": before, "after": payload.model_dump()},
+            details={"before": before, "after": data},
         )
         db.commit()
     except IntegrityError as error:
@@ -1014,9 +1080,10 @@ def preview_material_composition(
     db: Session = Depends(get_db),
     _user: User = Depends(can_write),
 ) -> dict:
+    supplier_name = _canonical_supplier_for_write(db, payload.supplier_name)
     return _compose_preview(
         db,
-        supplier_name=payload.supplier_name,
+        supplier_name=supplier_name,
         material_code=payload.material_code,
         usage_flute_type=payload.usage_flute_type,
         manual_quote_price=payload.quote_price,
@@ -1030,16 +1097,21 @@ def save_material_composition(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    supplier_name = _canonical_supplier_for_write(db, payload.supplier_name)
+    parsed_supplier_name = _canonical_supplier_for_write(
+        db,
+        payload.parsed_supplier_name,
+    )
     preview = _compose_preview(
         db,
-        supplier_name=payload.supplier_name,
+        supplier_name=supplier_name,
         material_code=payload.material_code,
         usage_flute_type=payload.usage_flute_type,
         manual_quote_price=payload.quote_price,
         requested_layer_count=payload.layer_count,
     )
     if (
-        payload.parsed_supplier_name.strip() != payload.supplier_name
+        parsed_supplier_name != supplier_name
         or payload.parsed_material_code.strip().upper() != payload.material_code
         or payload.parsed_layer_count != preview["layer_count"]
     ):
@@ -1051,7 +1123,7 @@ def save_material_composition(
         raise HTTPException(status_code=400, detail=preview["message"])
     existing = _find_dictionary_duplicate(
         db,
-        supplier_name=payload.supplier_name,
+        supplier_name=supplier_name,
         layer_count=preview["layer_count"],
         material_code=payload.material_code,
     )
@@ -1114,7 +1186,7 @@ def save_material_composition(
                 else "人工填写"
             ),
             price_unit="元/㎡",
-            supplier_name=payload.supplier_name,
+            supplier_name=supplier_name,
             remarks=(payload.remarks or "").strip() or None,
             is_active=True,
         )
@@ -1289,9 +1361,13 @@ def create_material(
     user: User = Depends(can_write),
 ) -> dict:
     data = _material_write_data(payload)
+    data["supplier_name"] = _canonical_supplier_for_write(
+        db,
+        payload.supplier_name,
+    )
     duplicate = _find_dictionary_duplicate(
         db,
-        supplier_name=(payload.supplier_name or "").strip(),
+        supplier_name=data["supplier_name"],
         layer_count=payload.layer_count or len(data["code"]),
         material_code=data["code"],
     )
@@ -1318,7 +1394,7 @@ def create_material(
             action="CREATE",
             resource="Material",
             resource_id=material.id,
-            details=payload.model_dump(),
+            details=data,
         )
         db.commit()
     except IntegrityError as error:
@@ -1340,9 +1416,14 @@ def update_material(
 ) -> dict:
     material = _material_or_404(db, material_id)
     before = MaterialResponse.model_validate(material).model_dump()
+    supplier_name = _canonical_supplier_for_write(
+        db,
+        payload.supplier_name,
+        current_name=material.supplier_name,
+    )
     duplicate = _find_dictionary_duplicate(
         db,
-        supplier_name=(payload.supplier_name or "").strip(),
+        supplier_name=supplier_name,
         layer_count=payload.layer_count or len(payload.code),
         material_code=payload.code,
         exclude_material_id=material_id,
@@ -1353,6 +1434,7 @@ def update_material(
             detail=f"该供应商下已存在材质代码 {payload.code}，不能重复保存",
         )
     updates = _material_write_data(payload)
+    updates["supplier_name"] = supplier_name
     changed = _changed_updates(material, updates)
     try:
         apply_versioned_update(

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, case, exists, func, or_, select
-from sqlalchemy.orm import Session, load_only, selectinload, with_loader_criteria
+from sqlalchemy.orm import Session, aliased, load_only, selectinload, with_loader_criteria
 
 from app.api.deps import (
     PermissionChecker,
@@ -27,7 +27,7 @@ from app.models.finance import (
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionTask
-from app.models.requisition import RequisitionItem
+from app.models.requisition import RequisitionHold, RequisitionItem
 from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
@@ -624,6 +624,96 @@ def dashboard_overview(
         if can_view_requisition
         else 0
     )
+    waiting_hold_filters = [
+        RequisitionHold.status == "active",
+        RequisitionHold.order_item_id.is_not(None),
+    ]
+    if visible_customer_ids is not None:
+        waiting_hold_filters.append(Order.customer_id.in_(visible_customer_ids))
+    waiting_requisition_items = (
+        int(
+            raw_db.scalar(
+                select(func.count(RequisitionHold.id))
+                .join(
+                    OrderItem,
+                    OrderItem.id == RequisitionHold.order_item_id,
+                )
+                .join(Order, Order.id == OrderItem.order_id)
+                .where(*waiting_hold_filters)
+            )
+            or 0
+        )
+        if can_view_requisition
+        else 0
+    )
+    active_held_item_ids = (
+        {
+            int(item_id)
+            for item_id in raw_db.scalars(
+                select(RequisitionHold.order_item_id)
+                .join(
+                    OrderItem,
+                    OrderItem.id == RequisitionHold.order_item_id,
+                )
+                .join(Order, Order.id == OrderItem.order_id)
+                .where(*waiting_hold_filters)
+            ).all()
+            if item_id is not None
+        }
+        if can_view_requisition
+        else set()
+    )
+    if can_view_requisition and active_held_item_ids:
+        pending_material_orders = len(
+            {
+                row["order_id"]
+                for row in workflow_rows
+                if row["business_status"] == "pending_material"
+                and row["item_id"] not in active_held_item_ids
+                and is_due(row)
+            }
+        )
+    previous_item = aliased(OrderItem)
+    previous_order = aliased(Order)
+    waiting_requisition_due_items = (
+        int(
+            raw_db.scalar(
+                select(func.count(RequisitionHold.id))
+                .join(
+                    OrderItem,
+                    OrderItem.id == RequisitionHold.order_item_id,
+                )
+                .join(Order, Order.id == OrderItem.order_id)
+                .outerjoin(
+                    previous_item,
+                    previous_item.id == RequisitionHold.previous_order_item_id,
+                )
+                .outerjoin(previous_order, previous_order.id == previous_item.order_id)
+                .where(
+                    *waiting_hold_filters,
+                    or_(
+                        and_(
+                            RequisitionHold.release_mode == "expected_date",
+                            RequisitionHold.expected_requisition_date <= today,
+                        ),
+                        and_(
+                            RequisitionHold.release_mode
+                            == "previous_batch_completed",
+                            previous_item.id.is_not(None),
+                            previous_item.is_force_closed.is_(False),
+                            previous_order.status.notin_(
+                                ["cancelled", "dead", "closed", "archived"]
+                            ),
+                            previous_item.delivered_quantity >= previous_item.quantity,
+                        ),
+                    ),
+                )
+            )
+            or 0
+        )
+        if can_view_requisition
+        else 0
+    )
     pending_incoming_items = (
         sum(
             1
@@ -693,7 +783,16 @@ def dashboard_overview(
                 "key": "pending_material",
                 "title": "待报料订单",
                 "count": pending_material_orders,
-                "description": "订单还没进入报料",
+                "description": (
+                    f"待报料 {pending_material_orders} · 等候 {waiting_requisition_items}"
+                    + (
+                        f"（到期 {waiting_requisition_due_items}）"
+                        if waiting_requisition_due_items
+                        else ""
+                    )
+                ),
+                "waiting_count": waiting_requisition_items,
+                "waiting_due_count": waiting_requisition_due_items,
                 "button_label": "去报料",
                 "target": "requisition",
             }

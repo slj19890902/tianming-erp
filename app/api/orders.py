@@ -43,6 +43,7 @@ from app.core.time_contract import (
     beijing_now_naive,
     beijing_today,
     utc_naive_to_api,
+    utc_now_naive,
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -66,7 +67,7 @@ from app.models.product_bom import (
     SalesOrderItemBomComponent,
     SalesOrderItemBomDemandAdjustment,
 )
-from app.models.requisition import Requisition, RequisitionItem
+from app.models.requisition import Requisition, RequisitionHold, RequisitionItem
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
@@ -1612,6 +1613,7 @@ def _order_response(
     completion_dates: dict[int, date] | None = None,
     bom_components_by_item_id: dict[int, list[dict]] | None = None,
     business_projection: dict | None = None,
+    active_holds_by_item_id: dict[int, RequisitionHold] | None = None,
 ) -> dict:
     item_ids = [item.id for item in order.items]
     reservation_map = (
@@ -1621,6 +1623,22 @@ def _order_response(
         if db is not None
         else {}
     )
+    active_hold_map = active_holds_by_item_id
+    if active_hold_map is None:
+        active_hold_map = (
+            {
+                int(hold.order_item_id): hold
+                for hold in db.scalars(
+                    select(RequisitionHold).where(
+                        RequisitionHold.order_item_id.in_(item_ids),
+                        RequisitionHold.status == "active",
+                    )
+                ).all()
+                if hold.order_item_id is not None
+            }
+            if db is not None and item_ids
+            else {}
+        )
     completion_date_map = completion_dates
     if completion_date_map is None and db is not None:
         completion_date_map = _completion_dates_by_item(
@@ -1807,6 +1825,20 @@ def _order_response(
                 ),
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": item.requisition_status,
+                "requisition_hold": (
+                    {
+                        "id": active_hold_map[item.id].id,
+                        "status": "active",
+                        "label": "等候中",
+                        "release_mode": active_hold_map[item.id].release_mode,
+                        "expected_requisition_date": (
+                            active_hold_map[item.id].expected_requisition_date
+                        ),
+                        "version": active_hold_map[item.id].version,
+                    }
+                    if item.id in active_hold_map
+                    else None
+                ),
                 "special_process": item.special_process,
                 "requisition_spec": item.requisition_spec,
                 "cardboard_len": item.cardboard_len,
@@ -2174,6 +2206,21 @@ def list_orders(
         db,
         [item.id for order in orders for item in order.items],
     )
+    page_item_ids = [item.id for order in orders for item in order.items]
+    active_holds_by_item_id = (
+        {
+            int(hold.order_item_id): hold
+            for hold in db.scalars(
+                select(RequisitionHold).where(
+                    RequisitionHold.order_item_id.in_(page_item_ids),
+                    RequisitionHold.status == "active",
+                )
+            ).all()
+            if hold.order_item_id is not None
+        }
+        if page_item_ids
+        else {}
+    )
     business_projections = (
         {
             order_id: candidate_projection[order_id]
@@ -2258,6 +2305,7 @@ def list_orders(
                 completion_dates=completion_dates,
                 bom_components_by_item_id=bom_components_by_item_id,
                 business_projection=business_projections.get(int(order.id)),
+                active_holds_by_item_id=active_holds_by_item_id,
             )
             for order in orders
         ],
@@ -3454,6 +3502,60 @@ def _production_meaning_changes(
     return list(dict.fromkeys(changes))
 
 
+def _invalidate_requisition_holds_before_item_delete(
+    db: Session,
+    *,
+    item_ids: list[int],
+    user: User,
+    request: Request | None = None,
+    batch_id: str | None = None,
+) -> None:
+    if not item_ids:
+        return
+    holds = db.scalars(
+        select(RequisitionHold).where(
+            RequisitionHold.order_item_id.in_(item_ids),
+            RequisitionHold.status == "active",
+        )
+    ).all()
+    now = utc_now_naive()
+    for hold in holds:
+        hold.status = "invalidated"
+        hold.released_by = user.id
+        hold.released_at = now
+        hold.release_source = "order_item_deleted"
+        hold.release_note = "订单明细删除，等候报料记录自动失效"
+        hold.updated_by = user.id
+        hold.version = int(hold.version or 0) + 1
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="requisition",
+            action_code="requisition.hold.invalidate",
+            legacy_action="INVALIDATE_REQUISITION_HOLD",
+            resource="Requisition",
+            entity_type="order_item",
+            entity_id=hold.order_item_id_snapshot,
+            object_ref=(
+                f"{hold.order_number_snapshot}:"
+                f"{hold.order_item_sequence_snapshot or hold.order_item_id_snapshot}"
+            ),
+            customer_id=hold.customer_id_snapshot,
+            customer_name=hold.customer_name_snapshot,
+            batch_id=batch_id,
+            description="订单明细删除，等候报料记录自动失效",
+            details={
+                "hold_id": hold.id,
+                "order_item_id": hold.order_item_id_snapshot,
+                "source": "order_item_deleted",
+            },
+        )
+
+
 def _delete_orders_in_transaction(
     db: Session,
     *,
@@ -3489,6 +3591,13 @@ def _delete_orders_in_transaction(
         operator_id=user.id,
         reason="删除订单前自动释放成品库存预占",
         idempotency_prefix="delete-order-reservation",
+    )
+    _invalidate_requisition_holds_before_item_delete(
+        db,
+        item_ids=item_ids,
+        user=user,
+        request=request,
+        batch_id=batch_id,
     )
     if item_ids:
         requisition_ids = set(
@@ -5585,6 +5694,22 @@ def update_order_item(
         )
         if error:
             raise HTTPException(status_code=400, detail=error)
+    active_hold = db.scalar(
+        select(RequisitionHold)
+        .where(
+            RequisitionHold.order_item_id == item.id,
+            RequisitionHold.status == "active",
+        )
+        .limit(1)
+    )
+    if (
+        active_hold is not None
+        and payload.product_code.strip() != (item.snapshot_product_code or "").strip()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该明细正在等候报料，请先恢复待报料，再修改存货编码",
+        )
     before = {
         "quantity": item.quantity,
         "unit_price": str(item.unit_price),
@@ -5944,6 +6069,12 @@ def delete_order_item(
         operator_id=user.id,
         reason="删除订单明细前自动释放成品库存预占",
         idempotency_prefix=f"delete-order-item-{item.id}",
+    )
+    _invalidate_requisition_holds_before_item_delete(
+        db,
+        item_ids=[item.id],
+        user=user,
+        request=request,
     )
     db.delete(item)
     db.flush()

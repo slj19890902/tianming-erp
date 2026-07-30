@@ -43,6 +43,7 @@ from app.models.order import Order, OrderDailySequence, OrderItem  # noqa: E402,
 from app.models.requisition import (  # noqa: E402,F401
     Requisition,
     RequisitionDailySequence,
+    RequisitionHold,
     RequisitionItem,
 )
 from app.models.delivery import (  # noqa: E402,F401

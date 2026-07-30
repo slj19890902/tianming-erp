@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>P1-21A 角色化手机版 ERP 离线原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef3f1;
+      --card: #ffffff;
+      --ink: #17231d;
+      --muted: #617069;
+      --line: #d5dfda;
+      --green: #16754b;
+      --green-soft: #e7f5ed;
+      --blue: #1769aa;
+      --blue-soft: #e8f2fb;
+      --orange: #a95708;
+      --orange-soft: #fff1dc;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --gray-soft: #f1f4f2;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+    * { box-sizing: border-box; min-width: 0; }
+    html, body { width: 100%; min-width: 0; margin: 0; overflow-x: hidden; background: var(--bg); color: var(--ink); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #79b8eb; outline-offset: 2px; }
+    [hidden] { display: none !important; }
+    .app {
+      width: min(100%, 430px); min-height: 100vh; margin: 0 auto;
+      padding-bottom: calc(76px + env(safe-area-inset-bottom));
+      background: var(--bg);
+    }
+    .top {
+      position: sticky; top: 0; z-index: 10; padding: 12px 13px 10px;
+      border-bottom: 1px solid var(--line); background: rgba(238, 243, 241, .97);
+      backdrop-filter: blur(8px);
+    }
+    .topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .eyebrow { margin: 0 0 3px; color: var(--green); font-size: 11px; font-weight: 900; }
+    h1 { margin: 0; font-size: 20px; line-height: 1.3; }
+    .offline {
+      flex: 0 0 auto; padding: 4px 7px; border-radius: 99px;
+      background: var(--orange-soft); color: #74410c; font-size: 10px; font-weight: 900;
+    }
+    .role-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 9px; }
+    .role-btn {
+      min-height: 38px; padding: 6px 4px; border: 1px solid var(--line);
+      border-radius: 9px; background: #fff; font-size: 12px; font-weight: 800;
+    }
+    .role-btn.active { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+    .prototype-note {
+      margin: 9px 13px 0; padding: 9px 10px; border: 1px solid #e6bd7b;
+      border-radius: 10px; background: var(--orange-soft); color: #704307;
+      font-size: 12px; font-weight: 700; line-height: 1.45;
+    }
+    main { padding: 10px 13px 18px; }
+    .page-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+    .page-head h2 { flex: 1; margin: 0; font-size: 18px; }
+    .back {
+      flex: 0 0 auto; min-height: 36px; padding: 6px 9px; border: 1px solid var(--line);
+      border-radius: 9px; background: #fff; font-weight: 800;
+    }
+    .card {
+      margin-bottom: 9px; padding: 12px; border: 1px solid var(--line);
+      border-radius: 13px; background: var(--card); box-shadow: 0 3px 10px rgba(36, 63, 48, .05);
+    }
+    .card h2, .card h3 { margin: 0 0 6px; }
+    .card h2 { font-size: 17px; }
+    .card h3 { font-size: 15px; }
+    .card p { margin: 4px 0; line-height: 1.5; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .notice { padding: 9px 10px; border-radius: 9px; font-size: 12px; line-height: 1.5; }
+    .notice.blue { background: var(--blue-soft); color: #174f7a; }
+    .notice.orange { background: var(--orange-soft); color: #704307; }
+    .notice.red { background: var(--red-soft); color: #8e1f17; }
+    .notice.green { background: var(--green-soft); color: #145f3e; }
+    .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .metric {
+      padding: 10px; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--gray-soft);
+    }
+    .metric strong { display: block; font-size: 22px; line-height: 1.2; }
+    .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .btn {
+      min-height: 43px; padding: 8px 11px; border: 1px solid var(--line);
+      border-radius: 10px; background: #fff; font-weight: 800;
+    }
+    .btn.primary { border-color: var(--green); background: var(--green); color: #fff; }
+    .btn.blue { border-color: var(--blue); background: var(--blue); color: #fff; }
+    .btn.full { width: 100%; }
+    .btn.small { min-height: 34px; padding: 5px 8px; font-size: 12px; }
+    .btn:disabled { opacity: .48; }
+    .actions { display: grid; gap: 7px; margin-top: 9px; }
+    .actions.two { grid-template-columns: 1fr 1fr; }
+    .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+    .searchbar input {
+      width: 100%; min-height: 44px; padding: 9px 10px; border: 1px solid #aebdb5;
+      border-radius: 10px; background: #fff; color: var(--ink);
+    }
+    .candidate {
+      display: block; width: 100%; padding: 11px; border: 1px solid var(--line);
+      border-radius: 11px; background: #fff; text-align: left;
+    }
+    .candidate + .candidate { margin-top: 7px; }
+    .candidate strong, .candidate span { display: block; }
+    .candidate span { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .tag {
+      display: inline-flex; align-items: center; padding: 3px 7px; border-radius: 99px;
+      font-size: 10px; font-weight: 900; white-space: nowrap;
+    }
+    .tag.green { background: var(--green-soft); color: var(--green); }
+    .tag.blue { background: var(--blue-soft); color: var(--blue); }
+    .tag.orange { background: var(--orange-soft); color: var(--orange); }
+    .tag.gray { background: #e9eeeb; color: #53615a; }
+    .row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .facts {
+      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 9px;
+      margin-top: 8px; font-size: 12px; line-height: 1.45;
+    }
+    .facts dt { color: var(--muted); }
+    .facts dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .quantity-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+    .quantity {
+      padding: 8px 4px; border-radius: 9px; background: var(--gray-soft); text-align: center;
+    }
+    .quantity strong { display: block; font-size: 18px; }
+    .quantity span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .location {
+      display: block; width: 100%; margin-top: 7px; padding: 10px;
+      border: 1px solid var(--line); border-left: 5px solid var(--blue);
+      border-radius: 10px; background: #fff; text-align: left;
+    }
+    .location.no-map { border-left-color: var(--orange); background: #fffaf2; }
+    .location strong, .location span { display: block; }
+    .location span { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .map-card { padding: 10px; }
+    .map {
+      position: relative; min-height: 315px; overflow: hidden; border: 2px solid #7f919e;
+      border-radius: 13px;
+      background:
+        linear-gradient(90deg, #e0e7e3 1px, transparent 1px),
+        linear-gradient(#e0e7e3 1px, transparent 1px), #fafcfa;
+      background-size: 30px 30px;
+    }
+    .zone {
+      position: absolute; display: grid; place-items: center; border: 1px dashed #8da89a;
+      border-radius: 9px; background: rgba(231, 245, 237, .65);
+      color: #315843; font-size: 11px; font-weight: 800;
+    }
+    .zone.c1 { top: 8%; left: 6%; width: 40%; height: 38%; }
+    .zone.f2 { right: 6%; bottom: 10%; width: 39%; height: 38%; }
+    .aisle { position: absolute; top: 49%; left: 5%; width: 90%; height: 6%; border-radius: 99px; background: #d2d9d5; }
+    .pin {
+      position: absolute; z-index: 2; width: 74px; min-height: 44px; padding: 5px;
+      border: 2px solid #fff; border-radius: 11px; background: var(--blue);
+      color: #fff; box-shadow: 0 5px 12px rgba(23, 105, 170, .3);
+      font-size: 10px; font-weight: 900; text-align: center;
+    }
+    .pin.one { top: 20%; left: 15%; }
+    .pin.two { right: 13%; bottom: 19%; }
+    .pin.focus { outline: 4px solid #ffc857; transform: scale(1.05); }
+    .legend { display: flex; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 11px; }
+    .state-tools {
+      margin: 0 13px 9px; padding: 9px; border: 1px dashed #aebdb5;
+      border-radius: 10px; background: #f9fbfa;
+    }
+    .state-tools summary { cursor: pointer; font-size: 12px; font-weight: 900; }
+    .state-buttons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .state-buttons button {
+      min-height: 31px; padding: 4px 7px; border: 1px solid var(--line);
+      border-radius: 8px; background: #fff; font-size: 11px;
+    }
+    .state-panel { display: grid; min-height: 220px; place-items: center; text-align: center; }
+    .state-icon { font-size: 34px; }
+    .skeleton { width: 100%; }
+    .skeleton span {
+      display: block; height: 13px; margin: 10px 0; border-radius: 99px;
+      background: linear-gradient(90deg, #e6ebe8, #f7f9f8, #e6ebe8);
+      background-size: 220% 100%; animation: shine 1.2s linear infinite;
+    }
+    .skeleton span:nth-child(2) { width: 76%; }
+    .skeleton span:nth-child(3) { width: 58%; }
+    @keyframes shine { to { background-position: -220% 0; } }
+    .bottom {
+      position: fixed; right: 0; bottom: 0; left: 0; z-index: 12;
+      padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+      border-top: 1px solid var(--line); background: rgba(255, 255, 255, .98);
+    }
+    .bottom-inner { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; width: min(100%, 430px); margin: 0 auto; }
+    .nav-btn {
+      min-height: 50px; padding: 5px 2px; border: 0; border-radius: 9px;
+      background: transparent; color: #5f6d66; font-size: 11px; font-weight: 800;
+    }
+    .nav-btn strong { display: block; margin-bottom: 2px; font-size: 16px; }
+    .nav-btn.active { background: var(--green-soft); color: var(--green); }
+    .nav-btn:disabled { color: #a2aaa6; }
+    .toast {
+      position: fixed; right: 14px; bottom: 76px; left: 14px; z-index: 30;
+      display: none; width: min(calc(100% - 28px), 402px); margin: auto;
+      padding: 10px 12px; border-radius: 10px; background: #20352a; color: #fff;
+      font-size: 12px; text-align: center;
+    }
+    .toast.show { display: block; }
+    @media (max-width: 359px) {
+      .top { padding-inline: 10px; }
+      main { padding-inline: 10px; }
+      .prototype-note, .state-tools { margin-inline: 10px; }
+      .role-btn { font-size: 11px; }
+      .actions.two, .grid2 { grid-template-columns: 1fr; }
+      .quantity-strip { gap: 3px; }
+      .quantity strong { font-size: 16px; }
+      .pin { width: 66px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="topline">
+        <div>
+          <p class="eyebrow">Q1-12 / P1-21A</p>
+          <h1>角色化手机版 ERP</h1>
+        </div>
+        <span class="offline">匿名离线原型</span>
+      </div>
+      <div class="role-switch" aria-label="角色演示">
+        <button type="button" class="role-btn active" data-role="admin">管理员</button>
+        <button type="button" class="role-btn" data-role="delivery">送货员</button>
+        <button type="button" class="role-btn" data-role="production">生产员工</button>
+      </div>
+    </header>
+
+    <div class="prototype-note" id="roleBoundary">
+      纯演示：不连接 ERP、不读取真实客户、不保存任何操作。
+    </div>
+
+    <details class="state-tools">
+      <summary>页面状态演示（开发核对）</summary>
+      <div class="state-buttons" aria-label="状态演示">
+        <button type="button" data-demo-state="normal">正常</button>
+        <button type="button" data-demo-state="loading">加载中</button>
+        <button type="button" data-demo-state="empty">空结果</button>
+        <button type="button" data-demo-state="error">加载失败</button>
+        <button type="button" data-demo-state="permission-denied">无权限</button>
+        <button type="button" data-demo-state="stale">数据过期</button>
+        <button type="button" data-demo-state="no-location">无位置</button>
+        <button type="button" data-demo-state="offline">弱网断开</button>
+      </div>
+    </details>
+
+    <main id="content" aria-live="polite"></main>
+  </div>
+
+  <nav class="bottom" aria-label="手机主导航">
+    <div class="bottom-inner">
+      <button type="button" class="nav-btn active" data-nav="home"><strong>⌂</strong>首页</button>
+      <button type="button" class="nav-btn" data-nav="search"><strong>⌕</strong>查产品</button>
+      <button type="button" class="nav-btn" data-nav="tasks"><strong>☑</strong>我的任务</button>
+      <button type="button" class="nav-btn" data-nav="me"><strong>○</strong>我的</button>
+    </div>
+  </nav>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const content = document.getElementById("content");
+      const roleBoundary = document.getElementById("roleBoundary");
+      const state = {
+        role: "admin",
+        view: "home",
+        demoState: "normal",
+        searchText: "DEMO-BOX-01",
+        selectedProduct: null,
+        selectedTask: null,
+        returnView: "home",
+        returnScroll: 0,
+        mapFocus: null
+      };
+
+      const products = [
+        {
+          id: 1,
+          customer: "匿名客户甲",
+          code: "DEMO-BOX-01",
+          name: "三层外箱（演示）",
+          spec: "400×300×250mm",
+          finished: { total: 150, available: 120, reserved: 30, pendingPick: 40, unit: "只" },
+          semi: { total: 48, unit: "张" },
+          locations: [
+            { id: "c1", label: "三楼 · C1 · C1-L03", pallet: "演示栈板 P-01", quantity: 90, unit: "只", mapped: true },
+            { id: "f2", label: "三楼 · F2 · F2-R04", pallet: "演示栈板 P-02", quantity: 40, unit: "只", mapped: true },
+            { id: "relocate", label: "待归位", pallet: "演示栈板 P-03", quantity: 20, unit: "只", mapped: false }
+          ]
+        },
+        {
+          id: 2,
+          customer: "匿名客户甲",
+          code: "DEMO-BOX-02",
+          name: "五层外箱（演示）",
+          spec: "520×350×300mm",
+          finished: { total: 0, available: 0, reserved: 0, pendingPick: 0, unit: "只" },
+          semi: { total: 0, unit: "张" },
+          locations: []
+        }
+      ];
+
+      const deliveryTask = {
+        id: "TASK-DEMO-01",
+        customer: "匿名客户甲",
+        delivery: "匿名送货草稿 01",
+        quantity: 130,
+        unit: "只",
+        product: products[0],
+        locations: products[0].locations.slice(0, 2)
+      };
+
+      const productionTask = {
+        id: "PROD-DEMO-01",
+        customer: "匿名客户乙",
+        code: "DEMO-INNER-01",
+        product: "模切内盒（演示）",
+        boxSpec: "280×180×90mm",
+        boardSpec: "610×460mm",
+        orderQuantity: 200,
+        producible: 160,
+        boardQuantity: 80,
+        crease: "压线：净尺寸 280 / 180 / 90mm",
+        process: "模切后粘箱",
+        drawing: "匿名图纸占位（正式接入必须鉴权）",
+        mold: "DEMO-MOLD-01",
+        moldLocation: "3F-M-立-02（独立模具位置，不是仓库地图点）",
+        locations: [
+          { id: "c1", label: "三楼 · C1 · C1-L03", pallet: "演示纸板栈板 P-04", quantity: 80, unit: "张", mapped: true }
+        ]
+      };
+
+      const escapeHtml = (value) => String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+
+      function toast(message) {
+        const node = document.getElementById("toast");
+        node.textContent = message;
+        node.classList.add("show");
+        window.setTimeout(() => node.classList.remove("show"), 1800);
+      }
+
+      function roleLabel() {
+        return { admin: "管理员", delivery: "送货员", production: "生产员工" }[state.role];
+      }
+
+      function setBoundary() {
+        const messages = {
+          admin: "管理员目标演示：全局查看仍须服务端权限和客户范围；本页没有真实数据。",
+          delivery: "送货员目标演示：只显示本人任务位置；当前正式接口尚缺严格任务归属字段。",
+          production: "生产员工目标演示：只读本人生产资料；当前正式系统尚无独立 production.view 权限。"
+        };
+        roleBoundary.textContent = `${messages[state.role]} 不连接 ERP、不保存。`;
+      }
+
+      function pageHead(title, backLabel = "返回") {
+        return `
+          <div class="page-head">
+            <button type="button" class="back" data-action="safe-back">← ${escapeHtml(backLabel)}</button>
+            <h2>${escapeHtml(title)}</h2>
+          </div>`;
+      }
+
+      function renderState() {
+        const states = {
+          loading: ["正在读取", "请稍候，尚未得到结果。", "loading"],
+          empty: ["没有找到", "读取成功，但当前条件没有结果。", "empty"],
+          error: ["加载失败", "服务没有返回有效结果，请重试。", "error"],
+          "permission-denied": ["无权查看", "权限或客户范围不允许；数量和位置均不显示。", "permission-denied"],
+          stale: ["数据已过期", "只能刷新后继续，旧位置不能用于正式操作。", "stale"],
+          "no-location": ["有数量，暂无可绘制位置", "保留“待归位/未布局”的真实文字，不伪造地图点。", "no-location"],
+          offline: ["连接中断", "未得到服务端成功结果，不显示“已完成”。可用同一次操作重试。", "offline"]
+        };
+        const [title, text, code] = states[state.demoState];
+        const loading = code === "loading";
+        content.innerHTML = `
+          ${pageHead(`${roleLabel()} · 状态演示`)}
+          <section class="card state-panel" data-state="${code}">
+            ${loading ? `
+              <div class="skeleton" aria-label="正在加载">
+                <span></span><span></span><span></span>
+              </div>` : `
+              <div>
+                <div class="state-icon" aria-hidden="true">${code === "permission-denied" ? "!" : "…"}</div>
+                <h2>${escapeHtml(title)}</h2>
+                <p class="muted">${escapeHtml(text)}</p>
+                ${["error", "stale", "offline"].includes(code) ? '<button type="button" class="btn primary" data-action="restore-normal">重试演示</button>' : ""}
+              </div>`}
+          </section>`;
+      }
+
+      function adminHome() {
+        return `
+          <section class="card">
+            <h2>今天先看</h2>
+            <div class="grid2">
+              <div class="metric"><strong>6</strong><span>匿名待处理订单</span></div>
+              <div class="metric"><strong>3</strong><span>匿名待送任务</span></div>
+              <div class="metric"><strong>4</strong><span>匿名待生产</span></div>
+              <div class="metric"><strong>2</strong><span>匿名位置待核对</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <h2>按产品找库存</h2>
+            <p class="muted">按客户、存货编码或产品名称查找；多候选必须人工选择。</p>
+            <button type="button" class="btn primary full" data-action="open-search">查产品和全部位置</button>
+          </section>
+          <div class="notice blue">
+            原料仓尚未建立，原型会明确显示“暂无正式原料仓数据”，不会把它与成品或半成品相加。
+          </div>`;
+      }
+
+      function deliveryHome() {
+        return `
+          <div class="notice orange">
+            目标流程演示：当前接口有客户范围门禁，但尚无严格“分配给当前送货员”的任务字段。
+          </div>
+          <section class="card">
+            <div class="row-head">
+              <div>
+                <h2>我的待拿任务</h2>
+                <p class="muted">匿名任务 · 只展示任务内位置</p>
+              </div>
+              <span class="tag blue">1 单</span>
+            </div>
+            <dl class="facts">
+              <dt>客户</dt><dd>${deliveryTask.customer}</dd>
+              <dt>送货</dt><dd>${deliveryTask.delivery}</dd>
+              <dt>应拿</dt><dd>${deliveryTask.quantity} ${deliveryTask.unit}</dd>
+              <dt>位置</dt><dd>2 个可绘制位置</dd>
+            </dl>
+            <button type="button" class="btn primary full" data-action="open-delivery-task">查看任务与位置</button>
+          </section>
+          <div class="notice blue">本原型不执行“全部拿齐”、不改送货草稿，也不自动正式发货。</div>`;
+      }
+
+      function productionHome() {
+        return `
+          <div class="notice orange">
+            目标流程演示：当前 workshop 权限较宽，尚无独立 production.view；正式接入前必须收窄。
+          </div>
+          <section class="card">
+            <div class="row-head">
+              <div>
+                <h2>我的生产资料</h2>
+                <p class="muted">匿名任务 · 第一阶段只读</p>
+              </div>
+              <span class="tag green">材料已到</span>
+            </div>
+            <dl class="facts">
+              <dt>客户</dt><dd>${productionTask.customer}</dd>
+              <dt>存货编码</dt><dd>${productionTask.code}</dd>
+              <dt>产品</dt><dd>${productionTask.product}</dd>
+              <dt>本次应做</dt><dd>${productionTask.orderQuantity} 只</dd>
+            </dl>
+            <button type="button" class="btn primary full" data-action="open-production-task">查看生产资料</button>
+          </section>
+          <div class="notice blue">查看资料不等于确认完工，不生成成品库存。</div>`;
+      }
+
+      function renderHome() {
+        const body = {
+          admin: adminHome,
+          delivery: deliveryHome,
+          production: productionHome
+        }[state.role]();
+        content.innerHTML = `
+          <div class="page-head"><h2>${roleLabel()}首页</h2></div>
+          ${body}`;
+      }
+
+      function renderSearch() {
+        const candidates = products.filter((product) => {
+          const keyword = state.searchText.trim().toLowerCase();
+          if (!keyword) return [];
+          return [product.customer, product.code, product.name, product.spec]
+            .some((value) => value.toLowerCase().includes(keyword));
+        });
+        content.innerHTML = `
+          ${pageHead("查产品", "返回首页")}
+          <section class="card">
+            <div class="searchbar">
+              <input id="searchInput" value="${escapeHtml(state.searchText)}"
+                aria-label="客户、存货编码或产品名称" placeholder="客户 / 存货编码 / 产品名称">
+              <button type="button" class="btn primary" data-action="run-search">搜索</button>
+            </div>
+            <div class="actions two">
+              <button type="button" class="btn small" data-action="demo-single">演示唯一结果</button>
+              <button type="button" class="btn small" data-action="demo-multiple">演示多候选</button>
+            </div>
+          </section>
+          <section class="card">
+            <h2>候选结果</h2>
+            <p class="muted">保留输入，不自动打开第一款。</p>
+            <div id="candidateList">
+              ${candidates.length ? candidates.map((product) => `
+                <button type="button" class="candidate" data-product-id="${product.id}">
+                  <strong>${escapeHtml(product.code)} · ${escapeHtml(product.name)}</strong>
+                  <span>${escapeHtml(product.customer)}｜${escapeHtml(product.spec)}</span>
+                </button>`).join("") : '<div class="notice blue">请输入关键词后搜索；成功的空结果与加载中会分开显示。</div>'}
+            </div>
+          </section>`;
+      }
+
+      function productSummary(product) {
+        return `
+          <div class="notice orange">匿名目标原型，尚未接入正式 ERP 产品聚合接口。</div>
+          <section class="card">
+            <div class="row-head">
+              <div>
+                <h2>${escapeHtml(product.code)}</h2>
+                <p>${escapeHtml(product.name)}</p>
+              </div>
+              <span class="tag green">匿名产品</span>
+            </div>
+            <p class="muted">${escapeHtml(product.customer)}｜${escapeHtml(product.spec)}</p>
+            <p class="muted">演示更新时间：14:30 <button type="button" class="btn small" data-action="demo-refresh">刷新演示</button></p>
+          </section>
+          <section class="card">
+            <h3>成品（只）</h3>
+            <div class="quantity-strip">
+              <div class="quantity"><strong>${product.finished.total}</strong><span>总量</span></div>
+              <div class="quantity"><strong>${product.finished.available}</strong><span>可用</span></div>
+              <div class="quantity"><strong>${product.finished.reserved}</strong><span>已预占</span></div>
+            </div>
+            <p class="muted">待拿 ${product.finished.pendingPick} 只；只数不与纸板张数相加。</p>
+          </section>
+          <section class="card">
+            <h3>半成品（张）</h3>
+            <div class="quantity-strip">
+              <div class="quantity"><strong>${product.semi.total}</strong><span>客户专用纸板</span></div>
+              <div class="quantity"><strong>—</strong><span>不换算成品</span></div>
+              <div class="quantity"><strong>—</strong><span>不跨单位合计</span></div>
+            </div>
+          </section>
+          <div class="notice orange"><strong>原料：</strong>当前尚无正式原料仓数据，不显示虚假 0，也不参与合计。</div>`;
+      }
+
+      function locationList(locations, action = "open-map") {
+        if (!locations.length) {
+          return '<div class="notice orange">有数量时如无可绘制位置，应显示“待归位/未布局”等真实文字，不伪造地图点。</div>';
+        }
+        return locations.map((location) => `
+          <button type="button" class="location ${location.mapped ? "" : "no-map"}"
+            data-location-id="${escapeHtml(location.id)}" data-action="${location.mapped ? action : "explain-no-map"}">
+            <strong>${escapeHtml(location.label)} · ${location.quantity} ${location.unit}</strong>
+            <span>${escapeHtml(location.pallet)}｜${location.mapped ? "可在地图聚焦" : "文字位置，不生成地图点"}</span>
+          </button>`).join("");
+      }
+
+      function renderProduct() {
+        const product = state.selectedProduct || products[0];
+        content.innerHTML = `
+          ${pageHead("产品数量与全部位置", "返回搜索")}
+          ${productSummary(product)}
+          <section class="card">
+            <div class="row-head">
+              <h3>成品位置（合计 ${product.locations.reduce((sum, row) => sum + row.quantity, 0)} 只）</h3>
+              <span class="tag blue">${product.locations.length} 项</span>
+            </div>
+            ${locationList(product.locations)}
+            ${product.locations.some((row) => row.mapped) ? '<button type="button" class="btn blue full" data-action="open-map-all">地图同时显示全部位置</button>' : ""}
+          </section>
+          <section class="card">
+            <h3>半成品位置</h3>
+            <button type="button" class="location no-map" data-action="explain-no-map">
+              <strong>三楼待布局临时位 · ${product.semi.total} 张</strong>
+              <span>有数量事实，但暂无可绘制坐标；只显示文字位置。</span>
+            </button>
+          </section>`;
+      }
+
+      function renderDeliveryTask() {
+        const task = deliveryTask;
+        content.innerHTML = `
+          ${pageHead("拿货任务", "返回任务列表")}
+          <div class="notice orange">匿名目标原型，尚未接入严格“本人任务”服务端门禁。</div>
+          <section class="card">
+            <div class="row-head">
+              <div><h2>${task.delivery}</h2><p class="muted">${task.customer}</p></div>
+              <span class="tag blue">目标演示</span>
+            </div>
+            <dl class="facts">
+              <dt>产品</dt><dd>${task.product.code} · ${task.product.name}</dd>
+              <dt>本单应拿</dt><dd>${task.quantity} ${task.unit}</dd>
+              <dt>可绘制位置</dt><dd>2 个</dd>
+              <dt>演示更新时间</dt><dd>14:30（刷新后才能继续正式动作）</dd>
+              <dt>正式状态</dt><dd>本原型不读取、不修改</dd>
+            </dl>
+          </section>
+          <section class="card">
+            <h3>按位置拿货</h3>
+            ${locationList(task.locations)}
+            <button type="button" class="btn blue full" data-action="open-map-all">地图查看本任务位置</button>
+          </section>
+          <button type="button" class="btn full" data-action="demo-write-disabled">正式“全部拿齐”继续复用 N083（原型不执行）</button>`;
+      }
+
+      function renderProductionTask() {
+        const task = productionTask;
+        content.innerHTML = `
+          ${pageHead("生产资料", "返回任务列表")}
+          <div class="notice orange">匿名目标原型，尚未接入最小 production.view 与本人任务门禁。</div>
+          <section class="card">
+            <div class="row-head">
+              <div><h2>${task.code}</h2><p>${task.product}</p></div>
+              <span class="tag green">只读演示</span>
+            </div>
+            <dl class="facts">
+              <dt>客户</dt><dd>${task.customer}</dd>
+              <dt>纸箱规格</dt><dd>${task.boxSpec}</dd>
+              <dt>纸板规格</dt><dd>${task.boardSpec}</dd>
+              <dt>订单数量</dt><dd>${task.orderQuantity} 只</dd>
+              <dt>当前可做</dt><dd>${task.producible} 只</dd>
+              <dt>客户纸板</dt><dd>${task.boardQuantity} 张（不与成品相加）</dd>
+              <dt>压线</dt><dd>${task.crease}</dd>
+              <dt>工艺</dt><dd>${task.process}</dd>
+              <dt>演示更新时间</dt><dd>14:30</dd>
+            </dl>
+          </section>
+          <section class="card">
+            <h3>本任务材料位置</h3>
+            ${locationList(task.locations)}
+            <button type="button" class="btn blue full" data-action="open-map-all">地图查看材料位置</button>
+          </section>
+          <section class="card">
+            <h3>图纸与模具</h3>
+            <button type="button" class="location" data-action="demo-drawing">
+              <strong>${task.drawing}</strong>
+              <span>未来必须走鉴权附件，不使用公开链接。</span>
+            </button>
+            <button type="button" class="location no-map" data-action="explain-no-map">
+              <strong>${task.mold}</strong>
+              <span>${task.moldLocation}</span>
+            </button>
+          </section>
+          <button type="button" class="btn full" data-action="demo-write-disabled">生产确认不在 P1-21A（原型不执行）</button>`;
+      }
+
+      function renderTasks() {
+        if (state.role === "delivery") {
+          content.innerHTML = `${pageHead("我的任务", "返回首页")}${deliveryHome()}`;
+        } else if (state.role === "production") {
+          content.innerHTML = `${pageHead("我的任务", "返回首页")}${productionHome()}`;
+        } else {
+          content.innerHTML = `
+            ${pageHead("管理员任务摘要", "返回首页")}
+            <section class="card">
+              <h2>只读摘要</h2>
+              <p class="muted">管理员可按现有权限进入原受控页面；P1-21A 不复制桌面写操作。</p>
+              <div class="grid2">
+                <div class="metric"><strong>3</strong><span>匿名拿货任务</span></div>
+                <div class="metric"><strong>4</strong><span>匿名生产任务</span></div>
+              </div>
+            </section>`;
+        }
+      }
+
+      function renderMe() {
+        const descriptions = {
+          admin: "当前 admin 拥有全部权限；手机仍只按当前页面返回最小字段。",
+          delivery: "当前 delivery_picker 默认只有 orders.view + deliveries.pick，没有 warehouse.view。",
+          production: "当前 workshop 权限较宽，尚无独立 production.view；原型只演示未来最小只读字段。"
+        };
+        content.innerHTML = `
+          ${pageHead("我的", "返回首页")}
+          <section class="card">
+            <h2>${roleLabel()} · 匿名账号</h2>
+            <p>${descriptions[state.role]}</p>
+            <div class="notice blue">退出共享设备时，未来正式页面必须清理任务、搜索、附件和敏感缓存。</div>
+          </section>
+          <section class="card">
+            <h3>原型安全边界</h3>
+            <p class="muted">没有真实登录态、没有网络请求、没有本地持久存储、没有业务提交。</p>
+          </section>`;
+      }
+
+      function mapLocations() {
+        if (state.role === "delivery") return deliveryTask.locations;
+        if (state.role === "production") return productionTask.locations;
+        if (state.role === "admin" && state.selectedProduct) {
+          return state.selectedProduct.locations.filter((row) => row.mapped);
+        }
+        return products[0].locations.filter((row) => row.mapped);
+      }
+
+      function renderMap() {
+        const rows = mapLocations();
+        const c1 = rows.find((row) => row.id === "c1");
+        const f2 = rows.find((row) => row.id === "f2");
+        content.innerHTML = `
+          ${pageHead("三楼作业图聚焦", "安全返回")}
+          <div class="notice blue">同时保留全部命中点；点击只聚焦，不删除其他位置。</div>
+          <section class="card map-card">
+            <div class="map" aria-label="匿名三楼轻量二维作业图">
+              <div class="zone c1">C1 区</div>
+              <div class="zone f2">F2 区</div>
+              <div class="aisle" aria-hidden="true"></div>
+              ${c1 ? `<button type="button" class="pin one ${state.mapFocus === "c1" ? "focus" : ""}" data-map-focus="c1">C1-L03<br>${c1.quantity} ${escapeHtml(c1.unit)}</button>` : ""}
+              ${f2 ? `<button type="button" class="pin two ${state.mapFocus === "f2" ? "focus" : ""}" data-map-focus="f2">F2-R04<br>${f2.quantity} ${escapeHtml(f2.unit)}</button>` : ""}
+            </div>
+            <div class="legend"><span>蓝色：真实可绘制位置</span><span>黄色圈：当前聚焦</span></div>
+          </section>
+          <section class="card">
+            <h3>不能绘制的位置</h3>
+            <button type="button" class="location no-map" data-action="explain-no-map">
+              <strong>待归位 / 未布局 / 独立模具位置</strong>
+              <span>继续用真实文字说明，不创建假坐标或最短路线。</span>
+            </button>
+          </section>
+          <button type="button" class="btn primary full" data-action="safe-back">返回并保留之前状态</button>`;
+      }
+
+      function render() {
+        setBoundary();
+        document.querySelectorAll("[data-role]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.role === state.role);
+        });
+        document.querySelectorAll("[data-nav]").forEach((button) => {
+          const isSearch = button.dataset.nav === "search";
+          button.disabled = isSearch && state.role !== "admin";
+          button.classList.toggle("active", button.dataset.nav === state.view);
+        });
+        if (state.demoState !== "normal") {
+          renderState();
+          return;
+        }
+        const renderers = {
+          home: renderHome,
+          search: renderSearch,
+          product: renderProduct,
+          tasks: renderTasks,
+          "delivery-task": renderDeliveryTask,
+          "production-task": renderProductionTask,
+          map: renderMap,
+          me: renderMe
+        };
+        (renderers[state.view] || renderHome)();
+      }
+
+      function navigate(view, { remember = false } = {}) {
+        if (remember) {
+          state.returnView = state.view;
+          state.returnScroll = window.scrollY;
+        }
+        state.view = view;
+        state.demoState = "normal";
+        render();
+        window.scrollTo(0, 0);
+      }
+
+      function safeBack() {
+        const fallback = {
+          search: "home",
+          product: "search",
+          tasks: "home",
+          "delivery-task": "tasks",
+          "production-task": "tasks",
+          map: state.returnView || "home",
+          me: "home"
+        }[state.view] || "home";
+        const restore = state.view === "map" ? state.returnScroll : 0;
+        state.view = fallback;
+        state.demoState = "normal";
+        render();
+        window.setTimeout(() => window.scrollTo(0, restore), 0);
+      }
+
+      document.addEventListener("input", (event) => {
+        if (event.target.id === "searchInput") state.searchText = event.target.value;
+      });
+
+      document.addEventListener("click", (event) => {
+        const roleButton = event.target.closest("[data-role]");
+        if (roleButton) {
+          state.role = roleButton.dataset.role;
+          state.view = "home";
+          state.demoState = "normal";
+          state.selectedProduct = null;
+          state.selectedTask = null;
+          state.mapFocus = null;
+          render();
+          window.scrollTo(0, 0);
+          return;
+        }
+
+        const stateButton = event.target.closest("[data-demo-state]");
+        if (stateButton) {
+          state.demoState = stateButton.dataset.demoState;
+          render();
+          return;
+        }
+
+        const navButton = event.target.closest("[data-nav]");
+        if (navButton && !navButton.disabled) {
+          navigate(navButton.dataset.nav);
+          return;
+        }
+
+        const productButton = event.target.closest("[data-product-id]");
+        if (productButton) {
+          state.selectedProduct = products.find((row) => row.id === Number(productButton.dataset.productId)) || products[0];
+          navigate("product");
+          return;
+        }
+
+        const focusButton = event.target.closest("[data-map-focus]");
+        if (focusButton) {
+          state.mapFocus = focusButton.dataset.mapFocus;
+          render();
+          toast(`已聚焦 ${state.mapFocus === "c1" ? "C1-L03" : "F2-R04"}；其他位置仍保留`);
+          return;
+        }
+
+        const actionButton = event.target.closest("[data-action]");
+        if (!actionButton) return;
+        const action = actionButton.dataset.action;
+        if (action === "safe-back") safeBack();
+        if (action === "restore-normal") { state.demoState = "normal"; render(); }
+        if (action === "open-search") navigate("search");
+        if (action === "demo-single") { state.searchText = "DEMO-BOX-01"; render(); }
+        if (action === "demo-multiple") { state.searchText = "匿名客户甲"; render(); }
+        if (action === "run-search") {
+          const pendingView = state.view;
+          state.demoState = "loading";
+          render();
+          window.setTimeout(() => {
+            if (state.view !== pendingView) return;
+            state.demoState = "normal";
+            render();
+          }, 450);
+        }
+        if (action === "open-delivery-task") { state.selectedTask = deliveryTask.id; navigate("delivery-task"); }
+        if (action === "open-production-task") { state.selectedTask = productionTask.id; navigate("production-task"); }
+        if (action === "open-map" || action === "open-map-all") {
+          state.mapFocus = actionButton.dataset.locationId || null;
+          navigate("map", { remember: true });
+        }
+        if (action === "explain-no-map") toast("该位置没有可验证坐标，只保留文字，不伪造地图点");
+        if (action === "demo-write-disabled") toast("离线原型不会保存、完工、移位、拿货或发货");
+        if (action === "demo-drawing") toast("图纸占位：正式接入必须鉴权且禁止公共缓存");
+        if (action === "demo-refresh") toast("已刷新匿名演示；没有请求正式 ERP");
+      });
+
+      render();
+    })();
+  </script>
+</body>
+</html>

@@ -17,6 +17,10 @@ from app.core.time_contract import (
 from app.models.audit import OperationLog
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
+from app.models.product_bom import (
+    RequisitionItemBomSource,
+    SalesOrderItemBomComponent,
+)
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.stock_replenishment import (
     StockReplenishmentOrder,
@@ -39,8 +43,14 @@ from app.services.stock_replenishment import (
     StockReplenishmentError,
     receive_replenishment_item,
 )
+from app.services.semi_finished_inventory import (
+    active_semi_reserved_piece_qty,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
+    active_finished_reserved_qty,
+    component_effective_required_piece_qty,
+    component_inventory_coverage,
     manual_semi_finished_in,
     mutate_lot,
 )
@@ -168,6 +178,194 @@ def _component_kind(name: str | None) -> str:
     return "whole"
 
 
+def _requisition_component_kind(
+    db: Session,
+    requisition_item: RequisitionItem,
+) -> str:
+    source_type = db.scalar(
+        select(RequisitionItemBomSource.component_type).where(
+            RequisitionItemBomSource.requisition_item_id
+            == requisition_item.id
+        )
+    )
+    normalized = str(source_type or "").strip().lower()
+    return (
+        normalized
+        if normalized in {"whole", "cover", "base"}
+        else _component_kind(requisition_item.product_name_snapshot)
+    )
+
+
+def _is_telescoping_lid_box(box_style: str | None) -> bool:
+    value = (box_style or "").strip().upper()
+    return bool(value) and ("天地盖" in value or "A3" in value)
+
+
+def _snapshot_component_types(
+    snapshot: SalesOrderItemBomComponent,
+) -> tuple[str, ...]:
+    if _is_telescoping_lid_box(snapshot.snapshot_component_box_style):
+        return ("cover", "base")
+    return ("whole",)
+
+
+def _snapshot_physical_pieces(
+    snapshot: SalesOrderItemBomComponent,
+    component_type: str,
+) -> int:
+    if component_type in {"cover", "base"}:
+        return 1
+    frozen = int(snapshot.snapshot_component_pieces_per_box or 0)
+    if frozen > 0:
+        return frozen
+    return (
+        2
+        if (snapshot.snapshot_component_splice_mode or "").strip().lower()
+        == "double"
+        else 1
+    )
+
+
+def _is_set_only_a3_surround_bom(
+    snapshots: list[SalesOrderItemBomComponent],
+) -> bool:
+    if len(snapshots) != 2:
+        return False
+    if any(
+        Decimal(row.quantity_per_set or 0) != Decimal("1")
+        for row in snapshots
+    ):
+        return False
+    a3 = [
+        row
+        for row in snapshots
+        if _is_telescoping_lid_box(row.snapshot_component_box_style)
+    ]
+    surrounds = [
+        row
+        for row in snapshots
+        if (
+            (row.snapshot_component_box_style or "").strip()
+            in {"围板", "围套"}
+            or "围板" in (row.snapshot_component_product_name or "")
+        )
+    ]
+    return (
+        len(a3) == 1
+        and len(surrounds) == 1
+        and a3[0].id != surrounds[0].id
+    )
+
+
+def _parent_inventory_fully_covers(
+    db: Session,
+    item: OrderItem,
+) -> bool:
+    pieces_per_box = int(item.snapshot_pieces_per_box or 0)
+    if pieces_per_box <= 0:
+        pieces_per_box = (
+            2
+            if (item.snapshot_splice_mode or "").strip().lower() == "double"
+            else 1
+        )
+    finished = active_finished_reserved_qty(db, item.id)
+    required = max(int(item.quantity or 0) - finished, 0) * pieces_per_box
+    semi = active_semi_reserved_piece_qty(
+        db,
+        order_item_id=item.id,
+        component_type="whole",
+    )
+    return required <= semi
+
+
+def _all_expected_bom_sources_received(
+    db: Session,
+    item: OrderItem,
+) -> bool | None:
+    """Return None for non-BOM items, otherwise exact physical-source closure."""
+    snapshots = db.scalars(
+        select(SalesOrderItemBomComponent)
+        .where(SalesOrderItemBomComponent.sales_order_item_id == item.id)
+        .order_by(
+            SalesOrderItemBomComponent.display_order,
+            SalesOrderItemBomComponent.id,
+        )
+    ).all()
+    if not snapshots:
+        return None
+
+    expected: set[tuple[int, str]] = set()
+    for snapshot in snapshots:
+        for component_type in _snapshot_component_types(snapshot):
+            required = (
+                component_effective_required_piece_qty(db, snapshot)
+                * _snapshot_physical_pieces(snapshot, component_type)
+            )
+            coverage = component_inventory_coverage(
+                db,
+                snapshot.id,
+                component_type=component_type,
+            )
+            if int(coverage["total_piece_quantity"]) < required:
+                expected.add((snapshot.id, component_type))
+
+    received_rows = db.execute(
+        select(
+            RequisitionItemBomSource.sales_order_item_bom_component_id,
+            RequisitionItemBomSource.component_type,
+        )
+        .join(
+            RequisitionItem,
+            RequisitionItem.id
+            == RequisitionItemBomSource.requisition_item_id,
+        )
+        .where(
+            RequisitionItem.order_item_id == item.id,
+            RequisitionItem.status == "已入库",
+        )
+    ).all()
+    received = {
+        (int(snapshot_id), component_type)
+        for snapshot_id, component_type in received_rows
+    }
+    for snapshot_id, component_type in expected:
+        if (snapshot_id, component_type) in received:
+            continue
+        # Historical A3 facts used one `whole` source before physical split.
+        if (
+            component_type in {"cover", "base"}
+            and (snapshot_id, "whole") in received
+        ):
+            continue
+        return False
+
+    parent_required = (
+        not _is_set_only_a3_surround_bom(snapshots)
+        and not _parent_inventory_fully_covers(db, item)
+    )
+    if parent_required:
+        linked_source = (
+            select(RequisitionItemBomSource.id)
+            .where(
+                RequisitionItemBomSource.requisition_item_id
+                == RequisitionItem.id
+            )
+            .exists()
+        )
+        parent_received = db.scalar(
+            select(RequisitionItem.id)
+            .where(
+                RequisitionItem.order_item_id == item.id,
+                RequisitionItem.status == "已入库",
+                ~linked_source,
+            )
+            .limit(1)
+        )
+        if parent_received is None:
+            return False
+    return True
+
+
 def _uses_confirmed_supplier_order(db: Session, order_item: OrderItem) -> bool:
     if not order_item.supplier_order_number:
         return False
@@ -246,10 +444,7 @@ def _target(
             allow_closed and requisition_item.status == "已入库"
         ):
             raise IncomingReceiptError("该报料明细当前不可入库", 409)
-        if not allow_closed and (
-            order_item.material_status != "pending"
-            or order_item.requisition_status not in {"已报料", "供应商已排单"}
-        ):
+        if not allow_closed and order_item.material_status != "pending":
             raise IncomingReceiptError(
                 "该明细当前不可入库，可能已入库、已作废或状态已变化", 409
             )
@@ -260,7 +455,10 @@ def _target(
             order_item=order_item,
             requisition_item=requisition_item,
             planned_quantity=planned,
-            component_type=_component_kind(requisition_item.product_name_snapshot),
+            component_type=_requisition_component_kind(
+                db,
+                requisition_item,
+            ),
         )
 
     try:
@@ -287,9 +485,27 @@ def _target(
             RequisitionItem.order_item_id == order_item.id,
         )
     ).all()
-    if any(
-        _component_kind(row.product_name_snapshot) in {"cover", "base"}
-        for row in component_rows
+    source_rows = db.execute(
+        select(
+            RequisitionItemBomSource.requisition_item_id,
+            RequisitionItemBomSource.component_type,
+        ).where(
+            RequisitionItemBomSource.requisition_item_id.in_(
+                [row.id for row in component_rows]
+            )
+        )
+    ).all()
+    sourced_item_ids = {int(item_id) for item_id, _kind in source_rows}
+    source_types = {
+        str(kind or "").strip().lower() for _item_id, kind in source_rows
+    }
+    if (
+        source_types.intersection({"cover", "base"})
+        or any(
+            _component_kind(row.product_name_snapshot) in {"cover", "base"}
+            for row in component_rows
+            if row.id not in sourced_item_ids
+        )
     ):
         raise IncomingReceiptError("天地盖来料必须分别按盖片和底片确认实收", 409)
     planned = int(order_item.requisition_qty or order_item.quantity or 0)
@@ -457,16 +673,20 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
             if closed
             else _open_requisition_status(db, target.requisition_item)
         )
-        component_rows = db.scalars(
-            select(RequisitionItem).where(
-                RequisitionItem.order_item_id == item.id,
+        bom_sources_received = _all_expected_bom_sources_received(db, item)
+        if bom_sources_received is None:
+            component_rows = db.scalars(
+                select(RequisitionItem).where(
+                    RequisitionItem.order_item_id == item.id,
+                )
+            ).all()
+            remaining_components = sum(
+                _requisition_can_receive(db, component, item)
+                for component in component_rows
             )
-        ).all()
-        remaining_components = sum(
-            _requisition_can_receive(db, component, item)
-            for component in component_rows
-        )
-        closed = closed and remaining_components == 0
+            closed = closed and remaining_components == 0
+        else:
+            closed = closed and bom_sources_received
     if closed:
         item.material_status = "received"
         item.requisition_status = "已入库"

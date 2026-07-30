@@ -29,8 +29,14 @@ from app.services.customer_quote_pricing import (
     estimate_a1_unit_price,
     resolve_customer_square_price,
 )
+from app.services.box_type_rules import (
+    BoxTypeRuleError,
+    box_type_code,
+    canonical_box_style,
+    normalize_box_configuration,
+    recommend_box_type,
+)
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
-from app.services.pricing import PricingError, calculate_price
 from app.services.report_crease import crease_width_error
 
 
@@ -129,13 +135,11 @@ def _validated_quotation_flute(
 
 
 def _is_a1(box_type: str | None) -> bool:
-    value = str(box_type or "").strip().upper()
-    return "A1" in value or "0201" in value
+    return box_type_code(box_type) == "a1_0201"
 
 
 def _is_a3(box_type: str | None) -> bool:
-    value = str(box_type or "").strip().upper()
-    return "A3" in value or "天地盖" in value
+    return box_type_code(box_type) == "a3_set"
 
 
 def _round_mm(value: Decimal) -> int:
@@ -160,58 +164,48 @@ def _quotation_report_values(item: QuotationItem, payload: ConvertPayload) -> di
         "base_crease_right_mm",
     )
     values = {name: getattr(payload, name) for name in (*main_fields, *base_fields)}
-    is_a1 = _is_a1(item.box_type)
     is_a3 = _is_a3(item.box_type)
     manual_report_started = any(values[name] is not None for name in (*main_fields, *base_fields))
 
-    splice_mode = (payload.splice_mode or "single").strip().lower()
-    if splice_mode not in {"single", "double"}:
-        raise HTTPException(status_code=400, detail="拼箱方式只能选择单拼或双拼")
-    if not is_a1:
-        splice_mode = "single"
-    flap_mm = payload.flap_mm if is_a1 else None
-    if is_a1 and flap_mm is None:
-        flap_mm = 30
-
-    dimensions = None
-    if item.length_mm and item.width_mm and item.height_mm:
-        dimensions = (
-            _round_mm(item.length_mm),
-            _round_mm(item.width_mm),
-            _round_mm(item.height_mm),
+    try:
+        configuration = normalize_box_configuration(
+            box_style=item.box_type,
+            splice_mode=payload.splice_mode,
+            pieces_per_box=None,
+            flap_mm=payload.flap_mm,
+            default_cutting_mode="一开一",
+            crease_type=payload.crease_type,
         )
+    except BoxTypeRuleError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
-    if not manual_report_started and dimensions and (is_a1 or is_a3):
+    dimensions = (
+        _round_mm(item.length_mm) if item.length_mm is not None else None,
+        _round_mm(item.width_mm) if item.width_mm is not None else None,
+        _round_mm(item.height_mm) if item.height_mm is not None else None,
+    )
+
+    if not manual_report_started:
         length_mm, width_mm, height_mm = dimensions
-        if is_a1:
-            side = _round_mm(Decimal(width_mm) / Decimal("2"))
-            values.update(
-                report_length_mm=(
-                    length_mm + width_mm + int(flap_mm or 0)
-                    if splice_mode == "double"
-                    else 2 * (length_mm + width_mm) + int(flap_mm or 0)
-                ),
-                report_width_mm=side + height_mm + side,
-                crease_type="压线",
-                crease_left_mm=side,
-                crease_middle_mm=height_mm,
-                crease_right_mm=side,
+        try:
+            recommendation = recommend_box_type(
+                box_style=item.box_type,
+                length_mm=length_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                splice_mode=str(configuration["splice_mode"]),
+                flap_mm=configuration["flap_mm"],
+                crease_type=payload.crease_type,
             )
-        else:
-            base_width = max(width_mm - 25, 1)
-            values.update(
-                report_length_mm=length_mm + 2 * height_mm,
-                report_width_mm=height_mm + width_mm + height_mm,
-                crease_type="压线",
-                crease_left_mm=height_mm,
-                crease_middle_mm=width_mm,
-                crease_right_mm=height_mm,
-                base_report_length_mm=max(length_mm - 25 + 2 * height_mm, 1),
-                base_report_width_mm=height_mm + base_width + height_mm,
-                base_crease_type="压线",
-                base_crease_left_mm=height_mm,
-                base_crease_middle_mm=base_width,
-                base_crease_right_mm=height_mm,
+        except BoxTypeRuleError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if recommendation["auto_calculated"]:
+            for name in (*main_fields, *base_fields):
+                values[name] = recommendation[name]
+            configuration.update(
+                splice_mode=recommendation["splice_mode"],
+                pieces_per_box=recommendation["pieces_per_box"],
+                flap_mm=recommendation["flap_mm"],
             )
 
     if values["report_length_mm"] is None or values["report_width_mm"] is None:
@@ -264,9 +258,9 @@ def _quotation_report_values(item: QuotationItem, payload: ConvertPayload) -> di
 
     return {
         **values,
-        "splice_mode": splice_mode,
-        "pieces_per_box": 2 if splice_mode == "double" else 1,
-        "flap_mm": flap_mm,
+        "splice_mode": configuration["splice_mode"],
+        "pieces_per_box": configuration["pieces_per_box"],
+        "flap_mm": configuration["flap_mm"],
         "report_notes": payload.report_notes,
         "base_report_notes": payload.base_report_notes,
     }
@@ -390,14 +384,12 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
             "message": "当前材质缺少平方价，请手工填写最终单价",
         }
     try:
-        result = calculate_price(
-            box_category="normal",
-            board_square_price=Decimal(str(square_price)),
-            length_mm=payload.length_mm,
-            width_mm=payload.width_mm,
-            height_mm=payload.height_mm,
+        area = a1_area_m2(
+            length_mm=Decimal(payload.length_mm),
+            width_mm=Decimal(payload.width_mm),
+            height_mm=Decimal(payload.height_mm),
         )
-    except PricingError as error:
+    except (CustomerQuotePricingError, TypeError) as error:
         return {
             "auto_calculated": False,
             "estimated_unit_cost": None,
@@ -405,7 +397,10 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
             "margin_rate": payload.margin_rate,
             "message": str(error),
         }
-    cost = Decimal(result.unit_price).quantize(PRICE)
+    cost = (area * Decimal(str(square_price))).quantize(
+        PRICE,
+        rounding=ROUND_HALF_UP,
+    )
     margin_fraction = payload.margin_rate / Decimal("100")
     suggested = (cost / (Decimal("1") - margin_fraction)).quantize(
         PRICE, rounding=ROUND_HALF_UP
@@ -415,9 +410,9 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
         "estimated_unit_cost": cost,
         "suggested_unit_price": suggested,
         "margin_rate": payload.margin_rate,
-        "area_m2": result.area_m2,
+        "area_m2": area,
         "material_square_price": square_price,
-        "message": "已按现有纸板成本口径计算，建议单价可手工修改",
+        "message": "已按 A1 尺寸平方价口径计算，建议单价可手工修改",
     }
 
 
@@ -791,7 +786,7 @@ def convert_to_product(
         width_mm=item.width_mm,
         height_mm=item.height_mm,
         box_category="die_cut" if "异形" in item.box_type else "normal",
-        box_style=item.box_type,
+        box_style=canonical_box_style(item.box_type),
         unit="只",
         sale_unit_price=item.final_unit_price,
         **cost_values,

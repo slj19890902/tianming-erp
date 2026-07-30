@@ -471,14 +471,40 @@ def component_effective_required_piece_qty(
     return max(int(snapshot.required_piece_quantity or 0) + int(delta or 0), 0)
 
 
-def component_inventory_coverage(db: Session, snapshot_id: int) -> dict[str, int]:
+def component_inventory_coverage(
+    db: Session,
+    snapshot_id: int,
+    *,
+    component_type: str = "whole",
+) -> dict[str, int]:
     """One authoritative component coverage view for reserve and requisition.
 
-    Both formal finished stock and semi-finished stock are order-bound facts.
-    Callers must use `total_piece_quantity` as one shared upper bound rather
-    than independently filling the same component demand twice.
+    Formal finished stock is one complete component product, so one reserved A3
+    component covers one cover and one base.  Semi-finished stock is a physical
+    board and must remain scoped to whole/cover/base.  Historical `whole`
+    requirements continue to cover the complete legacy snapshot.
     """
-    finished = active_finished_component_reserved_qty(db, snapshot_id)
+    component = (component_type or "").strip().lower()
+    if component not in {"whole", "cover", "base"}:
+        raise WarehouseInventoryError(
+            "组合组件库存类型仅允许 whole、cover 或 base"
+        )
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None:
+        raise WarehouseInventoryError("组件快照不存在", 404)
+    physical_pieces_per_component = 1
+    if component == "whole":
+        frozen_value = int(snapshot.snapshot_component_pieces_per_box or 0)
+        if frozen_value > 0:
+            physical_pieces_per_component = frozen_value
+        elif (
+            snapshot.snapshot_component_splice_mode or ""
+        ).strip().lower() == "double":
+            physical_pieces_per_component = 2
+    finished = (
+        active_finished_component_reserved_qty(db, snapshot_id)
+        * physical_pieces_per_component
+    )
     # `semi_requirement_id` was the only link before the explicit snapshot
     # field existed. Keep that historical link in the one coverage view so an
     # older, still-active reservation cannot be counted a second time by a
@@ -492,6 +518,19 @@ def component_inventory_coverage(db: Session, snapshot_id: int) -> dict[str, int
         .where(
             InventoryReservation.reservation_type == "semi_order",
             InventoryReservation.status != "cancelled",
+            (
+                or_(
+                    OrderItemSemiRequirement.id.is_(None),
+                    OrderItemSemiRequirement.component_type == "whole",
+                )
+                if component == "whole"
+                else or_(
+                    OrderItemSemiRequirement.id.is_(None),
+                    OrderItemSemiRequirement.component_type.in_(
+                        [component, "whole"]
+                    ),
+                )
+            ),
             or_(
                 InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
                 OrderItemSemiRequirement.sales_order_item_bom_component_id
@@ -602,14 +641,33 @@ def reserve_finished_inventory_for_bom_component(
             raise WarehouseInventoryError("通用组件成品库存必须人工确认后才能使用", 409)
     elif detail.owner_customer_id != order.customer_id:
         raise WarehouseInventoryError("客户专用组件库存不能用于其他客户订单", 409)
+    physical_pieces_per_component = int(
+        snapshot.snapshot_component_pieces_per_box or 0
+    )
+    if physical_pieces_per_component <= 0:
+        physical_pieces_per_component = (
+            2
+            if (snapshot.snapshot_component_splice_mode or "")
+            .strip()
+            .lower()
+            == "double"
+            else 1
+        )
     coverage = component_inventory_coverage(db, bom_snapshot_id)
-    remaining = max(
+    remaining_physical_pieces = max(
         component_effective_required_piece_qty(db, snapshot)
+        * physical_pieces_per_component
         - int(coverage["total_piece_quantity"]),
         0,
     )
-    if quantity > remaining:
-        raise WarehouseInventoryError(f"组件抵扣数量不能超过剩余需求 {remaining}", 409)
+    remaining_component_units = (
+        remaining_physical_pieces // physical_pieces_per_component
+    )
+    if quantity > remaining_component_units:
+        raise WarehouseInventoryError(
+            f"组件成品抵扣数量不能超过剩余 {remaining_component_units}",
+            409,
+        )
     if lot.version != expected_version or quantity > int(lot.quantity_available or 0):
         raise WarehouseInventoryError("库存数量或版本已变化，请刷新后重试", 409)
     before = _balances(lot)

@@ -104,6 +104,8 @@ def requisition_app(tmp_path: Path):
             width_mm=Decimal("350"),
             height_mm=Decimal("300"),
             box_category="normal",
+            box_style="A1",
+            flap_mm=30,
         )
         session.add(product)
         session.flush()
@@ -1555,13 +1557,14 @@ def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
         item.requisition_date = date(2026, 6, 22)
         item.cardboard_len = Decimal("1756")
         item.cardboard_width = Decimal("1962")
-        session.add(
-            ProductDrawing(
-                product_id=item.product_id,
-                image_path="/static/uploads/drawings/customer-order.pdf",
-                thumbnail_path="/static/uploads/drawings/customer-order.pdf",
-            )
+        drawing = ProductDrawing(
+            product_id=item.product_id,
+            image_path="/static/uploads/drawings/customer-order.pdf",
+            thumbnail_path="/static/uploads/drawings/customer-order.pdf",
         )
+        session.add(drawing)
+        session.flush()
+        drawing_id = drawing.id
         session.commit()
 
     with TestClient(app) as client:
@@ -1571,7 +1574,9 @@ def test_mobile_incoming_exposes_latest_pdf_drawing(requisition_app) -> None:
     assert response.status_code == 200
     row = response.json()["items"][0]
     assert row["drawing_is_pdf"] is True
-    assert row["drawing_path"].endswith("customer-order.pdf")
+    assert row["drawing_path"] == (
+        f"/api/master/products/drawings/{drawing_id}/content/original.pdf"
+    )
     assert row["product_code"] == "21301028"
     assert row["incoming_quantity"] == row["requisition_qty"]
     assert row["requisition_date"] is not None
@@ -1625,7 +1630,9 @@ def test_mobile_entry_returns_lan_url_and_qr_code(requisition_app) -> None:
 
 
 def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> None:
+    from app.api.requisition import _suggested_dimensions
     from app.models.order import OrderItem
+    from app.models.product import Product
     from app.models.requisition import Requisition, RequisitionItem
 
     app, session_factory = requisition_app
@@ -1637,8 +1644,8 @@ def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> No
     assert pending.status_code == 200
     row = pending.json()["items"][0]
     assert row["requisition_status"] == "未报料"
-    assert Decimal(str(row["suggested_cardboard_len"])) == Decimal("1756")
-    assert Decimal(str(row["suggested_cardboard_width"])) == Decimal("654")
+    assert Decimal(str(row["suggested_cardboard_len"])) == Decimal("1770")
+    assert Decimal(str(row["suggested_cardboard_width"])) == Decimal("650")
     assert created.status_code == 201, created.text
     assert created.json()["requisition_number"].startswith(
         f"BL-{date.today():%Y%m%d}-"
@@ -1653,6 +1660,17 @@ def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> No
         assert item.special_process == "一开三"
         assert session.scalar(select(Requisition)) is not None
         assert session.scalar(select(RequisitionItem)) is not None
+    unknown = Product(
+        customer_id=1,
+        product_code="UNKNOWN-BOX",
+        product_name="未知箱型",
+        box_category="normal",
+        box_style="未来新箱型",
+        length_mm=Decimal("520"),
+        width_mm=Decimal("350"),
+        height_mm=Decimal("300"),
+    )
+    assert _suggested_dimensions(unknown) == (None, None)
 
 
 def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receive(

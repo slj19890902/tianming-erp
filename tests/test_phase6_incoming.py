@@ -469,7 +469,8 @@ def test_pending_incoming_uses_current_confirmed_supplier_group_only(
     pending_card = next(
         card for card in overview.json()["cards"] if card["key"] == "pending_incoming"
     )
-    assert pending_card["count"] == 3
+    # 首页按订单明细计数；来料页按盖/底等物理料行展开为 3 行。
+    assert pending_card["count"] == 1
     assert old_receive.status_code == 409
     assert receive_cover.status_code == 200, receive_cover.text
     assert {row["item_id"] for row in pending_after_cover.json()["items"]} == {
@@ -1586,7 +1587,10 @@ def test_incoming_rows_prioritize_order_item_drawing_over_product_drawing(
     assert response.status_code == 200
     items = {item["item_id"]: item for item in response.json()["items"]}
     # item 2 只有常用箱图纸 -> 使用常用箱图纸
-    assert items[2]["drawing_path"] == "/static/uploads/drawings/product-only.pdf"
+    assert (
+        items[2]["drawing_path"]
+        == "/api/master/products/drawings/1/content/original.pdf"
+    )
     assert items[2]["drawing_is_pdf"] is True
 
     with session_factory() as session:
@@ -1599,10 +1603,19 @@ def test_incoming_rows_prioritize_order_item_drawing_over_product_drawing(
 
     items = {item["item_id"]: item for item in response.json()["items"]}
     # item 1 同时存在订单图纸与常用箱图纸 -> 订单图纸优先
-    assert items[1]["drawing_path"] == "/static/uploads/drawings/order-item.jpg"
+    assert (
+        items[1]["drawing_path"]
+        == "/api/orders/items/1/drawing/content/file.jpg"
+    )
     assert items[1]["drawing_is_pdf"] is False
-    assert items[1]["order_drawing_path"] == "/static/uploads/drawings/order-item.jpg"
-    assert items[1]["product_drawing_path"] == "/static/uploads/drawings/product-only.pdf"
+    assert (
+        items[1]["order_drawing_path"]
+        == "/api/orders/items/1/drawing/content/file.jpg"
+    )
+    assert (
+        items[1]["product_drawing_path"]
+        == "/api/master/products/drawings/1/content/original.pdf"
+    )
 
 
 def test_no_received_state_is_changed_when_duplicate_receive_races(

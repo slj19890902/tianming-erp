@@ -51,13 +51,12 @@ def _assert_database(database: Path, revision: str) -> None:
         _assert_delivery_void_columns(connection)
 
 
-def test_ct76_is_linear_parent_of_the_unique_q0_02_head(
+def test_ct76_is_linear_parent_of_cv78(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(monkeypatch, tmp_path / "lineage.sqlite3")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [NEXT_REVISION]
     assert script.get_revision(TARGET_REVISION).down_revision == PARENT_REVISION
     assert script.get_revision(NEXT_REVISION).down_revision == TARGET_REVISION
 

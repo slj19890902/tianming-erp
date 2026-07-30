@@ -101,6 +101,12 @@ from app.services.order_business_status import (
     build_order_business_statuses,
 )
 from app.services import material_pricing
+from app.services.box_type_rules import (
+    BoxTypeRuleError,
+    box_type_code,
+    get_box_type_rule,
+    normalize_box_configuration,
+)
 from app.services.order_pdf_import import (
     PARSE_STATUS_LABELS,
     PdfParseError,
@@ -965,8 +971,36 @@ def _advance_plan_version(
 
 
 def _is_telescoping_product(product: Product) -> bool:
-    value = (product.box_style or "").strip().upper()
-    return bool(value) and ("天地盖" in value or "A3" in value)
+    return box_type_code(product.box_style) == "a3_set"
+
+
+def _order_snapshot_box_configuration(product: Product) -> dict[str, object]:
+    """Normalize recognized types while preserving unknown historical values."""
+    if get_box_type_rule(product.box_style) is None:
+        splice_mode = (product.splice_mode or "single").strip().lower()
+        return {
+            "recognized": False,
+            "code": None,
+            "box_style": (product.box_style or "").strip() or None,
+            "splice_mode": splice_mode,
+            "pieces_per_box": (
+                product.pieces_per_box
+                if product.pieces_per_box is not None
+                else (2 if splice_mode == "double" else 1)
+            ),
+            "flap_mm": product.flap_mm,
+            "default_cutting_mode": (
+                product.default_cutting_mode or "一开一"
+            ),
+        }
+    return normalize_box_configuration(
+        box_style=product.box_style,
+        splice_mode=product.splice_mode,
+        pieces_per_box=product.pieces_per_box,
+        flap_mm=product.flap_mm,
+        default_cutting_mode=product.default_cutting_mode,
+        crease_type=product.crease_type,
+    )
 
 
 def _semi_component_specs(
@@ -4561,6 +4595,18 @@ def _create_order_impl(
                 )
                 or initial_material_code
             )
+            try:
+                product_box_configuration = (
+                    _order_snapshot_box_configuration(product)
+                )
+            except BoxTypeRuleError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"常用箱 {product.product_code} 的箱型配置无效："
+                        f"{error}"
+                    ),
+                ) from error
             item = OrderItem(
                 order_id=order.id,
                 product_id=product.id,
@@ -4619,15 +4665,14 @@ def _create_order_impl(
                 snapshot_base_crease_middle_mm=product.base_crease_middle_mm,
                 snapshot_base_crease_right_mm=product.base_crease_right_mm,
                 snapshot_base_report_notes=product.base_report_notes,
-                snapshot_splice_mode=product.splice_mode or "single",
-                snapshot_pieces_per_box=product.pieces_per_box or (2 if (product.splice_mode or "").lower() == "double" else 1),
-                snapshot_flap_mm=product.flap_mm or 30,
-                special_process=(
-                    (product.default_cutting_mode or "一开一")
-                    if (product.box_style or "").strip()
-                    in {"平卡", "模切内盒", "隔板", "刀卡"}
-                    else "一开一"
-                ),
+                snapshot_splice_mode=product_box_configuration["splice_mode"],
+                snapshot_pieces_per_box=product_box_configuration[
+                    "pieces_per_box"
+                ],
+                snapshot_flap_mm=product_box_configuration["flap_mm"],
+                special_process=product_box_configuration[
+                    "default_cutting_mode"
+                ],
                 requisition_status="未报料",
                 **combination_provenances[index],
             )
@@ -5529,7 +5574,6 @@ def update_order_item(
         add_product_update("layer_count", prospective_product_layer)
         add_product_update("flute_type", prospective_product_flute)
         for field_name in (
-            "box_style",
             "length_mm",
             "width_mm",
             "height_mm",
@@ -5539,16 +5583,70 @@ def update_order_item(
             value = getattr(payload, field_name)
             if value is not None:
                 add_product_update(field_name, value)
-        splice_mode = payload.snapshot_splice_mode or product.splice_mode or "single"
-        add_product_update("splice_mode", splice_mode)
-        pieces_per_box = (
-            payload.snapshot_pieces_per_box
-            if payload.snapshot_pieces_per_box is not None
-            else (2 if splice_mode == "double" else 1)
+        structure_touched = any(
+            value is not None
+            for value in (
+                payload.box_style,
+                payload.snapshot_splice_mode,
+                payload.snapshot_pieces_per_box,
+                payload.snapshot_flap_mm,
+            )
         )
-        add_product_update("pieces_per_box", pieces_per_box)
-        if payload.snapshot_flap_mm is not None:
-            add_product_update("flap_mm", payload.snapshot_flap_mm)
+        if structure_touched:
+            prospective_box_style = (
+                payload.box_style
+                if payload.box_style is not None
+                else product.box_style
+            )
+            try:
+                box_configuration = normalize_box_configuration(
+                    box_style=prospective_box_style,
+                    splice_mode=(
+                        payload.snapshot_splice_mode
+                        if payload.snapshot_splice_mode is not None
+                        else product.splice_mode
+                    ),
+                    pieces_per_box=(
+                        payload.snapshot_pieces_per_box
+                        if payload.snapshot_pieces_per_box is not None
+                        else product.pieces_per_box
+                    ),
+                    flap_mm=(
+                        payload.snapshot_flap_mm
+                        if payload.snapshot_flap_mm is not None
+                        else product.flap_mm
+                    ),
+                    default_cutting_mode=product.default_cutting_mode,
+                    crease_type=(
+                        payload.snapshot_crease_type
+                        if payload.snapshot_crease_type is not None
+                        else product.crease_type
+                    ),
+                )
+            except BoxTypeRuleError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(error),
+                ) from error
+            if payload.box_style is not None:
+                add_product_update(
+                    "box_style",
+                    box_configuration["box_style"],
+                )
+            add_product_update(
+                "splice_mode",
+                box_configuration["splice_mode"],
+            )
+            add_product_update(
+                "pieces_per_box",
+                box_configuration["pieces_per_box"],
+            )
+            add_product_update("flap_mm", box_configuration["flap_mm"])
+            item.snapshot_splice_mode = box_configuration["splice_mode"]
+            item.snapshot_pieces_per_box = box_configuration[
+                "pieces_per_box"
+            ]
+            item.snapshot_flap_mm = box_configuration["flap_mm"]
         for snapshot_field, product_field in report_field_mapping.items():
             if snapshot_field not in changed_report_fields:
                 continue

@@ -22,7 +22,7 @@ def test_product_form_exposes_independent_default_cutting_mode() -> None:
         'v-model="productForm.default_cutting_mode"'
     ) < report_row.index('class="field product-crease-field"')
     assert (
-        'v-if="!usesProductDefaultCuttingMode(productForm.box_style)" '
+        'v-if="productSupportsCreaseSegments(productForm.box_style)" '
         'class="field product-crease-field"'
         in report_row
     )
@@ -35,17 +35,15 @@ def test_cutting_mode_visibility_and_flat_card_rename_follow_box_style() -> None
     assert '"模切内盒"' in options
     assert '"平卡"' not in options
     assert '"隔板"' in options
-    assert 'return value === "模切内盒" || value === "平卡" || value === "隔板"' in INDEX_HTML
-    assert '"平卡": "模切内盒"' in INDEX_HTML
-    assert (
-        'v-if="!usesProductDefaultCuttingMode(productForm.box_style)" value="压线"'
-        in INDEX_HTML
-    )
+    assert "?.supports_cutting_mode === true" in INDEX_HTML
+    assert "productSupportedCuttingModes(productForm.box_style)" in INDEX_HTML
+    assert "productSupportedCreaseTypes(productForm.box_style)" in INDEX_HTML
     special_select = INDEX_HTML.split(
         'class="field product-crease-type-field"', 1
     )[1].split("</select>", 1)[0]
-    for value, label in (("净料", "净"), ("毛片", "毛"), ("其他", "其他")):
-        assert f'<option value="{value}">{label}</option>' in special_select
+    assert "productSupportedCreaseTypes(productForm.box_style)" in special_select
+    assert "creaseTypeLabel(creaseType)" in special_select
+    assert 'return value === "净料" ? "净" : value === "毛片" ? "毛" : value;' in INDEX_HTML
 
 
 def test_requisition_form_keeps_manual_cutting_mode_override() -> None:

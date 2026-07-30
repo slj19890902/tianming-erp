@@ -152,6 +152,76 @@ WAREHOUSE_CONSTRUCTION_STATUSES = {
 }
 
 
+def _is_a3_bom_snapshot(snapshot: SalesOrderItemBomComponent) -> bool:
+    box_style = (snapshot.snapshot_component_box_style or "").strip().upper()
+    return bool(box_style) and ("天地盖" in box_style or "A3" in box_style)
+
+
+def _bom_snapshot_component_type(
+    snapshot: SalesOrderItemBomComponent,
+    requested_component: str,
+) -> str:
+    component = (requested_component or "").strip().lower() or "whole"
+    allowed = {"cover", "base"} if _is_a3_bom_snapshot(snapshot) else {"whole"}
+    if component not in allowed:
+        label = "盖片或底片" if _is_a3_bom_snapshot(snapshot) else "整片"
+        raise WarehouseInventoryError(f"该组合组件库存只能选择{label}", 409)
+    return component
+
+
+def _bom_snapshot_physical_facts(
+    snapshot: SalesOrderItemBomComponent,
+    component_type: str,
+) -> dict[str, int | str | None]:
+    is_base = component_type == "base"
+    return {
+        "board_length_mm": (
+            snapshot.snapshot_component_base_report_length_mm
+            if is_base
+            else snapshot.snapshot_component_report_length_mm
+        ),
+        "board_width_mm": (
+            snapshot.snapshot_component_base_report_width_mm
+            if is_base
+            else snapshot.snapshot_component_report_width_mm
+        ),
+        "crease_type": (
+            snapshot.snapshot_component_base_crease_type
+            if is_base
+            else snapshot.snapshot_component_crease_type
+        ),
+        "crease_left_mm": (
+            snapshot.snapshot_component_base_crease_left_mm
+            if is_base
+            else snapshot.snapshot_component_crease_left_mm
+        ),
+        "crease_middle_mm": (
+            snapshot.snapshot_component_base_crease_middle_mm
+            if is_base
+            else snapshot.snapshot_component_crease_middle_mm
+        ),
+        "crease_right_mm": (
+            snapshot.snapshot_component_base_crease_right_mm
+            if is_base
+            else snapshot.snapshot_component_crease_right_mm
+        ),
+    }
+
+
+def _bom_snapshot_physical_pieces_per_component(
+    snapshot: SalesOrderItemBomComponent,
+    component_type: str,
+) -> int:
+    if component_type in {"cover", "base"}:
+        return 1
+    frozen_value = int(snapshot.snapshot_component_pieces_per_box or 0)
+    if frozen_value > 0:
+        return frozen_value
+    if (snapshot.snapshot_component_splice_mode or "").strip().lower() == "double":
+        return 2
+    return 1
+
+
 class LocationPayload(BaseModel):
     location_code: str = Field(min_length=1, max_length=50)
     location_name: str = Field(min_length=1, max_length=100)
@@ -647,6 +717,7 @@ class BomComponentFinishedReservationPayload(FinishedReservationPayload):
 class BomComponentAutoCoverPayload(BaseModel):
     order_item_id: int = Field(gt=0)
     idempotency_key: str = Field(min_length=8, max_length=60)
+    component_type: Literal["whole", "cover", "base"] = "whole"
 
 
 class ReleaseReservationPayload(BaseModel):
@@ -1699,11 +1770,31 @@ def auto_cover_bom_component_inventory(
         order = db.get(Order, item.order_id) if item is not None else None
         if item is None or order is None:
             raise WarehouseInventoryError("订单明细不存在", 404)
-        required = component_effective_required_piece_qty(db, snapshot)
+        component_type = _bom_snapshot_component_type(
+            snapshot,
+            payload.component_type,
+        )
+        physical_facts = _bom_snapshot_physical_facts(
+            snapshot,
+            component_type,
+        )
+        required = (
+            component_effective_required_piece_qty(db, snapshot)
+            * _bom_snapshot_physical_pieces_per_component(
+                snapshot,
+                component_type,
+            )
+        )
 
         # Prefer formal finished components. Only the current customer's
         # dedicated stock is eligible for this no-dialog shortcut.
         finished_added = 0
+        physical_pieces_per_component = (
+            _bom_snapshot_physical_pieces_per_component(
+                snapshot,
+                component_type,
+            )
+        )
         for lot in finished_inventory_candidates_for_bom_component(
             db,
             order_item_id=item.id,
@@ -1716,9 +1807,16 @@ def auto_cover_bom_component_inventory(
                 or detail.owner_customer_id != order.customer_id
             ):
                 continue
-            coverage = component_inventory_coverage(db, snapshot.id)
+            coverage = component_inventory_coverage(
+                db,
+                snapshot.id,
+                component_type=component_type,
+            )
             remaining = max(required - coverage["total_piece_quantity"], 0)
-            quantity = min(int(lot.quantity_available or 0), remaining)
+            quantity = min(
+                int(lot.quantity_available or 0),
+                remaining // physical_pieces_per_component,
+            )
             if quantity <= 0:
                 break
             reserve_finished_inventory_for_bom_component(
@@ -1736,12 +1834,16 @@ def auto_cover_bom_component_inventory(
 
         # Then use only exact, customer-owned semi-finished matches. Existing
         # matching and CAS services still perform every authorization check.
-        coverage = component_inventory_coverage(db, snapshot.id)
+        coverage = component_inventory_coverage(
+            db,
+            snapshot.id,
+            component_type=component_type,
+        )
         remaining = max(required - coverage["total_piece_quantity"], 0)
         semi_added = 0
         semi_signature_complete = (
-            int(snapshot.snapshot_component_report_length_mm or 0) > 0
-            and int(snapshot.snapshot_component_report_width_mm or 0) > 0
+            int(physical_facts["board_length_mm"] or 0) > 0
+            and int(physical_facts["board_width_mm"] or 0) > 0
             and bool(str(snapshot.snapshot_component_material or "").strip())
             and bool(str(snapshot.snapshot_component_flute_type or "").strip())
         )
@@ -1749,7 +1851,8 @@ def auto_cover_bom_component_inventory(
             requirement = db.scalar(
                 select(OrderItemSemiRequirement).where(
                     OrderItemSemiRequirement.sales_order_item_bom_component_id
-                    == snapshot.id
+                    == snapshot.id,
+                    OrderItemSemiRequirement.component_type == component_type,
                 )
             )
             yield_per_sheet = COMPONENT_CUTTING_YIELDS.get(
@@ -1764,16 +1867,12 @@ def auto_cover_bom_component_inventory(
                     db,
                     product_id=snapshot.component_product_id,
                     customer_id=order.customer_id,
-                    board_length_mm=int(
-                        snapshot.snapshot_component_report_length_mm
-                    ),
-                    board_width_mm=int(
-                        snapshot.snapshot_component_report_width_mm
-                    ),
+                    board_length_mm=int(physical_facts["board_length_mm"]),
+                    board_width_mm=int(physical_facts["board_width_mm"]),
                     material_code=str(snapshot.snapshot_component_material),
                     flute_type=str(snapshot.snapshot_component_flute_type),
-                    component_type="whole",
-                    pieces_per_box=1,
+                    component_type=component_type,
+                    pieces_per_box=physical_pieces_per_component,
                     stock_yield_per_sheet=yield_per_sheet,
                 )
             else:
@@ -1793,10 +1892,10 @@ def auto_cover_bom_component_inventory(
                         row.lot.semi_finished_detail,
                         supplier_name=snapshot.snapshot_component_supplier_name,
                         layer_count=snapshot.snapshot_component_layer_count,
-                        crease_type=snapshot.snapshot_component_crease_type,
-                        crease_left_mm=snapshot.snapshot_component_crease_left_mm,
-                        crease_middle_mm=snapshot.snapshot_component_crease_middle_mm,
-                        crease_right_mm=snapshot.snapshot_component_crease_right_mm,
+                        crease_type=physical_facts["crease_type"],
+                        crease_left_mm=physical_facts["crease_left_mm"],
+                        crease_middle_mm=physical_facts["crease_middle_mm"],
+                        crease_right_mm=physical_facts["crease_right_mm"],
                     )
                 )
             ]
@@ -1807,16 +1906,12 @@ def auto_cover_bom_component_inventory(
                     db,
                     order_item_id=item.id,
                     sales_order_item_bom_component_id=snapshot.id,
-                    component_type="whole",
-                    board_length_mm=int(
-                        snapshot.snapshot_component_report_length_mm
-                    ),
-                    board_width_mm=int(
-                        snapshot.snapshot_component_report_width_mm
-                    ),
+                    component_type=component_type,
+                    board_length_mm=int(physical_facts["board_length_mm"]),
+                    board_width_mm=int(physical_facts["board_width_mm"]),
                     material_code=str(snapshot.snapshot_component_material),
                     flute_type=str(snapshot.snapshot_component_flute_type),
-                    pieces_per_box=1,
+                    pieces_per_box=physical_pieces_per_component,
                     stock_yield_per_sheet=yield_per_sheet,
                     required_piece_quantity=required,
                     operator_id=user.id,
@@ -1834,14 +1929,20 @@ def auto_cover_bom_component_inventory(
                         for row in safe_candidates
                     ],
                     operator_id=user.id,
-                    idempotency_key=f"{payload.idempotency_key}:s",
+                    idempotency_key=(
+                        f"{payload.idempotency_key}:s:{component_type}"
+                    ),
                     confirmed=True,
                     override=False,
                     warning_acknowledged_codes=[],
                 )
                 semi_added = result.allocated_requirement_quantity
 
-        coverage = component_inventory_coverage(db, snapshot.id)
+        coverage = component_inventory_coverage(
+            db,
+            snapshot.id,
+            component_type=component_type,
+        )
         remaining = max(required - coverage["total_piece_quantity"], 0)
         db.commit()
         if finished_added or semi_added:
@@ -2017,20 +2118,44 @@ def upsert_bom_component_semi_requirement(
         raise HTTPException(status_code=404, detail="组件快照不存在")
     _require_order_item_customer_access(db, snapshot.sales_order_item_id, user)
     try:
-        coverage = component_inventory_coverage(db, snapshot.id)
-        required = component_effective_required_piece_qty(db, snapshot)
+        component_type = _bom_snapshot_component_type(
+            snapshot,
+            payload.component_type,
+        )
+        physical_facts = _bom_snapshot_physical_facts(
+            snapshot,
+            component_type,
+        )
+        coverage = component_inventory_coverage(
+            db,
+            snapshot.id,
+            component_type=component_type,
+        )
+        required = (
+            component_effective_required_piece_qty(db, snapshot)
+            * _bom_snapshot_physical_pieces_per_component(
+                snapshot,
+                component_type,
+            )
+        )
+        physical_pieces_per_component = (
+            _bom_snapshot_physical_pieces_per_component(
+                snapshot,
+                component_type,
+            )
+        )
         if required <= coverage["total_piece_quantity"]:
             raise WarehouseInventoryError("该组件已由库存全额覆盖", 409)
         row = save_order_item_semi_requirement(
             db,
             order_item_id=snapshot.sales_order_item_id,
             sales_order_item_bom_component_id=snapshot.id,
-            component_type=payload.component_type,
-            board_length_mm=int(snapshot.snapshot_component_report_length_mm or 0),
-            board_width_mm=int(snapshot.snapshot_component_report_width_mm or 0),
+            component_type=component_type,
+            board_length_mm=int(physical_facts["board_length_mm"] or 0),
+            board_width_mm=int(physical_facts["board_width_mm"] or 0),
             material_code=str(snapshot.snapshot_component_material or "").strip(),
             flute_type=str(snapshot.snapshot_component_flute_type or "").strip(),
-            pieces_per_box=1,
+            pieces_per_box=physical_pieces_per_component,
             stock_yield_per_sheet=payload.stock_yield_per_sheet,
             required_piece_quantity=required,
             operator_id=user.id,

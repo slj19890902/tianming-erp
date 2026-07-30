@@ -78,9 +78,19 @@ from app.services.composite_bom import (
     raise_http as raise_composite_bom_http,
     replace_product_bom,
 )
+from app.services.box_type_rules import (
+    BOX_TYPE_RULES,
+    BoxTypeRuleError,
+    box_type_supports_cutting_mode,
+    box_type_uses_flap,
+    box_type_uses_splice,
+    normalize_box_configuration,
+    recommend_box_type,
+)
 
 
 router = APIRouter()
+box_type_rules_router = APIRouter()
 can_read = PermissionChecker("products.view")
 can_create = PermissionChecker("products.create")
 can_write = PermissionChecker("products.edit")
@@ -93,27 +103,15 @@ PRODUCT_DELETE_CONFLICT_DETAIL = (
 
 
 def _box_style_uses_splice(box_style: str | None) -> bool:
-    value = (box_style or "").strip().upper()
-    return bool(value) and ("A1" in value or "0201" in value)
+    return box_type_uses_splice(box_style)
 
 
 def _box_style_uses_tongue(box_style: str | None) -> bool:
-    value = (box_style or "").strip()
-    if not value:
-        return True
-    upper = value.upper()
-    return (
-        "A1" in upper
-        or "0201" in upper
-        or "围套" in value
-        or "半开槽" in value
-        or "全搭盖" in value
-    )
+    return box_type_uses_flap(box_style)
 
 
 def _box_style_uses_default_cutting_mode(box_style: str | None) -> bool:
-    value = (box_style or "").strip()
-    return value in {"平卡", "模切内盒", "隔板", "刀卡"}
+    return box_type_supports_cutting_mode(box_style)
 
 
 def _production_process_uses_mold(value: str | None) -> bool:
@@ -299,41 +297,19 @@ class ProductPayload(BaseModel):
         )
         if err:
             raise ValueError(err)
-        self.box_style = (self.box_style or "").strip() or None
-        if self.box_style == "平卡":
-            self.box_style = "模切内盒"
-        if _box_style_uses_default_cutting_mode(self.box_style):
-            if self.crease_type == "压线":
-                raise ValueError("模切内盒、隔板和刀卡的压线类型仅允许：净、毛、其他")
-        else:
-            self.default_cutting_mode = "一开一"
-        splice_mode = (self.splice_mode or "single").strip().lower()
-        if _box_style_uses_splice(self.box_style):
-            if splice_mode not in {"single", "double"}:
-                raise ValueError("拼箱方式仅允许：single 或 double")
-            self.splice_mode = splice_mode
-            if self.pieces_per_box is None:
-                self.pieces_per_box = 2 if splice_mode == "double" else 1
-            if self.pieces_per_box not in {1, 2}:
-                raise ValueError("每箱片数仅允许 1 或 2")
-        elif self.box_style:
-            self.splice_mode = "single"
-            self.pieces_per_box = 1
-        else:
-            if splice_mode not in {"single", "double"}:
-                raise ValueError("拼箱方式仅允许：single 或 double")
-            self.splice_mode = splice_mode
-            if self.pieces_per_box is None:
-                self.pieces_per_box = 2 if splice_mode == "double" else 1
-            if self.pieces_per_box not in {1, 2}:
-                raise ValueError("每箱片数仅允许 1 或 2")
-        if _box_style_uses_tongue(self.box_style):
-            if self.flap_mm is None:
-                self.flap_mm = 30
-            if self.flap_mm <= 0:
-                raise ValueError("舌头(mm)必须大于0")
-        else:
-            self.flap_mm = None
+        configuration = normalize_box_configuration(
+            box_style=self.box_style,
+            splice_mode=self.splice_mode,
+            pieces_per_box=self.pieces_per_box,
+            flap_mm=self.flap_mm,
+            default_cutting_mode=self.default_cutting_mode,
+            crease_type=self.crease_type,
+        )
+        self.box_style = configuration["box_style"]
+        self.splice_mode = configuration["splice_mode"]
+        self.pieces_per_box = configuration["pieces_per_box"]
+        self.flap_mm = configuration["flap_mm"]
+        self.default_cutting_mode = configuration["default_cutting_mode"]
         return self
 
 
@@ -811,6 +787,38 @@ def _validate_product_material_flute(db: Session, payload: ProductPayload) -> No
         raise HTTPException(status_code=400, detail=error)
     payload.layer_count = effective_layer_count
     payload.flute_type = normalized_flute
+
+
+class BoxTypeRecommendationPayload(BaseModel):
+    box_style: str = Field(min_length=1, max_length=150)
+    length_mm: int | None = Field(default=None, gt=0)
+    width_mm: int | None = Field(default=None, gt=0)
+    height_mm: int | None = Field(default=None, gt=0)
+    splice_mode: Literal["single", "double"] = "single"
+    flap_mm: int | None = Field(default=None, ge=0)
+    crease_type: str | None = Field(default=None, max_length=20)
+
+
+@router.get("/box-type-rules")
+@box_type_rules_router.get("/box-type-rules")
+def list_box_type_rules(
+    _user: User = Depends(can_read),
+) -> dict:
+    """Stable read-only source for product forms and other UI consumers."""
+    return {"rules": [rule.public_dict() for rule in BOX_TYPE_RULES]}
+
+
+@router.post("/box-type-recommendation")
+@box_type_rules_router.post("/box-type-recommendation")
+def preview_box_type_recommendation(
+    payload: BoxTypeRecommendationPayload,
+    _user: User = Depends(can_read),
+) -> dict:
+    """Return confirmed suggestions without writing a product or database row."""
+    try:
+        return recommend_box_type(**payload.model_dump())
+    except BoxTypeRuleError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("")

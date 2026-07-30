@@ -11,7 +11,7 @@ from uuid import uuid4
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import (
@@ -32,6 +32,10 @@ from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
 from app.models.product import Product
+from app.models.product_bom import (
+    RequisitionItemBomSource,
+    SalesOrderItemBomComponent,
+)
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.stock_replenishment import (
     StockReplenishmentOrder,
@@ -219,6 +223,37 @@ def _component_kind(name: str | None) -> str:
     if value.endswith("-盖"):
         return "cover"
     return ""
+
+
+def _source_component_types(
+    db: Session,
+    requisition_item_ids: list[int],
+) -> dict[int, str]:
+    if not requisition_item_ids:
+        return {}
+    return {
+        int(item_id): str(component_type or "whole").strip().lower()
+        for item_id, component_type in db.execute(
+            select(
+                RequisitionItemBomSource.requisition_item_id,
+                RequisitionItemBomSource.component_type,
+            ).where(
+                RequisitionItemBomSource.requisition_item_id.in_(
+                    requisition_item_ids
+                )
+            )
+        ).all()
+    }
+
+
+def _requisition_component_kind(
+    db: Session,
+    requisition_item: RequisitionItem,
+) -> str:
+    return _source_component_types(db, [requisition_item.id]).get(
+        requisition_item.id,
+        _component_kind(requisition_item.product_name_snapshot),
+    )
 
 
 def _is_component_key(value: int | str) -> bool:
@@ -521,6 +556,99 @@ def _active_requisition_components(
     return components
 
 
+def _is_a3_snapshot(snapshot: SalesOrderItemBomComponent) -> bool:
+    box_style = (snapshot.snapshot_component_box_style or "").strip().upper()
+    return bool(box_style) and ("天地盖" in box_style or "A3" in box_style)
+
+
+def _is_surround_snapshot(snapshot: SalesOrderItemBomComponent) -> bool:
+    box_style = (snapshot.snapshot_component_box_style or "").strip()
+    product_name = (snapshot.snapshot_component_product_name or "").strip()
+    return box_style in {"围板", "围套"} or "围板" in product_name
+
+
+def _is_set_only_a3_surround_bom(
+    snapshots: list[SalesOrderItemBomComponent],
+) -> bool:
+    if len(snapshots) != 2:
+        return False
+    return (
+        all(int(snapshot.quantity_per_set) == 1 for snapshot in snapshots)
+        and sum(1 for snapshot in snapshots if _is_a3_snapshot(snapshot)) == 1
+        and sum(
+            1 for snapshot in snapshots if _is_surround_snapshot(snapshot)
+        )
+        == 1
+    )
+
+
+def _all_expected_bom_material_received(
+    db: Session,
+    *,
+    order_item_id: int,
+) -> bool:
+    snapshots = db.scalars(
+        select(SalesOrderItemBomComponent)
+        .where(
+            SalesOrderItemBomComponent.sales_order_item_id == order_item_id
+        )
+        .order_by(
+            SalesOrderItemBomComponent.display_order,
+            SalesOrderItemBomComponent.id,
+        )
+    ).all()
+    if not snapshots:
+        return True
+
+    received_sources = db.execute(
+        select(
+            RequisitionItemBomSource.sales_order_item_bom_component_id,
+            RequisitionItemBomSource.component_type,
+        )
+        .join(
+            RequisitionItem,
+            RequisitionItem.id
+            == RequisitionItemBomSource.requisition_item_id,
+        )
+        .where(
+            RequisitionItem.order_item_id == order_item_id,
+            RequisitionItem.status == "已入库",
+        )
+    ).all()
+    received_by_snapshot: dict[int, set[str]] = {}
+    for snapshot_id, component_type in received_sources:
+        received_by_snapshot.setdefault(int(snapshot_id), set()).add(
+            str(component_type or "whole").strip().lower()
+        )
+    for snapshot in snapshots:
+        received_types = received_by_snapshot.get(snapshot.id, set())
+        required_types = (
+            {"cover", "base"} if _is_a3_snapshot(snapshot) else {"whole"}
+        )
+        if "whole" in received_types:
+            continue
+        if not required_types.issubset(received_types):
+            return False
+
+    if _is_set_only_a3_surround_bom(snapshots):
+        return True
+    parent_received = db.scalar(
+        select(RequisitionItem.id)
+        .where(
+            RequisitionItem.order_item_id == order_item_id,
+            RequisitionItem.status == "已入库",
+            ~select(RequisitionItemBomSource.id)
+            .where(
+                RequisitionItemBomSource.requisition_item_id
+                == RequisitionItem.id
+            )
+            .exists(),
+        )
+        .limit(1)
+    )
+    return parent_received is not None
+
+
 def _rows(
     db: Session,
     *,
@@ -583,10 +711,25 @@ def _rows(
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     if received_since is None:
+        has_receivable_requisition_item = (
+            select(RequisitionItem.id)
+            .where(
+                RequisitionItem.order_item_id == OrderItem.id,
+                RequisitionItem.status.in_(
+                    ["有效", "supplier_requisition_created"]
+                ),
+            )
+            .exists()
+        )
         query = query.where(
             Order.status.notin_(["cancelled", "dead"]),
             OrderItem.material_status == "pending",
-            OrderItem.requisition_status.in_(["已报料", "供应商已排单"]),
+            or_(
+                OrderItem.requisition_status.in_(
+                    ["已报料", "供应商已排单"]
+                ),
+                has_receivable_requisition_item,
+            ),
         ).order_by(
             OrderItem.requisition_date.desc(),
             OrderItem.created_at.desc(),
@@ -613,6 +756,7 @@ def _rows(
 
     rows = []
     received_component_order_item_ids: set[int] = set()
+    component_types_by_requisition_item: dict[int, str] = {}
     if received_since is not None:
         receive_times = _component_receive_times(db, received_since=received_since)
         component_query = (
@@ -636,10 +780,25 @@ def _rows(
             component_query = component_query.where(
                 Order.customer_id.in_(visible_customer_ids)
             )
-        for req, item, order, product, customer, received_by_name in db.execute(
-            component_query
-        ):
-            component = _component_kind(req.product_name_snapshot)
+        component_records = db.execute(component_query).all()
+        component_types_by_requisition_item.update(
+            _source_component_types(
+                db,
+                [record[0].id for record in component_records],
+            )
+        )
+        for (
+            req,
+            item,
+            order,
+            product,
+            customer,
+            received_by_name,
+        ) in component_records:
+            component = component_types_by_requisition_item.get(
+                req.id,
+                _component_kind(req.product_name_snapshot),
+            )
             if not component:
                 continue
             received_at = (
@@ -728,6 +887,16 @@ def _rows(
         for req in req_rows:
             if received_since is None or req.status == "已入库":
                 component_requisition_items.setdefault(req.order_item_id, []).append(req)
+    component_types_by_requisition_item.update(
+        _source_component_types(
+            db,
+            [
+                req.id
+                for requisition_rows in component_requisition_items.values()
+                for req in requisition_rows
+            ],
+        )
+    )
 
     for data in base_rows:
         if data["item_id"] in received_component_order_item_ids:
@@ -735,7 +904,10 @@ def _rows(
         req_rows = component_requisition_items.get(data["item_id"], [])
         if req_rows:
             for req in req_rows:
-                component = _component_kind(req.product_name_snapshot)
+                component = component_types_by_requisition_item.get(
+                    req.id,
+                    _component_kind(req.product_name_snapshot),
+                )
                 component_data = dict(data)
                 component_data["order_item_id"] = data["item_id"]
                 component_data["requisition_item_id"] = req.id
@@ -1013,7 +1185,13 @@ def _receive_requisition_component(
             order_item_ids=[order_item.id],
         )
     )
-    if remaining_components == 0:
+    if (
+        remaining_components == 0
+        and _all_expected_bom_material_received(
+            db,
+            order_item_id=order_item.id,
+        )
+    ):
         total_received = sum(
             int(item.requisition_qty or 0)
             for item in _active_requisition_components(
@@ -1054,7 +1232,10 @@ def _receive_requisition_component(
         details={
             "received_at": received_at,
             "requisition_item_id": requisition_item.id,
-            "component_type": _component_kind(requisition_item.product_name_snapshot),
+            "component_type": _requisition_component_kind(
+                db,
+                requisition_item,
+            ),
             "previous_requisition_qty": previous_requisition_qty,
             "received_quantity": final_quantity,
         },
@@ -1325,8 +1506,10 @@ def _receipt_fact_rows(
             if fact.requisition_item_id
             else None
         )
-        component = _component_kind(
-            requisition_item.product_name_snapshot if requisition_item else None
+        component = (
+            _requisition_component_kind(db, requisition_item)
+            if requisition_item is not None
+            else ""
         )
         product_code = (
             requisition_item.product_code_snapshot if requisition_item else None
@@ -2011,8 +2194,9 @@ def _revert_requisition_component(
             details={
                 "reason": payload.reason,
                 "requisition_item_id": requisition_item_id,
-                "component_type": _component_kind(
-                    requisition_item.product_name_snapshot
+                "component_type": _requisition_component_kind(
+                    db,
+                    requisition_item,
                 ),
                 "previous_received_at": previous_received_at,
                 "previous_received_by": previous_received_by,

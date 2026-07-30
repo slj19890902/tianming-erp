@@ -32,7 +32,10 @@ from app.api.materials import router as materials_router
 from app.api.suppliers import router as suppliers_router
 from app.api.orders import router as orders_router
 from app.api.pricing import router as pricing_router
-from app.api.products import router as products_router
+from app.api.products import (
+    box_type_rules_router,
+    router as products_router,
+)
 from app.api.requisition import router as requisition_router
 from app.api.quotations import router as quotations_router
 from app.api.contracts import router as contracts_router
@@ -391,6 +394,15 @@ def create_app() -> FastAPI:
     for prefix, router, tag in router_specs:
         if prefix not in existing_paths:
             application.include_router(router, prefix=prefix, tags=[tag])
+    if not any(
+        route.path == "/api/products/box-type-rules"
+        for route in application.routes
+    ):
+        application.include_router(
+            box_type_rules_router,
+            prefix="/api/products",
+            tags=["product-box-type-rules"],
+        )
     if not any(
         route.path == "/api/master-data/{object_type}/{object_id}/versions"
         for route in application.routes

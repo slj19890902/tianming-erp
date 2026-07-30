@@ -367,7 +367,7 @@ def test_n034_order_responses_bulk_attach_snapshots_and_phase_a_has_no_fact_writ
     response_source = inspect.getsource(orders._order_response)
     list_source = inspect.getsource(orders.list_orders)
     phase_a_source = inspect.getsource(create_order_item_bom_snapshots)
-    create_order_source = inspect.getsource(orders.create_order)
+    create_order_source = inspect.getsource(orders._create_order_impl)
 
     assert '"bom_components": bom_components_by_item_id.get(item.id, [])' in response_source
     assert "get_order_item_bom_components_by_item_ids" in list_source
@@ -383,5 +383,13 @@ def test_n034_order_responses_bulk_attach_snapshots_and_phase_a_has_no_fact_writ
     ):
         assert forbidden_write not in phase_a_source
     assert "create_order_item_bom_snapshots" in create_order_source
-    assert "if is_composite_product(product):" in create_order_source
+    assert (
+        'if created_item.combination_role == "set_parent":'
+        in create_order_source
+    )
+    assert create_order_source.index(
+        "create_order_item_bom_snapshots("
+    ) < create_order_source.index(
+        "create_or_refresh_production_task(db, created_item.id)"
+    )
     assert "continue\n            create_or_refresh_production_task" in create_order_source

@@ -26,7 +26,7 @@ def test_common_box_edit_uses_five_compact_business_rows() -> None:
         'class="product-edit-grid"',
         'class="product-form-row product-core-row"',
         'class="product-form-row product-size-report-row"',
-        'class="product-form-row product-material-row"',
+        'class="product-material-workbench"',
         'class="product-form-row product-print-row"',
         'class="product-form-row product-final-row"',
     )
@@ -205,7 +205,7 @@ def test_common_box_second_row_contains_splice_flap_report_and_crease() -> None:
     source = _source()
 
     row_start = source.index('class="product-form-row product-size-report-row"')
-    material_row_start = source.index('class="product-form-row product-material-row"')
+    material_row_start = source.index('class="product-material-workbench"')
     row = source[row_start:material_row_start]
 
     for marker in (
@@ -250,19 +250,16 @@ def test_common_box_a1_board_and_crease_recommendations_use_splice_and_flap() ->
     source = _source()
 
     assert "normalizeMmInteger(value)" in source
-    assert "calculateBoardSizeByBoxType(boxType, length, width, height, spliceMode, flapMm)" in source
-    assert "calculateCreaseByBoxType(boxType, length, width, height, creaseType)" in source
-    assert "2 * (L + W) + flap" in source
-    assert "L + W + flap" in source
-    assert "W + H + 5" not in source
-    assert "board_width: this.normalizeMmInteger(W + H)" in source
+    assert 'axios.get("/api/products/box-type-rules")' in source
+    assert 'axios.post("/api/products/box-type-recommendation", payload)' in source
+    assert "calculateBoardSizeByBoxType" not in source
+    assert "calculateCreaseByBoxType" not in source
+    assert "2 * (L + W) + flap" not in source
     assert "form.report_width_mm = left + middle + right;" in source
     assert "if (sum !== width)" in source
-    assert "Math.round(W / 2)" in source
-    assert "A1/0201 双拼推荐" in source
-    assert "A1/0201 单拼推荐" in source
-    assert "(L + W + 8) * 2" not in source
-    assert "W + H + 4" not in source
+    assert "Math.round(W / 2)" not in source
+    assert "productSupportedSpliceModes" in source
+    assert "usesProductTongue" in source
 
 
 def test_common_box_all_crease_inputs_sync_width_and_block_manual_mismatch() -> None:
@@ -343,7 +340,7 @@ def test_telescoping_lid_edit_layout_separates_cover_and_base_rows() -> None:
         assert marker in source
 
     size_row_start = source.index('class="product-form-row product-size-report-row"')
-    material_row_start = source.index('class="product-form-row product-material-row"')
+    material_row_start = source.index('class="product-material-workbench"')
     size_row = source[size_row_start:material_row_start]
     assert "telescoping-component-grid" in size_row
 
@@ -353,11 +350,10 @@ def test_telescoping_lid_edit_layout_separates_cover_and_base_rows() -> None:
     assert "报料备注" in print_row
     assert "v-model.trim=\"productForm.report_notes\"" in print_row
     assert "compact-remark-field" in source
-    assert "A3 天地盖推荐" in source
-    assert '["平卡", "模切内盒", "刀卡", "隔板"]' in source
-    assert "围套推荐" in source
-    assert "半开槽箱推荐" in source
-    assert "全搭盖箱推荐" in source
+    assert "/api/products/box-type-recommendation" in source
+    assert "productSupportedCreaseTypes" in source
+    assert "围套推荐" not in source
+    assert "全搭盖箱推荐" not in source
 
 
 def test_telescoping_lid_requisition_modal_splits_cover_and_base_lines() -> None:
@@ -398,8 +394,10 @@ def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     assert "delete payload._material_supplier" in source
     assert "delete payload._report_dims_manual" in source
     assert "delete payload._crease_dims_manual" in source
+    assert "delete payload._crease_type_manual" in source
     assert "delete payload._base_report_dims_manual" in source
     assert "delete payload._base_crease_dims_manual" in source
+    assert "delete payload._base_crease_type_manual" in source
     assert "delete payload._recommendation_message" in source
     assert "delete payload.drawings" in source
     assert "productFormSnapshot" in source

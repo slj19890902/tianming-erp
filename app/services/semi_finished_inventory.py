@@ -171,7 +171,9 @@ def save_order_item_semi_requirement(
     )
     if snapshot is not None:
         existing_query = existing_query.where(
-            OrderItemSemiRequirement.sales_order_item_bom_component_id == snapshot.id
+            OrderItemSemiRequirement.sales_order_item_bom_component_id
+            == snapshot.id,
+            OrderItemSemiRequirement.component_type == component,
         )
     else:
         existing_query = existing_query.where(
@@ -1682,10 +1684,14 @@ def reserve_semi_finished_inventory(
                 raise WarehouseInventoryError(
                     "组件库存预占关联已失效，请刷新订单后重试", 409
                 )
-            coverage = component_inventory_coverage(db, snapshot.id)
+            coverage = component_inventory_coverage(
+                db,
+                snapshot.id,
+                component_type=requirement.component_type,
+            )
             remaining_requirement = max(
-                component_effective_required_piece_qty(db, snapshot)
-                - coverage["total_piece_quantity"],
+                int(requirement.required_piece_quantity)
+                - int(coverage["total_piece_quantity"]),
                 0,
             )
         else:

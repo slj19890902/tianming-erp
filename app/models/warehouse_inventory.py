@@ -696,6 +696,7 @@ class OrderItemSemiRequirement(Base):
         Index(
             "uq_order_item_semi_requirements_bom_component",
             "sales_order_item_bom_component_id",
+            "component_type",
             unique=True,
             sqlite_where=text("sales_order_item_bom_component_id IS NOT NULL"),
             postgresql_where=text("sales_order_item_bom_component_id IS NOT NULL"),

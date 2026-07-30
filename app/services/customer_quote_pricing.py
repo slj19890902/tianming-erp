@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 
+from app.services.box_type_rules import box_type_code
 from app.services.material_pricing import get_effective_material_price
 
 
@@ -16,10 +17,9 @@ class CustomerQuotePricingError(ValueError):
 
 def canonical_quote_box_type(box_type: str | None) -> str:
     """Use one stable key for the A1/0201 aliases used by customer preferences."""
-    normalized = str(box_type or "").strip().upper()
-    if "A1" in normalized or "0201" in normalized:
+    if box_type_code(box_type) == "a1_0201":
         return "A1"
-    return normalized
+    return str(box_type or "").strip().upper()
 
 
 def a1_area_m2(*, length_mm: Decimal, width_mm: Decimal, height_mm: Decimal) -> Decimal:

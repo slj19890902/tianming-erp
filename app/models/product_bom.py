@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -452,9 +453,18 @@ class RequisitionItemBomSource(Base):
             "direction_note IS NULL OR length(trim(direction_note)) > 0",
             name="ck_requisition_item_bom_sources_direction_note",
         ),
+        CheckConstraint(
+            "component_type IN ('whole','cover','base')",
+            name="ck_requisition_item_bom_sources_component_type",
+        ),
+        CheckConstraint(
+            "active_guard IS NULL OR active_guard = 1",
+            name="ck_requisition_item_bom_sources_active_guard",
+        ),
         UniqueConstraint(
             "requisition_item_id",
             "sales_order_item_bom_component_id",
+            "component_type",
             name="uq_requisition_item_bom_sources_item_snapshot",
         ),
         Index(
@@ -464,6 +474,19 @@ class RequisitionItemBomSource(Base):
         Index(
             "ix_requisition_item_bom_sources_snapshot_id",
             "sales_order_item_bom_component_id",
+        ),
+        Index(
+            "ix_requisition_item_bom_sources_snapshot_component",
+            "sales_order_item_bom_component_id",
+            "component_type",
+        ),
+        Index(
+            "uq_requisition_item_bom_sources_active_physical_source",
+            "sales_order_item_bom_component_id",
+            "component_type",
+            unique=True,
+            sqlite_where=text("active_guard = 1"),
+            postgresql_where=text("active_guard = 1"),
         ),
     )
 
@@ -475,6 +498,17 @@ class RequisitionItemBomSource(Base):
     sales_order_item_bom_component_id: Mapped[int] = mapped_column(
         ForeignKey("sales_order_item_bom_components.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    component_type: Mapped[str] = mapped_column(
+        String(20),
+        default="whole",
+        nullable=False,
+    )
+    active_guard: Mapped[int | None] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=True,
     )
     order_set_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity_per_set: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)

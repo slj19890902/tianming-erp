@@ -733,7 +733,7 @@ def test_business_view_and_unfinished_badge_use_derived_status_before_paging(
         )
 
     assert daily.status_code == 200, daily.text
-    assert daily.json()["total"] == 0
+    assert daily.json()["total"] == 1
     assert daily.json()["unfinished_total"] == 0
     assert receipt.status_code == 200, receipt.text
     assert receipt.json()["total"] == 1

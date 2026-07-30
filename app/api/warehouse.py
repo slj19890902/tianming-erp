@@ -2772,6 +2772,7 @@ def list_floor3_locations(
             InventoryPalletItem.order_no.like(pattern),
             InventoryPalletItem.product_name.like(pattern),
             Customer.name.like(pattern),
+            Customer.customer_code.like(pattern),
         ]
         if visible_customer_ids is None:
             pallet_search_conditions.append(InventoryPallet.pallet_code.like(pattern))
@@ -3735,7 +3736,16 @@ def reference_customers(
     rows = db.scalars(
         query.order_by(Customer.customer_number, Customer.id)
     ).all()
-    return {"items": [{"id": row.id, "name": row.name} for row in rows]}
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "name": row.name,
+                "customer_code": row.customer_code,
+            }
+            for row in rows
+        ]
+    }
 
 
 @router.get("/references/products")

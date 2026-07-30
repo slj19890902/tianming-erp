@@ -69,6 +69,7 @@ from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.master_data_versioning import (
     apply_versioned_update,
     normalize_json_value,
+    preview_versioned_update,
     record_versioned_create,
     serialize_versioned_entity,
 )
@@ -444,16 +445,20 @@ class ProductMutationPayload(BaseModel):
 
 class ProductUpdatePayload(ProductPayload):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
+
+
+class ProductUpdatePreviewPayload(ProductPayload):
+    expected_version: int = Field(ge=1)
 
 
 class ProductStatusPayload(ProductMutationPayload):
@@ -519,6 +524,36 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
         for field in _COST_SENSITIVE_PRODUCT_FIELDS:
             data.pop(field, None)
     return data
+
+
+def _validated_product_versioned_updates(
+    db: Session,
+    *,
+    product: Product,
+    payload: ProductPayload,
+    user: User,
+) -> dict:
+    _normalize_product_mold_binding(payload)
+    _validate_references(
+        db,
+        customer_id=payload.customer_id,
+        material_id=payload.material_id,
+        mold_tool_id=payload.mold_tool_id,
+        historical_material_id=product.material_id,
+    )
+    _validate_product_material_flute(db, payload)
+    _validate_changed_product_crease_widths(payload, product)
+    updates = _product_write_data(payload, user)
+    versioned_fields = set(serialize_versioned_entity("product", product))
+    updates = {
+        key: value for key, value in updates.items() if key in versioned_fields
+    }
+    updates.update(
+        product_code=clean_code(payload.product_code),
+        customer_material_code=clean_code(payload.customer_material_code),
+        product_name=payload.product_name.strip(),
+    )
+    return updates
 
 
 def _product_or_404(db: Session, product_id: int) -> Product:
@@ -1009,6 +1044,32 @@ def get_product(
     return _response(product, user)
 
 
+@router.post("/{product_id}/update-preview")
+def preview_product_update(
+    product_id: int,
+    payload: ProductUpdatePreviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    require_customer_access(payload.customer_id, current_user=user, db=db)
+    updates = _validated_product_versioned_updates(
+        db,
+        product=product,
+        payload=payload,
+        user=user,
+    )
+    return preview_versioned_update(
+        db,
+        object_type="product",
+        entity=product,
+        updates=updates,
+        expected_version=payload.expected_version,
+        user=user,
+    )
+
+
 @router.get("/{product_id}/bom")
 def read_product_bom(
     product_id: int,
@@ -1277,30 +1338,14 @@ def update_product(
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     require_customer_access(payload.customer_id, current_user=user, db=db)
-    _normalize_product_mold_binding(payload)
-    _validate_references(
+    updates = _validated_product_versioned_updates(
         db,
-        customer_id=payload.customer_id,
-        material_id=payload.material_id,
-        mold_tool_id=payload.mold_tool_id,
-        historical_material_id=product.material_id,
+        product=product,
+        payload=payload,
+        user=user,
     )
-    _validate_product_material_flute(db, payload)
-    _validate_changed_product_crease_widths(payload, product)
-    before = _product_payload_snapshot(product)
-    updates = _product_write_data(payload, user)
-    versioned_fields = set(serialize_versioned_entity("product", product))
-    updates = {
-        key: value for key, value in updates.items() if key in versioned_fields
-    }
-    updates.update(
-        product_code=clean_code(payload.product_code),
-        customer_material_code=clean_code(payload.customer_material_code),
-        product_name=payload.product_name.strip(),
-    )
-    changed = _changed_updates(product, updates)
     try:
-        apply_versioned_update(
+        revision = apply_versioned_update(
             db,
             object_type="product",
             entity=product,
@@ -1311,17 +1356,9 @@ def update_product(
             source="api.products.update",
             confirmation_token=payload.confirmation_token,
         )
-        product.manual_modified = True
-        product.manual_modified_at = beijing_now_naive()
-        if changed:
-            audit_master_change(
-                db,
-                user=user,
-                action="UPDATE",
-                resource="Product",
-                resource_id=product.id,
-                details={"before": before, "after": updates},
-            )
+        if revision is not None:
+            product.manual_modified = True
+            product.manual_modified_at = beijing_now_naive()
         db.commit()
     except IntegrityError as error:
         db.rollback()

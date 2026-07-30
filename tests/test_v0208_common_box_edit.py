@@ -388,11 +388,16 @@ def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     save_block = source[
         save_start:source.index('if (this.modal.type === "material")', save_start)
     ]
+    payload_start = source.index("buildProductWritePayload(options = null)")
+    payload_block = source[
+        payload_start:source.index("async prepareProductChangeConfirmation(", payload_start)
+    ]
 
     assert "payload.production_process = this.serializeProductionProcesses(" in source
-    assert '"pieces_per_box", "flap_mm",' in save_block
-    assert '"splice_mode", "pieces_per_box", "flap_mm"' not in save_block
-    assert '"base_report_length_mm", "base_report_width_mm"' in save_block
+    assert "buildProductWritePayload(masterOptions)" in save_block
+    assert '"pieces_per_box", "flap_mm",' in payload_block
+    assert '"splice_mode", "pieces_per_box", "flap_mm"' not in payload_block
+    assert '"base_report_length_mm", "base_report_width_mm"' in payload_block
     assert "delete payload._production_processes" in source
     assert "delete payload._production_process_legacy" in source
     assert "delete payload._material_supplier" in source

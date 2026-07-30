@@ -141,10 +141,15 @@ def _create_customer(client: TestClient, suffix: str, number: int = 1) -> dict:
     return response.json()
 
 
-def _create_product(client: TestClient, customer_id: int, suffix: str) -> dict:
+def _create_product(
+    client: TestClient,
+    customer_id: int,
+    suffix: str,
+    **overrides,
+) -> dict:
     response = client.post(
         "/api/master/products",
-        json=_product_payload(customer_id, suffix),
+        json=_product_payload(customer_id, suffix, **overrides),
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -339,12 +344,17 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
             expected_version=1,
             change_reason="   ",
         )
-    with pytest.raises(ValidationError):
-        ProductUpdatePayload(
-            **_product_payload(1, "EMPTY"),
-            expected_version=1,
-            change_reason="   ",
-        )
+    product_payload = ProductUpdatePayload(
+        **_product_payload(1, "EMPTY"),
+        expected_version=1,
+        change_reason="   ",
+    )
+    assert product_payload.change_reason is None
+    product_payload_without_reason = ProductUpdatePayload(
+        **_product_payload(1, "EMPTY"),
+        expected_version=1,
+    )
+    assert product_payload_without_reason.change_reason is None
     with pytest.raises(ValidationError):
         MaterialUpdatePayload(
             **_material_payload("E1"),
@@ -395,6 +405,252 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
             )
         )
     assert count == 2
+
+
+def test_product_update_preview_supports_one_confirmation_without_reason(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.product import Product
+
+    with TestClient(writer_app) as client:
+        customer = _create_customer(client, "P1-20", 112)
+        product = _create_product(client, customer["id"], "P1-20")
+        endpoint = f"/api/master/products/{product['id']}"
+        payload = {
+            **_product_payload(
+                customer["id"],
+                "P1-20",
+                remark="无需填写原因的一次确认",
+            ),
+            "expected_version": 1,
+        }
+
+        with writer_app.state.session_factory() as session:
+            versions_before = session.scalar(
+                select(func.count(MasterDataObjectVersion.id)).where(
+                    MasterDataObjectVersion.object_type == "product",
+                    MasterDataObjectVersion.object_id == product["id"],
+                )
+            )
+            logs_before = session.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.entity_type == "product",
+                    OperationLog.entity_id == product["id"],
+                )
+            )
+        preview = client.post(f"{endpoint}/update-preview", json=payload)
+        unchanged_after_preview = client.get(endpoint)
+        with writer_app.state.session_factory() as session:
+            assert session.scalar(
+                select(func.count(MasterDataObjectVersion.id)).where(
+                    MasterDataObjectVersion.object_type == "product",
+                    MasterDataObjectVersion.object_id == product["id"],
+                )
+            ) == versions_before
+            assert session.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.entity_type == "product",
+                    OperationLog.entity_id == product["id"],
+                )
+            ) == logs_before
+        saved = client.put(endpoint, json=payload)
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["can_update"] is True
+    assert preview.json()["current_version"] == 1
+    assert preview.json()["changed_fields"] == ["remark"]
+    assert preview.json()["warnings"] == []
+    assert preview.json()["confirmation_token"] is None
+    assert unchanged_after_preview.status_code == 200
+    assert unchanged_after_preview.json()["version"] == 1
+    assert unchanged_after_preview.json()["remark"] is None
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["version"] == 2
+    assert saved.json()["remark"] == "无需填写原因的一次确认"
+    with writer_app.state.session_factory() as session:
+        assert session.scalar(
+            select(func.count(MasterDataObjectVersion.id)).where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id == product["id"],
+            )
+        ) == versions_before + 1
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.entity_type == "product",
+                OperationLog.entity_id == product["id"],
+            )
+        ) == logs_before + 1
+        latest = session.scalar(
+            select(OperationLog)
+            .where(
+                OperationLog.entity_type == "product",
+                OperationLog.entity_id == product["id"],
+            )
+            .order_by(OperationLog.id.desc())
+        )
+        revision = session.scalar(
+            select(MasterDataObjectVersion).where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id == product["id"],
+                MasterDataObjectVersion.version == 2,
+            )
+        )
+        stored = session.get(Product, product["id"])
+
+    assert latest is not None
+    assert latest.action == "MASTER_UPDATE"
+    assert latest.username == "p4-writer-admin"
+    assert json.loads(latest.details or "{}")["reason"] is None
+    assert revision is not None
+    assert revision.actor_username_snapshot == "p4-writer-admin"
+    assert revision.reason is None
+    assert stored is not None
+    assert stored.manual_modified is True
+    assert stored.manual_modified_at is not None
+
+
+def test_product_update_preview_returns_bound_warning_token_before_write(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+
+    with TestClient(writer_app) as client:
+        customer = _create_customer(client, "P1-20-W", 113)
+        product = _create_product(client, customer["id"], "P1-20-W")
+        endpoint = f"/api/master/products/{product['id']}"
+        payload = {
+            **_product_payload(customer["id"], "P1-20-W"),
+            "product_code": "P1-20-W-NEW",
+            "expected_version": 1,
+        }
+
+        preview = client.post(f"{endpoint}/update-preview", json=payload)
+        token = preview.json()["confirmation_token"]
+        missing_token = client.put(endpoint, json=payload)
+        unchanged = client.get(endpoint)
+        confirmed = client.put(
+            endpoint,
+            json={**payload, "confirmation_token": token},
+        )
+        stale = client.put(
+            endpoint,
+            json={
+                **payload,
+                "product_name": "不能用旧版本覆盖",
+                "confirmation_token": token,
+            },
+        )
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["can_update"] is True
+    assert preview.json()["changed_fields"] == ["product_code"]
+    assert any(
+        warning["code"] == "PRODUCT_CODE_CHANGE"
+        for warning in preview.json()["warnings"]
+    )
+    assert token
+    assert missing_token.status_code == 409
+    assert missing_token.json()["detail"]["code"] == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+    assert unchanged.json()["version"] == 1
+    assert unchanged.json()["product_code"] == product["product_code"]
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["version"] == 2
+    assert confirmed.json()["product_code"] == "P1-20-W-NEW"
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "MASTER_VERSION_CONFLICT"
+    with writer_app.state.session_factory() as session:
+        assert session.scalar(
+            select(func.count(MasterDataObjectVersion.id)).where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id == product["id"],
+            )
+        ) == 2
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.entity_type == "product",
+                OperationLog.entity_id == product["id"],
+                OperationLog.action == "MASTER_UPDATE",
+            )
+        ) == 1
+
+
+def test_product_noop_without_reason_keeps_version_audit_and_manual_flag_unchanged(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.product import Product
+
+    with TestClient(writer_app) as client:
+        customer = _create_customer(client, "P1-20-N", 114)
+        numeric_values = {
+            "length_mm": 520,
+            "width_mm": 350,
+            "height_mm": 300,
+            "pieces_per_box": 1,
+            "flap_mm": 30,
+            "sale_unit_price": "3.6800",
+        }
+        product = _create_product(
+            client,
+            customer["id"],
+            "P1-20-N",
+            **numeric_values,
+        )
+        endpoint = f"/api/master/products/{product['id']}"
+        payload = {
+            **_product_payload(customer["id"], "P1-20-N", **numeric_values),
+            "expected_version": 1,
+        }
+        with writer_app.state.session_factory() as session:
+            versions_before = session.scalar(
+                select(func.count(MasterDataObjectVersion.id)).where(
+                    MasterDataObjectVersion.object_type == "product",
+                    MasterDataObjectVersion.object_id == product["id"],
+                )
+            )
+            logs_before = session.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.entity_type == "product",
+                    OperationLog.entity_id == product["id"],
+                )
+            )
+            product_before = session.get(Product, product["id"])
+            manual_modified_before = product_before.manual_modified
+            manual_modified_at_before = product_before.manual_modified_at
+
+        preview = client.post(f"{endpoint}/update-preview", json=payload)
+        saved = client.put(endpoint, json=payload)
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["can_update"] is False
+    assert preview.json()["changed_fields"] == []
+    assert preview.json()["confirmation_token"] is None
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["version"] == 1
+    with writer_app.state.session_factory() as session:
+        assert session.scalar(
+            select(func.count(MasterDataObjectVersion.id)).where(
+                MasterDataObjectVersion.object_type == "product",
+                MasterDataObjectVersion.object_id == product["id"],
+            )
+        ) == versions_before
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.entity_type == "product",
+                OperationLog.entity_id == product["id"],
+            )
+        ) == logs_before
+        stored = session.get(Product, product["id"])
+
+    assert stored is not None
+    assert stored.version == 1
+    assert stored.manual_modified is manual_modified_before
+    assert stored.manual_modified_at == manual_modified_at_before
 
 
 def test_customer_identity_change_requires_bound_confirmation_token(

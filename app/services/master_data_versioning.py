@@ -319,11 +319,28 @@ def serialize_versioned_entity(
 def _diff(
     before: Mapping[str, Any],
     after: Mapping[str, Any],
+    *,
+    numeric_fields: frozenset[str] = frozenset(),
 ) -> dict[str, dict[str, Any]]:
+    def values_equal(field: str) -> bool:
+        old_value = before.get(field)
+        new_value = after.get(field)
+        if old_value == new_value:
+            return True
+        if field not in numeric_fields:
+            return False
+        old_number = _as_decimal(old_value)
+        new_number = _as_decimal(new_value)
+        return (
+            old_number is not None
+            and new_number is not None
+            and old_number == new_number
+        )
+
     return {
         field: {"before": before.get(field), "after": after.get(field)}
         for field in sorted(set(before) | set(after))
-        if before.get(field) != after.get(field)
+        if not values_equal(field)
     }
 
 
@@ -855,7 +872,7 @@ def apply_versioned_update(
     proposed.update(
         {field: normalize_json_value(value) for field, value in updates.items()}
     )
-    changed = _diff(before, proposed)
+    changed = _diff(before, proposed, numeric_fields=spec.numeric_fields)
     if not changed and not force_version:
         return None
 
@@ -981,6 +998,77 @@ def apply_versioned_update(
     db.add(revision)
     db.flush()
     return revision
+
+
+def preview_versioned_update(
+    db: Session,
+    *,
+    object_type: str,
+    entity: VersionedEntity,
+    updates: Mapping[str, Any],
+    expected_version: int,
+    user: User,
+    action: str = "update",
+) -> dict[str, Any]:
+    """Build a read-only update preview and an anomaly-bound token when needed."""
+
+    spec = _validate_entity(object_type, entity)
+    object_id = int(entity.id)
+    current_version = _database_version(
+        db,
+        spec=spec,
+        object_id=object_id,
+    )
+    if current_version is None:
+        raise ValueError("主数据实体尚未持久化或已不存在")
+    if current_version != expected_version:
+        raise _version_conflict(expected_version, current_version)
+
+    unknown_fields = sorted(set(updates) - set(spec.fields))
+    if unknown_fields:
+        raise ValueError(
+            "不可写入版本快照的字段：" + ", ".join(unknown_fields)
+        )
+
+    normalized_action = action.strip().lower() or "update"
+    before = serialize_versioned_entity(object_type, entity)
+    proposed = dict(before)
+    proposed.update(
+        {field: normalize_json_value(value) for field, value in updates.items()}
+    )
+    changed = _diff(before, proposed, numeric_fields=spec.numeric_fields)
+    warnings = _change_warnings(
+        object_type,
+        changed,
+        numeric_fields=spec.numeric_fields,
+        action=normalized_action,
+    )
+    target_version = current_version + 1
+    confirmation_token = None
+    if changed and warnings:
+        confirmation_token = _create_confirmation_token(
+            object_type=object_type,
+            object_id=object_id,
+            expected_version=expected_version,
+            target_version=target_version,
+            after_sha256=_sha256(canonical_json(proposed)),
+            warnings=warnings,
+            action=normalized_action,
+            purpose=_confirmation_purpose(normalized_action, None),
+            restored_from_version=None,
+            user=user,
+        )
+    return {
+        "object_type": object_type,
+        "object_id": object_id,
+        "current_version": current_version,
+        "target_version": target_version if changed else current_version,
+        "changed_fields": sorted(changed),
+        "changes": changed,
+        "warnings": warnings,
+        "confirmation_token": confirmation_token,
+        "can_update": bool(changed),
+    }
 
 
 def list_object_versions(
@@ -1111,7 +1199,7 @@ def preview_versioned_restore(
     proposed.update(
         {field: normalize_json_value(value) for field, value in updates.items()}
     )
-    changed = _diff(before, proposed)
+    changed = _diff(before, proposed, numeric_fields=spec.numeric_fields)
     warnings = _change_warnings(
         object_type,
         changed,

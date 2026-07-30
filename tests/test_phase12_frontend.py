@@ -289,11 +289,14 @@ def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
         "item.total_estimated_cost",
         "itemBusinessStatusKey(item)",
         "item.completion_date",
-        "openOrderDetail(row)",
+        "openOrderTrace(row,item)",
+        "openOrderItem(row,item)",
     ]
     positions = [detail_block.index(field) for field in ordered_fields]
     assert positions == sorted(positions)
     assert "item.item_order_number" not in detail_block
+    assert "openOrderDetail(row)" not in detail_block
+    assert '@click="openOrderGroupDetail(group)"' in INDEX
 
 
 def test_order_search_highlights_visible_text_without_html_injection() -> None:

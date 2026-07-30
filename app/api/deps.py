@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Generator, Iterable
 
 from fastapi import Depends, HTTPException, Request, status
@@ -8,9 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import load_settings
 from app.core.database import SessionLocal
+from app.core.request_context import get_current_request
 from app.core.security import decode_session_token
 from app.models.access_control import UserCustomerScope
 from app.models.user import User
+from app.services.audit_log import append_audit_event
 
 
 # Permission names are intentionally stable API contracts.  New routes can use
@@ -60,6 +60,7 @@ PERMISSION_CATALOG = frozenset(
         "pdf_training.manage",
         "system.backup",
         "users.manage",
+        "audit.view",
     }
 )
 
@@ -87,6 +88,7 @@ ADMIN_ONLY_PERMISSIONS = frozenset(
         "users.manage",
         "pdf_training.manage",
         "warehouse.stocktake.review",
+        "audit.view",
     }
 )
 BOSS_DEFAULT_PERMISSIONS = frozenset(
@@ -217,9 +219,19 @@ class RoleChecker:
 
     def __call__(
         self,
+        request: Request,
         current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
     ) -> User:
         if current_user.role not in self.allowed_roles:
+            _record_security_denial(
+                db,
+                request=request,
+                current_user=current_user,
+                action_code="role.denied",
+                object_ref=",".join(sorted(self.allowed_roles)),
+                details={"allowed_roles": sorted(self.allowed_roles)},
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="权限不足",
@@ -235,9 +247,19 @@ class PermissionChecker:
 
     def __call__(
         self,
+        request: Request,
         current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
     ) -> User:
         if not has_permission(current_user, self.permission_code):
+            _record_security_denial(
+                db,
+                request=request,
+                current_user=current_user,
+                action_code="permission.denied",
+                object_ref=self.permission_code,
+                details={"permission_code": self.permission_code},
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="权限不足",
@@ -245,14 +267,71 @@ class PermissionChecker:
         return current_user
 
 
+def _record_security_denial(
+    db: Session,
+    *,
+    request: Request | None,
+    current_user: User,
+    action_code: str,
+    object_ref: str,
+    details: dict[str, object],
+) -> None:
+    """Best-effort security evidence that must never turn a denial into access.
+
+    A separate short transaction prevents a rejected access check from
+    committing or rolling back any business work already present in the
+    caller's session.  Audit failure is swallowed only to preserve the
+    fail-closed 403 response; it can never authorize the request.
+    """
+    request = request or get_current_request()
+    try:
+        with Session(bind=db.get_bind()) as audit_db:
+            append_audit_event(
+                audit_db,
+                request=request,
+                actor=current_user,
+                event_category="security",
+                result="denied",
+                source=(
+                    "mobile"
+                    if request is not None
+                    and request.url.path.startswith("/api/mobile/")
+                    else "web"
+                ),
+                module_code="security",
+                action_code=action_code,
+                resource="AccessControl",
+                entity_type="permission",
+                object_ref=object_ref,
+                description="权限校验拒绝",
+                details={
+                    **details,
+                    "method": request.method if request is not None else None,
+                    "path": request.url.path if request is not None else None,
+                },
+            )
+            audit_db.commit()
+    except Exception:
+        pass
+
+
 def require_customer_access(
     customer_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    request: Request = None,
 ) -> User:
     """Dependency for endpoints whose resource belongs to one customer."""
     if has_unrestricted_customer_access(current_user, db):
         return current_user
     if customer_id not in customer_scope_ids(current_user, db):
+        _record_security_denial(
+            db,
+            request=request,
+            current_user=current_user,
+            action_code="customer_scope.denied",
+            object_ref=str(customer_id),
+            details={"customer_id": customer_id},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无客户访问权限")
     return current_user

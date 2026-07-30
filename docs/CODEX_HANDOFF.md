@@ -3264,3 +3264,40 @@ legacy_ruida_* 原始层
   内联 JavaScript 语法和 `git diff --check` 均通过。
 - 老板于 2026-07-30 授权开发通过自动验证后直接提交、推送独立候选，并在
   工厂正式 ERP 统一验收。该授权不包含修改正式分支、正式数据库或工厂服务。
+
+## 99. 2026-07-30 Q1-02 统一操作审计第一闭环重放候选
+
+- 独立 worktree：
+  `D:\tm-worktrees\erp-q1-02-audit-replay-20260730`；分支：
+  `codex/q1-02-audit-replay-20260730`；精确基线：
+  `b2e3f28e756ed473376cf2c0cd80d9541e3efa8b`（已推送的 Q1-01 候选）。
+  本轮保留 Q1-01 箱型规则、组合 A3 物理来源及正式供应商主档，没有混入
+  P1-15 送货草稿或旧 Q0 测试断言改动。
+- 新增只追加的结构化操作审计信封、统一写入服务、请求编号上下文和管理员只读
+  “操作记录”查询页；首批接入登录/鉴权、订单、来料及财务关键写事务。批量删除
+  使用同一 `batch_id` 串联，业务写入与成功审计保持同一事务；异常和拒绝事件
+  使用受控失败审计，不记录密码、Cookie、Authorization 或完整敏感载荷。
+- 迁移 `cz82v8x9z71` 线性接在 Q1-01 的 `cy81v8x9z70` 后，Alembic 只有
+  一个 head。迁移只为既有 `operation_logs` 增加可空结构化字段、查询索引和
+  UPDATE/DELETE 禁止触发器；历史日志不猜测补齐。存在
+  `schema_version=1` 的结构化事实时，downgrade 在任何 DDL 前 fail-closed。
+- 全新隔离库
+  `D:\tm-uat\q1-02-audit-replay-20260730\q1_02_rehearsal.sqlite3`
+  从空库升级至 `cy81v8x9z70` 后，完成
+  `cy81 → cz82 → cy81 → cz82`；最终 SHA-256
+  `1AC4A1A052D044B5053AF2113BBB149269A45CBE71B215D93D115874E20AFA69`，
+  `integrity_check=ok`、外键异常 0。隔离复制件
+  `q1_02_fail_closed.sqlite3` 写入一条测试结构化事实后，降级按预期失败，
+  revision 仍为 `cz82v8x9z71`，字段和两条不可变触发器仍完整，
+  `integrity_check=ok`、外键异常 0。
+- Q1-02 聚焦 API、事务、前端、核心服务和迁移测试 `48 passed`；Q1-01、
+  供应商主档、订单、来料及报料扩大回归 `194 passed, 4 failed`。同 4 项失败
+  已在未修改的精确基线单独复跑并得到相同结果，分别是旧 TM 显示号搜索、
+  新供应商门禁改变旧测试期待、已全送业务视图过滤和更新时间排序，不是
+  Q1-02 回归。另行复核审计 API、既有认证和财务关键路径 `30 passed`。
+  Python compileall、内联 JavaScript 语法、Alembic 单 head 和
+  `git diff --check` 通过。
+- 老板于 2026-07-30 明确授权：以后家庭端开发完成并通过自动验证后可直接提交、
+  推送独立 `codex/` 候选，随后在工厂正式 ERP 验收；发现问题再回传修复。
+  本授权不包含更新 `origin/factory-current-baseline`、修改 `origin/main`、
+  工厂发布、服务重启或正式数据库迁移。

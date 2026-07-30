@@ -67,6 +67,7 @@ from app.services.production_workflow import (
     refresh_production_task,
 )
 from app.services.composite_bom_workflow import is_composite_order_item
+from app.services.audit_log import append_audit_event
 
 
 router = APIRouter()
@@ -1065,23 +1066,55 @@ def _audit(
     action: str,
     item_id: int,
     details: dict,
+    audit_context: dict[str, object] | None = None,
 ) -> None:
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action=action,
-            resource="OrderItem",
-            details=json.dumps(details, ensure_ascii=False, default=str),
-            username=user.username,
-            role=user.role,
-            entity_type="order_item",
-            entity_id=item_id,
-            description=(
-                "车间来料入库"
-                if action == "RECEIVE_MATERIAL"
-                else "撤回来料入库"
-            ),
-        )
+    context = audit_context or {}
+    row = db.execute(
+        select(OrderItem, Order)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.id == item_id)
+    ).one_or_none()
+    order_item, order = row if row is not None else (None, None)
+    customer = (
+        db.get(Customer, order.customer_id)
+        if order is not None
+        else None
+    )
+    append_audit_event(
+        db,
+        request=context.get("request"),
+        actor=user,
+        event_category="business",
+        result="success",
+        source=str(context.get("source") or "web"),
+        module_code="incoming",
+        action_code=(
+            "incoming.receive"
+            if action == "RECEIVE_MATERIAL"
+            else "incoming.revert"
+        ),
+        legacy_action=action,
+        resource="OrderItem",
+        entity_type="order_item",
+        entity_id=item_id,
+        object_ref=(
+            order_item.item_order_number
+            if order_item is not None and order_item.item_order_number
+            else f"order_item:{item_id}"
+        ),
+        customer_id=order.customer_id if order is not None else None,
+        customer_name=customer.name if customer is not None else None,
+        batch_id=(
+            str(context["batch_id"])
+            if context.get("batch_id") is not None
+            else None
+        ),
+        description=(
+            "车间来料入库"
+            if action == "RECEIVE_MATERIAL"
+            else "撤回来料入库"
+        ),
+        details=details,
     )
 
 
@@ -1941,6 +1974,7 @@ def _preflight_receipt_item_customer_access(
 @router.put("/receive/{item_id}")
 def receive_item(
     item_id: str,
+    request: Request = None,
     payload: ReceiveRequest | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
@@ -1958,6 +1992,7 @@ def receive_item(
             resolution_reason=(payload.resolution_reason if payload else None),
             surplus_location_id=(payload.surplus_location_id if payload else None),
             idempotency_key=(payload.idempotency_key if payload else None),
+            audit_context={"request": request},
         )
         db.commit()
         return _new_receipt_response(db, fact)
@@ -1975,6 +2010,7 @@ def receive_item(
 @router.put("/batch-receive")
 def batch_receive_items(
     payload: BatchReceiveRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
@@ -1983,6 +2019,7 @@ def batch_receive_items(
     for line in payload.items:
         _preflight_item_customer_access(db, item_id=line.item_id, user=user)
     seen: set[int | str] = set()
+    batch_id = (payload.idempotency_key or "").strip() or uuid4().hex
     results: list[dict] = []
     succeeded = 0
     for line in payload.items:
@@ -2009,11 +2046,10 @@ def batch_receive_items(
                     idempotency_key=(
                         line.idempotency_key
                         or (
-                            f"{payload.idempotency_key}:{line.item_id}"
-                            if payload.idempotency_key
-                            else uuid4().hex
+                            f"{batch_id}:{line.item_id}"
                         )
                     ),
+                    audit_context={"request": request, "batch_id": batch_id},
                 )
                 response = _new_receipt_response(db, fact)
             results.append(
@@ -2043,8 +2079,41 @@ def batch_receive_items(
                     "message": "系统处理失败，请刷新后重试",
                 }
             )
-    db.commit()
+    try:
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result=(
+                "success"
+                if succeeded == len(payload.items)
+                else "failed"
+                if succeeded == 0
+                else "partial"
+            ),
+            source="web",
+            module_code="incoming",
+            action_code="incoming.batch_receive",
+            legacy_action="BATCH_RECEIVE_MATERIAL",
+            resource="IncomingReceiptBatch",
+            entity_type="incoming_batch",
+            object_ref=batch_id,
+            batch_id=batch_id,
+            description="批量来料实收",
+            details={
+                "total": len(payload.items),
+                "succeeded": succeeded,
+                "failed": len(payload.items) - succeeded,
+                "item_ids": [str(line.item_id) for line in payload.items],
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {
+        "batch_id": batch_id,
         "total": len(payload.items),
         "succeeded": succeeded,
         "failed": len(payload.items) - succeeded,
@@ -2056,6 +2125,7 @@ def batch_receive_items(
 def accept_short_receipt_item(
     receipt_item_id: int,
     payload: AcceptShortRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
@@ -2070,6 +2140,7 @@ def accept_short_receipt_item(
             user=user,
             receipt_item_id=receipt_item_id,
             reason=payload.reason,
+            audit_context={"request": request},
         )
         db.commit()
         return _new_receipt_response(db, fact)
@@ -2082,6 +2153,7 @@ def accept_short_receipt_item(
 def revert_new_receipt_item(
     receipt_item_id: int,
     payload: RevertRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
@@ -2096,6 +2168,7 @@ def revert_new_receipt_item(
             user=user,
             receipt_item_id=receipt_item_id,
             reason=payload.reason,
+            audit_context={"request": request},
         )
         db.commit()
         return receipt_item_dict(fact)
@@ -2110,6 +2183,7 @@ def _revert_requisition_component(
     requisition_item_id: int,
     payload: RevertRequest,
     user: User,
+    request: Request | None = None,
 ) -> dict:
     row = db.execute(
         select(RequisitionItem, OrderItem, Order)
@@ -2201,6 +2275,7 @@ def _revert_requisition_component(
                 "previous_received_at": previous_received_at,
                 "previous_received_by": previous_received_by,
             },
+            audit_context={"request": request},
         )
         db.commit()
         return _component_response(db, requisition_item_id)
@@ -2216,6 +2291,7 @@ def _revert_requisition_component(
 def revert_item(
     item_id: str,
     payload: RevertRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
@@ -2225,6 +2301,7 @@ def revert_item(
             requisition_item_id=_component_id(item_id),
             payload=payload,
             user=user,
+            request=request,
         )
     try:
         item_id_int = int(item_id)
@@ -2291,6 +2368,7 @@ def revert_item(
                 "previous_received_at": previous_received_at,
                 "previous_received_by": previous_received_by,
             },
+            audit_context={"request": request},
         )
         db.execute(
             update(RequisitionItem)

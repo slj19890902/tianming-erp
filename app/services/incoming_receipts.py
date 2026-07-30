@@ -14,7 +14,7 @@ from app.core.time_contract import (
     utc_naive_to_beijing_date,
     utc_now_naive,
 )
-from app.models.audit import OperationLog
+from app.models.customer import Customer
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.product_bom import (
@@ -54,6 +54,7 @@ from app.services.warehouse_inventory import (
     manual_semi_finished_in,
     mutate_lot,
 )
+from app.services.audit_log import append_audit_event
 
 
 class IncomingReceiptError(ValueError):
@@ -813,21 +814,55 @@ def _audit(
     action: str,
     target: IncomingTarget,
     details: dict,
+    audit_context: dict[str, object] | None = None,
 ) -> None:
-    import json
-
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action=action,
-            resource="IncomingReceiptItem",
-            details=json.dumps(details, ensure_ascii=False, default=str),
-            username=user.username,
-            role=user.role,
-            entity_type="order_item",
-            entity_id=target.order_item.id,
-            description="来料实收登记" if action == "RECEIVE_MATERIAL" else "来料实收撤销",
-        )
+    context = audit_context or {}
+    customer = db.get(Customer, target.order.customer_id)
+    receipt_item_id = details.get("incoming_receipt_item_id")
+    action_codes = {
+        "RECEIVE_MATERIAL": "incoming.receive",
+        "RESOLVE_INCOMING_VARIANCE": "incoming.accept_short",
+        "REVERT_MATERIAL": "incoming.revert",
+    }
+    descriptions = {
+        "RECEIVE_MATERIAL": "来料实收登记",
+        "RESOLVE_INCOMING_VARIANCE": "来料短收结单",
+        "REVERT_MATERIAL": "撤回来料入库",
+    }
+    append_audit_event(
+        db,
+        request=context.get("request"),
+        actor=user,
+        event_category="business",
+        result="success",
+        source=str(context.get("source") or "web"),
+        module_code="incoming",
+        action_code=action_codes.get(action, f"incoming.{action.lower()}"),
+        legacy_action=action,
+        resource="IncomingReceiptItem",
+        entity_type="incoming_receipt_item",
+        entity_id=(
+            int(receipt_item_id)
+            if isinstance(receipt_item_id, int)
+            else target.order_item.id
+        ),
+        object_ref=(
+            f"incoming:{receipt_item_id}"
+            if isinstance(receipt_item_id, int)
+            else (
+                target.order_item.item_order_number
+                or f"order_item:{target.order_item.id}"
+            )
+        ),
+        customer_id=target.order.customer_id,
+        customer_name=customer.name if customer is not None else None,
+        batch_id=(
+            str(context["batch_id"])
+            if context.get("batch_id") is not None
+            else None
+        ),
+        description=descriptions.get(action, action),
+        details=details,
     )
 
 
@@ -912,6 +947,7 @@ def _receive_stock_replenishment_one(
     resolution_reason: str | None,
     surplus_location_id: int | None,
     idempotency_key: str,
+    audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     order, item = _stock_target(db, item_key)
     planned = int(item.quantity or 0)
@@ -992,30 +1028,40 @@ def _receive_stock_replenishment_one(
     except StockReplenishmentError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
     receipt_item.received_inventory_lot_id = lot.id
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="RECEIVE_STOCK_REPLENISHMENT",
-            resource="IncomingReceiptItem",
-            details=__import__("json").dumps(
-                {
-                    "incoming_receipt_id": receipt.id,
-                    "incoming_receipt_item_id": receipt_item.id,
-                    "stock_replenishment_order_id": order.id,
-                    "stock_replenishment_item_id": item.id,
-                    "planned_quantity": planned,
-                    "received_quantity": quantity,
-                    "cumulative_received_quantity": cumulative,
-                    "received_inventory_lot_id": lot.id,
-                },
-                ensure_ascii=False,
-            ),
-            username=user.username,
-            role=user.role,
-            entity_type="stock_replenishment_item",
-            entity_id=item.id,
-            description="补库来料实际收货",
-        )
+    context = audit_context or {}
+    customer = db.get(Customer, item.customer_id) if item.customer_id is not None else None
+    append_audit_event(
+        db,
+        request=context.get("request"),
+        actor=user,
+        event_category="business",
+        result="success",
+        source=str(context.get("source") or "web"),
+        module_code="incoming",
+        action_code="incoming.stock_replenishment.receive",
+        legacy_action="RECEIVE_STOCK_REPLENISHMENT",
+        resource="IncomingReceiptItem",
+        entity_type="stock_replenishment_item",
+        entity_id=item.id,
+        object_ref=f"stock_replenishment_item:{item.id}",
+        customer_id=item.customer_id,
+        customer_name=customer.name if customer is not None else None,
+        batch_id=(
+            str(context["batch_id"])
+            if context.get("batch_id") is not None
+            else None
+        ),
+        description="补库来料实际收货",
+        details={
+            "incoming_receipt_id": receipt.id,
+            "incoming_receipt_item_id": receipt_item.id,
+            "stock_replenishment_order_id": order.id,
+            "stock_replenishment_item_id": item.id,
+            "planned_quantity": planned,
+            "received_quantity": quantity,
+            "cumulative_received_quantity": cumulative,
+            "received_inventory_lot_id": lot.id,
+        },
     )
     db.flush()
     return receipt_item
@@ -1031,6 +1077,7 @@ def receive_one(
     resolution_reason: str | None,
     surplus_location_id: int | None,
     idempotency_key: str | None,
+    audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     key = (idempotency_key or "").strip() or uuid4().hex
     existing_receipt = db.scalar(
@@ -1057,6 +1104,7 @@ def receive_one(
             resolution_reason=resolution_reason,
             surplus_location_id=surplus_location_id,
             idempotency_key=key,
+            audit_context=audit_context,
         )
 
     target = _target(db, item_key)
@@ -1153,6 +1201,7 @@ def receive_one(
             "resolution_action": action,
             "surplus_inventory_lot_id": receipt_item.surplus_inventory_lot_id,
         },
+        audit_context=audit_context,
     )
     db.flush()
     return receipt_item
@@ -1164,6 +1213,7 @@ def accept_short(
     user: User,
     receipt_item_id: int,
     reason: str | None,
+    audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     clean_reason = (reason or "").strip() or None
     row = db.get(IncomingReceiptItem, receipt_item_id)
@@ -1215,6 +1265,7 @@ def accept_short(
             "resolution_action": "accept_short",
             "resolution_reason": clean_reason,
         },
+        audit_context=audit_context,
     )
     db.flush()
     return row
@@ -1269,6 +1320,7 @@ def revert_receipt_item(
     user: User,
     receipt_item_id: int,
     reason: str,
+    audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     clean_reason = reason.strip()
     if not clean_reason:
@@ -1368,6 +1420,7 @@ def revert_receipt_item(
             "reason": clean_reason,
             "remaining_cumulative_received_quantity": remaining,
         },
+        audit_context=audit_context,
     )
     db.flush()
     return receipt_item

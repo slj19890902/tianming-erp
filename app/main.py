@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import main as legacy
+from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.customers import router as customers_router
 from app.api.deliveries import (
@@ -382,6 +383,12 @@ def create_app() -> FastAPI:
             auth_router,
             prefix="/api/auth",
             tags=["auth"],
+        )
+    if not any(route.path == "/api/audit/logs" for route in application.routes):
+        application.include_router(
+            audit_router,
+            prefix="/api/audit",
+            tags=["audit"],
         )
     router_specs = (
         ("/api/customers", customers_router, "customers"),

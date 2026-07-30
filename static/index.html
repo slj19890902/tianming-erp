@@ -1279,9 +1279,70 @@
       .production-table .production-location-picker {
         grid-template-columns:1fr; width:172px; max-width:100%;
       }
+      .audit-tabs {
+        display: inline-flex; gap: 4px; padding: 4px;
+        border: 1px solid var(--line-strong); border-radius: 999px; background: #f2f2f4;
+      }
+      .audit-tab {
+        min-height: 34px; padding: 5px 16px; border: 0; border-radius: 999px;
+        background: transparent; color: var(--text-secondary); font-weight: 700;
+      }
+      .audit-tab.active { background: var(--primary); color: #fff; }
+      .audit-filter-panel { padding: 12px 14px; margin-bottom: 10px; }
+      .audit-filter-grid {
+        display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 8px 10px;
+      }
+      .audit-filter-grid .field { min-width: 0; margin: 0; }
+      .audit-filter-grid .field label { margin-bottom: 3px; font-size: 12px; }
+      .audit-filter-actions {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 10px; margin-top: 10px;
+      }
+      .audit-table { width: 100%; table-layout: fixed; }
+      .audit-table th, .audit-table td {
+        padding: 9px 8px; white-space: normal; overflow-wrap: anywhere; vertical-align: middle;
+      }
+      .audit-table th:nth-child(1) { width: 13%; }
+      .audit-table th:nth-child(2) { width: 11%; }
+      .audit-table th:nth-child(3) { width: 14%; }
+      .audit-table th:nth-child(4) { width: 14%; }
+      .audit-table th:nth-child(5) { width: 13%; }
+      .audit-table th:nth-child(6) { width: 10%; }
+      .audit-table th:nth-child(7) { width: 19%; }
+      .audit-table th:nth-child(8) { width: 6%; }
+      .audit-table .btn.small { padding-left: 8px; padding-right: 8px; }
+      .audit-cell-two-lines {
+        display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2; line-clamp: 2;
+      }
+      .audit-detail-grid {
+        display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px; margin-bottom: 12px;
+      }
+      .audit-detail-card {
+        min-width: 0; padding: 9px 10px; border: 1px solid var(--line);
+        border-radius: 10px; background: #fafafa;
+      }
+      .audit-detail-card.wide { grid-column: 1 / -1; }
+      .audit-detail-label { color: var(--muted); font-size: 12px; }
+      .audit-detail-value { margin-top: 2px; overflow-wrap: anywhere; }
+      .audit-json {
+        max-height: 300px; margin: 0; padding: 10px; overflow: auto;
+        border: 1px solid var(--line); border-radius: 10px; background: #f7f7f8;
+        color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere;
+        font: 12px/1.55 Consolas, "Microsoft YaHei", monospace;
+      }
+      .ui-large .audit-filter-grid { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
+      .ui-large .audit-table th, .ui-large .audit-table td { padding: 10px 8px; font-size: 16px; }
+      .ui-large .audit-detail-label, .ui-large .audit-json { font-size: 15px; }
+      @media(max-width:1400px) {
+        .audit-filter-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+        .audit-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
       @media(max-width:900px) {
         .warehouse-shell-frame { height: calc(100vh - 188px); min-height: 520px; }
         .production-location-picker { grid-template-columns: 1fr; }
+        .audit-filter-grid, .audit-detail-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -2456,6 +2517,57 @@
               </div>
             </template>
 
+            <template v-else-if="activePage === 'audit'">
+              <page-head title="操作记录" desc="只读查看谁在什么时候做了什么；这里不能修改或删除记录。"></page-head>
+              <div class="toolbar" style="margin-bottom:10px">
+                <div class="audit-tabs" role="tablist" aria-label="操作记录分类">
+                  <button type="button" :class="['audit-tab',{active:auditLogState.category==='business'}]" @click="setAuditCategory('business')">业务操作</button>
+                  <button type="button" :class="['audit-tab',{active:auditLogState.category==='security'}]" @click="setAuditCategory('security')">安全事件</button>
+                </div>
+                <button class="btn" type="button" :disabled="auditLogState.loading" @click="loadAuditLogs()">{{ auditLogState.loading ? "读取中…" : "刷新" }}</button>
+              </div>
+              <div class="panel audit-filter-panel">
+                <div class="audit-filter-grid">
+                  <div class="field"><label>开始日期</label><input class="input" type="date" v-model="auditLogState.filters.date_from" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>结束日期</label><input class="input" type="date" v-model="auditLogState.filters.date_to" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>操作人</label><input class="input" v-model.trim="auditLogState.filters.operator" placeholder="姓名或账号" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>模块</label><input class="input" v-model.trim="auditLogState.filters.module" placeholder="如订单、仓库" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>动作</label><input class="input" v-model.trim="auditLogState.filters.action" placeholder="如新增、修改" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>单号或对象</label><input class="input" v-model.trim="auditLogState.filters.object_ref" placeholder="输入单号或编号" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>客户</label><input class="input" v-model.trim="auditLogState.filters.customer" placeholder="客户名称" @keyup.enter="queryAuditLogs" /></div>
+                  <div class="field"><label>结果</label><select class="select" v-model="auditLogState.filters.result"><option value="">全部结果</option><option value="success">成功</option><option value="failed">失败</option><option value="denied">已拒绝</option><option value="no_change">没有变化</option></select></div>
+                  <div class="field"><label>来源</label><select class="select" v-model="auditLogState.filters.source"><option value="">全部来源</option><option value="web">电脑网页</option><option value="mobile">手机</option><option value="import">导入</option><option value="api">接口</option><option value="system">系统</option><option value="script">脚本</option><option value="migration">升级程序</option></select></div>
+                </div>
+                <div class="audit-filter-actions">
+                  <span class="muted">{{ auditLogState.category === 'security' ? '这里包括登录、权限拒绝和操作记录查看。' : '这里显示订单、报料、仓库、生产、送货等业务操作。' }}</span>
+                  <div class="toolbar-group"><button class="btn" type="button" :disabled="auditLogState.loading" @click="resetAuditFilters">清空</button><button class="btn primary" type="button" :disabled="auditLogState.loading" @click="queryAuditLogs">查询</button></div>
+                </div>
+              </div>
+              <div class="panel">
+                <div v-if="auditLogState.loading && !auditLogState.items.length" class="empty">正在读取操作记录…</div>
+                <div v-else-if="auditLogState.error" class="empty">读取失败：{{ auditLogState.error }} <button class="btn small" type="button" @click="loadAuditLogs()">重试</button></div>
+                <div v-else-if="!auditLogState.items.length" class="empty">当前条件下没有记录</div>
+                <div v-else class="table-wrap">
+                  <table class="audit-table">
+                    <thead><tr><th>时间</th><th>操作人</th><th>模块 / 动作</th><th>单号 / 对象</th><th>客户</th><th>结果 / 来源</th><th>说明</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr v-for="row in auditLogState.items" :key="row.id">
+                        <td>{{ formatDateTime(row.created_at) }}</td>
+                        <td><strong>{{ auditOperatorText(row) }}</strong><div class="muted">{{ row.operator?.username || '-' }}</div></td>
+                        <td><strong>{{ auditModuleLabel(row.module_code || row.resource) }}</strong><div class="muted audit-cell-two-lines">{{ auditActionLabel(row.action_code) }}</div></td>
+                        <td><div class="audit-cell-two-lines">{{ auditObjectText(row) }}</div></td>
+                        <td><div class="audit-cell-two-lines">{{ row.customer_name || '-' }}</div></td>
+                        <td><span :class="['status',auditResultTone(row.result)]">{{ auditResultLabel(row.result) }}</span><div class="muted">{{ auditSourceLabel(row.source) }}</div></td>
+                        <td><div class="audit-cell-two-lines" :title="row.description || ''">{{ row.description || '已记录操作' }}</div></td>
+                        <td><button class="btn small" type="button" @click="openAuditDetail(row)">查看</button></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <pager :page="auditLogState.page" :total="auditLogState.total" :page-size="auditLogState.page_size" :always="true" @change="changeAuditPage"></pager>
+              </div>
+            </template>
+
             <template v-else-if="activePage === 'permissions'">
               <page-head title="用户权限管理" desc="选择用户，勾选功能权限并分配可见客户范围；一次保存同时生效，避免出现半套权限。"></page-head>
               <div class="panel" style="padding:16px 18px">
@@ -2962,7 +3074,28 @@
               <strong>他人已修改，打开版本{{ masterVersionConflict.expectedVersion }} / 当前版本{{ masterVersionConflict.currentVersion }}</strong>
               <div class="toolbar-group" style="margin-top:8px"><button class="btn small" @click="loadServerLatestMaster">加载服务器最新版</button><button class="btn small" @click="openConflictVersionHistory">查看版本历史</button></div>
             </div>
-            <div v-if="modal.type === 'customer'">
+            <div v-if="modal.type === 'auditDetail'">
+              <div v-if="auditLogState.detailLoading" class="empty">正在读取详情…</div>
+              <div v-else-if="auditLogState.detailError" class="empty">读取失败：{{ auditLogState.detailError }}</div>
+              <template v-else-if="auditLogState.detail">
+                <div class="audit-detail-grid">
+                  <div class="audit-detail-card"><div class="audit-detail-label">时间</div><div class="audit-detail-value">{{ formatDateTime(auditLogState.detail.created_at) }}</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">分类</div><div class="audit-detail-value">{{ auditCategoryLabel(auditLogState.detail.event_category) }}</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">结果</div><div class="audit-detail-value"><span :class="['status',auditResultTone(auditLogState.detail.result)]">{{ auditResultLabel(auditLogState.detail.result) }}</span></div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">操作人</div><div class="audit-detail-value">{{ auditOperatorText(auditLogState.detail) }}（{{ auditLogState.detail.operator?.username || '-' }}）</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">模块 / 动作</div><div class="audit-detail-value">{{ auditModuleLabel(auditLogState.detail.module_code || auditLogState.detail.resource) }} / {{ auditActionLabel(auditLogState.detail.action_code) }}</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">来源</div><div class="audit-detail-value">{{ auditSourceLabel(auditLogState.detail.source) }}</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">单号 / 对象</div><div class="audit-detail-value">{{ auditObjectText(auditLogState.detail) }}</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">客户</div><div class="audit-detail-value">{{ auditLogState.detail.customer_name || '-' }}</div></div>
+                  <div class="audit-detail-card"><div class="audit-detail-label">访问地址</div><div class="audit-detail-value">{{ auditLogState.detail.ip_address || '-' }}</div></div>
+                  <div class="audit-detail-card wide"><div class="audit-detail-label">说明</div><div class="audit-detail-value">{{ auditLogState.detail.description || '已记录操作' }}</div></div>
+                  <div class="audit-detail-card wide"><div class="audit-detail-label">关联编号</div><div class="audit-detail-value">请求：{{ auditLogState.detail.request_id || '-' }}　批次：{{ auditLogState.detail.batch_id || '-' }}</div></div>
+                </div>
+                <div class="audit-detail-label" style="margin-bottom:5px">操作内容</div>
+                <pre class="audit-json">{{ auditDetailsText(auditLogState.detail.details) }}</pre>
+              </template>
+            </div>
+            <div v-else-if="modal.type === 'customer'">
               <div v-if="customerForm.id && !canEditCustomers" class="notice readonly-hint">当前为只读查看；客户资料控件已禁用。</div>
               <fieldset class="form-grid" :class="'readonly-fieldset'" :disabled="!!customerForm.id && !canEditCustomers">
                 <div class="field"><label>客户编号</label><input class="input" type="number" v-model.number="customerForm.customer_number" /></div>
@@ -5140,7 +5273,7 @@
       const menuPermissions = {
         dashboard: "dashboard.view", customers: "customers.view", products: "products.view", orders: "orders.view",
         requisition: "requisition.view", incoming: "incoming.view", production: "orders.view", warehouse: "warehouse.view",
-        deliveries: "deliveries.view", finance: "finance.view", contracts: "contracts.view", system: "system.backup", permissions: "users.manage",
+        deliveries: "deliveries.view", finance: "finance.view", contracts: "contracts.view", audit: "audit.view", system: "system.backup", permissions: "users.manage",
       };
       const blankCustomer = () => ({
         id: null, version: null, customer_number: 1, customer_code: "", name: "",
@@ -5338,6 +5471,11 @@
             systemUsers: [], expandedOrders: {},
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
             permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
+            auditLogState: {
+              category:"business", items:[], total:0, page:1, page_size:25, pages:0,
+              loading:false, error:"", detail:null, detailLoading:false, detailError:"",
+              filters:{ date_from:"", date_to:"", operator:"", module:"", action:"", object_ref:"", customer:"", result:"", source:"" },
+            },
             createUserForm: { username:"", real_name:"", display_name:"", role:"sales", temporary_password:"", confirm_password:"" },
             showCreateUserModal: false,
             userRoleOptions: [
@@ -5942,6 +6080,7 @@
               { key: "finance", label: "对账开票收款" },
               { key: "customers", label: "客户管理" },
               { key: "products", label: "常用箱与材质" },
+              { key: "audit", label: "操作记录" },
               { key: "system", label: "系统备份" }
             ];
             if (this.canManagePermissions) items.push({ key: "permissions", label: "用户权限管理" });
@@ -6237,7 +6376,7 @@
             return (legacy[this.user?.role] || []).includes(code);
           },
           pagePermission(page) {
-            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", contracts:"contracts.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", system:"system.backup", permissions:"users.manage" })[page] || null;
+            return ({ dashboard:"dashboard.view", customers:"customers.view", quotations:"quotations.view", contracts:"contracts.view", products:"products.view", orders:"orders.view", orders_legacy:"orders.view", requisition:"requisition.view", incoming:"incoming.view", production:"orders.view", warehouse:"warehouse.view", deliveries:"deliveries.view", finance:"finance.view", audit:"audit.view", system:"system.backup", permissions:"users.manage" })[page] || null;
           },
           pageAllowed(page) {
             if (this.isBoss && ["system", "permissions"].includes(page)) return false;
@@ -8177,6 +8316,7 @@
               if (page === "deliveries") await Promise.all([this.loadDeliveries(), this.loadCustomerOptions(force)]);
               if (page === "warehouse") this.ensureWarehouseFrame();
               if (page === "finance") await this.loadFinance();
+              if (page === "audit") await this.loadAuditLogs();
               if (page === "system") await this.loadSystem();
               if (page === "permissions") await this.loadPermissionUsers();
               this.markPageCache(page);
@@ -10043,6 +10183,156 @@
             this.statements = statements.data.items; this.statementsTotal = statements.data.total;
             this.invoices = invoices.data.items; this.invoicesTotal = invoices.data.total;
           },
+          auditQueryParams() {
+            const filters = this.auditLogState.filters || {};
+            const params = {
+              page:this.auditLogState.page,
+              page_size:this.auditLogState.page_size,
+              event_category:this.auditLogState.category,
+            };
+            for (const key of ["date_from","date_to","operator","module","action","object_ref","customer","result","source"]) {
+              const value = String(filters[key] || "").trim();
+              if (value) params[key] = value;
+            }
+            return params;
+          },
+          async loadAuditLogs({ resetPage=false } = {}) {
+            if (!this.hasPermission("audit.view")) return;
+            if (resetPage) this.auditLogState.page = 1;
+            const requestKey = "auditLogs";
+            const controller = this.beginLatestRequest(requestKey);
+            this.auditLogState.loading = true;
+            this.auditLogState.error = "";
+            try {
+              const { data } = await axios.get("/api/audit/logs", {
+                params:this.auditQueryParams(),
+                signal:controller.signal,
+              });
+              if (latestRequestControllers.get(requestKey) !== controller) return;
+              this.auditLogState.items = Array.isArray(data?.items) ? data.items : [];
+              this.auditLogState.total = Number(data?.total || 0);
+              this.auditLogState.page = Number(data?.page || this.auditLogState.page || 1);
+              this.auditLogState.page_size = Number(data?.page_size || this.auditLogState.page_size || 25);
+              this.auditLogState.pages = Number(data?.pages || 0);
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) {
+                this.auditLogState.items = [];
+                this.auditLogState.total = 0;
+                this.auditLogState.error = this.errorMessage(error);
+              }
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.auditLogState.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          queryAuditLogs() {
+            const from = String(this.auditLogState.filters.date_from || "");
+            const to = String(this.auditLogState.filters.date_to || "");
+            if (from && to && from > to) {
+              this.showToast("开始日期不能晚于结束日期", true);
+              return;
+            }
+            return this.loadAuditLogs({ resetPage:true });
+          },
+          resetAuditFilters() {
+            this.auditLogState.filters = { date_from:"", date_to:"", operator:"", module:"", action:"", object_ref:"", customer:"", result:"", source:"" };
+            return this.loadAuditLogs({ resetPage:true });
+          },
+          setAuditCategory(category) {
+            if (!["business","security"].includes(category) || category === this.auditLogState.category) return;
+            this.auditLogState.category = category;
+            this.auditLogState.page = 1;
+            return this.loadAuditLogs();
+          },
+          changeAuditPage(page) {
+            const safePage = Math.max(1, Number(page || 1));
+            if (safePage === this.auditLogState.page) return;
+            this.auditLogState.page = safePage;
+            return this.loadAuditLogs();
+          },
+          async openAuditDetail(row) {
+            const logId = Number(row?.id || 0);
+            if (!logId || !this.hasPermission("audit.view")) return;
+            this.auditLogState.detail = null;
+            this.auditLogState.detailError = "";
+            this.auditLogState.detailLoading = true;
+            this.modal = { type:"auditDetail", title:"操作详情" };
+            try {
+              const { data } = await axios.get(`/api/audit/logs/${encodeURIComponent(logId)}`);
+              if (this.modal?.type === "auditDetail") this.auditLogState.detail = data || null;
+            } catch (error) {
+              if (this.modal?.type === "auditDetail") this.auditLogState.detailError = this.errorMessage(error);
+            } finally {
+              if (this.modal?.type === "auditDetail") this.auditLogState.detailLoading = false;
+            }
+          },
+          auditOperatorText(row) {
+            return row?.operator?.name || row?.operator?.username || "系统";
+          },
+          auditObjectText(row) {
+            if (row?.object_ref) return String(row.object_ref);
+            if (row?.entity_id) return `编号 ${row.entity_id}`;
+            return "-";
+          },
+          auditModuleLabel(value) {
+            const key = String(value || "").trim().toLowerCase();
+            const labels = {
+              auth:"登录与账号", permissions:"用户权限", audit:"操作记录", customers:"客户",
+              customer:"客户", products:"常用箱", product:"常用箱", quotations:"报价",
+              contracts:"合同", orders:"订单", order:"订单", requisition:"报料",
+              incoming:"来料入库", production:"生产", warehouse:"仓库库存",
+              deliveries:"送货", delivery:"送货", receipts:"回单", receipt:"回单",
+              finance:"对账开票收款", system:"系统", migration:"系统升级",
+            };
+            return labels[key] || value || "其他";
+          },
+          auditActionLabel(value) {
+            const raw = String(value || "").trim();
+            const key = raw.toLowerCase();
+            const exact = {
+              "audit.list.view":"查看操作记录", "audit.detail.view":"查看操作详情",
+              "login":"登录", "login_failed":"登录失败", "login_throttled":"登录受限",
+              "logout":"退出登录", "change_password":"修改密码", "reset_password":"重置密码",
+              "permission.denied":"权限拒绝", "role.denied":"角色拒绝",
+            };
+            if (exact[key]) return exact[key];
+            if (key.includes("delete")) return "删除";
+            if (key.includes("void")) return "作废";
+            if (key.includes("cancel") || key.includes("reverse")) return "撤销";
+            if (key.includes("create") || key.includes("add")) return "新增";
+            if (key.includes("update") || key.includes("edit") || key.includes("save")) return "修改/保存";
+            if (key.includes("receive") || key.includes("incoming")) return "收料入库";
+            if (key.includes("complete")) return "确认完工";
+            if (key.includes("dispatch") || key.includes("deliver")) return "发货";
+            if (key.includes("reserve")) return "库存预占";
+            if (key.includes("release")) return "释放库存";
+            if (key.includes("view") || key.includes("read") || key.includes("list")) return "查看";
+            return raw || "操作";
+          },
+          auditCategoryLabel(value) {
+            return ({ business:"业务操作", security:"安全事件", audit_access:"日志查看", system:"系统任务" })[String(value || "").toLowerCase()] || value || "-";
+          },
+          auditResultLabel(value) {
+            return ({ success:"成功", failed:"失败", denied:"已拒绝", no_change:"没有变化" })[String(value || "").toLowerCase()] || value || "-";
+          },
+          auditResultTone(value) {
+            const key = String(value || "").toLowerCase();
+            if (key === "success") return "green";
+            if (key === "failed" || key === "denied") return "red";
+            if (key === "no_change") return "gray";
+            return "blue";
+          },
+          auditSourceLabel(value) {
+            return ({ web:"电脑网页", mobile:"手机", import:"导入", api:"接口", system:"系统", script:"脚本", migration:"升级程序" })[String(value || "").toLowerCase()] || value || "-";
+          },
+          auditDetailsText(value) {
+            if (value === null || value === undefined || value === "") return "无补充内容";
+            if (typeof value === "string") return value;
+            try { return JSON.stringify(value, null, 2); }
+            catch (error) { return "内容无法显示"; }
+          },
           async loadBackups() {
             const { data } = await axios.get("/api/system/backups");
             this.backups = data.items || [];
@@ -10061,7 +10351,7 @@
               ["products", "产品查看", "products.view"], ["products", "产品新增", "products.create"], ["products", "产品编辑", "products.edit"], ["products", "产品停用", "products.deactivate"], ["products", "产品删除", "products.delete"],
               ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["contracts", "合同查看", "contracts.view"], ["contracts", "合同编辑", "contracts.edit"], ["contracts", "合同转订单", "contracts.convert"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
               ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
-              ["dashboard", "首页仪表盘查看", "dashboard.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
+              ["dashboard", "首页仪表盘查看", "dashboard.view"], ["audit", "操作记录查看", "audit.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
               ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
               ["deliveries", "送货查看", "deliveries.view"], ["deliveries", "送货操作", "deliveries.execute"], ["deliveries", "超量送货确认", "deliveries.over_delivery"], ["deliveries", "手机拿货", "deliveries.pick"], ["finance", "财务查看", "finance.view"], ["finance", "财务操作", "finance.execute"],
             ];
@@ -10072,7 +10362,7 @@
             const role = roleOverride || this.permissionProfile?.role || this.permissionUsers.find(row => row.id === this.selectedPermissionUserId)?.role;
             if (role === "admin") return true;
             const defaults = {
-              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","warehouse.stocktake.review","deliveries.over_delivery"].includes(code)),
+              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","audit.view","warehouse.stocktake.review","deliveries.over_delivery"].includes(code)),
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
               finance: ["customers.view","quotations.view","contracts.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
               workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
@@ -15386,6 +15676,11 @@
 	              return;
 	            }
 	            if (this.modal?.type === "order") this.resetOrderCommonBoxPicker();
+              if (this.modal?.type === "auditDetail") {
+                this.auditLogState.detail = null;
+                this.auditLogState.detailError = "";
+                this.auditLogState.detailLoading = false;
+              }
 	            this.modal = null;
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };

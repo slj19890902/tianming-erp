@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 import jwt
 from fastapi import (
@@ -95,6 +96,7 @@ from app.services.order_numbering import (
     reserve_next_order_number,
 )
 from app.services.order_document_trace import build_order_item_document_trace
+from app.services.audit_log import append_audit_event
 from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
     DERIVED_BUSINESS_STATUSES,
@@ -210,6 +212,48 @@ can_status = PermissionChecker("orders.status")
 can_delete = PermissionChecker("orders.delete")
 can_rollback = PermissionChecker("orders.rollback")
 can_view_cost = PermissionChecker("cost.view")
+
+
+def _append_order_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    user: User,
+    order: Order,
+    action_code: str,
+    legacy_action: str,
+    description: str,
+    details: dict[str, object],
+    entity_type: str = "order",
+    entity_id: int | None = None,
+    object_ref: str | None = None,
+    resource: str = "Order",
+    source: str = "web",
+    batch_id: str | None = None,
+) -> None:
+    """Append one structured order event inside the caller's transaction."""
+
+    customer = db.get(Customer, order.customer_id)
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="business",
+        result="success",
+        source=source,
+        module_code="orders",
+        action_code=action_code,
+        legacy_action=legacy_action,
+        resource=resource,
+        entity_type=entity_type,
+        entity_id=order.id if entity_id is None else entity_id,
+        object_ref=object_ref or order.order_number,
+        customer_id=order.customer_id,
+        customer_name=customer.name if customer is not None else None,
+        batch_id=batch_id,
+        description=description,
+        details=details,
+    )
 _PRODUCT_DRAWING_SAVE_OPTIONS = frozenset({"save_to_product", "overwrite_product"})
 MONEY_QUANTUM = Decimal("0.00")
 ORDER_STATUSES = {
@@ -3415,6 +3459,8 @@ def _delete_orders_in_transaction(
     *,
     orders: list[Order],
     user: User,
+    request: Request | None = None,
+    batch_id: str | None = None,
 ) -> None:
     order_ids = [order.id for order in orders]
     _lock_orders_for_production_transition(db, order_ids)
@@ -3461,28 +3507,81 @@ def _delete_orders_in_transaction(
             ) is None:
                 db.execute(delete(Requisition).where(Requisition.id == requisition_id))
     for order in orders:
-        db.add(
-            OperationLog(
-                user_id=user.id,
-                action="DELETE",
-                resource="Order",
-                details=json.dumps(
-                    {
-                        "order_number": order.order_number,
-                        "customer_id": order.customer_id,
-                        "customer_po": order.customer_po,
-                        "item_count": len(order.items),
-                    },
-                    ensure_ascii=False,
+        for item in order.items:
+            _append_order_audit(
+                db,
+                request=request,
+                user=user,
+                order=order,
+                action_code="order.item.delete",
+                legacy_action="DELETE",
+                description="随整单删除订单明细",
+                details={
+                    "order_id": order.id,
+                    "order_number": order.order_number,
+                    "item_id": item.id,
+                    "item_order_number": item.item_order_number,
+                    "product_code": item.snapshot_product_code,
+                    "product_name": item.snapshot_product_name,
+                    "quantity": item.quantity,
+                },
+                entity_type="order_item",
+                entity_id=item.id,
+                object_ref=(
+                    item.item_order_number
+                    or f"{order.order_number}:{item.id}"
                 ),
-                username=user.username,
-                role=user.role,
-                entity_type="order",
-                entity_id=order.id,
-                description="删除无业务关联订单",
+                resource="OrderItem",
+                batch_id=batch_id,
             )
+        _append_order_audit(
+            db,
+            request=request,
+            user=user,
+            order=order,
+            action_code="order.delete",
+            legacy_action="DELETE",
+            description="删除无业务关联订单",
+            details={
+                "order_number": order.order_number,
+                "customer_id": order.customer_id,
+                "customer_po": order.customer_po,
+                "item_count": len(order.items),
+            },
+            batch_id=batch_id,
         )
         db.delete(order)
+    if batch_id is not None:
+        first_order = orders[0]
+        customer = db.get(Customer, first_order.customer_id)
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="orders",
+            action_code="order.group_delete",
+            legacy_action="GROUP_DELETE",
+            resource="OrderGroup",
+            entity_type="order_group",
+            object_ref=_order_group_key(first_order),
+            customer_id=first_order.customer_id,
+            customer_name=customer.name if customer is not None else None,
+            batch_id=batch_id,
+            description="批量删除同一客户订单组",
+            details={
+                "deleted_order_count": len(orders),
+                "deleted_item_count": sum(
+                    len(order.items) for order in orders
+                ),
+                "order_ids": [order.id for order in orders],
+                "order_numbers": [
+                    order.order_number for order in orders
+                ],
+            },
+        )
     try:
         db.commit()
     except IntegrityError as error:
@@ -3497,6 +3596,7 @@ def _delete_orders_in_transaction(
 def update_order_status(
     order_id: int,
     payload: OrderStatusRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_status),
 ) -> dict:
@@ -3549,21 +3649,15 @@ def update_order_status(
         )
         for item in order.items:
             item.is_force_closed = True
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="STATUS",
-            resource="Order",
-            details=json.dumps(
-                {"before": before, "after": target, "remark": remark},
-                ensure_ascii=False,
-            ),
-            username=user.username,
-            role=user.role,
-            entity_type="order",
-            entity_id=order.id,
-            description=f"订单状态变更为{target}",
-        )
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.status_change",
+        legacy_action="STATUS",
+        description=f"订单状态变更为{target}",
+        details={"before": before, "after": target, "remark": remark},
     )
     db.commit()
     customer = db.get(Customer, order.customer_id)
@@ -3578,6 +3672,7 @@ def update_order_status(
 @router.delete("/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_order(
     order_id: int,
+    request: Request = None,
     confirm: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(can_delete),
@@ -3590,13 +3685,14 @@ def delete_order(
     if order is None:
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
-    _delete_orders_in_transaction(db, orders=[order], user=user)
+    _delete_orders_in_transaction(db, orders=[order], user=user, request=request)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/group-delete")
 def delete_order_group(
     payload: OrderGroupDeleteRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_delete),
 ) -> dict:
@@ -3615,14 +3711,22 @@ def delete_order_group(
         require_customer_access(order.customer_id, current_user=user, db=db)
     if len({_order_group_key(order) for order in orders}) != 1:
         raise HTTPException(status_code=400, detail="所选订单不属于同一订单组，请刷新后重试")
-    _delete_orders_in_transaction(db, orders=orders, user=user)
-    return {"deleted_count": len(orders)}
+    batch_id = uuid4().hex
+    _delete_orders_in_transaction(
+        db,
+        orders=orders,
+        user=user,
+        request=request,
+        batch_id=batch_id,
+    )
+    return {"deleted_count": len(orders), "batch_id": batch_id}
 
 
 @router.put("/{order_id}/rollback-workflow")
 def rollback_order_workflow(
     order_id: int,
     payload: WorkflowRollbackRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_rollback),
 ) -> dict:
@@ -3791,27 +3895,21 @@ def rollback_order_workflow(
         )
         order.status = "pending_production"
         order.payment_status = "unpaid"
-        db.add(
-            OperationLog(
-                user_id=user.id,
-                action="ROLLBACK_WORKFLOW",
-                resource="Order",
-                details=json.dumps(
-                    {
-                        "reason": reason,
-                        "delivery_ids": sorted(delivery_ids),
-                        "receipt_ids": receipt_ids,
-                        "statement_ids": sorted(statement_ids),
-                        "supplier_requisition_changes": supplier_requisition_changes,
-                    },
-                    ensure_ascii=False,
-                ),
-                username=user.username,
-                role=user.role,
-                entity_type="order",
-                entity_id=order.id,
-                description="订单撤回到未送货未报料状态",
-            )
+        _append_order_audit(
+            db,
+            request=request,
+            user=user,
+            order=order,
+            action_code="order.workflow_rollback",
+            legacy_action="ROLLBACK_WORKFLOW",
+            description="订单撤回到未送货未报料状态",
+            details={
+                "reason": reason,
+                "delivery_ids": sorted(delivery_ids),
+                "receipt_ids": receipt_ids,
+                "statement_ids": sorted(statement_ids),
+                "supplier_requisition_changes": supplier_requisition_changes,
+            },
         )
         db.commit()
         customer = db.get(Customer, order.customer_id)
@@ -3906,6 +4004,7 @@ def get_order_item_documents(
 def update_order(
     order_id: int,
     payload: OrderUpdate,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_edit),
 ) -> dict:
@@ -3919,9 +4018,31 @@ def update_order(
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
 
+    before = {
+        "customer_po": order.customer_po,
+        "delivery_date": order.delivery_date,
+        "remark": order.remark,
+    }
     order.customer_po = (payload.customer_po or "").strip() or None
     order.delivery_date = payload.delivery_date
     order.remark = (payload.remark or "").strip() or None
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.update",
+        legacy_action="UPDATE",
+        description="修改订单基础资料",
+        details={
+            "before": before,
+            "after": {
+                "customer_po": order.customer_po,
+                "delivery_date": order.delivery_date,
+                "remark": order.remark,
+            },
+        },
+    )
     db.commit()
     db.refresh(order)
     customer = db.get(Customer, order.customer_id)
@@ -3970,32 +4091,32 @@ def _component_has_active_requisition(db: Session, snapshot_id: int) -> bool:
 def _log_component_demand_change(
     db: Session,
     *,
+    request: Request | None,
     user: User,
+    order: Order,
     snapshot_id: int,
     before_quantity: int,
     after_quantity: int,
     idempotency_key: str,
 ) -> None:
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="UPDATE_BOM_COMPONENT_DEMAND",
-            resource="OrderItem",
-            details=json.dumps(
-                {
-                    "snapshot_id": snapshot_id,
-                    "before_required_piece_quantity": before_quantity,
-                    "after_required_piece_quantity": after_quantity,
-                    "idempotency_key": idempotency_key,
-                },
-                ensure_ascii=False,
-            ),
-            username=user.username,
-            role=user.role,
-            entity_type="sales_order_item_bom_component",
-            entity_id=snapshot_id,
-            description="随订单保存本订单组件需求件数",
-        )
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.bom_component_demand.update",
+        legacy_action="UPDATE_BOM_COMPONENT_DEMAND",
+        description="修改本订单组件需求件数",
+        details={
+            "snapshot_id": snapshot_id,
+            "before_required_piece_quantity": before_quantity,
+            "after_required_piece_quantity": after_quantity,
+            "idempotency_key": idempotency_key,
+        },
+        entity_type="sales_order_item_bom_component",
+        entity_id=snapshot_id,
+        object_ref=f"{order.order_number}:bom:{snapshot_id}",
+        resource="OrderItem",
     )
 
 
@@ -4005,6 +4126,8 @@ def _apply_new_order_component_demands(
     item: OrderItem,
     targets: list[NewOrderBomComponentDemand],
     user: User,
+    order: Order,
+    request: Request | None,
 ) -> None:
     if not targets:
         return
@@ -4043,7 +4166,9 @@ def _apply_new_order_component_demands(
         if created:
             _log_component_demand_change(
                 db,
+                request=request,
                 user=user,
+                order=order,
                 snapshot_id=snapshot_id,
                 before_quantity=current,
                 after_quantity=desired,
@@ -4096,6 +4221,8 @@ def _apply_existing_component_demands(
     item: OrderItem,
     targets: list[ExistingOrderBomComponentDemand],
     user: User,
+    order: Order,
+    request: Request | None,
 ) -> None:
     if not targets:
         return
@@ -4122,7 +4249,9 @@ def _apply_existing_component_demands(
         if created:
             _log_component_demand_change(
                 db,
+                request=request,
                 user=user,
+                order=order,
                 snapshot_id=target.snapshot_id,
                 before_quantity=current,
                 after_quantity=desired,
@@ -4193,6 +4322,7 @@ def _create_order_impl(
     commit: bool = True,
     source_contract_id: int | None = None,
     observability: dict[str, object] | None = None,
+    request: Request | None = None,
 ):
     pending_drawing_consumptions: list[PendingTemporaryConsumption] = []
     _set_order_save_stage(observability, "customer_scope")
@@ -4698,59 +4828,62 @@ def _create_order_impl(
             MONEY_QUANTUM,
             rounding=ROUND_HALF_UP,
         )
-        db.add(
-            OperationLog(
-                user_id=user.id,
-                action="CREATE",
-                resource="Order",
-                details=json.dumps(
-                    {
-                        "order_number": order.order_number,
-                        "customer_id": order.customer_id,
-                        "item_count": len(payload.items),
-                        "total_amount": str(order.total_amount),
-                    },
-                    ensure_ascii=False,
-                ),
-                username=user.username,
-                role=user.role,
-                entity_type="order",
-                entity_id=order.id,
-                description="创建多明细订单",
-            )
+        _append_order_audit(
+            db,
+            request=request,
+            user=user,
+            order=order,
+            action_code=(
+                "order.pdf_create"
+                if payload.pdf_import_confirmation is not None
+                else "order.create"
+            ),
+            legacy_action="CREATE",
+            source=(
+                "import"
+                if payload.pdf_import_confirmation is not None
+                else "web"
+            ),
+            description=(
+                "PDF 创建多明细订单"
+                if payload.pdf_import_confirmation is not None
+                else "创建多明细订单"
+            ),
+            details={
+                "order_number": order.order_number,
+                "customer_id": order.customer_id,
+                "item_count": len(payload.items),
+                "total_amount": str(order.total_amount),
+                "source_contract_id": source_contract_id,
+            },
         )
         if pdf_safety_override_reasons:
-            db.add(
-                OperationLog(
-                    user_id=user.id,
-                    action="PDF_SAFETY_OVERRIDE",
-                    resource="Order",
-                    details=json.dumps(
-                        {
-                            "order_number": order.order_number,
-                            "customer_id": order.customer_id,
-                            "item_count": len(payload.items),
-                            "source_name": pdf_safety_claims.get("source_name"),
-                            "source_hash": pdf_safety_claims.get("source_hash"),
-                            "recognition_status": pdf_safety_claims.get(
-                                "recognition_status"
-                            ),
-                            "customer_route_status": pdf_safety_claims.get(
-                                "customer_route_status"
-                            ),
-                            "integrity_status": pdf_safety_claims.get(
-                                "integrity_status"
-                            ),
-                            "override_reasons": pdf_safety_override_reasons,
-                        },
-                        ensure_ascii=False,
+            _append_order_audit(
+                db,
+                request=request,
+                user=user,
+                order=order,
+                action_code="order.pdf_safety_override",
+                legacy_action="PDF_SAFETY_OVERRIDE",
+                source="import",
+                description="人工明确确认后保存存在安全闸门状态的 PDF 草稿",
+                details={
+                    "order_number": order.order_number,
+                    "customer_id": order.customer_id,
+                    "item_count": len(payload.items),
+                    "source_name": pdf_safety_claims.get("source_name"),
+                    "source_hash": pdf_safety_claims.get("source_hash"),
+                    "recognition_status": pdf_safety_claims.get(
+                        "recognition_status"
                     ),
-                    username=user.username,
-                    role=user.role,
-                    entity_type="order",
-                    entity_id=order.id,
-                    description="人工明确确认后保存存在安全闸门状态的 PDF 草稿",
-                )
+                    "customer_route_status": pdf_safety_claims.get(
+                        "customer_route_status"
+                    ),
+                    "integrity_status": pdf_safety_claims.get(
+                        "integrity_status"
+                    ),
+                    "override_reasons": pdf_safety_override_reasons,
+                },
             )
         _set_order_save_stage(observability, "bom_and_production")
         db.flush()  # 获取 item.id 以便处理图纸
@@ -4767,6 +4900,8 @@ def _create_order_impl(
                     item=created_item,
                     targets=payload.items[index - 1].bom_component_demands,
                     user=user,
+                    order=order,
+                    request=request,
                 )
                 create_or_refresh_production_task(db, created_item.id)
                 continue
@@ -4951,6 +5086,7 @@ def create_order(
             user,
             commit=True,
             observability=observability,
+            request=request,
         )
     except HTTPException as error:
         # Validation may run after an explicit manual-size common-box flush.
@@ -5004,6 +5140,7 @@ def update_order_item_bom_component_demand(
     item_id: int,
     snapshot_id: int,
     payload: BomComponentDemandUpdate,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_edit),
 ) -> dict:
@@ -5061,7 +5198,9 @@ def update_order_item_bom_component_demand(
         ensure_component_production_tasks(db, item.id)
         _log_component_demand_change(
             db,
+            request=request,
             user=user,
+            order=order,
             snapshot_id=snapshot.id,
             before_quantity=payload.expected_required_piece_quantity,
             after_quantity=payload.required_piece_quantity,
@@ -5084,6 +5223,7 @@ def update_order_item_bom_component_demand(
 def update_order_item(
     item_id: int,
     payload: OrderItemUpdate,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_edit),
 ) -> dict:
@@ -5501,6 +5641,8 @@ def update_order_item(
         item=item,
         targets=payload.bom_component_demands,
         user=user,
+        order=order,
+        request=request,
     )
     item.unit_price = unit_price
     item.subtotal = (Decimal(payload.quantity) * unit_price).quantize(
@@ -5684,32 +5826,37 @@ def update_order_item(
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     _refresh_total(db, order)
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="UPDATE",
-            resource="OrderItem",
-            details=json.dumps(
-                {
-                    "before": before,
-                    "after": {
-                        **payload.model_dump(),
-                        "material": item.snapshot_material,
-                        "material_id": item.material_id,
-                        "supplier_name": item.snapshot_supplier_name,
-                        "sync_product": effective_sync_product,
-                    },
-                    "source_reference": item.item_order_number or str(item.id),
-                },
-                ensure_ascii=False,
-                default=str,
-            ),
-            username=user.username,
-            role=user.role,
-            entity_type="order_item",
-            entity_id=item.id,
-            description="修改订单单条明细",
-        )
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.item.update",
+        legacy_action="UPDATE",
+        description="修改订单单条明细",
+        details={
+            "before": before,
+            "after": {
+                "quantity": item.quantity,
+                "unit_price": str(item.unit_price),
+                "subtotal": str(item.subtotal),
+                "product_code": item.snapshot_product_code,
+                "product_name": item.snapshot_product_name,
+                "specification": item.snapshot_spec,
+                "material": item.snapshot_material,
+                "material_id": item.material_id,
+                "supplier_name": item.snapshot_supplier_name,
+                "layer_count": item.layer_count,
+                "flute_type": item.flute_type,
+                "production_notes": item.snapshot_production_notes,
+                "sync_product": effective_sync_product,
+            },
+            "source_reference": item.item_order_number or str(item.id),
+        },
+        entity_type="order_item",
+        entity_id=item.id,
+        object_ref=item.item_order_number or f"{order.order_number}:{item.id}",
+        resource="OrderItem",
     )
     db.commit()
     db.refresh(item)
@@ -5751,6 +5898,7 @@ def update_order_item(
 @router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_order_item(
     item_id: int,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_delete),
 ) -> Response:
@@ -5800,18 +5948,19 @@ def delete_order_item(
     db.delete(item)
     db.flush()
     _refresh_total(db, order)
-    db.add(
-        OperationLog(
-            user_id=user.id,
-            action="DELETE",
-            resource="OrderItem",
-            details=json.dumps(deleted, ensure_ascii=False),
-            username=user.username,
-            role=user.role,
-            entity_type="order_item",
-            entity_id=item_id,
-            description="删除订单单条明细",
-        )
+    _append_order_audit(
+        db,
+        request=request,
+        user=user,
+        order=order,
+        action_code="order.item.delete",
+        legacy_action="DELETE",
+        description="删除订单单条明细",
+        details=deleted,
+        entity_type="order_item",
+        entity_id=item_id,
+        object_ref=deleted["item_order_number"] or f"{order.order_number}:{item_id}",
+        resource="OrderItem",
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

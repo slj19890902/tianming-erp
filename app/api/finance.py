@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import date, timedelta
@@ -7,7 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -40,6 +41,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.audit_log import append_audit_event
 
 
 router = APIRouter()
@@ -507,6 +509,7 @@ def _statement_detail_response(
 @router.get("/statements/{statement_id}/export")
 def export_statement_excel(
     statement_id: int,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> StreamingResponse:
@@ -518,7 +521,12 @@ def export_statement_excel(
     if row is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer = row
-    require_customer_access(statement.customer_id, user, db)
+    require_customer_access(
+        statement.customer_id,
+        current_user=user,
+        db=db,
+        request=request,
+    )
     lines = db.execute(
         select(
             Delivery.delivery_date,
@@ -666,6 +674,33 @@ def export_statement_excel(
     raw_name = f"{abbr}{statement.statement_month}对账单.xlsx"
     filename = _safe_filename(raw_name)
     encoded = quote(filename, safe="")
+    export_bytes = output.getvalue()
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="security",
+        result="success",
+        source="web",
+        module_code="finance",
+        action_code="finance.statement.export",
+        legacy_action="EXPORT_STATEMENT",
+        resource="Statement",
+        entity_type="statement",
+        entity_id=statement.id,
+        object_ref=statement.statement_number,
+        customer_id=statement.customer_id,
+        customer_name=customer.name,
+        description="导出月结对账单 Excel",
+        details={
+            "statement_month": statement.statement_month,
+            "line_count": len(lines),
+            "filename": filename,
+            "file_size": len(export_bytes),
+            "file_sha256": hashlib.sha256(export_bytes).hexdigest(),
+        },
+    )
+    db.commit()
     return StreamingResponse(
         output,
         media_type=(

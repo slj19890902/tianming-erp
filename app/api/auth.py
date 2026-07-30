@@ -30,6 +30,7 @@ from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.user import USER_ROLES, User
+from app.services.audit_log import append_audit_event
 
 
 router = APIRouter()
@@ -84,6 +85,7 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "cost.view": ("sensitive", "成本/毛利查看"),
     "system.backup": ("system", "系统备份"),
     "users.manage": ("system", "用户权限管理"),
+    "audit.view": ("system", "审计日志查看"),
 }
 
 
@@ -168,6 +170,22 @@ class UserResponse(BaseModel):
 
 def _user_payload(user: User) -> dict:
     return UserResponse.model_validate(user).model_dump()
+
+
+def _user_admin_audit_snapshot(user: User) -> dict[str, object]:
+    """Return only non-secret account facts needed for responsibility tracing."""
+
+    return {
+        "username": user.username,
+        "role": user.role,
+        "real_name": user.real_name,
+        "display_name": user.display_name,
+        "is_active": user.is_active,
+        "credential_change_required": user.must_change_password,
+        "customer_access_mode": user.customer_access_mode,
+        "ui_mode": user.ui_mode,
+        "auth_version": user.auth_version,
+    }
 
 
 def _auth_payload(user: User, db: Session) -> dict:
@@ -402,40 +420,37 @@ def _commit_access_audit(
         after = _access_audit_snapshot(db, target)
         if after != expected_after:
             raise RuntimeError("access configuration audit snapshot mismatch")
-        db.add(
-            OperationLog(
-                user_id=actor.id,
-                action=action,
-                resource="UserAccess",
-                details=json.dumps(
-                    {
-                        "action": action,
-                        "actor": {
-                            "user_id": actor.id,
-                            "username": actor.username,
-                            "role": actor.role,
-                        },
-                        "target_user_id": target.id,
-                        "target_username": target.username,
-                        "result": "changed" if changed else "no_change",
-                        "before": before,
-                        "after": after,
-                        "auth_version": {
-                            "before": before_auth_version,
-                            "after": target.auth_version,
-                        },
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                ip_address=request.client.host if request.client else None,
-                username=actor.username,
-                role=actor.role,
-                entity_type="user",
-                entity_id=target.id,
-                description=description,
-                user_agent=request.headers.get("user-agent"),
-            )
+        append_audit_event(
+            db,
+            request=request,
+            actor=actor,
+            event_category="security",
+            result="success" if changed else "no_change",
+            source="web",
+            module_code="users",
+            action_code=action,
+            resource="UserAccess",
+            entity_type="user",
+            entity_id=target.id,
+            object_ref=target.username,
+            description=description,
+            details={
+                "action": action,
+                "actor": {
+                    "user_id": actor.id,
+                    "username": actor.username,
+                    "role": actor.role,
+                },
+                "target_user_id": target.id,
+                "target_username": target.username,
+                "result": "changed" if changed else "no_change",
+                "before": before,
+                "after": after,
+                "auth_version": {
+                    "before": before_auth_version,
+                    "after": target.auth_version,
+                },
+            },
         )
         db.commit()
     except Exception:
@@ -472,27 +487,28 @@ def _validate_new_password(password: str, *, username: str | None = None) -> Non
 
 
 def _password_log(
+    db: Session,
     *,
     actor: User,
     target: User,
     action: str,
     request: Request,
 ) -> OperationLog:
-    return OperationLog(
-        user_id=actor.id,
-        action=action,
+    return append_audit_event(
+        db,
+        request=request,
+        actor=actor,
+        event_category="security",
+        result="success",
+        source="web",
+        module_code="auth",
+        action_code=action,
         resource="User",
-        details=json.dumps(
-            {"username": target.username, "target_user_id": target.id},
-            ensure_ascii=False,
-        ),
-        ip_address=request.client.host if request.client else None,
-        username=actor.username,
-        role=actor.role,
         entity_type="user",
         entity_id=target.id,
+        object_ref=target.username,
         description="修改密码" if action == "CHANGE_PASSWORD" else "管理员重置密码",
-        user_agent=request.headers.get("user-agent"),
+        details={"username": target.username, "target_user_id": target.id},
     )
 
 
@@ -509,22 +525,29 @@ def _login_request_metadata(request: Request, username: str) -> dict[str, str | 
 
 
 def _login_attempt_log(
+    db: Session,
     *,
     action: str,
     request: Request,
     username: str,
 ) -> OperationLog:
     metadata = _login_request_metadata(request, username)
-    return OperationLog(
-        action=action,
+    return append_audit_event(
+        db,
+        request=request,
+        event_category="security",
+        result="denied" if action == "LOGIN_THROTTLED" else "failed",
+        source="web",
+        module_code="auth",
+        action_code=action,
         resource="User",
-        details=json.dumps(metadata, ensure_ascii=False),
-        ip_address=metadata["ip_address"],
-        username=username,
+        entity_type="user",
+        object_ref=username,
+        operator_name=username,
         description=(
             "\u767b\u5f55\u5931\u8d25" if action == "LOGIN_FAILED" else "\u767b\u5f55\u8bf7\u6c42\u88ab\u9650\u6d41"
         ),
-        user_agent=metadata["user_agent"],
+        details=metadata,
     )
 
 
@@ -618,12 +641,11 @@ def _raise_login_throttled(
         ip_address=ip_address,
         ip_throttled=ip_throttled,
     ):
-        db.add(
-            _login_attempt_log(
-                action="LOGIN_THROTTLED",
-                request=request,
-                username=username,
-            )
+        _login_attempt_log(
+            db,
+            action="LOGIN_THROTTLED",
+            request=request,
+            username=username,
         )
     db.commit()
     raise HTTPException(
@@ -711,12 +733,11 @@ def login(
                     ip_address=ip_address,
                     ip_throttled=ip_throttled,
                 )
-            db.add(
-                _login_attempt_log(
-                    action="LOGIN_FAILED",
-                    request=request,
-                    username=username,
-                )
+            _login_attempt_log(
+                db,
+                action="LOGIN_FAILED",
+                request=request,
+                username=username,
             )
             db.commit()
         raise HTTPException(
@@ -749,26 +770,30 @@ def login(
     # SQLite accepts one writer at a time.  Serialize only this short audit
     # commit; all password checks above remain fully concurrent.
     with _LOGIN_AUDIT_GATE:
-        db.add(
-            OperationLog(
-                user_id=user_snapshot["id"],
-                action="LOGIN",
-                resource="User",
-                details=json.dumps(
-                    {
-                        "username": user_snapshot["username"],
-                        "role": user_snapshot["role"],
-                    },
-                    ensure_ascii=False,
-                ),
-                ip_address=request.client.host if request.client else None,
-                username=user_snapshot["username"],
-                role=user_snapshot["role"],
-                entity_type="user",
-                entity_id=user_snapshot["id"],
-                description="用户登录",
-                user_agent=request.headers.get("user-agent"),
+        login_actor = db.get(User, user_snapshot["id"])
+        if login_actor is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="用户名或密码错误",
             )
+        append_audit_event(
+            db,
+            request=request,
+            actor=login_actor,
+            event_category="security",
+            result="success",
+            source="web",
+            module_code="auth",
+            action_code="LOGIN",
+            resource="User",
+            entity_type="user",
+            entity_id=login_actor.id,
+            object_ref=login_actor.username,
+            description="用户登录",
+            details={
+                "username": login_actor.username,
+                "role": login_actor.role,
+            },
         )
         db.commit()
     user = db.get(User, user_snapshot["id"])
@@ -782,6 +807,7 @@ def login(
 
 @router.post("/logout")
 def logout(
+    request: Request,
     response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -789,6 +815,22 @@ def logout(
     # The intentionally coarse-grained first implementation revokes every
     # browser session for this user, including the one that made this request.
     current_user.auth_version += 1
+    append_audit_event(
+        db,
+        request=request,
+        actor=current_user,
+        event_category="security",
+        result="success",
+        source="web",
+        module_code="auth",
+        action_code="LOGOUT",
+        resource="User",
+        entity_type="user",
+        entity_id=current_user.id,
+        object_ref=current_user.username,
+        description="用户退出登录",
+        details={"revoked_all_sessions": True},
+    )
     db.commit()
     current = load_settings()
     response.delete_cookie(
@@ -861,13 +903,12 @@ def change_password(
     current_user.password_hash = hash_password(payload.new_password)
     current_user.must_change_password = False
     current_user.auth_version += 1
-    db.add(
-        _password_log(
-            actor=current_user,
-            target=current_user,
-            action="CHANGE_PASSWORD",
-            request=request,
-        )
+    _password_log(
+        db,
+        actor=current_user,
+        target=current_user,
+        action="CHANGE_PASSWORD",
+        request=request,
     )
     db.commit()
     db.refresh(current_user)
@@ -886,6 +927,7 @@ def list_users(
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: UserCreateRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -906,18 +948,24 @@ def create_user(
     )
     db.add(user)
     db.flush()
-    db.add(
-        OperationLog(
-            user_id=admin.id,
-            action="CREATE_USER",
-            resource="User",
-            details=json.dumps({"target_user_id": user.id, "username": user.username}),
-            username=admin.username,
-            role=admin.role,
-            entity_type="user",
-            entity_id=user.id,
-            description="创建用户",
-        )
+    append_audit_event(
+        db,
+        request=request,
+        actor=admin,
+        event_category="security",
+        result="success",
+        source="web",
+        module_code="users",
+        action_code="CREATE_USER",
+        resource="User",
+        entity_type="user",
+        entity_id=user.id,
+        object_ref=user.username,
+        description="创建用户",
+        details={
+            "target_user_id": user.id,
+            "after": _user_admin_audit_snapshot(user),
+        },
     )
     db.commit()
     db.refresh(user)
@@ -928,10 +976,12 @@ def create_user(
 def update_user(
     user_id: int,
     payload: UserUpdateRequest,
+    request: Request,
     admin: User = Depends(RoleChecker(["admin"])),
     db: Session = Depends(get_db),
 ) -> dict:
     user = _get_user_or_404(db, user_id)
+    before = _user_admin_audit_snapshot(user)
     changes = payload.model_dump(exclude_unset=True)
     removes_admin_access = (
         (changes.get("role") is not None and changes["role"] != "admin")
@@ -973,18 +1023,40 @@ def update_user(
             user.must_change_password = True
     if {"role", "is_active", "password"}.intersection(changes):
         user.auth_version += 1
-    db.add(
-        OperationLog(
-            user_id=admin.id,
-            action="UPDATE_USER",
-            resource="User",
-            details=json.dumps({"target_user_id": user.id, "fields": sorted(changes)}),
-            username=admin.username,
-            role=admin.role,
-            entity_type="user",
-            entity_id=user.id,
-            description="更新用户",
-        )
+    after = _user_admin_audit_snapshot(user)
+    changed_fields = sorted(
+        field_name
+        for field_name in before
+        if before[field_name] != after[field_name]
+    )
+    password_changed = (
+        "password" in changes and changes["password"] is not None
+    )
+    append_audit_event(
+        db,
+        request=request,
+        actor=admin,
+        event_category="security",
+        result=(
+            "success"
+            if changed_fields or password_changed
+            else "no_change"
+        ),
+        source="web",
+        module_code="users",
+        action_code="UPDATE_USER",
+        resource="User",
+        entity_type="user",
+        entity_id=user.id,
+        object_ref=user.username,
+        description="更新用户",
+        details={
+            "target_user_id": user.id,
+            "changed_fields": changed_fields,
+            "credential_changed": password_changed,
+            "before": before,
+            "after": after,
+        },
     )
     db.commit()
     db.refresh(user)
@@ -1276,13 +1348,12 @@ def reset_password(
     target.password_hash = hash_password(payload.new_password)
     target.must_change_password = True
     target.auth_version += 1
-    db.add(
-        _password_log(
-            actor=admin,
-            target=target,
-            action="RESET_PASSWORD",
-            request=request,
-        )
+    _password_log(
+        db,
+        actor=admin,
+        target=target,
+        action="RESET_PASSWORD",
+        request=request,
     )
     db.commit()
     db.refresh(target)

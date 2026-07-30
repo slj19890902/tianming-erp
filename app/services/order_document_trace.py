@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -36,6 +38,9 @@ from app.models.warehouse_inventory import (
     InventoryReservation,
     WarehouseLocation,
 )
+from app.services.order_business_status import BUSINESS_STATUS_LABELS
+
+logger = logging.getLogger(__name__)
 
 
 STAGE_LABELS = {
@@ -56,7 +61,6 @@ STATUS_LABELS = {
     "confirmed": "已确认",
     "posted": "已生效",
     "reversed": "已撤销",
-    "active": "有效",
     "partial": "部分执行",
     "released": "已释放",
     "consumed": "已用完",
@@ -67,6 +71,8 @@ STATUS_LABELS = {
     "settled": "已结清",
     "completed": "已完成",
     "ready": "待生产",
+    "closed": "已关闭",
+    "frozen": "已冻结",
 }
 
 MOVEMENT_LABELS = {
@@ -81,6 +87,22 @@ MOVEMENT_LABELS = {
     "release_reserve": "释放预占",
     "consume": "出库扣减",
     "reverse_consume": "撤销出库",
+}
+
+CONTEXT_STATUS_LABELS = {
+    ("order", "sales_order", "pending_production"): "待生产",
+    ("order", "sales_order", "waiting_material"): "待收料",
+    ("order", "sales_order", "production"): "生产中",
+    ("order", "sales_order", "delivered"): "已送完",
+    ("production", "production_task", "waiting_material"): "待收料",
+    ("production", "production_task", "pending"): "待生产",
+    ("production", "production_task", "completed"): "已完成",
+    ("production", "production_task", "not_required"): "无需生产",
+    ("inventory", "inventory_movement", "reserve"): "预占库存",
+    ("inventory", "inventory_movement", "release_reserve"): "释放预占",
+    ("inventory", "inventory_reservation", "active"): "预占中",
+    ("inventory", "inventory_lot", "active"): "正常在库",
+    ("inventory", "inventory_lot", "frozen"): "已冻结",
 }
 
 
@@ -99,10 +121,39 @@ def _quantity(value: Any) -> int | float | None:
     return int(number) if number.is_integer() else number
 
 
-def _status_label(status: str | None) -> str:
+def _status_label(
+    status: str | None,
+    *,
+    stage: str,
+    source_type: str,
+) -> str:
     if not status:
         return "未记录"
-    return STATUS_LABELS.get(status, status)
+    contextual = CONTEXT_STATUS_LABELS.get((stage, source_type, status))
+    if contextual:
+        return contextual
+    if stage == "inventory" and source_type == "inventory_movement":
+        movement_label = MOVEMENT_LABELS.get(status)
+        if movement_label:
+            return movement_label
+    if stage == "order" and source_type == "sales_order":
+        business_label = BUSINESS_STATUS_LABELS.get(status)
+        if business_label:
+            return business_label
+    generic = STATUS_LABELS.get(status)
+    if generic:
+        return generic
+    if re.search(r"[\u3400-\u9fff]", status):
+        return status
+    logger.warning(
+        "order trace encountered an unmapped status",
+        extra={
+            "trace_stage": stage,
+            "trace_source_type": source_type,
+            "trace_status": status,
+        },
+    )
+    return "状态待确认"
 
 
 def build_order_item_document_trace(
@@ -157,7 +208,11 @@ def build_order_item_document_trace(
                 "source_id": source_id,
                 "document_number": document_number,
                 "status": status,
-                "status_label": _status_label(status),
+                "status_label": _status_label(
+                    status,
+                    stage=stage,
+                    source_type=source_type,
+                ),
                 "occurred_at": _api_datetime(occurred_at),
                 "business_date": _api_date(business_date),
                 "quantity": _quantity(quantity),
@@ -493,7 +548,7 @@ def build_order_item_document_trace(
                 in {"release_reserve", "reverse_consume"},
                 details={
                     "movement_label": MOVEMENT_LABELS.get(
-                        movement.movement_type, movement.movement_type
+                        movement.movement_type, "库存动作待确认"
                     )
                 },
             )
@@ -668,6 +723,11 @@ def build_order_item_document_trace(
                     "lot_number": lot.lot_number,
                     "inventory_type": lot.inventory_type,
                     "status": lot.status,
+                    "status_label": _status_label(
+                        lot.status,
+                        stage="inventory",
+                        source_type="inventory_lot",
+                    ),
                     "quantity_available": lot.quantity_available,
                     "quantity_reserved": lot.quantity_reserved,
                     "quantity_consumed": lot.quantity_consumed,

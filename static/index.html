@@ -2297,6 +2297,7 @@
                         <td class="cell-actions">
                           <div class="toolbar-group">
                             <button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button>
+                            <button class="btn small" @click="openOrderGroupDetail(group)">详情</button>
                             <button v-if="canEditOrders" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
                           </div>
                         </td>
@@ -2341,13 +2342,7 @@
                                     <td>{{ item.completion_date || "-" }}</td>
                                     <td class="toolbar-group">
                                       <button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button>
-                                      <button class="btn small" @click="openOrderDetail(row)">详情</button>
                                       <button v-if="canEditOrders" class="btn small" @click="openOrderItem(row,item)">编辑</button>
-                                      <a v-if="item.drawing_file || item.product_drawing_file"
-                                         href="#"
-                                         class="btn small"
-                                         @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)"
-                                         title="查看图纸">图纸</a>
                                     </td>
                                   </tr>
                                 </template>
@@ -4720,7 +4715,7 @@
                 <tbody><tr v-for="lot in orderTrace.current_inventory" :key="lot.lot_id">
                   <td>{{ lot.lot_number }}</td><td>{{ lot.inventory_type === "finished" ? "成品" : "半成品" }}</td>
                   <td>{{ lot.quantity_available }} / {{ lot.quantity_reserved }} {{ lot.unit === "boxes" ? "只" : "张" }}</td>
-                  <td>{{ lot.location_code || lot.location_name || "-" }}</td><td>{{ lot.pallet_code || "-" }}</td><td>{{ lot.status }}</td>
+                  <td>{{ lot.location_code || lot.location_name || "-" }}</td><td>{{ lot.pallet_code || "-" }}</td><td>{{ lot.status_label }}</td>
                 </tr></tbody>
               </table>
               <div class="section-title">真实单据时间线</div>
@@ -4736,6 +4731,74 @@
                 </tr></tbody>
               </table>
               <div v-if="orderTrace.events.length <= 1" class="muted" style="margin-top:10px">该明细目前尚无真实后续单据。</div>
+            </div>
+            <div v-else-if="modal.type === 'orderGroupDetail' && orderGroupDetail">
+              <div class="form-grid">
+                <div class="field"><label>客户</label><div>{{ orderGroupDetail.customer_name }}</div></div>
+                <div class="field"><label>客户单号</label><div>{{ orderGroupDetail.customer_po || "未填写客户单号" }}</div></div>
+                <div class="field"><label>底层订单</label><div>{{ orderGroupDetail.orders.length }} 张</div></div>
+                <div class="field"><label>存货编码</label><div>{{ orderGroupDetail.orders.reduce((total, order) => total + order.items.length, 0) }} 款</div></div>
+              </div>
+              <div class="section-title">整组订单详情</div>
+              <div v-for="order in orderGroupDetail.orders" :key="order.id" class="order-group-detail-card" style="margin-bottom:12px">
+                <div class="toolbar" style="margin-bottom:8px">
+                  <div>
+                    <strong class="sys-num">{{ displayOrderNumber(order) }}</strong>
+                    <span style="margin-left:10px">{{ order.order_date || "-" }} → {{ order.delivery_date || "-" }}</span>
+                    <span v-if="order.remark" class="muted" style="margin-left:10px">备注：{{ order.remark }}</span>
+                  </div>
+                  <div class="toolbar-group">
+                    <span v-if="canViewCosts" class="sensitive-price">金额 ¥ {{ money(order.total_amount) }}</span>
+                    <status-tag :value="orderDisplayStatusKey(order)"></status-tag>
+                  </div>
+                </div>
+                <table>
+                  <thead><tr>
+                    <th class="col-order-item-sequence">序号</th><th>明细系统单号</th>
+                    <th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th>
+                    <th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
+                    <th>报料尺寸</th><th>压线</th>
+                    <th v-if="!isWorkshop" class="sensitive-price">单价</th>
+                    <th v-if="!isWorkshop" class="sensitive-price">金额</th>
+                    <th>状态</th><th>图纸</th>
+                  </tr></thead>
+                  <tbody><tr v-for="item in order.items" :key="item.id">
+                    <td class="col-order-item-sequence">{{ item.item_sequence || "-" }}</td>
+                    <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}</td>
+                    <td>{{ plainProductText(item.snapshot_product_code) }}</td>
+                    <td :title="plainProductText(item.snapshot_product_name)" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
+                      {{ plainProductText(item.snapshot_product_name) }}
+                      <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
+                      <div v-if="hasBomComponents(item)" class="bom-preview-box">
+                        <div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div>
+                        <div class="bom-preview-list">
+                          <div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{{ item.snapshot_spec || "-" }}</td>
+                    <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
+                    <td>{{ item.snapshot_production_notes || "-" }}<div v-if="item.mold_location" class="status blue" style="margin-top:4px;white-space:normal">模具：{{ moldLocationText(item) }}</div></td>
+                    <td>{{ item.quantity }}</td>
+                    <td>{{ item.finished_inventory_reserved_qty || 0 }}</td>
+                    <td><strong>{{ item.production_required_qty }}</strong></td>
+                    <td style="font-size:12px;white-space:nowrap">{{ formatReportDims(item) }}</td>
+                    <td style="font-size:12px">{{ formatCrease(item) }}</td>
+                    <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.unit_price) }}</td>
+                    <td v-if="!isWorkshop" class="sensitive-price">{{ money(item.subtotal) }}</td>
+                    <td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td>
+                    <td>
+                      <a v-if="item.drawing_file || item.product_drawing_file"
+                         href="#"
+                         class="btn small"
+                         @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)">
+                        {{ item.drawing_file ? "订单图纸" : "常用箱图纸" }}
+                      </a>
+                      <span v-else class="muted">-</span>
+                    </td>
+                  </tr></tbody>
+                </table>
+              </div>
             </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <div class="form-grid">
@@ -6126,7 +6189,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderTrace:null, drawingFile:null,
+            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, drawingFile:null,
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
@@ -6827,26 +6890,27 @@
           groupedOrderRows() {
             this.filters.orderView = "customer_po";
             const keyByView = {
-              customer_po: (row) => row.customer_po || `NO_PO_${row.id}`,
+              customer_po: (row) => String(row.customer_po || "").trim() || `NO_PO_${row.id}`,
               customer_name: (row) => `${row.customer_name || "-"}#${row.customer_id || row.id}`,
               order_date: (row) => row.order_date || "未设置日期",
             };
             const labelByView = {
-              customer_po: (row) => row.customer_po || "未填写客户单号",
+              customer_po: (row) => String(row.customer_po || "").trim() || "未填写客户单号",
               customer_name: (row) => row.customer_name || "-",
               order_date: (row) => row.order_date || "未设置日期",
             };
             const groups = new Map();
             for (const row of this.orders) {
               const key = `${this.filters.orderView}:${keyByView[this.filters.orderView](row)}`;
-              const normalizedKey = this.filters.orderView === "customer_po" && row.customer_po
+              const normalizedCustomerPo = String(row.customer_po || "").trim();
+              const normalizedKey = this.filters.orderView === "customer_po" && normalizedCustomerPo
                 ? `${key}:${row.customer_id}`
                 : key;
               if (!groups.has(normalizedKey)) {
                 groups.set(normalizedKey, {
                   key: normalizedKey,
-                  label: row.customer_po || "未填写客户单号",
-                  customer_po: row.customer_po || null,
+                  label: labelByView[this.filters.orderView](row),
+                  customer_po: normalizedCustomerPo || null,
                   customer_id: row.customer_id || null,
                   customer_name: row.customer_name || null,
                   order_date: row.order_date || null,
@@ -16155,6 +16219,32 @@
           },
           toggleOrderGroup(key) { this.expandedOrders[key] = !this.expandedOrders[key]; },
           toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
+          async openOrderGroupDetail(group) {
+            const anchor = group?.orders?.[0];
+            if (!anchor?.id || !group?.customer_id) {
+              this.showToast("订单汇总信息不完整，请刷新后重试", true);
+              return;
+            }
+            const params = {
+              customer_id: group.customer_id,
+              anchor_order_id: group.orders[0].id,
+              scope: this.filters.orderScope || "active",
+            };
+            if (String(group.customer_po || "").trim()) {
+              params.customer_po = String(group.customer_po).trim();
+            }
+            try {
+              const { data } = await axios.get("/api/orders/group-detail", { params });
+              this.orderGroupDetail = data;
+              this.modal = {
+                type:"orderGroupDetail",
+                title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
+              };
+            } catch (error) {
+              this.orderGroupDetail = null;
+              this.showToast(`订单整组详情加载失败：${this.errorMessage(error)}`, true);
+            }
+          },
           async openOrderDetail(row) {
             const { data } = await axios.get(`/api/orders/${row.id}`);
             this.orderDetail = data;

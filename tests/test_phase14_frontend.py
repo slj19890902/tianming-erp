@@ -43,17 +43,28 @@ def test_order_page_hides_old_system_name_and_uses_tm_search_copy() -> None:
     assert "ruida" not in orders
     assert "瑞达" not in orders
     assert "filters.orderKeyword" in orders
-    assert "openOrderDetail" in orders
-    assert "modal.type === 'orderDetail'" in INDEX
-    assert "系统单号" in orders
-    assert "明细单号" in orders
+    assert "openOrderDetail" not in orders
+    assert "openOrderGroupDetail" in orders
+    assert "modal.type === 'orderGroupDetail'" in INDEX
+    assert "明细系统单号" not in orders
+    assert "明细系统单号" in INDEX
 
 
 def test_order_page_uses_customer_po_group_as_default() -> None:
     assert 'orderView:"customer_po"' in INDEX
     assert "groupedOrderRows" in INDEX
-    assert "customer_po: (row) => row.customer_po || `NO_PO_${row.id}`" in INDEX
-    assert "const normalizedKey = this.filters.orderView === \"customer_po\" && row.customer_po" in INDEX
+    assert (
+        'customer_po: (row) => String(row.customer_po || "").trim() || `NO_PO_${row.id}`'
+        in INDEX
+    )
+    assert (
+        'const normalizedCustomerPo = String(row.customer_po || "").trim()'
+        in INDEX
+    )
+    assert (
+        'const normalizedKey = this.filters.orderView === "customer_po" && normalizedCustomerPo'
+        in INDEX
+    )
 
 
 def test_order_page_uses_redesigned_group_table_columns() -> None:
@@ -171,7 +182,7 @@ def test_new_order_form_has_dedicated_code_width_classes() -> None:
 
 def test_requisition_page_keeps_pending_and_submitted_views() -> None:
     assert "待报料 {{ requisitionPending.length }}" in INDEX
-    assert "已报料/已入库 {{ requisitionItems.length }}" in INDEX
+    assert "已报料/已入库<span v-if=\"requisitionReportedLoaded\"> {{ requisitionReportedTotal }}</span>" in INDEX
     assert '@click="openSupplierRequisitionDraft()"' in INDEX
 
 

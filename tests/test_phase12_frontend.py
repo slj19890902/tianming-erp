@@ -156,12 +156,15 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     assert ':disabled="productionBusy"' in INDEX
 
 
-def test_n029_production_menu_is_between_incoming_and_warehouse() -> None:
+def test_n029_production_menu_follows_the_order_and_warehouse_workbench() -> None:
+    group_start = INDEX.index('{ key:"workbench", label:"订单与仓库"')
+    group_end = INDEX.index("]}", group_start)
+    group = INDEX[group_start:group_end]
+    assert group.index('key:"incoming"') < group.index('key:"warehouse"')
     menu_start = INDEX.index("menus() {")
     menu_end = INDEX.index("];", menu_start)
     menu = INDEX[menu_start:menu_end]
-    assert menu.index('key: "incoming"') < menu.index('key: "production"')
-    assert menu.index('key: "production"') < menu.index('key: "warehouse"')
+    assert menu.index('key: "workbench"') < menu.index('key: "production"')
 
 
 def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll() -> None:
@@ -289,11 +292,14 @@ def test_order_list_n026_search_sort_finished_view_and_detail_columns() -> None:
         "item.total_estimated_cost",
         "itemBusinessStatusKey(item)",
         "item.completion_date",
-        "openOrderDetail(row)",
+        "openOrderTrace(row,item)",
+        "openOrderItem(row,item)",
     ]
     positions = [detail_block.index(field) for field in ordered_fields]
     assert positions == sorted(positions)
     assert "item.item_order_number" not in detail_block
+    assert "openOrderDetail(row)" not in detail_block
+    assert '@click="openOrderGroupDetail(group)"' in INDEX
 
 
 def test_order_search_highlights_visible_text_without_html_injection() -> None:
@@ -489,7 +495,7 @@ def test_order_pdf_multi_candidate_picker_uses_full_width_subrow() -> None:
     main_row = table_block[main_row_start:main_row_end]
     candidate_row = table_block[main_row_end:edit_row_start]
 
-    assert column_count == 10
+    assert column_count == 7
     assert 'class="order-item-sub-row import-product-candidate-row"' in candidate_row
     assert ':colspan="pdfDraftColumnCount(draft)"' in candidate_row
     assert "匹配候选（只选择常用箱，不会改写 PDF 存货编码）" in candidate_row

@@ -47,8 +47,11 @@ def floor3_app(tmp_path):
             must_change_password=False,
             customer_access_mode="selected",
         )
-        tianhua = Customer(name="苏州天华超净科技股份有限公司")
-        other = Customer(name="其他客户")
+        tianhua = Customer(
+            name="苏州天华超净科技股份有限公司",
+            customer_code="TH",
+        )
+        other = Customer(name="其他客户", customer_code="QT")
         db.add_all([admin, scoped, tianhua, other])
         db.flush()
         db.add(UserCustomerScope(user_id=scoped.id, customer_id=tianhua.id))
@@ -379,6 +382,88 @@ def test_floor3_locations_customer_filter_enforces_scope_and_positive_id(
             params={"customer_id": 0},
         )
         assert invalid.status_code == 422, invalid.text
+
+
+def test_floor3_customer_abbreviation_search_is_scoped_and_does_not_auto_select(
+    floor3_app,
+) -> None:
+    app, ids, _factory = floor3_app
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        for location_id, customer_id, product_id, code in [
+            (
+                ids["locations"][0],
+                ids["tianhua"],
+                ids["products"][0],
+                "ABBR-TIANHUA",
+            ),
+            (
+                ids["locations"][1],
+                ids["other"],
+                ids["other_product"],
+                "ABBR-QT",
+            ),
+        ]:
+            created = client.post(
+                "/api/warehouse/pallets",
+                json={
+                    "location_id": location_id,
+                    "items": [_matched_item(customer_id, product_id, code)],
+                },
+            )
+            assert created.status_code == 201, created.text
+
+        references = client.get("/api/warehouse/references/customers")
+        assert references.status_code == 200, references.text
+        assert {
+            (row["id"], row["customer_code"]) for row in references.json()["items"]
+        } == {
+            (ids["tianhua"], "TH"),
+            (ids["other"], "QT"),
+        }
+
+        tianhua = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"q": "TH"},
+        )
+        assert tianhua.status_code == 200, tianhua.text
+        assert ids["locations"][0] in {
+            row["id"] for row in tianhua.json()["items"]
+        }
+        other = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"q": "QT"},
+        )
+        assert other.status_code == 200, other.text
+        assert [row["id"] for row in other.json()["items"]] == [
+            ids["locations"][1]
+        ]
+        client.post("/api/auth/logout")
+
+        _login(client, "floor3-scoped")
+        scoped_references = client.get("/api/warehouse/references/customers")
+        assert scoped_references.status_code == 200, scoped_references.text
+        assert scoped_references.json()["items"] == [
+            {
+                "id": ids["tianhua"],
+                "name": "苏州天华超净科技股份有限公司",
+                "customer_code": "TH",
+            }
+        ]
+        allowed = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"q": "TH"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert [row["id"] for row in allowed.json()["items"]] == [
+            ids["locations"][0]
+        ]
+        denied = client.get(
+            "/api/warehouse/floor3/locations",
+            params={"q": "QT"},
+        )
+        assert denied.status_code == 200, denied.text
+        assert denied.json() == {"items": [], "total": 0}
 
 
 def test_floor3_search_requires_explicit_candidate_choice(floor3_app) -> None:

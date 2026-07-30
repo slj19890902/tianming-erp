@@ -286,10 +286,34 @@ def test_floor3_f_group_uses_rack_level_visualization_without_horizontal_scroll(
     assert "transform:rotateX(2deg) rotateY(-2deg)" in WAREHOUSE_HTML
     assert ".floor3-area-slot-map.floor3-f-group-map{height:auto!important;min-height:0;overflow-y:auto;overflow-x:hidden" in WAREHOUSE_HTML
     assert 'area==="F"?floor3FGroupHtml(rows)' in WAREHOUSE_HTML
-    assert 'panel.innerHTML=area==="F"?floor3FSecondaryHtml(rows)' in WAREHOUSE_HTML
+    assert '$("floor3FSecondaryPanel").innerHTML=floor3FSecondaryHtml(rows)' in WAREHOUSE_HTML
     assert "F 区概览" not in WAREHOUSE_HTML
     assert ".floor3-area-focus.floor3-f-mode{grid-template-columns:repeat(2,minmax(0,1fr))}" in WAREHOUSE_HTML
     assert 'classList.toggle("floor3-f-mode",areaCode==="F")' in WAREHOUSE_HTML
+
+
+def test_floor3_f_detail_moves_away_from_the_selected_rack_without_duplicate_panels() -> None:
+    assert WAREHOUSE_HTML.count('id="floor3AreaLeftContextHost"') == 1
+    assert WAREHOUSE_HTML.count('id="floor3FSecondaryPanel"') == 1
+    assert WAREHOUSE_HTML.count('id="floor3ContextPanels"') == 1
+    assert WAREHOUSE_HTML.count('id="floor3DetailPanel"') == 1
+    assert "function floor3DetailSide()" in WAREHOUSE_HTML
+    detail_side = WAREHOUSE_HTML.split("function floor3DetailSide(){", 1)[1].split(
+        "function floor3PlaceContextPanels", 1
+    )[0]
+    assert 'area==="F3"||area==="F4"' in detail_side
+    placement = WAREHOUSE_HTML.split("function floor3PlaceContextPanels(){", 1)[1].split(
+        "function floor3AreaStats", 1
+    )[0]
+    assert 'leftSide?$("floor3AreaLeftContextHost"):$("floor3AreaDetailRail")' in placement
+    assert "host.appendChild(panels)" in placement
+    assert '$("floor3AreaSlotMap").classList.toggle("hidden",leftSide)' in placement
+    assert '$("floor3FSecondaryPanel").classList.toggle("hidden"' in placement
+    assert "floor3PlaceContextPanels()" in WAREHOUSE_HTML.split(
+        "function renderFloor3Detail(){", 1
+    )[1].split("function closeFloor3Detail", 1)[0]
+    area_rule = WAREHOUSE_HTML.split(".floor3-area-focus{", 1)[1].split("}", 1)[0]
+    assert "overflow-x:hidden" in area_rule
 
 
 def test_floor3_d1_has_two_ground_pallet_rows_and_one_second_level_rack_row() -> None:
@@ -862,6 +886,7 @@ def test_floor3_dynamic_bind_customers_are_redrawn_after_customer_load() -> None
         "function clearFinishedProductSelection", 1
     )[0]
     assert 'state.customers=data.items' in loader
+    assert 'x.customer_code?`${x.customer_code} · ${x.name}`:x.name' in loader
     assert "syncFloor3BindRows();renderFloor3BindRows()" in loader
     assert loader.index("state.customers=data.items") < loader.index("renderFloor3BindRows()")
     assert 'class="floor3-bind-customer" onchange="scheduleFloor3BindCandidateSearch(' in WAREHOUSE_HTML
@@ -884,13 +909,21 @@ def test_floor3_bind_candidate_search_is_guarded_debounced_and_stale_safe() -> N
     assert "requestId!==row.requestId" in search
     assert "limit:30" in search
     assert "criteriaChanged" in sync
+    assert "row.searched=false" in sync
     assert "row.candidates=[];row.candidate=null" in sync
+    assert "if(criteriaChanged)renderFloor3BindSelected(index)" in sync
     assert 'oninput="scheduleFloor3BindCandidateSearch(' in WAREHOUSE_HTML
+    assert 'data-floor3-bind-selected="${index}"' in WAREHOUSE_HTML
+    assert "renderFloor3BindCandidateResults(index)" in search
+    assert "row.searched=true" in search
+    assert "renderFloor3BindRows()" not in search
+    assert "没有找到匹配产品，已保留输入内容" in WAREHOUSE_HTML
 
 
 def test_floor3_bind_panel_lives_in_detail_rail_and_closes_independently() -> None:
     assert WAREHOUSE_HTML.count('id="floor3BindPanel"') == 1
-    assert '<div id="floor3AreaDetailRail"><div id="floor3DetailPanel"' in WAREHOUSE_HTML
+    assert '<div id="floor3ContextPanels">' in WAREHOUSE_HTML
+    assert WAREHOUSE_HTML.index('id="floor3ContextPanels"') < WAREHOUSE_HTML.index('id="floor3DetailPanel"')
     assert WAREHOUSE_HTML.index('id="floor3AreaDetailRail"') < WAREHOUSE_HTML.index('id="floor3BindPanel"')
     assert 'id="floor3BindClose"' in WAREHOUSE_HTML
     close_bind = WAREHOUSE_HTML.split("function closeFloor3BindPanel(){", 1)[1].split(

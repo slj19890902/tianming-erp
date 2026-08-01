@@ -322,6 +322,32 @@ def test_selected_scope_filters_finance_reads_and_redacts_costs(
             ).status_code
             == 403
         )
+        report = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={"year": 2026, "statement_month": "2026-07"},
+        )
+        assert report.status_code == 200
+        assert {
+            row["customer_id"]
+            for row in report.json()["selected_month_customers"]
+        } == {ids["customer_a"]}
+        assert {
+            row["customer_id"]
+            for row in report.json()["customer_balances"]
+        } == {ids["customer_a"]}
+        assert "total_gross_profit" not in report.text
+        assert "bank_account" not in report.text
+        assert (
+            client.get(
+                "/api/finance/reports/monthly-yearly",
+                params={
+                    "year": 2026,
+                    "statement_month": "2026-07",
+                    "customer_id": ids["customer_b"],
+                },
+            ).status_code
+            == 403
+        )
 
         detail = client.get(f"/api/finance/statements/{ids['statement_a']}")
         assert detail.status_code == 200
@@ -516,6 +542,19 @@ def test_empty_selected_scope_returns_zero_lists_and_forbids_resources(
         assert settled_history.status_code == 200
         assert settled_history.json()["total"] == 0
         assert settled_history.json()["items"] == []
+        report = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={"year": 2026, "statement_month": "2026-07"},
+        )
+        assert report.status_code == 200
+        assert report.json()["selected_month_customers"] == []
+        assert report.json()["customer_balances"] == []
+        assert report.json()["yearly_summary"]["record_count"] == 0
+        assert all(
+            Decimal(str(row["reconciled_receivable_amount"]))
+            == Decimal("0.00")
+            for row in report.json()["monthly"]
+        )
         assert client.get("/api/finance/statement-customers").json()["items"] == []
         invoices = client.get("/api/finance/invoices")
         assert invoices.status_code == 200

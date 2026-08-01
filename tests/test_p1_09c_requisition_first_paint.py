@@ -12,7 +12,10 @@ def _method_block(name: str, next_name: str) -> str:
 
 def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
     load_page = _method_block("async loadPage(page", "refreshCurrent()")
-    requisition_load = _method_block("async loadRequisition()", "async loadReportedDocuments()")
+    requisition_load = _method_block(
+        "async loadRequisition({skipAutoRelease=false}={})",
+        "async loadReportedDocuments()",
+    )
 
     assert 'if (page === "requisition") await this.loadRequisition();' in load_page
     assert "loadCustomerOptions(force)" not in load_page.split('if (page === "requisition")')[1].split('if (page === "incoming")')[0]
@@ -48,8 +51,8 @@ def test_requisition_materials_are_deferred_without_hiding_existing_merge_suppli
     assert "async ensureRequisitionMaterials()" in INDEX
     assert "await this.ensureRequisitionMaterials();" in material_change
     assert '@focus="ensureRequisitionMaterials()"' in INDEX
-    assert "const pendingGroupSuppliers" in INDEX
-    assert "pendingGroupSuppliers" in INDEX
+    assert "row.supplier_name && !materialSupplierSelectOptions.includes(row.supplier_name)" in INDEX
+    assert "（历史值）" in INDEX
     assert 'v-model="group.supplier_name" @focus="ensureRequisitionMaterials()"' in INDEX
     assert "!materialSupplierSelectOptions.includes(group.supplier_name)" in INDEX
 

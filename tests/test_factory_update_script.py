@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.27"
-    assert APP_VERSION_NAME == "报料库存生产审计补齐"
+    assert APP_VERSION == "v0.22.28"
+    assert APP_VERSION_NAME == "等候报料与录单接续策略"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "供应商报料单" in item and "结构化操作记录" in item
+        "本次更新｜" in item and "批量暂缓" in item and "等候队列" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "库存调整" in item and "前后数量" in item
+        "本次更新｜" in item and "新建订单" in item and "逐条判断" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "系统版本" in item and "v0.22.27" in item
+        "如何验证｜" in item and "系统版本" in item and "v0.22.28" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "普通账号" in item and "后端拒绝" in item
+        "如何验证｜" in item and "恢复" in item and "不自动生成" in item
         for item in current_release
     )
     assert any(

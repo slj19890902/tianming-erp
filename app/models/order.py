@@ -25,6 +25,7 @@ from app.models import Base
 if TYPE_CHECKING:
     from app.models.customer_contract import CustomerContract
     from app.models.product import Product
+    from app.models.requisition import RequisitionHold
 
 
 class OrderDailySequence(Base):
@@ -49,6 +50,10 @@ class Order(Base):
         CheckConstraint(
             "payment_status IN ('unpaid', 'paid')",
             name="ck_sales_orders_payment_status",
+        ),
+        CheckConstraint(
+            "requisition_strategy IN ('normal', 'wait_previous_batch')",
+            name="ck_sales_orders_requisition_strategy",
         ),
         UniqueConstraint("order_number", name="uq_sales_orders_order_number"),
         UniqueConstraint("source_contract_id", name="uq_sales_orders_source_contract_id"),
@@ -81,6 +86,9 @@ class Order(Base):
         String(20),
         default="unpaid",
         nullable=False,
+    )
+    requisition_strategy: Mapped[str] = mapped_column(
+        String(30), default="normal", server_default="normal", nullable=False
     )
     total_amount: Mapped[Decimal] = mapped_column(
         Numeric(14, 2),
@@ -318,6 +326,12 @@ class OrderItem(Base):
 
     order: Mapped["Order"] = relationship(back_populates="items")
     product: Mapped["Product"] = relationship(foreign_keys=[product_id])
+    requisition_holds: Mapped[list["RequisitionHold"]] = relationship(
+        back_populates="order_item",
+        foreign_keys="RequisitionHold.order_item_id",
+        passive_deletes=True,
+        order_by="RequisitionHold.id",
+    )
 
 
 class OrderItemNumberSequence(Base):

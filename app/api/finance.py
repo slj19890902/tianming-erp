@@ -25,6 +25,7 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.core.time_contract import beijing_today
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -1662,6 +1663,279 @@ def pending_statement_customer_summaries(
         summary["delivery_ids"].append(int(row["delivery_id"]))
 
     return list(summaries.values())
+
+
+def _money_value(value: object) -> Decimal:
+    return Decimal(str(value or 0)).quantize(MONEY, rounding=ROUND_HALF_UP)
+
+
+@router.get("/current-customer-months")
+def current_customer_months(
+    statement_month: str | None = None,
+    balance_type: str | None = None,
+    customer_id: int | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return the current finance workbench grouped by customer and month.
+
+    A customer can have several statements in the same month.  The grouping is
+    therefore performed before pagination and uses the stable customer id, not
+    the display name or the possibly stale statement status.
+    """
+
+    selected_month = statement_month or beijing_today().strftime("%Y-%m")
+    try:
+        _statement_period(selected_month, 1)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    allowed_balance_types = {
+        None,
+        "pending_reconciliation",
+        "pending_invoice",
+        "pending_payment",
+    }
+    if balance_type not in allowed_balance_types:
+        raise HTTPException(status_code=400, detail="未知的财务待办筛选")
+
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+        visible_customer_ids = {customer_id}
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return {
+            "statement_month": selected_month,
+            "as_of": beijing_today(),
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "summary": {
+                "customer_count": 0,
+                "pending_reconciliation_amount": Decimal("0.00"),
+                "reconciled_receivable_amount": Decimal("0.00"),
+                "pending_invoice_amount": Decimal("0.00"),
+                "invoiced_amount": Decimal("0.00"),
+                "pending_payment_amount": Decimal("0.00"),
+                "settled_amount": Decimal("0.00"),
+            },
+            "items": [],
+        }
+
+    try:
+        pending_rows = pending_statement_customer_summaries(
+            db,
+            statement_month=selected_month,
+            visible_customer_ids=visible_customer_ids,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    statement_query = (
+        select(
+            Statement.id,
+            Statement.statement_number,
+            Statement.customer_id,
+            Customer.name.label("customer_name"),
+            Customer.statement_cycle_start_day,
+            Statement.statement_month,
+            Statement.total_receivable,
+            Statement.invoiced_amount,
+            Statement.settled_amount,
+            Statement.status,
+            Statement.created_at,
+        )
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.statement_month == selected_month)
+        .order_by(Customer.name, Customer.id, Statement.id.desc())
+    )
+    if visible_customer_ids is not None:
+        statement_query = statement_query.where(
+            Statement.customer_id.in_(visible_customer_ids)
+        )
+    statement_rows = db.execute(statement_query).mappings().all()
+
+    grouped: dict[int, dict] = {}
+    for pending in pending_rows:
+        pending_customer_id = int(pending["customer_id"])
+        grouped[pending_customer_id] = {
+            "customer_id": pending_customer_id,
+            "customer_name": pending["customer_name"],
+            "statement_month": selected_month,
+            "statement_cycle_start_day": int(
+                pending["statement_cycle_start_day"] or 1
+            ),
+            "period_start": pending["period_start"],
+            "period_end": pending["period_end"],
+            "pending_reconciliation_count": int(pending["pending_count"] or 0),
+            "blocked_reconciliation_count": int(pending["blocked_count"] or 0),
+            "pending_reconciliation_item_count": int(
+                pending["pending_item_count"] or 0
+            ),
+            "pending_reconciliation_amount": _money_value(pending["amount"]),
+            "reconciled_receivable_amount": Decimal("0.00"),
+            "invoiced_amount": Decimal("0.00"),
+            "settled_amount": Decimal("0.00"),
+            "pending_invoice_amount": Decimal("0.00"),
+            "pending_payment_amount": Decimal("0.00"),
+            "statement_count": 0,
+            "status_anomaly_count": 0,
+            "statements": [],
+        }
+
+    for statement in statement_rows:
+        statement_customer_id = int(statement["customer_id"])
+        cycle_day = int(statement["statement_cycle_start_day"] or 1)
+        period_start, period_end = _statement_period(selected_month, cycle_day)
+        group = grouped.setdefault(
+            statement_customer_id,
+            {
+                "customer_id": statement_customer_id,
+                "customer_name": statement["customer_name"],
+                "statement_month": selected_month,
+                "statement_cycle_start_day": cycle_day,
+                "period_start": period_start,
+                "period_end": period_end,
+                "pending_reconciliation_count": 0,
+                "blocked_reconciliation_count": 0,
+                "pending_reconciliation_item_count": 0,
+                "pending_reconciliation_amount": Decimal("0.00"),
+                "reconciled_receivable_amount": Decimal("0.00"),
+                "invoiced_amount": Decimal("0.00"),
+                "settled_amount": Decimal("0.00"),
+                "pending_invoice_amount": Decimal("0.00"),
+                "pending_payment_amount": Decimal("0.00"),
+                "statement_count": 0,
+                "status_anomaly_count": 0,
+                "statements": [],
+            },
+        )
+        receivable = _money_value(statement["total_receivable"])
+        invoiced = _money_value(statement["invoiced_amount"])
+        settled = _money_value(statement["settled_amount"])
+        invoice_balance = max(receivable - invoiced, Decimal("0.00"))
+        payment_balance = max(receivable - settled, Decimal("0.00"))
+        status_is_settled = statement["status"] == "settled"
+        balance_is_settled = payment_balance == Decimal("0.00")
+        if status_is_settled != balance_is_settled:
+            group["status_anomaly_count"] += 1
+        group["statement_count"] += 1
+        group["reconciled_receivable_amount"] = _money_value(
+            group["reconciled_receivable_amount"] + receivable
+        )
+        group["invoiced_amount"] = _money_value(
+            group["invoiced_amount"] + invoiced
+        )
+        group["settled_amount"] = _money_value(
+            group["settled_amount"] + settled
+        )
+        group["pending_invoice_amount"] = _money_value(
+            group["pending_invoice_amount"] + invoice_balance
+        )
+        group["pending_payment_amount"] = _money_value(
+            group["pending_payment_amount"] + payment_balance
+        )
+        group["statements"].append(
+            {
+                "id": int(statement["id"]),
+                "statement_number": statement["statement_number"],
+                "customer_id": statement_customer_id,
+                "customer_name": statement["customer_name"],
+                "statement_month": statement["statement_month"],
+                "total_receivable": receivable,
+                "invoiced_amount": invoiced,
+                "settled_amount": settled,
+                "pending_invoice_amount": invoice_balance,
+                "pending_payment_amount": payment_balance,
+                "status": statement["status"],
+                "created_at": statement["created_at"],
+            }
+        )
+
+    items: list[dict] = []
+    for group in grouped.values():
+        has_reconciliation = (
+            group["pending_reconciliation_count"]
+            + group["blocked_reconciliation_count"]
+            > 0
+        )
+        has_invoice = group["pending_invoice_amount"] > 0
+        has_payment = group["pending_payment_amount"] > 0
+        if not (has_reconciliation or has_invoice or has_payment):
+            continue
+        if balance_type == "pending_reconciliation" and not has_reconciliation:
+            continue
+        if balance_type == "pending_invoice" and not has_invoice:
+            continue
+        if balance_type == "pending_payment" and not has_payment:
+            continue
+        if has_reconciliation:
+            primary_action = "reconcile"
+        elif has_invoice:
+            primary_action = "invoice"
+        else:
+            primary_action = "payment"
+        group["primary_action"] = primary_action
+        group["primary_action_blocked"] = bool(
+            primary_action == "reconcile"
+            and group["pending_reconciliation_count"] == 0
+            and group["blocked_reconciliation_count"] > 0
+        )
+        items.append(group)
+
+    action_rank = {"reconcile": 0, "invoice": 1, "payment": 2}
+    items.sort(
+        key=lambda row: (
+            action_rank[row["primary_action"]],
+            str(row["customer_name"]),
+            int(row["customer_id"]),
+        )
+    )
+    total = len(items)
+    summary = {
+        "customer_count": total,
+        "pending_reconciliation_amount": _money_value(
+            sum(
+                (row["pending_reconciliation_amount"] for row in items),
+                Decimal("0.00"),
+            )
+        ),
+        "reconciled_receivable_amount": _money_value(
+            sum(
+                (row["reconciled_receivable_amount"] for row in items),
+                Decimal("0.00"),
+            )
+        ),
+        "pending_invoice_amount": _money_value(
+            sum(
+                (row["pending_invoice_amount"] for row in items),
+                Decimal("0.00"),
+            )
+        ),
+        "invoiced_amount": _money_value(
+            sum((row["invoiced_amount"] for row in items), Decimal("0.00"))
+        ),
+        "pending_payment_amount": _money_value(
+            sum(
+                (row["pending_payment_amount"] for row in items),
+                Decimal("0.00"),
+            )
+        ),
+        "settled_amount": _money_value(
+            sum((row["settled_amount"] for row in items), Decimal("0.00"))
+        ),
+    }
+    start = (page - 1) * page_size
+    return {
+        "statement_month": selected_month,
+        "as_of": beijing_today(),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": summary,
+        "items": items[start : start + page_size],
+    }
 
 
 @router.get("/pending_statements")

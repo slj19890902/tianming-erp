@@ -201,6 +201,13 @@ def test_customer_statement_cycle_start_day_round_trip_through_head(
     monkeypatch.setenv("ERP_DATABASE_PATH", str(database_path))
     monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("ERP_SECRET_KEY", "customer-statement-cycle-round-trip")
+    # This test uses a throw-away SQLite file and intentionally exercises a
+    # full historical downgrade.  N031 correctly refuses that operation in a
+    # real environment unless the operational acknowledgement is explicit.
+    monkeypatch.setenv(
+        "N031_AUTH_VERSION_DOWNGRADE_CONFIRM",
+        "DOWNTIME_COMPLETE_AND_SESSION_SECRET_ROTATED",
+    )
     project_root = Path(__file__).resolve().parents[1]
     config = Config(str(project_root / "alembic.ini"))
     current_head = ScriptDirectory.from_config(config).get_current_head()

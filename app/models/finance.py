@@ -131,6 +131,11 @@ class Statement(Base):
             "status IN ('unsettled', 'settled')",
             name="ck_finance_statements_status",
         ),
+        CheckConstraint(
+            "confirmation_status IN ('draft', 'confirmed', 'cancelled')",
+            name="ck_finance_statements_confirmation_status",
+        ),
+        CheckConstraint("version >= 1", name="ck_finance_statements_version"),
         UniqueConstraint(
             "statement_number",
             name="uq_finance_statements_number",
@@ -174,6 +179,23 @@ class Statement(Base):
         default="unsettled",
         nullable=False,
     )
+    confirmation_status: Mapped[str] = mapped_column(
+        String(20),
+        default="draft",
+        server_default="draft",
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
+    confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -257,6 +279,14 @@ class Invoice(Base):
             "invoice_amount > 0",
             name="ck_finance_invoices_amount_positive",
         ),
+        CheckConstraint(
+            "invoice_status IN ('issued', 'voided')",
+            name="ck_finance_invoices_status",
+        ),
+        CheckConstraint(
+            "source IN ('legacy_manual', 'invoice_task')",
+            name="ck_finance_invoices_source",
+        ),
         UniqueConstraint("invoice_number", name="uq_finance_invoices_number"),
         Index("ix_finance_invoices_statement_id", "statement_id"),
     )
@@ -272,6 +302,36 @@ class Invoice(Base):
         Numeric(14, 2),
         nullable=False,
     )
+    invoice_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_invoice_tasks.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+    seller_entity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("invoice_seller_entities.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    net_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    invoice_status: Mapped[str] = mapped_column(
+        String(20),
+        default="issued",
+        server_default="issued",
+        nullable=False,
+    )
+    source: Mapped[str] = mapped_column(
+        String(30),
+        default="legacy_manual",
+        server_default="legacy_manual",
+        nullable=False,
+    )
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

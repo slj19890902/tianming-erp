@@ -55,6 +55,12 @@ customer_file_summary.json
 !static/assets/logo.ico
 !static/factory_maps/assets/
 !static/factory_maps/assets/*.webp
+
+# FIN-001: a verified blank tax template is a versioned application resource,
+# never a customer export or business artifact.
+!app/resources/
+!app/resources/invoice_tax_templates/
+!app/resources/invoice_tax_templates/发票开具项目信息导入模板.xlsx
 qa-screenshots/
 qa_screenshots/
 migration-reports/

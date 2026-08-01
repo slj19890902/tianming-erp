@@ -27,6 +27,10 @@ from app.api.deliveries import (
 )
 from app.api.dashboard import router as dashboard_router
 from app.api.finance import router as finance_router
+from app.api.invoice_tasks import (
+    customer_router as invoice_customer_router,
+    router as invoice_tasks_router,
+)
 from app.api.incoming import router as incoming_router
 from app.api.master_data_versions import router as master_data_versions_router
 from app.api.materials import router as materials_router
@@ -504,6 +508,24 @@ def create_app() -> FastAPI:
             finance_router,
             prefix="/api/finance",
             tags=["finance"],
+        )
+    if not any(
+        route.path == "/api/finance/invoice-tasks"
+        for route in application.routes
+    ):
+        application.include_router(
+            invoice_tasks_router,
+            prefix="/api/finance",
+            tags=["invoice-tasks"],
+        )
+    if not any(
+        route.path == "/api/customers/{customer_id}/invoice-profile"
+        for route in application.routes
+    ):
+        application.include_router(
+            invoice_customer_router,
+            prefix="/api/customers",
+            tags=["customer-invoice-profiles"],
         )
     if not any(route.path == "/api/dashboard/kpi" for route in application.routes):
         application.include_router(

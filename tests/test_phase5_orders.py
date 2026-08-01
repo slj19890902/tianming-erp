@@ -359,6 +359,219 @@ def test_product_default_cutting_mode_is_saved_and_frozen_into_new_order(
     assert _purchase_qty(100, 0, "一开一") == 100
 
 
+def test_half_slotted_odd_width_preview_freezes_into_order_and_requisition(
+    order_api_app,
+) -> None:
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        preview = client.post(
+            "/api/master/products/box-type-recommendation",
+            json={
+                "box_style": "半开槽",
+                "length_mm": 300,
+                "width_mm": 201,
+                "height_mm": 100,
+                "splice_mode": "double",
+                "flap_mm": 30,
+                "crease_type": "压线",
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        recommendation = preview.json()
+        assert (
+            recommendation["report_length_mm"],
+            recommendation["report_width_mm"],
+            recommendation["crease_left_mm"],
+            recommendation["crease_middle_mm"],
+            recommendation["crease_right_mm"],
+        ) == (531, 201, 101, 100, 0)
+        assert recommendation["pieces_per_box"] == 2
+
+        created_product = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "HALF-ODD-201",
+                "customer_material_code": "HALF-ODD-201",
+                "product_name": "半开槽奇数宽金样",
+                "box_category": "normal",
+                "box_style": recommendation["box_style"],
+                "length_mm": 300,
+                "width_mm": 201,
+                "height_mm": 100,
+                "splice_mode": recommendation["splice_mode"],
+                "pieces_per_box": recommendation["pieces_per_box"],
+                "flap_mm": recommendation["flap_mm"],
+                "report_length_mm": recommendation["report_length_mm"],
+                "report_width_mm": recommendation["report_width_mm"],
+                "crease_type": recommendation["crease_type"],
+                "crease_left_mm": recommendation["crease_left_mm"],
+                "crease_middle_mm": recommendation["crease_middle_mm"],
+                "crease_right_mm": recommendation["crease_right_mm"],
+            },
+        )
+        assert created_product.status_code == 201, created_product.text
+        product = created_product.json()
+
+        created_order = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "PO-HALF-ODD-201",
+                "order_date": "2026-08-01",
+                "delivery_date": "2026-08-08",
+                "items": [
+                    {"product_id": product["id"], "quantity": 10, "unit_price": "1.00"}
+                ],
+            },
+        )
+        assert created_order.status_code == 201, created_order.text
+        item = created_order.json()["items"][0]
+        assert item["snapshot_splice_mode"] == "double"
+        assert item["snapshot_pieces_per_box"] == 2
+        assert item["snapshot_report_length_mm"] == 531
+        assert item["snapshot_report_width_mm"] == 201
+        assert (
+            item["snapshot_crease_left_mm"],
+            item["snapshot_crease_middle_mm"],
+            item["snapshot_crease_right_mm"],
+        ) == (101, 100, 0)
+
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        row = next(
+            candidate
+            for candidate in pending.json()["items"]
+            if candidate["item_id"] == item["id"]
+        )
+        assert row["required_piece_qty"] == 20
+        assert row["requisition_qty"] == 20
+        assert int(row["suggested_cardboard_len"]) == 531
+        assert int(row["suggested_cardboard_width"]) == 201
+
+
+def test_order_only_cutting_mode_edit_normalizes_structure_without_rewriting_product(
+    order_api_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        created_product = client.post(
+            "/api/master/products",
+            json={
+                "customer_id": 1,
+                "product_code": "INNER-CUT-ORDER",
+                "customer_material_code": "INNER-CUT-ORDER",
+                "product_name": "订单单独开料方式",
+                "box_category": "normal",
+                "box_style": "模切内盒",
+                "report_length_mm": 575,
+                "report_width_mm": 550,
+                "crease_type": "净料",
+                "default_cutting_mode": "一开二",
+            },
+        )
+        assert created_product.status_code == 201, created_product.text
+        product = created_product.json()
+        created_order = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "PO-INNER-CUT-ORDER",
+                "order_date": "2026-08-01",
+                "delivery_date": "2026-08-08",
+                "items": [
+                    {"product_id": product["id"], "quantity": 100, "unit_price": "1.00"}
+                ],
+            },
+        )
+        assert created_order.status_code == 201, created_order.text
+        item = created_order.json()["items"][0]
+        edited = client.put(
+            f"/api/orders/items/{item['id']}",
+            json={
+                "quantity": 100,
+                "unit_price": "1.00",
+                "product_code": item["snapshot_product_code"],
+                "product_name": item["snapshot_product_name"],
+                "material": item["snapshot_material"],
+                "specification": item["snapshot_spec"],
+                "box_style": "模切内盒",
+                "snapshot_splice_mode": "double",
+                "snapshot_pieces_per_box": 2,
+                "snapshot_flap_mm": 30,
+                "snapshot_report_length_mm": 575,
+                "snapshot_report_width_mm": 550,
+                "snapshot_crease_type": "净料",
+                "snapshot_crease_left_mm": 10,
+                "snapshot_crease_middle_mm": 20,
+                "snapshot_crease_right_mm": 30,
+                "special_process": "一开三",
+                "sync_product": False,
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        body = edited.json()
+        assert body["snapshot_splice_mode"] == "single"
+        assert body["snapshot_pieces_per_box"] == 1
+        assert body["snapshot_flap_mm"] is None
+        assert body["special_process"] == "一开三"
+        assert body["snapshot_crease_type"] == "净料"
+        assert body["snapshot_crease_left_mm"] is None
+        assert body["snapshot_crease_middle_mm"] is None
+        assert body["snapshot_crease_right_mm"] is None
+
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        row = next(
+            candidate
+            for candidate in pending.json()["items"]
+            if candidate["item_id"] == item["id"]
+        )
+        assert row["cutting_mode"] == "一开三"
+        assert row["requisition_qty"] == 34
+
+    with session_factory() as session:
+        saved_item = session.get(OrderItem, item["id"])
+        saved_product = session.get(Product, product["id"])
+        assert saved_item.special_process == "一开三"
+        assert saved_product.default_cutting_mode == "一开二"
+
+
+def test_order_item_box_style_change_requires_explicit_common_box_sync(
+    order_api_app,
+) -> None:
+    app, _ = order_api_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/orders",
+            json={**_payload(), "items": [_payload()["items"][0]]},
+        )
+        assert created.status_code == 201, created.text
+        item = created.json()["items"][0]
+        rejected = client.put(
+            f"/api/orders/items/{item['id']}",
+            json={
+                "quantity": item["quantity"],
+                "unit_price": str(item["unit_price"]),
+                "product_code": item["snapshot_product_code"],
+                "product_name": item["snapshot_product_name"],
+                "material": item["snapshot_material"],
+                "specification": item["snapshot_spec"],
+                "box_style": "半开槽箱",
+                "sync_product": False,
+            },
+        )
+
+    assert rejected.status_code == 400
+    assert "更改箱型时请勾选同步常用箱" in rejected.json()["detail"]
+
+
 def test_default_cutting_mode_is_limited_to_die_cut_inner_box_and_partition(
     order_api_app,
 ) -> None:

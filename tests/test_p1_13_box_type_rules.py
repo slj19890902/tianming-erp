@@ -157,7 +157,7 @@ def test_surround_and_full_flap_use_confirmed_width_and_splice_rules() -> None:
     ) == (300, 100, 300)
 
 
-def test_half_slotted_even_width_is_supported_but_odd_width_fails_closed() -> None:
+def test_half_slotted_odd_width_uses_one_upward_rounded_half_flap() -> None:
     even = recommend_box_type(
         box_style="半开槽箱",
         length_mm=300,
@@ -174,16 +174,41 @@ def test_half_slotted_even_width_is_supported_but_odd_width_fails_closed() -> No
     ) == (100, 100, 0)
     assert even["pieces_per_box"] == 2
 
-    odd = recommend_box_type(
+    odd_single = recommend_box_type(
         box_style="半开槽",
         length_mm=300,
         width_mm=201,
         height_mm=100,
+        splice_mode="single",
         flap_mm=30,
     )
-    assert odd["auto_calculated"] is False
-    assert odd["manual_required"] is True
-    assert "奇数宽" in odd["message"]
+    assert odd_single["auto_calculated"] is True
+    assert odd_single["manual_required"] is False
+    assert (
+        odd_single["report_length_mm"],
+        odd_single["report_width_mm"],
+        odd_single["crease_left_mm"],
+        odd_single["crease_middle_mm"],
+        odd_single["crease_right_mm"],
+        odd_single["pieces_per_box"],
+    ) == (1032, 201, 101, 100, 0, 1)
+
+    odd_double = recommend_box_type(
+        box_style="半开槽箱",
+        length_mm=300,
+        width_mm=201,
+        height_mm=100,
+        splice_mode="double",
+        flap_mm=30,
+    )
+    assert (
+        odd_double["report_length_mm"],
+        odd_double["report_width_mm"],
+        odd_double["crease_left_mm"],
+        odd_double["crease_middle_mm"],
+        odd_double["crease_right_mm"],
+        odd_double["pieces_per_box"],
+    ) == (531, 201, 101, 100, 0, 2)
 
 
 def test_liner_can_use_length_width_only_and_never_gets_flap_or_splice() -> None:
@@ -257,6 +282,20 @@ def test_product_payload_normalizes_known_types_but_preserves_unknown_manual_val
     assert no_flap.flap_mm is None
     assert no_flap.default_cutting_mode == "一开三"
 
+    manual_die_cut = _product_payload(
+        box_style="模切内盒",
+        splice_mode="double",
+        pieces_per_box=2,
+        flap_mm=30,
+        default_cutting_mode="一开三",
+        crease_type="净料",
+        report_length_mm=575,
+        report_width_mm=550,
+    )
+    assert manual_die_cut.default_cutting_mode == "一开三"
+    assert manual_die_cut.report_length_mm == 575
+    assert manual_die_cut.report_width_mm == 550
+
     unknown = _product_payload(
         box_style="历史自定义箱型",
         splice_mode="double",
@@ -318,6 +357,24 @@ def test_quotation_recommendation_uses_shared_a1_rule_and_preserves_manual_value
     assert manual["report_length_mm"] == 1040
     assert manual["report_width_mm"] == 306
     assert manual["crease_type"] == "其他"
+
+    half_slotted = _quotation_report_values(
+        _quotation_item("半开槽箱", 300, 201, 100),
+        ConvertPayload(
+            product_code="HALF-SLOTTED-GOLDEN",
+            splice_mode="double",
+            flap_mm=30,
+        ),
+    )
+    assert (
+        half_slotted["report_length_mm"],
+        half_slotted["report_width_mm"],
+        half_slotted["crease_left_mm"],
+        half_slotted["crease_middle_mm"],
+        half_slotted["crease_right_mm"],
+        half_slotted["splice_mode"],
+        half_slotted["pieces_per_box"],
+    ) == (531, 201, 101, 100, 0, "double", 2)
 
 
 def test_order_snapshot_clears_known_no_flap_but_preserves_unknown_history() -> None:

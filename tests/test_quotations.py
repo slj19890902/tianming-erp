@@ -163,8 +163,8 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
             },
         )
         assert preview.status_code == 200
-        assert preview.json()["estimated_unit_cost"] == "1.8000"
-        assert preview.json()["suggested_unit_price"] == "2.2500"
+        assert preview.json()["estimated_unit_cost"] == "2.2620"
+        assert preview.json()["suggested_unit_price"] == "2.8275"
         changed_margin = client.post(
             "/api/quotations/preview",
             json={
@@ -177,7 +177,7 @@ def test_quotation_baseline_create_generate_accept_and_print(tmp_path):
                 "margin_rate": 25,
             },
         )
-        assert changed_margin.json()["suggested_unit_price"] == "2.4000"
+        assert changed_margin.json()["suggested_unit_price"] == "3.0160"
 
         created = client.post(
             f"/api/quotations?customer_id={customer_id}",

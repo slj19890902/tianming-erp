@@ -83,6 +83,37 @@ def test_unknown_and_manual_formula_types_fail_closed() -> None:
     )[1].split("applyBoxTypeRecommendation", 1)[0]
 
 
+def test_order_item_editor_reuses_box_type_capabilities_and_explicit_recommendation() -> None:
+    order_item = INDEX.split("modal.type === 'orderItem'", 1)[1].split(
+        "modal.type === 'stock'", 1
+    )[0]
+    assert '@change="onOrderItemBoxStyleChange"' in order_item
+    assert 'v-if="usesProductSplice(orderItemForm.box_style)"' in order_item
+    assert 'v-if="usesProductTongue(orderItemForm.box_style)"' in order_item
+    assert 'v-if="usesProductDefaultCuttingMode(orderItemForm.box_style)"' in order_item
+    assert 'productSupportedCuttingModes(orderItemForm.box_style)' in order_item
+    assert 'productSupportedCreaseTypes(orderItemForm.box_style)' in order_item
+    assert 'v-if="productSupportsCreaseSegments(orderItemForm.box_style)"' in order_item
+    assert '@click="reapplyOrderItemRecommendations"' in order_item
+    assert "async reapplyOrderItemRecommendations()" in INDEX
+    assert "await this.requestBoxTypeRecommendation({" in INDEX
+    assert "手工报料长宽已保留" in INDEX
+
+
+def test_order_item_box_change_only_normalizes_unsupported_fields() -> None:
+    method = INDEX.split("onOrderItemBoxStyleChange()", 1)[1].split(
+        "async reapplyOrderItemRecommendations()", 1
+    )[0]
+    assert "if (!this.usesProductSplice(form.box_style))" in method
+    assert "if (!this.usesProductTongue(form.box_style)) form.snapshot_flap_mm = null;" in method
+    assert "if (!this.usesProductDefaultCuttingMode(form.box_style)) form.special_process = \"一开一\";" in method
+    assert "form.snapshot_report_length_mm =" not in method
+    assert "form.snapshot_report_width_mm =" not in method
+    assert "form.sync_product = true;" in method
+    assert "订单编辑修改箱型并同步常用箱" in method
+    assert "productRequiresDimension(orderItemForm.box_style,'height_mm')" in INDEX
+
+
 def test_composite_a3_draft_uses_physical_source_identity() -> None:
     assert "bomSourceSelectionKey(component)" in INDEX
     assert '`component:${snapshotId}:${component?.component_type || "whole"}`' in INDEX

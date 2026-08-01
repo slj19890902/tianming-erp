@@ -499,6 +499,7 @@ class OrderItemUpdate(BaseModel):
     snapshot_splice_mode: str | None = None
     snapshot_pieces_per_box: int | None = None
     snapshot_flap_mm: int | None = None
+    special_process: str | None = Field(default=None, max_length=30)
     # v0.20.9: 订单编辑页中的常用箱生产字段；有关联产品时同事务同步。
     sync_product: bool = False
     product_expected_version: int | None = Field(default=None, ge=1)
@@ -3433,6 +3434,7 @@ def _production_meaning_changes(
         "snapshot_splice_mode",
         "snapshot_pieces_per_box",
         "snapshot_flap_mm",
+        "special_process",
     )
     for field_name in snapshot_fields:
         value = getattr(payload, field_name)
@@ -5262,6 +5264,26 @@ def update_order_item(
     effective_sync_product = bool(
         item.product_id and (payload.sync_product or material_changed)
     )
+    current_product = db.get(Product, item.product_id) if item.product_id else None
+    requested_box_code = box_type_code(payload.box_style)
+    current_box_code = box_type_code(current_product.box_style) if current_product else None
+    requested_box_style = (payload.box_style or "").strip()
+    current_box_style = (current_product.box_style or "").strip() if current_product else ""
+    box_style_changed = (
+        requested_box_code != current_box_code
+        if requested_box_code is not None or current_box_code is not None
+        else requested_box_style != current_box_style
+    )
+    if (
+        current_product is not None
+        and "box_style" in payload.model_fields_set
+        and box_style_changed
+        and not effective_sync_product
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="订单明细没有独立箱型字段；更改箱型时请勾选同步常用箱",
+        )
     product_change_reason: str | None = None
     if effective_sync_product:
         if not has_permission(user, "products.edit"):
@@ -5340,6 +5362,11 @@ def update_order_item(
             and payload.snapshot_splice_mode != item.snapshot_splice_mode
         ):
             sensitive_changes.append("拼版方式")
+        if (
+            payload.special_process is not None
+            and payload.special_process != item.special_process
+        ):
+            sensitive_changes.append("开料方式")
         product = db.get(Product, item.product_id)
         if (
             payload.box_style is not None
@@ -5425,6 +5452,54 @@ def update_order_item(
         payload.flute_type if payload.flute_type is not None else item.flute_type,
         detail_prefix="订单明细",
     )
+    structure_fields = {
+        "box_style",
+        "snapshot_splice_mode",
+        "snapshot_pieces_per_box",
+        "snapshot_flap_mm",
+        "snapshot_crease_type",
+        "special_process",
+    }
+    structure_touched = bool(structure_fields.intersection(payload.model_fields_set))
+    item_box_configuration: dict[str, object] | None = None
+    structure_product = current_product
+    if structure_touched:
+        prospective_box_style = (
+            payload.box_style
+            if "box_style" in payload.model_fields_set
+            else (structure_product.box_style if structure_product is not None else None)
+        )
+        try:
+            item_box_configuration = normalize_box_configuration(
+                box_style=prospective_box_style,
+                splice_mode=(
+                    payload.snapshot_splice_mode
+                    if "snapshot_splice_mode" in payload.model_fields_set
+                    else item.snapshot_splice_mode
+                ),
+                pieces_per_box=(
+                    payload.snapshot_pieces_per_box
+                    if "snapshot_pieces_per_box" in payload.model_fields_set
+                    else item.snapshot_pieces_per_box
+                ),
+                flap_mm=(
+                    payload.snapshot_flap_mm
+                    if "snapshot_flap_mm" in payload.model_fields_set
+                    else item.snapshot_flap_mm
+                ),
+                default_cutting_mode=(
+                    payload.special_process
+                    if "special_process" in payload.model_fields_set
+                    else item.special_process
+                ),
+                crease_type=(
+                    payload.snapshot_crease_type
+                    if "snapshot_crease_type" in payload.model_fields_set
+                    else item.snapshot_crease_type
+                ),
+            )
+        except BoxTypeRuleError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
     product_to_sync: Product | None = None
     prospective_product_layer: int | None = None
     prospective_product_flute: str | None = None
@@ -5594,6 +5669,7 @@ def update_order_item(
         "material_id": item.material_id,
         "supplier_name": item.snapshot_supplier_name,
         "specification": item.snapshot_spec,
+        "special_process": item.special_process,
     }
     quantity_delta = int(payload.quantity) - int(item.quantity or 0)
     _validate_existing_component_demands(
@@ -5703,6 +5779,16 @@ def update_order_item(
         item.snapshot_pieces_per_box = payload.snapshot_pieces_per_box
     if payload.snapshot_flap_mm is not None:
         item.snapshot_flap_mm = payload.snapshot_flap_mm
+    if item_box_configuration is not None:
+        item.snapshot_splice_mode = str(item_box_configuration["splice_mode"])
+        item.snapshot_pieces_per_box = int(item_box_configuration["pieces_per_box"])
+        item.snapshot_flap_mm = item_box_configuration["flap_mm"]
+        item.special_process = str(item_box_configuration["default_cutting_mode"])
+        item.snapshot_crease_type = item_box_configuration["crease_type"]
+        if item.snapshot_crease_type != "压线":
+            item.snapshot_crease_left_mm = None
+            item.snapshot_crease_middle_mm = None
+            item.snapshot_crease_right_mm = None
     if product_to_sync is not None:
         product = product_to_sync
         product_updates: dict[str, object] = {}
@@ -5725,15 +5811,6 @@ def update_order_item(
             value = getattr(payload, field_name)
             if value is not None:
                 add_product_update(field_name, value)
-        structure_touched = any(
-            value is not None
-            for value in (
-                payload.box_style,
-                payload.snapshot_splice_mode,
-                payload.snapshot_pieces_per_box,
-                payload.snapshot_flap_mm,
-            )
-        )
         if structure_touched:
             prospective_box_style = (
                 payload.box_style
@@ -5758,7 +5835,11 @@ def update_order_item(
                         if payload.snapshot_flap_mm is not None
                         else product.flap_mm
                     ),
-                    default_cutting_mode=product.default_cutting_mode,
+                    default_cutting_mode=(
+                        payload.special_process
+                        if "special_process" in payload.model_fields_set
+                        else product.default_cutting_mode
+                    ),
                     crease_type=(
                         payload.snapshot_crease_type
                         if payload.snapshot_crease_type is not None
@@ -5789,6 +5870,11 @@ def update_order_item(
                 "pieces_per_box"
             ]
             item.snapshot_flap_mm = box_configuration["flap_mm"]
+            if payload.sync_product and "special_process" in payload.model_fields_set:
+                add_product_update(
+                    "default_cutting_mode",
+                    box_configuration["default_cutting_mode"],
+                )
         for snapshot_field, product_field in report_field_mapping.items():
             if snapshot_field not in changed_report_fields:
                 continue
@@ -5849,6 +5935,7 @@ def update_order_item(
                 "layer_count": item.layer_count,
                 "flute_type": item.flute_type,
                 "production_notes": item.snapshot_production_notes,
+                "special_process": item.special_process,
                 "sync_product": effective_sync_product,
             },
             "source_reference": item.item_order_number or str(item.id),
@@ -5892,6 +5979,7 @@ def update_order_item(
         "snapshot_splice_mode": item.snapshot_splice_mode,
         "snapshot_pieces_per_box": item.snapshot_pieces_per_box,
         "snapshot_flap_mm": item.snapshot_flap_mm,
+        "special_process": item.special_process,
     }
 
 

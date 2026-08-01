@@ -236,6 +236,99 @@ def test_audit_view_is_admin_only_and_denial_is_recorded(
     assert json.loads(event.details)["path"] == "/api/audit/logs"
 
 
+def test_audit_detail_is_admin_only_and_denial_never_records_a_successful_view(
+    audit_api_context,
+) -> None:
+    from app.api.deps import effective_permissions
+    from app.models.access_control import UserPermissionOverride
+    from app.models.audit import OperationLog
+    from app.models.user import User
+
+    app, factory, ids = audit_api_context
+    with factory() as db:
+        boss = db.get(User, ids["boss"])
+        assert boss is not None
+        db.add(
+            UserPermissionOverride(
+                user_id=boss.id,
+                permission_code="audit.view",
+                is_allowed=True,
+                granted_by=ids["admin"],
+            )
+        )
+        db.commit()
+        assert "audit.view" not in effective_permissions(boss)
+        before = (
+            db.scalar(
+                select(func.count())
+                .select_from(OperationLog)
+                .where(OperationLog.action_code == "audit.detail.view")
+            )
+            or 0
+        )
+
+    with TestClient(app) as client:
+        _login(client, "audit-boss", "AuditBoss123!")
+        denied = client.get(f"/api/audit/logs/{ids['first']}")
+
+    assert denied.status_code == 403
+    with factory() as db:
+        after = (
+            db.scalar(
+                select(func.count())
+                .select_from(OperationLog)
+                .where(OperationLog.action_code == "audit.detail.view")
+            )
+            or 0
+        )
+        event = db.scalar(
+            select(OperationLog)
+            .where(
+                OperationLog.event_category == "security",
+                OperationLog.result == "denied",
+                OperationLog.action_code == "permission.denied",
+            )
+            .order_by(OperationLog.id.desc())
+        )
+    assert after == before
+    assert event is not None
+    assert json.loads(event.details)["path"] == f"/api/audit/logs/{ids['first']}"
+
+
+def test_missing_audit_detail_does_not_write_success_self_audit(
+    audit_api_context,
+) -> None:
+    from app.models.audit import OperationLog
+
+    app, factory, _ids = audit_api_context
+    with factory() as db:
+        before = (
+            db.scalar(
+                select(func.count())
+                .select_from(OperationLog)
+                .where(OperationLog.action_code == "audit.detail.view")
+            )
+            or 0
+        )
+
+    with TestClient(app) as client:
+        _login(client, "audit-admin", "AuditAdmin123!")
+        missing = client.get("/api/audit/logs/999999")
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "审计日志不存在"
+    with factory() as db:
+        after = (
+            db.scalar(
+                select(func.count())
+                .select_from(OperationLog)
+                .where(OperationLog.action_code == "audit.detail.view")
+            )
+            or 0
+        )
+    assert after == before
+
+
 def test_customer_scope_denial_is_recorded_without_weakening_403(
     audit_api_context,
 ) -> None:

@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from threading import Lock
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -81,6 +82,7 @@ from app.services.location_candidates import (
     list_operational_locations,
     operational_location_issue,
 )
+from app.services.audit_log import append_audit_event
 from app.services.stock_replenishment import (
     StockReplenishmentError,
     finished_product_quantity_summary,
@@ -2254,6 +2256,34 @@ def _require_supplier_order_customer_access(
 ) -> None:
     if not _supplier_order_is_visible(order, user, db):
         raise HTTPException(status_code=403, detail="无客户访问权限")
+
+
+def _supplier_order_audit_customers(
+    db: Session,
+    order: SupplierRequisitionOrder,
+) -> tuple[list[int], list[str]]:
+    """Return stable customer snapshots for one supplier requisition order."""
+    linked_ids = sorted(
+        {
+            int(item.order_item_id)
+            for item in order.items
+            if item.order_item_id is not None
+        }
+    )
+    if not linked_ids:
+        return [], []
+    rows = db.execute(
+        select(Customer.id, Customer.name)
+        .join(Order, Order.customer_id == Customer.id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .where(OrderItem.id.in_(linked_ids))
+        .distinct()
+        .order_by(Customer.id)
+    ).all()
+    return (
+        [int(customer_id) for customer_id, _name in rows],
+        [str(name) for _customer_id, name in rows],
+    )
 
 
 def _apply_supplier_order_scope(query, user: User, db: Session):
@@ -9344,17 +9374,88 @@ def create_supplier_orders_from_pending_selection(
         for group in touched_groups:
             group.status = "supplier_requisition_created"
         db.flush()
-        _audit(
+        batch_id = uuid4().hex
+        all_customer_ids: set[int] = set()
+        all_customer_names: set[str] = set()
+        for order in created_orders:
+            customer_ids, customer_names = _supplier_order_audit_customers(
+                db,
+                order,
+            )
+            all_customer_ids.update(customer_ids)
+            all_customer_names.update(customer_names)
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="requisition",
+                action_code="requisition.supplier_order.create",
+                legacy_action="CREATE_SUPPLIER_ORDER",
+                resource="Requisition",
+                actor=user,
+                entity_type="supplier_requisition_order",
+                entity_id=order.id,
+                object_ref=order.order_number,
+                customer_id=(customer_ids[0] if len(customer_ids) == 1 else None),
+                customer_name=(
+                    customer_names[0] if len(customer_names) == 1 else None
+                ),
+                batch_id=batch_id,
+                description="生成供应商报料单",
+                details={
+                    "supplier_name": order.supplier_name,
+                    "item_count": len(order.items),
+                    "customer_ids": customer_ids,
+                    "customer_names": customer_names,
+                    "order_item_ids": sorted(
+                        {
+                            int(item.order_item_id)
+                            for item in order.items
+                            if item.order_item_id is not None
+                        }
+                    ),
+                },
+            )
+        append_audit_event(
             db,
-            user=user,
-            action="CREATE_SUPPLIER_ORDERS_FROM_PENDING_SELECTION",
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="requisition",
+            action_code="requisition.supplier_orders.create_batch",
+            legacy_action="CREATE_SUPPLIER_ORDERS",
+            resource="Requisition",
+            actor=user,
+            entity_type="supplier_requisition_order_batch",
             entity_id=created_orders[0].id if created_orders else None,
+            object_ref=(
+                created_orders[0].order_number if created_orders else "empty"
+            ),
+            customer_id=(
+                next(iter(all_customer_ids))
+                if len(all_customer_ids) == 1
+                else None
+            ),
+            customer_name=(
+                next(iter(all_customer_names))
+                if len(all_customer_names) == 1
+                else None
+            ),
+            batch_id=batch_id,
+            description="待报料列表按供应商合并生成供应商报料单",
             details={
                 "supplier_order_ids": [order.id for order in created_orders],
-                "supplier_names": [order.supplier_name for order in created_orders],
+                "supplier_order_numbers": [
+                    order.order_number for order in created_orders
+                ],
+                "supplier_names": [
+                    order.supplier_name for order in created_orders
+                ],
                 "supplier_group_count": len(payload.supplier_groups),
+                "customer_ids": sorted(all_customer_ids),
+                "customer_names": sorted(all_customer_names),
             },
-            description="待报料列表按供应商合并生成供应商报料单",
         )
         db.commit()
         for order in created_orders:
@@ -10022,6 +10123,8 @@ def void_supplier_order(
     if order.status == "voided":
         raise HTTPException(status_code=400, detail="该报料单已作废")
 
+    before_status = order.status
+    affected_items: list[dict[str, object]] = []
     order.status = "voided"
     order.voided_at = beijing_now_naive()
 
@@ -10029,11 +10132,64 @@ def void_supplier_order(
         if item.order_item_id:
             oi = db.get(OrderItem, item.order_item_id)
             if oi and oi.requisition_status == "已报料":
+                affected_items.append(
+                    {
+                        "order_item_id": oi.id,
+                        "before_requisition_status": oi.requisition_status,
+                        "before_inventory_deducted_qty": int(
+                            oi.inventory_deducted_qty or 0
+                        ),
+                        "before_requisition_qty": (
+                            int(oi.requisition_qty)
+                            if oi.requisition_qty is not None
+                            else None
+                        ),
+                    }
+                )
                 oi.requisition_status = "未报料"
                 oi.inventory_deducted_qty = 0
                 oi.requisition_qty = None
                 oi.special_process = DEFAULT_CUTTING_MODE
 
-    db.commit()
+    try:
+        if isinstance(user, User):
+            customer_ids, customer_names = _supplier_order_audit_customers(
+                db,
+                order,
+            )
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="requisition",
+                action_code="requisition.supplier_order.void",
+                legacy_action="VOID_SUPPLIER_ORDER",
+                resource="Requisition",
+                actor=user,
+                entity_type="supplier_requisition_order",
+                entity_id=order.id,
+                object_ref=order.order_number,
+                customer_id=(
+                    customer_ids[0] if len(customer_ids) == 1 else None
+                ),
+                customer_name=(
+                    customer_names[0] if len(customer_names) == 1 else None
+                ),
+                description="作废供应商报料单并恢复关联订单待报料",
+                details={
+                    "before_status": before_status,
+                    "after_status": order.status,
+                    "voided_at": order.voided_at,
+                    "supplier_name": order.supplier_name,
+                    "customer_ids": customer_ids,
+                    "customer_names": customer_names,
+                    "affected_items": affected_items,
+                },
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(order)
     return _supplier_order_dict(order, db)

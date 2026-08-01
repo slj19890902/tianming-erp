@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import date
 from typing import Literal
 
@@ -19,10 +18,11 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
+from app.models.customer import Customer
 from app.models.order import Order, OrderItem
-from app.models.audit import OperationLog
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.user import User
+from app.services.audit_log import append_audit_event
 from app.services.production_workflow import (
     COMPLETED,
     NOT_REQUIRED,
@@ -162,6 +162,77 @@ def _require_task_customer_access(
         require_customer_access(customer_id, current_user=user, db=db)
 
 
+def _completion_customer_snapshots(
+    db: Session,
+    completions: list[ProductionCompletion] | tuple[ProductionCompletion, ...],
+) -> dict[int, tuple[int, str]]:
+    """Read only the customer identifiers needed by production audit events."""
+
+    completion_ids = [completion.id for completion in completions]
+    if not completion_ids:
+        return {}
+    rows = db.execute(
+        select(ProductionCompletion.id, Customer.id, Customer.name)
+        .join(OrderItem, OrderItem.id == ProductionCompletion.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Customer, Customer.id == Order.customer_id)
+        .where(ProductionCompletion.id.in_(completion_ids))
+    ).all()
+    return {
+        completion_id: (customer_id, customer_name)
+        for completion_id, customer_id, customer_name in rows
+    }
+
+
+def _append_production_completion_audit(
+    db: Session,
+    *,
+    user: User,
+    completion: ProductionCompletion,
+    customer_snapshot: tuple[int, str] | None,
+) -> None:
+    customer_id, customer_name = customer_snapshot or (None, None)
+    is_supplemental = completion.completion_type == "supplemental"
+    append_audit_event(
+        db,
+        event_category="business",
+        result="success",
+        source="web",
+        module_code="production",
+        action_code="production.completion.posted",
+        legacy_action=(
+            "SUPPLEMENT_PRODUCTION_COMPLETE"
+            if is_supplemental
+            else "COMPLETE_PRODUCTION"
+        ),
+        resource="ProductionCompletion",
+        actor=user,
+        entity_type="production_completion",
+        entity_id=completion.id,
+        object_ref=f"production_completion:{completion.id}",
+        customer_id=customer_id,
+        customer_name=customer_name,
+        batch_id=str(completion.batch_id),
+        description=("管理员补充生产确认" if is_supplemental else "确认生产完工"),
+        details={
+            "batch_id": completion.batch_id,
+            "task_id": completion.task_id,
+            "completion_type": completion.completion_type,
+            "initial_disposition": completion.initial_disposition,
+            "material_input_quantity": completion.material_input_quantity,
+            "planned_output_quantity": completion.planned_output_quantity,
+            "actual_output_quantity": completion.actual_output_quantity,
+            "defective_quantity": completion.defective_quantity,
+            "order_reserved_quantity": completion.order_reserved_quantity,
+            "direct_delivery_quantity": completion.direct_delivery_quantity,
+            "stock_quantity": completion.stock_quantity,
+            "surplus_finished_quantity": completion.surplus_finished_quantity,
+            "inventory_lot_id": completion.inventory_lot_id,
+            "warehouse_location_id": completion.warehouse_location_id,
+        },
+    )
+
+
 @router.get("/tasks")
 def get_production_tasks(
     task_status: Literal[
@@ -295,42 +366,59 @@ def post_completion_batch(
         for customer_id in batch_customer_ids(db, result.completions):
             require_customer_access(customer_id, current_user=user, db=db)
         if not result.replayed:
+            customer_snapshots = _completion_customer_snapshots(
+                db,
+                result.completions,
+            )
             for completion in result.completions:
-                db.add(
-                    OperationLog(
-                        user_id=user.id,
-                        action=(
-                            "SUPPLEMENT_PRODUCTION_COMPLETION"
-                            if completion.completion_type == "supplemental"
-                            else "COMPLETE_PRODUCTION"
-                        ),
-                        resource="ProductionCompletion",
-                        details=json.dumps(
-                            {
-                                "batch_id": result.batch.id,
-                                "task_id": completion.task_id,
-                                "completion_type": completion.completion_type,
-                                "material_input_quantity": completion.material_input_quantity,
-                                "planned_output_quantity": completion.planned_output_quantity,
-                                "actual_output_quantity": completion.actual_output_quantity,
-                                "defective_quantity": completion.defective_quantity,
-                                "order_reserved_quantity": completion.order_reserved_quantity,
-                                "stock_quantity": completion.stock_quantity,
-                                "surplus_finished_quantity": completion.surplus_finished_quantity,
-                            },
-                            ensure_ascii=False,
-                        ),
-                        username=user.username,
-                        role=user.role,
-                        entity_type="production_completion",
-                        entity_id=completion.id,
-                        description=(
-                            "管理员补充生产确认"
-                            if completion.completion_type == "supplemental"
-                            else "确认生产完工"
-                        ),
-                    )
+                _append_production_completion_audit(
+                    db,
+                    user=user,
+                    completion=completion,
+                    customer_snapshot=customer_snapshots.get(completion.id),
                 )
+            customer_ids = sorted(
+                {snapshot[0] for snapshot in customer_snapshots.values()}
+            )
+            customer_names = sorted(
+                {snapshot[1] for snapshot in customer_snapshots.values()}
+            )
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.completion.batch_posted",
+                legacy_action="COMPLETE_PRODUCTION_BATCH",
+                resource="ProductionCompletionBatch",
+                actor=user,
+                entity_type="production_completion_batch",
+                entity_id=result.batch.id,
+                object_ref=f"production_completion_batch:{result.batch.id}",
+                customer_id=(customer_ids[0] if len(customer_ids) == 1 else None),
+                customer_name=(
+                    customer_names[0] if len(customer_names) == 1 else None
+                ),
+                batch_id=str(result.batch.id),
+                description="批量确认生产完工",
+                details={
+                    "batch_id": result.batch.id,
+                    "completion_ids": [
+                        completion.id for completion in result.completions
+                    ],
+                    "task_ids": [
+                        completion.task_id for completion in result.completions
+                    ],
+                    "completion_types": [
+                        completion.completion_type
+                        for completion in result.completions
+                    ],
+                    "item_count": result.batch.item_count,
+                    "customer_ids": customer_ids,
+                    "customer_names": customer_names,
+                },
+            )
         completion_ids = [row.id for row in result.completions]
         db.commit()
         items = list_production_completions(
@@ -359,6 +447,9 @@ def post_completion_batch(
             status_code=409,
             detail="完工批次已被其他请求修改，请刷新后重试",
         ) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/completions/{completion_id}/stock-transfers")
@@ -386,6 +477,40 @@ def post_completion_stock_transfer(
             ),
             operator_id=user.id,
         )
+        if not result.replayed:
+            completion = db.get(ProductionCompletion, completion_id)
+            customer_snapshot = _completion_customer_snapshots(
+                db,
+                (completion,) if completion is not None else (),
+            ).get(completion_id)
+            snapshot_customer_id, snapshot_customer_name = (
+                customer_snapshot or (None, None)
+            )
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.stock_transfer.posted",
+                legacy_action="TRANSFER_PRODUCTION_STOCK",
+                resource="ProductionStockTransfer",
+                actor=user,
+                entity_type="production_stock_transfer",
+                entity_id=result.transfer.id,
+                object_ref=f"production_stock_transfer:{result.transfer.id}",
+                customer_id=snapshot_customer_id,
+                customer_name=snapshot_customer_name,
+                batch_id=(str(completion.batch_id) if completion is not None else None),
+                description="生产完工余货转入库存",
+                details={
+                    "completion_id": completion_id,
+                    "batch_id": completion.batch_id if completion is not None else None,
+                    "transfer_id": result.transfer.id,
+                    "inventory_lot_id": result.transfer.inventory_lot_id,
+                    "warehouse_location_id": result.transfer.warehouse_location_id,
+                },
+            )
         db.commit()
         rows = list_production_completions(
             db,
@@ -411,6 +536,9 @@ def post_completion_stock_transfer(
             status_code=409,
             detail="转库存记录已被其他请求修改，请刷新后重试",
         ) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/completions/{completion_id}/revert")
@@ -430,27 +558,45 @@ def revert_production_completion(
             operator_id=user.id,
             reason=payload.reason,
         )
-        db.add(
-            OperationLog(
-                user_id=user.id,
-                action="REVERT_PRODUCTION_COMPLETION",
-                resource="ProductionCompletion",
-                details=json.dumps(
-                    {
-                        "reason": payload.reason,
-                        "completion_id": completion_id,
-                        "stock_transfer_id": result.transfer.id if result.transfer else None,
-                        "inventory_lot_id": result.inventory_lot_id,
-                        "reversed_semi_movement_ids": list(result.reversed_semi_movement_ids),
-                    },
-                    ensure_ascii=False,
+        customer_snapshot = _completion_customer_snapshots(
+            db,
+            (result.completion,),
+        ).get(completion_id)
+        snapshot_customer_id, snapshot_customer_name = (
+            customer_snapshot or (None, None)
+        )
+        append_audit_event(
+            db,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="production",
+            action_code="production.completion.reverted",
+            legacy_action="REVERT_PRODUCTION_COMPLETION",
+            resource="ProductionCompletion",
+            actor=user,
+            entity_type="production_completion",
+            entity_id=completion_id,
+            object_ref=f"production_completion:{completion_id}",
+            customer_id=snapshot_customer_id,
+            customer_name=snapshot_customer_name,
+            batch_id=str(result.completion.batch_id),
+            description="管理员撤销生产确认并回到待生产确认",
+            details={
+                "reason": payload.reason,
+                "completion_id": completion_id,
+                "batch_id": result.completion.batch_id,
+                "stock_transfer_id": result.transfer.id if result.transfer else None,
+                "inventory_lot_id": result.inventory_lot_id,
+                "warehouse_location_id": (
+                    result.transfer.warehouse_location_id
+                    if result.transfer is not None
+                    else result.completion.warehouse_location_id
                 ),
-                username=user.username,
-                role=user.role,
-                entity_type="production_completion",
-                entity_id=completion_id,
-                description="管理员撤销生产确认并回到待生产确认",
-            )
+                "reversed_semi_movement_ids": list(
+                    result.reversed_semi_movement_ids
+                ),
+            },
         )
         db.commit()
         rows = list_production_completions(
@@ -474,3 +620,6 @@ def revert_production_completion(
             status_code=409,
             detail="生产或库存记录已被其他操作修改，请刷新后重试",
         ) from error
+    except Exception:
+        db.rollback()
+        raise

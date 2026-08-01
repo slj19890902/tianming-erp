@@ -205,7 +205,7 @@ function candidate(lotId, stock, yieldFactor=1, finished=false, source="signatur
 function part(candidates=[]) {{ return {{ candidates, manual_candidates:[], selected:candidates[0] || null, selected_candidates:candidates, allocations:[], skipped:false, unavailable_reason:"" }}; }}
 function line(quantity, semiCandidates=[], finishedCandidates=[]) {{ return {{ quantity, _inventory:{{ api_error:false, stale:false, finished:part(finishedCandidates), semi:{{ whole:part(semiCandidates), cover:part(), base:part() }} }} }}; }}
 const methods = sandbox.definition.methods;
-const context = {{ inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride, inventoryCandidateWarnings:methods.inventoryCandidateWarnings, isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate }};
+const context = {{ inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride, inventoryCandidateWarnings:methods.inventoryCandidateWarnings, isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate }};
 const shared = [line(50,[candidate(7,100)]), line(30,[candidate(7,100)]), line(30,[candidate(7,100)])];
 method.call(context, shared);
 const yielded = [line(1,[candidate(8,2,3)]), line(5,[candidate(8,2,3)])];
@@ -218,7 +218,7 @@ method.call(context, manual);
 const manualPlan = methods.buildReservationPlan.call(context, manual[0]);
 const finished = [line(4,[],[candidate(11,5,1,true)]), line(4,[],[candidate(11,5,1,true)])];
 method.call(context, finished);
-const decisionContext = {{ inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true, componentLabel:methods.componentLabel }};
+const decisionContext = {{ inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true, componentLabel:methods.componentLabel }};
 const apiError = line(1); apiError._inventory.api_error = true; apiError._inventory.error = "库存候选加载失败：网络错误";
 const incomplete = line(1); incomplete._inventory.semi.whole.unavailable_reason = "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品";
 const apiBlocked = methods.inventoryDecisionRequired.call(decisionContext, apiError);
@@ -247,6 +247,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
   sandbox.axios.post = async (url) => {{ requests.push(url); return {{data:{{items:[]}}}}; }};
   const fallbackLine = {{matched_product_id:99,quantity:2}};
   const loadContext = {{
+    inventoryPlanApplies:methods.inventoryPlanApplies,
     inventoryCustomerForLine:() => 5, newOrderInventoryState:methods.newOrderInventoryState,
     inventoryComponents:() => ["whole"], inventoryCandidatePayload:() => ({{board_length_mm:10,board_width_mm:20,material_code:"C4C",flute_type:"B"}}),
     inventoryPayloadUnavailableReason:methods.inventoryPayloadUnavailableReason, componentLabel:methods.componentLabel,
@@ -448,6 +449,7 @@ sandbox.axios.post = async () => ({{data:{{items:[generalSemi]}}}});
 const line = {{product_id:99,quantity:5}};
 let reallocations = 0;
 const context = {{
+  inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryCustomerForLine:() => 7,
   newOrderInventoryState:methods.newOrderInventoryState,
   inventoryComponents:() => ["whole"],
@@ -505,6 +507,7 @@ const part = {{candidates:[general],manual_candidates:[],selected:null,selected_
 const line = {{product_id:99,quantity:5,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:5}},finished:{{candidates:[],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false}},semi:{{whole:part,cover:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}},base:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}}}}}}}};
 let reallocations = 0;
 const context = {{
+  inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryComponents:() => ["whole"],
   inventoryCandidateWarnings:methods.inventoryCandidateWarnings,
   isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,

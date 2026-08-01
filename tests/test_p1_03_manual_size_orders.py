@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from tests.test_phase5_orders import _login, order_api_app
+
+
+def _inventory_counts(session) -> tuple[int, int, int]:
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryMovement,
+        InventoryReservation,
+    )
+
+    return (
+        session.scalar(select(func.count()).select_from(InventoryLot)) or 0,
+        session.scalar(select(func.count()).select_from(InventoryReservation)) or 0,
+        session.scalar(select(func.count()).select_from(InventoryMovement)) or 0,
+    )
 
 
 def _manual_payload(*, client_line_id: str = "manual-size-line-001") -> dict:
@@ -53,6 +68,8 @@ def test_manual_size_order_creates_versioned_a1_common_box_and_freezes_order(
 
     app, session_factory = order_api_app
     _make_fixture_material_valid_for_manual_a1(session_factory)
+    with session_factory() as session:
+        inventory_before = _inventory_counts(session)
     with TestClient(app) as client:
         _login(client)
         response = client.post("/api/orders", json=_manual_payload())
@@ -68,7 +85,7 @@ def test_manual_size_order_creates_versioned_a1_common_box_and_freezes_order(
         stored_item = session.get(OrderItem, item["id"])
         assert product is not None
         assert stored_item is not None
-        assert product.product_code.startswith("SZ-1-20260729-")
+        assert product.product_code.startswith(f"SZ-1-{date.today():%Y%m%d}-")
         assert product.product_code == product.customer_material_code
         assert product.product_name == "纸箱"
         assert product.box_style == "A1"
@@ -87,6 +104,7 @@ def test_manual_size_order_creates_versioned_a1_common_box_and_freezes_order(
                 MasterDataObjectVersion.object_id == product.id,
             )
         ) == 1
+        assert _inventory_counts(session) == inventory_before
 
 
 def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute(
@@ -146,6 +164,8 @@ def test_manual_size_product_rolls_back_with_failed_order_transaction(order_api_
 
     app, session_factory = order_api_app
     _make_fixture_material_valid_for_manual_a1(session_factory)
+    with session_factory() as session:
+        inventory_before = _inventory_counts(session)
     payload = _manual_payload(client_line_id="manual-rollback-line")
     payload["customer_po"] = "P1-03-ROLLBACK"
     payload["items"].append({"product_id": 999999, "quantity": 1, "unit_price": "1.00"})
@@ -158,6 +178,7 @@ def test_manual_size_product_rolls_back_with_failed_order_transaction(order_api_
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 0
         assert session.scalar(select(func.count()).select_from(Product)) == 2
+        assert _inventory_counts(session) == inventory_before
 
 
 def test_manual_size_does_not_relax_existing_product_or_pdf_guards(order_api_app) -> None:

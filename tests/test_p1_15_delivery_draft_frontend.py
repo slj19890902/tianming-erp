@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+MAIN = (ROOT / "main.py").read_text(encoding="utf-8")
 
 
 def _inline_script() -> str:
@@ -192,11 +193,74 @@ def test_first_save_keeps_delivery_modal_open_and_sets_editing_id() -> None:
 def test_draft_print_opens_only_print_page_without_dispatch_or_print_status_write() -> None:
     body = _method_body("printCurrentDeliveryDraft")
 
-    assert "window.open" in body
-    assert "/delivery-print.html?id=" in body
+    assert "openDeliveryPrintTab" in body
     assert "/dispatch" not in body
     assert "/printed" not in body
     assert "axios." not in body
+
+
+def test_delivery_print_tab_is_same_origin_isolated_and_reports_popup_blocking() -> None:
+    body = _method_body("openDeliveryPrintTab")
+
+    assert "/delivery-print.html?id=" in body
+    assert 'window.open(printPath, "_blank", "noopener")' in body
+    assert "BroadcastChannel" in body
+    assert "open_token=" in body
+    assert "window.location" not in body
+    assert "浏览器阻止了打印页面" in body
+
+    result = _run_node(
+        _vue_harness(
+            """
+const notices = [];
+const channels = new Map();
+sandbox.crypto = { randomUUID() { return "uat-print-token"; } };
+sandbox.BroadcastChannel = class {
+  constructor(name) { this.name = name; this.messages = []; channels.set(name, this); }
+  postMessage(message) { this.messages.push(message); }
+  close() { this.closed = true; }
+};
+sandbox.window.open = (url, target, features) => {
+  if (!url.includes("/delivery-print.html?id=27") || target !== "_blank" || features !== "noopener") {
+    throw new Error("print must use the same-origin route with native noopener");
+  }
+  const token = new URL(`http://uat.local${url}`).searchParams.get("open_token");
+  const channel = channels.get(`erp-delivery-print-${token}`);
+  channel.onmessage({ data: { type: "ready" } });
+  return null;
+};
+const context = { showToast(message, error) { notices.push([message, error]); } };
+(async () => {
+  const opened = await methods.openDeliveryPrintTab.call(context, 27, true);
+  if (!opened) throw new Error("ready acknowledgement must return a print session");
+  opened.activate();
+  const channel = channels.get("erp-delivery-print-uat-print-token");
+  if (!channel.messages.some(message => message.type === "activate")) {
+    throw new Error("print session must support deferred activation");
+  }
+  if (notices.length) throw new Error("successful open must not show an error");
+
+  sandbox.window.open = () => null;
+  sandbox.setTimeout = (callback) => { callback(); return 1; };
+  sandbox.crypto.randomUUID = () => "blocked-token";
+  const blocked = await methods.openDeliveryPrintTab.call(context, 28);
+  if (blocked !== null) throw new Error("unacknowledged popup must return null");
+  if (!notices.some(([message, error]) => message.includes("浏览器阻止了打印页面") && error === true)) {
+    throw new Error("blocked popup must show a clear message on the original page");
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        )
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_delivery_print_response_severs_opener_at_browser_boundary() -> None:
+    route_start = MAIN.index('@app.get("/delivery-print.html")')
+    route_end = MAIN.index("mount_static_files(app)", route_start)
+    route = MAIN[route_start:route_end]
+
+    assert '"Cross-Origin-Opener-Policy": "noopener-allow-popups"' in route
 
 
 def test_dirty_saved_delivery_requires_confirmation_before_closing() -> None:

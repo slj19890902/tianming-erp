@@ -60,6 +60,10 @@ from app.services.delivery_numbering import (
     DeliveryNumberingError,
     next_delivery_number,
 )
+from app.services.delivery_snapshots import (
+    build_order_delivery_snapshot,
+    ensure_order_delivery_snapshot,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
@@ -1805,12 +1809,11 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 Order.customer_po,
                 func.coalesce(
                     DeliveryItem.product_code_snapshot,
-                    Product.product_code,
+                    OrderItem.snapshot_product_code,
                 ).label("product_code"),
                 func.coalesce(
                     DeliveryItem.product_name_snapshot,
                     OrderItem.snapshot_product_name,
-                    Product.product_name,
                 ).label("product_name"),
                 func.coalesce(
                     DeliveryItem.specification_snapshot,
@@ -2083,7 +2086,19 @@ def _delivery_response(
     response_items: list[dict] = []
     total_actual_goods_quantity = 0
     for row in items:
-        mapping = row
+        mapping = dict(row)
+        mapping["product_code"] = (
+            str(mapping.get("product_code") or "").strip()
+            or "存货编码未登记"
+        )
+        mapping["product_name"] = (
+            str(mapping.get("product_name") or "").strip()
+            or "产品名称未登记"
+        )
+        mapping["specification"] = (
+            str(mapping.get("specification") or "").strip()
+            or "规格未登记"
+        )
         is_unordered = mapping.get("source_type") == "unordered_finished"
         order_item = (
             list_context["order_items"].get(mapping["order_item_id"])
@@ -3793,6 +3808,7 @@ def create_delivery(
                         delivery_id=delivery.id,
                         source_type="order",
                         order_item_id=order_item.id,
+                        **build_order_delivery_snapshot(db, order_item),
                         delivered_quantity=line.delivered_quantity,
                         ordered_quantity_snapshot=int(order_item.quantity or 0),
                         order_remaining_snapshot=order_remaining,
@@ -4056,6 +4072,7 @@ def dispatch_delivery(
             line.ordered_quantity_snapshot = int(order_item.quantity or 0)
             line.order_remaining_snapshot = order_remaining_before
             line.over_delivery_quantity = over_delivery
+            ensure_order_delivery_snapshot(db, line, order_item)
             component_capacity = (
                 None
                 if production_managed
@@ -4271,6 +4288,7 @@ def update_delivery(
                         delivery_id=delivery.id,
                         source_type="order",
                         order_item_id=order_item.id,
+                        **build_order_delivery_snapshot(db, order_item),
                         delivered_quantity=line.delivered_quantity,
                         ordered_quantity_snapshot=int(order_item.quantity or 0),
                         order_remaining_snapshot=order_remaining,
@@ -4902,12 +4920,11 @@ def get_delivery_print_data(
             ).label("customer_po"),
             func.coalesce(
                 DeliveryItem.product_code_snapshot,
-                Product.product_code,
+                OrderItem.snapshot_product_code,
             ).label("product_code"),
             func.coalesce(
                 DeliveryItem.product_name_snapshot,
                 OrderItem.snapshot_product_name,
-                Product.product_name,
             ).label("product_name"),
             func.coalesce(
                 DeliveryItem.specification_snapshot,
@@ -4942,6 +4959,15 @@ def get_delivery_print_data(
     print_items: list[dict] = []
     actual_goods_items: list[dict] = []
     for row in rows:
+        product_code = (
+            str(row.product_code or "").strip() or "存货编码未登记"
+        )
+        product_name = (
+            str(row.product_name or "").strip() or "产品名称未登记"
+        )
+        specification = (
+            str(row.specification or "").strip() or "规格未登记"
+        )
         is_unordered = row.source_type == "unordered_finished"
         order_item = (
             db.get(OrderItem, row.order_item_id)
@@ -4961,9 +4987,9 @@ def get_delivery_print_data(
                     "line_type": "parent",
                     "order_item_id": None,
                     "component_snapshot_id": None,
-                    "product_code": row.product_code,
-                    "product_name": row.product_name,
-                    "specification": row.specification,
+                    "product_code": product_code,
+                    "product_name": product_name,
+                    "specification": specification,
                     "unit": row.unit_snapshot or "PCS",
                     "quantity": int(row.quantity or 0),
                     "pricing_included": True,
@@ -4974,9 +5000,9 @@ def get_delivery_print_data(
             if is_unordered
             else _actual_goods_lines(
                 order_item_id=row.order_item_id,
-                product_code=_print_product_code(row.product_code),
-                product_name=row.product_name,
-                specification=row.specification,
+                product_code=_print_product_code(product_code),
+                product_name=product_name,
+                specification=specification,
                 parent_quantity=row.quantity,
                 component_lines=kit_metadata["component_lines"],
             )
@@ -4996,9 +5022,9 @@ def get_delivery_print_data(
                 "delivery_item_id": row.delivery_item_id,
                 "order_item_id": row.order_item_id,
                 "customer_po": row.customer_po,
-                "product_code": _print_product_code(row.product_code),
-                "product_name": row.product_name,
-                "specification": row.specification,
+                "product_code": _print_product_code(product_code),
+                "product_name": product_name,
+                "specification": specification,
                 "unit": row.unit_snapshot or "PCS",
                 "quantity": row.quantity,
                 "ordered_quantity": row.ordered_quantity_snapshot,

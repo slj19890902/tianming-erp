@@ -23,6 +23,10 @@ from app.models.product import Product
 from app.models.production import ProductionTask
 from app.models.tianhua_pre_delivery import TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryImportBatch, TianhuaPreDeliveryImportItem
 from app.services.delivery_numbering import next_delivery_number
+from app.services.delivery_snapshots import (
+    build_order_delivery_snapshot,
+    ensure_order_delivery_snapshot,
+)
 from app.services.production_workflow import production_ready_quantity
 
 STATUS_LABELS = {"ok":"可送货","duplicate_warning":"疑似重复","qty_mismatch":"数量不一致","stock_shortage":"库存不足","not_matched":"未匹配","ocr_failed":"识别失败"}
@@ -345,12 +349,14 @@ def ensure_draft_delivery(
             delivery_item = DeliveryItem(
                 delivery_id=delivery.id,
                 order_item_id=row.order_item_id,
+                **build_order_delivery_snapshot(db, order_item),
                 delivered_quantity=qty,
                 remarks=None,
             )
             db.add(delivery_item)
         else:
             delivery_item.delivered_quantity = qty
+            ensure_order_delivery_snapshot(db, delivery_item, order_item)
         db.flush()
         row.delivery_item_id = delivery_item.id
         wanted_ids.add(delivery_item.id)

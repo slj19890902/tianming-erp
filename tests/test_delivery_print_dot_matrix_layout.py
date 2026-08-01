@@ -100,3 +100,27 @@ def test_delivery_print_inline_javascript_is_syntactically_valid(
         encoding="utf-8",
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_print_page_keeps_auth_and_network_errors_inside_print_tab() -> None:
+    source = _source()
+
+    assert "open_token" in source
+    assert "BroadcastChannel" in source
+    assert 'type: "ready"' in source
+    assert 'type === "activate"' in source
+    assert 'type === "abort"' in source
+    assert "登录已失效，请返回系统登录后重新打印" in source
+    assert "无法连接 ERP 服务" in source
+    assert "window.opener" not in source
+    assert "window.opener.location" not in source
+    assert "window.location = '/'" not in source
+
+
+def test_printed_product_name_and_specification_share_a_two_line_cell() -> None:
+    source = _source()
+
+    assert "产品名称 / 规格" in source
+    assert 'class="product-spec"' in source
+    assert 'item.specification || ""' in source
+    assert "规格未登记" in source

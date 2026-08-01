@@ -2139,7 +2139,10 @@ def incoming_management_page() -> FileResponse:
 
 @app.get("/delivery-print.html")
 def delivery_print_page() -> FileResponse:
-    return FileResponse(static_dir() / "delivery-print.html")
+    return FileResponse(
+        static_dir() / "delivery-print.html",
+        headers={"Cross-Origin-Opener-Policy": "noopener-allow-popups"},
+    )
 
 
 mount_static_files(app)

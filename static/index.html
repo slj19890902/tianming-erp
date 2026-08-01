@@ -2464,7 +2464,8 @@
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td>
                       <div v-for="item in row.items" :key="item.id" style="margin-bottom:4px">
-                        <div>{{ item.product_code }} {{ item.product_name }} × {{ item.delivered_quantity }}</div>
+                        <div><strong>{{ item.product_code || "存货编码未登记" }}</strong> {{ item.product_name || "产品名称未登记" }} × {{ item.delivered_quantity }}</div>
+                        <div class="muted" style="font-size:11px">{{ item.specification || "规格未登记" }}</div>
                         <div v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code" class="muted" style="font-size:11px">
                           套内子件：{{ component.component_code || component.product_code || "-" }} {{ component.component_name || component.product_name || "未命名组件" }} × {{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}（不单独计价）
                         </div>
@@ -15324,7 +15325,7 @@
             }
             return this.saveModal();
           },
-          printCurrentDeliveryDraft() {
+          async printCurrentDeliveryDraft() {
             const deliveryId = Number(this.deliveryForm.editingId || 0);
             if (!deliveryId) {
               this.showToast("请先保存送货草稿", true);
@@ -15334,11 +15335,57 @@
               this.showToast("内容已修改，请先保存后再打印", true);
               return false;
             }
-            window.open(
-              `/delivery-print.html?id=${encodeURIComponent(deliveryId)}`,
-              "_blank"
-            );
-            return true;
+            return !!(await this.openDeliveryPrintTab(deliveryId));
+          },
+          async openDeliveryPrintTab(deliveryId, deferLoad = false) {
+            const normalizedId = Number(deliveryId || 0);
+            if (!normalizedId) {
+              this.showToast("送货单不存在，无法打开打印页面", true);
+              return null;
+            }
+            if (typeof BroadcastChannel !== "function") {
+              this.showToast("当前浏览器不支持安全打开打印页，请升级浏览器后重试", true);
+              return null;
+            }
+            const token = globalThis.crypto?.randomUUID?.()
+              || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const channel = new BroadcastChannel(`erp-delivery-print-${token}`);
+            const printPath = `/delivery-print.html?id=${encodeURIComponent(normalizedId)}&open_token=${encodeURIComponent(token)}${deferLoad ? "&defer=1" : ""}`;
+            const ready = new Promise((resolve) => {
+              let settled = false;
+              let timeoutId = null;
+              const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                if (timeoutId) clearTimeout(timeoutId);
+                resolve(value);
+              };
+              channel.onmessage = (event) => {
+                if (event?.data?.type === "ready") finish(true);
+              };
+              timeoutId = setTimeout(() => finish(false), 2500);
+            });
+            window.open(printPath, "_blank", "noopener");
+            if (!(await ready)) {
+              channel.close();
+              this.showToast("浏览器阻止了打印页面，请允许打开打印页面后重试", true);
+              return null;
+            }
+            if (!deferLoad) {
+              channel.close();
+              return true;
+            }
+            return {
+              activate() {
+                channel.postMessage({ type: "activate" });
+                setTimeout(() => channel.close(), 0);
+              },
+              abort(message) {
+                channel.postMessage({ type: "abort", message });
+                setTimeout(() => channel.close(), 0);
+              },
+              close() { channel.close(); },
+            };
           },
           validateDeliveryForm() {
             const lines = this.deliveryForm.lines || [];
@@ -16215,17 +16262,22 @@
               } catch (error) { this.showToast(this.errorMessage(error), true); return; }
             }
             if (!confirm(`确认发货并打印 ${row.delivery_number} 吗？`)) return;
-            const printWindow = window.open("about:blank", "_blank");
+            const printSession = await this.openDeliveryPrintTab(row.id, true);
+            if (!printSession) return;
             try {
               await axios.put(`/api/deliveries/${row.id}/dispatch`);
               await axios.put(`/api/deliveries/${row.id}/printed`);
-              if (printWindow) printWindow.location = `/delivery-print.html?id=${row.id}`;
+              printSession.activate();
               await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
               this.showToast("发货成功，打印页已打开");
             }
-            catch (error) { this.showToast(this.errorMessage(error), true); }
+            catch (error) {
+              const message = this.errorMessage(error);
+              printSession.abort(message);
+              this.showToast(message, true);
+            }
           },
-          printDelivery(row) { window.open(`/delivery-print.html?id=${row.id}`, "_blank"); },
+          async printDelivery(row) { return !!(await this.openDeliveryPrintTab(row?.id)); },
           async editDelivery(row) {
             const sourceMode = row.source_mode === "unordered_finished" || (row.items || []).some(item => item.source_type === "unordered_finished") ? "unordered_finished" : "order";
             if (sourceMode === "order") await this.loadDeliveryPendingItems();

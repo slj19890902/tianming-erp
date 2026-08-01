@@ -146,7 +146,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
         display_name="半开槽箱",
         aliases=("半开槽", "半开槽箱"),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
-        formula_version="tm_half_slotted_even_width_20260729_v1",
+        formula_version="tm_half_slotted_20260801_v2",
         is_component=False,
         uses_flap=True,
         supports_splice=True,
@@ -524,14 +524,9 @@ def recommend_box_type(
                 crease_right_mm=length,
             )
     elif rule.code == "half_slotted_carton":
-        if width % 2:
-            return _empty_recommendation(
-                rule=rule,
-                box_style=box_style,
-                configuration=configuration,
-                message="半开槽箱奇数宽的半摇盖取整尚未确认，请人工填写报料宽和压线",
-            )
-        half_width = width // 2
+        # The factory rule uses one half flap only: odd widths round that
+        # physical flap upward, while even widths remain an exact half.
+        half_width = (width + 1) // 2
         result.update(
             report_length_mm=report_length,
             report_width_mm=height + half_width,

@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.25"
-    assert APP_VERSION_NAME == "财务月度年度经营报表"
+    assert APP_VERSION == "v0.22.26"
+    assert APP_VERSION_NAME == "箱型公式边界与订单快照统一"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "月度年度报表" in item and "12 个月" in item
+        "本次更新｜" in item and "半开槽箱奇数宽" in item and "531×201" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "客户未结余额排名" in item and "账龄" in item
+        "本次更新｜" in item and "订单明细编辑" in item and "开料方式" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "系统版本" in item and "v0.22.25" in item
+        "如何验证｜" in item and "系统版本" in item and "v0.22.26" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "月度年度报表" in item and "月份" in item
+        "如何验证｜" in item and "重新推荐" in item and "531×201" in item
         for item in current_release
     )
     assert any(

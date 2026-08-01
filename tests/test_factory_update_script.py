@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.29"
-    assert APP_VERSION_NAME == "月结开票人工闭环（资料门禁）"
+    assert APP_VERSION == "v0.22.30"
+    assert APP_VERSION_NAME == "订单与仓库工作台（地图入口）"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "开票任务" in item and "冻结版本" in item
+        "本次更新｜" in item and "一级导航" in item and "订单与仓库" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "固定空白税务模板" in item and "不自动登录税局" in item
+        "本次更新｜" in item and "真实三楼二维地图" in item and "不生成假区域" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "对账开票收款" in item and "开票任务" in item
+        "如何验证｜" in item and "订单与仓库" in item and "仓库地图" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "登记失败" in item and "不得增加金额" in item
+        "如何验证｜" in item and "一楼" in item and "虚构库存" in item
         for item in current_release
     )
     assert any(

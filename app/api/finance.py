@@ -302,11 +302,14 @@ class SettlementCreate(BaseModel):
 def list_statements(
     customer_id: int | None = None,
     statement_month: str | None = None,
+    balance_type: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    if balance_type not in {None, "pending_invoice", "pending_payment"}:
+        raise HTTPException(status_code=400, detail="未知的财务待办筛选")
     query = (
         select(Statement, Customer.name.label("customer_name"))
         .join(Customer, Customer.id == Statement.customer_id)
@@ -321,12 +324,21 @@ def list_statements(
             query = query.where(Statement.customer_id.in_(visible_customer_ids))
     if statement_month:
         query = query.where(Statement.statement_month == statement_month)
-    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    if balance_type == "pending_invoice":
+        query = query.where(Statement.total_receivable > Statement.invoiced_amount)
+    elif balance_type == "pending_payment":
+        query = query.where(Statement.total_receivable > Statement.settled_amount)
+    filtered = query.order_by(None).subquery()
+    total = db.scalar(select(func.count()).select_from(filtered)) or 0
+    customer_count = db.scalar(
+        select(func.count(func.distinct(filtered.c.customer_id)))
+    ) or 0
     rows = db.execute(
         query.offset((page - 1) * page_size).limit(page_size)
     ).all()
     return {
         "total": total,
+        "customer_count": customer_count,
         "page": page,
         "page_size": page_size,
         "items": [
@@ -358,6 +370,31 @@ def list_statement_customers(
     user: User = Depends(can_read),
 ) -> dict:
     visible_customer_ids = _visible_customer_ids(user, db)
+    if statement_month:
+        try:
+            summaries = pending_statement_customer_summaries(
+                db,
+                statement_month=statement_month,
+                visible_customer_ids=visible_customer_ids,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {
+            "items": [
+                {
+                    "id": row["customer_id"],
+                    "name": row["customer_name"],
+                    "pending_count": row["pending_count"],
+                    "blocked_count": row["blocked_count"],
+                    "statement_cycle_start_day": row[
+                        "statement_cycle_start_day"
+                    ],
+                    "period_start": row["period_start"],
+                    "period_end": row["period_end"],
+                }
+                for row in summaries
+            ]
+        }
     candidate_query = (
         select(Delivery.customer_id)
         .join(ReturnReceipt, ReturnReceipt.delivery_id == Delivery.id)
@@ -1497,6 +1534,134 @@ def _pending_statement_groups(
         )
         deliveries.append(delivery)
     return deliveries
+
+
+def pending_statement_customer_summaries(
+    db: Session,
+    *,
+    statement_month: str,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    """Return one pending-reconciliation row per customer for a statement month.
+
+    The finance workbench and dashboard share this query so customer-cycle
+    boundaries, customer scope and unreconciled receipt identities cannot drift.
+    All candidate deliveries are aggregated in one query; no per-customer query
+    loop is used.
+    """
+
+    customer_query = select(
+        Customer.id,
+        Customer.name,
+        Customer.statement_cycle_start_day,
+    ).order_by(Customer.id)
+    if visible_customer_ids is not None:
+        if not visible_customer_ids:
+            return []
+        customer_query = customer_query.where(Customer.id.in_(visible_customer_ids))
+    customer_rows = db.execute(customer_query).all()
+    if not customer_rows:
+        return []
+
+    customer_periods: dict[int, tuple[date, date]] = {}
+    customer_names: dict[int, str] = {}
+    customer_cycle_days: dict[int, int] = {}
+    for customer_id, customer_name, cycle_start_day in customer_rows:
+        cycle_day = int(cycle_start_day or 1)
+        customer_periods[int(customer_id)] = _statement_period(
+            statement_month,
+            cycle_day,
+        )
+        customer_names[int(customer_id)] = customer_name
+        customer_cycle_days[int(customer_id)] = cycle_day
+
+    broad_start = min(period[0] for period in customer_periods.values())
+    broad_end = max(period[1] for period in customer_periods.values())
+    effective_unit_price = case(
+        (
+            DeliveryItem.source_type == "unordered_finished",
+            DeliveryItem.unit_price_snapshot,
+        ),
+        else_=OrderItem.unit_price,
+    )
+    pending_item_count = func.sum(
+        case((StatementItem.id.is_(None), 1), else_=0)
+    )
+    pending_amount = func.sum(
+        case(
+            (
+                StatementItem.id.is_(None),
+                ReturnReceiptItem.actual_received_quantity * effective_unit_price,
+            ),
+            else_=0,
+        )
+    )
+    query = (
+        select(
+            Delivery.customer_id,
+            Delivery.id.label("delivery_id"),
+            Delivery.delivery_date,
+            func.count(ReturnReceiptItem.id).label("item_count"),
+            pending_item_count.label("pending_item_count"),
+            func.coalesce(pending_amount, 0).label("pending_amount"),
+        )
+        .select_from(ReturnReceiptItem)
+        .join(ReturnReceipt, ReturnReceipt.id == ReturnReceiptItem.return_receipt_id)
+        .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(
+            StatementItem,
+            StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+        )
+        .where(
+            ReturnReceipt.status == "confirmed",
+            Delivery.delivery_date >= broad_start,
+            Delivery.delivery_date <= broad_end,
+            Delivery.customer_id.in_(tuple(customer_periods)),
+        )
+        .group_by(Delivery.customer_id, Delivery.id, Delivery.delivery_date)
+        .order_by(Delivery.customer_id, Delivery.delivery_date, Delivery.id)
+    )
+
+    summaries: dict[int, dict] = {}
+    for row in db.execute(query).mappings():
+        customer_id = int(row["customer_id"])
+        period_start, period_end = customer_periods[customer_id]
+        delivery_date = row["delivery_date"]
+        if delivery_date < period_start or delivery_date > period_end:
+            continue
+        remaining_count = int(row["pending_item_count"] or 0)
+        if remaining_count <= 0:
+            continue
+        item_count = int(row["item_count"] or 0)
+        summary = summaries.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": customer_names[customer_id],
+                "statement_month": statement_month,
+                "statement_cycle_start_day": customer_cycle_days[customer_id],
+                "period_start": period_start,
+                "period_end": period_end,
+                "pending_count": 0,
+                "blocked_count": 0,
+                "pending_item_count": 0,
+                "amount": Decimal("0.00"),
+                "delivery_ids": [],
+            },
+        )
+        if remaining_count < item_count:
+            summary["blocked_count"] += 1
+        else:
+            summary["pending_count"] += 1
+        summary["pending_item_count"] += remaining_count
+        summary["amount"] = (
+            summary["amount"] + Decimal(str(row["pending_amount"] or 0))
+        ).quantize(MONEY, rounding=ROUND_HALF_UP)
+        summary["delivery_ids"].append(int(row["delivery_id"]))
+
+    return list(summaries.values())
 
 
 @router.get("/pending_statements")

@@ -50,8 +50,10 @@ def test_dashboard_frontend_uses_plain_language_workflow_cards() -> None:
         "overviewError",
         "dashboard-cards",
         "todo-list",
-        "go(card.target)",
-        "go(todo.target)",
+        "openDashboardTarget(card)",
+        "openDashboardTarget(todo)",
+        "统计截至",
+        "card.count_unit",
         "当前没有紧急待办",
     ):
         assert marker in source

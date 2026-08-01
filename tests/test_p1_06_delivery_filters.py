@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 @pytest.fixture()
 def delivery_filter_app(tmp_path: Path):
     from app.api.auth import router as auth_router
+    from app.api.dashboard import router as dashboard_router
     from app.api.deliveries import router as deliveries_router
     from app.api.deps import get_db
     from app.core.database import create_sqlite_engine
@@ -99,6 +100,7 @@ def delivery_filter_app(tmp_path: Path):
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(dashboard_router, prefix="/api/dashboard")
     app.include_router(deliveries_router, prefix="/api/deliveries")
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -151,9 +153,26 @@ def test_delivery_filters_compose_and_keep_stable_pagination(delivery_filter_app
 def test_return_statuses_and_existing_status_parameter_remain_compatible(delivery_filter_app) -> None:
     with TestClient(delivery_filter_app) as client:
         _login(client, "admin")
-        assert _numbers(client.get("/api/deliveries", params={"return_status": "waiting_receipt"})) == ["TH-0002"]
+        assert _numbers(client.get("/api/deliveries", params={"return_status": "waiting_receipt"})) == ["MJ-0001", "TH-0002"]
+        assert _numbers(client.get("/api/deliveries", params={"status": "dispatched", "return_status": "waiting_receipt"})) == ["MJ-0001"]
         assert _numbers(client.get("/api/deliveries", params=[("return_status", "confirmed"), ("return_status", "cancelled")])) == ["MJ-0001", "TH-0001"]
         assert _numbers(client.get("/api/deliveries", params={"status": "pending"})) == ["TH-0002"]
+
+
+def test_dashboard_pending_receipt_matches_cancelled_receipt_drilldown(
+    delivery_filter_app,
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        overview = client.get("/api/dashboard/overview")
+        assert overview.status_code == 200, overview.text
+        cards = {row["key"]: row for row in overview.json()["cards"]}
+        assert cards["pending_receipt"]["count"] == 1
+        drilldown = client.get(
+            "/api/deliveries",
+            params={"status": "dispatched", "return_status": "waiting_receipt"},
+        )
+        assert _numbers(drilldown) == ["MJ-0001"]
 
 
 def test_customer_scope_applies_before_filters_and_blocks_direct_out_of_scope_request(delivery_filter_app) -> None:

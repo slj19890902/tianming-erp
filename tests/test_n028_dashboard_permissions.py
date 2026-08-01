@@ -251,7 +251,8 @@ def test_dashboard_selected_customer_scope_filters_every_aggregate(tmp_path: Pat
     }
     assert {card["key"] for card in overview["cards"]} >= {
         "pending_reconciliation",
-        "unsettled_statements",
+        "pending_invoice",
+        "pending_payment",
     }
     assert overview["todos"]
     assert {todo["customer_name"] for todo in overview["todos"]} == {
@@ -300,7 +301,8 @@ def test_dashboard_hides_finance_data_and_empty_selected_scope_returns_zeroes(
                 "pending_delivery",
                 "pending_receipt",
                 "pending_reconciliation",
-                "unsettled_statements",
+                "pending_invoice",
+                "pending_payment",
             }
         )
         assert "today_pending_incoming_tasks" not in sales_kpi

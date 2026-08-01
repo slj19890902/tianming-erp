@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, case, exists, func, or_, select
@@ -32,6 +33,10 @@ from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
 from app.services.inventory_insights import build_inventory_insights
+from app.services.dashboard_metric_contracts import (
+    build_authoritative_snapshot,
+    financial_balance_rows,
+)
 from app.services.order_business_status import build_order_business_statuses
 from app.services.stock_replenishment import (
     product_replenishment_defaults,
@@ -327,7 +332,8 @@ class _CustomerScopedSession:
 def _todo_sort_key(todo: dict) -> tuple:
     priority_map = {
         "待对账": 10,
-        "未结清对账单": 20,
+        "待开票": 15,
+        "待结款": 20,
         "待回单": 30,
         "待送货": 40,
         "待生产": 45,
@@ -572,14 +578,304 @@ def dashboard_kpi(
     return result
 
 
+_BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+def _dashboard_target_filter(metric_key: str, statement_month: str) -> dict:
+    filters = {
+        "pending_material": {"tab": "pending"},
+        "pending_incoming": {"tab": "pending"},
+        "pending_production": {"tab": "pending"},
+        "pending_delivery": {"mode": "pending_customers"},
+        "pending_receipt": {
+            "status": "dispatched",
+            "return_status": "waiting_receipt",
+        },
+        "pending_reconciliation": {
+            "mode": "pending_reconciliation",
+            "statement_month": statement_month,
+        },
+        "pending_invoice": {
+            "balance_type": "pending_invoice",
+            "statement_month": statement_month,
+        },
+        "pending_payment": {
+            "balance_type": "pending_payment",
+            "statement_month": statement_month,
+        },
+    }
+    return dict(filters[metric_key])
+
+
+def _authoritative_dashboard_data(
+    db: Session,
+    *,
+    user: User,
+    visible_customer_ids: set[int] | None,
+    statement_month: str,
+    as_of: str,
+    can_view_requisition: bool,
+    can_view_incoming: bool,
+    can_view_orders: bool,
+    can_view_deliveries: bool,
+    can_view_finance: bool,
+) -> dict:
+    # Import page endpoints lazily.  The dashboard intentionally reuses the same
+    # collection functions instead of rebuilding order-state approximations.
+    from app.api.deliveries import pending_delivery_customer_summaries
+    from app.api.finance import pending_statement_customer_summaries
+    from app.api.incoming import pending_items as pending_incoming_items
+    from app.api.production import get_production_tasks
+    from app.api.requisition import pending_requisitions
+
+    pending_material_rows = (
+        pending_requisitions(db=db, _user=user).get("items", [])
+        if can_view_requisition
+        else []
+    )
+    pending_incoming_rows = (
+        pending_incoming_items(db=db, user=user).get("items", [])
+        if can_view_incoming
+        else []
+    )
+    pending_production_rows = (
+        get_production_tasks(task_status="pending", db=db, user=user).get(
+            "items", []
+        )
+        if can_view_orders
+        else []
+    )
+    pending_delivery_rows = (
+        pending_delivery_customer_summaries(db=db, user=user)
+        if can_view_deliveries
+        else []
+    )
+
+    pending_receipt_rows: list[dict] = []
+    if can_view_deliveries:
+        receipt_query = (
+            select(
+                Delivery.id.label("delivery_id"),
+                Delivery.customer_id,
+                Customer.name.label("customer_name"),
+                Delivery.delivery_date,
+            )
+            .join(Customer, Customer.id == Delivery.customer_id)
+            .where(
+                Delivery.status == "dispatched",
+                ~exists(
+                    select(ReturnReceipt.id).where(
+                        ReturnReceipt.delivery_id == Delivery.id,
+                        ReturnReceipt.status == "confirmed",
+                    )
+                ),
+            )
+            .order_by(Delivery.delivery_date, Delivery.id)
+        )
+        if visible_customer_ids is not None:
+            receipt_query = receipt_query.where(
+                Delivery.customer_id.in_(visible_customer_ids)
+            )
+        pending_receipt_rows = [
+            dict(row) for row in db.execute(receipt_query).mappings().all()
+        ]
+
+    pending_reconciliation_rows = (
+        pending_statement_customer_summaries(
+            db,
+            statement_month=statement_month,
+            visible_customer_ids=visible_customer_ids,
+        )
+        if can_view_finance
+        else []
+    )
+    statement_rows: list[dict] = []
+    if can_view_finance:
+        statement_query = (
+            select(Statement, Customer.name.label("customer_name"))
+            .join(Customer, Customer.id == Statement.customer_id)
+            .where(Statement.statement_month == statement_month)
+            .order_by(Statement.id)
+        )
+        if visible_customer_ids is not None:
+            statement_query = statement_query.where(
+                Statement.customer_id.in_(visible_customer_ids)
+            )
+        statement_rows = [
+            {
+                "statement_id": statement.id,
+                "customer_id": statement.customer_id,
+                "customer_name": customer_name,
+                "statement_month": statement.statement_month,
+                "status": statement.status,
+                "total_receivable": statement.total_receivable,
+                "invoiced_amount": statement.invoiced_amount,
+                "settled_amount": statement.settled_amount,
+            }
+            for statement, customer_name in db.execute(statement_query).all()
+        ]
+
+    snapshot = build_authoritative_snapshot(
+        pending_material_rows=pending_material_rows,
+        pending_incoming_rows=pending_incoming_rows,
+        pending_production_rows=pending_production_rows,
+        pending_delivery_rows=pending_delivery_rows,
+        pending_receipt_rows=pending_receipt_rows,
+        pending_reconciliation_rows=pending_reconciliation_rows,
+        statement_rows=statement_rows,
+        statement_month=statement_month,
+        as_of=as_of,
+    )
+    invoice_rows, payment_rows = financial_balance_rows(statement_rows)
+    customer_names = {
+        int(row["customer_id"]): str(row.get("customer_name") or "未命名客户")
+        for row in statement_rows
+    }
+    for rows in (invoice_rows, payment_rows):
+        for row in rows:
+            row["customer_name"] = customer_names.get(
+                int(row["customer_id"]), "未命名客户"
+            )
+            row["statement_month"] = statement_month
+
+    return {
+        "snapshot": snapshot,
+        "rows": {
+            "pending_material": pending_material_rows,
+            "pending_incoming": pending_incoming_rows,
+            "pending_production": pending_production_rows,
+            "pending_delivery": pending_delivery_rows,
+            "pending_receipt": pending_receipt_rows,
+            "pending_reconciliation": pending_reconciliation_rows,
+            "pending_invoice": invoice_rows,
+            "pending_payment": payment_rows,
+        },
+    }
+
+
+def _authoritative_dashboard_cards(
+    data: dict,
+    *,
+    permissions: dict[str, bool],
+) -> list[dict]:
+    descriptions = {
+        "pending_material": ("当前可直接进入待报料的业务项", "去报料"),
+        "pending_incoming": ("当前可确认收料的来料明细", "去入库"),
+        "pending_production": ("当前生产确认页可操作的任务", "去生产确认"),
+        "pending_delivery": ("当前至少有一款可送货的客户", "查看待送货客户"),
+        "pending_receipt": ("已正式送货但还没有有效回单的客户", "去回单"),
+        "pending_reconciliation": ("按客户结转周期归入本月的待对账客户", "去对账"),
+        "pending_invoice": ("本月应收减去已登记发票后的余额", "去开票"),
+        "pending_payment": ("本月应收减去已核销收款后的余额", "去收款"),
+    }
+    result = []
+    snapshot = data["snapshot"]
+    for key, metric in snapshot["metrics"].items():
+        if not permissions.get(key, False):
+            continue
+        description, button_label = descriptions[key]
+        card = {
+            "key": key,
+            "title": metric["title"],
+            "count": metric["count"],
+            "count_unit": metric["count_unit"],
+            "description": description,
+            "button_label": button_label,
+            "target": metric["target"],
+            "target_filter": _dashboard_target_filter(
+                key, snapshot["statement_month"]
+            ),
+            "identity_key": metric["identity_key"],
+            "authoritative_source": metric["authoritative_source"],
+            "amount_formula": metric["amount_formula"],
+            "as_of": snapshot["as_of"],
+            "statement_month": snapshot["statement_month"],
+        }
+        if metric["amount"] is not None:
+            card["amount"] = metric["amount"]
+        result.append(card)
+    return result
+
+
+def _authoritative_dashboard_todos(data: dict) -> list[dict]:
+    configs = {
+        "pending_material": ("待报料", "个待报料项", "去报料"),
+        "pending_incoming": ("待入库", "条待入库明细", "去入库"),
+        "pending_production": ("待生产", "个待生产任务", "去生产确认"),
+        "pending_delivery": ("待送货", "款可送货明细", "去送货"),
+        "pending_receipt": ("待回单", "张待回单送货单", "去回单"),
+        "pending_reconciliation": ("待对账", "条待对账明细", "去生成月结对账单"),
+        "pending_invoice": ("待开票", "个待开票客户", "去开票"),
+        "pending_payment": ("待结款", "个待结款客户", "去收款"),
+    }
+    target_by_key = {
+        key: _dashboard_target_filter(key, data["snapshot"]["statement_month"])
+        for key in configs
+    }
+    todos: list[dict] = []
+    for key, rows in data["rows"].items():
+        grouped: dict[int, dict] = {}
+        for row in rows:
+            customer_id = row.get("customer_id")
+            if not customer_id:
+                continue
+            customer_id = int(customer_id)
+            group = grouped.setdefault(
+                customer_id,
+                {
+                    "customer_id": customer_id,
+                    "customer_name": row.get("customer_name") or "未命名客户",
+                    "count": 0,
+                    "amount": Decimal("0.00"),
+                    "first_order_no": row.get("order_number"),
+                    "first_item_no": row.get("product_code"),
+                    "sort_date": _business_date_string(
+                        row.get("delivery_date") or row.get("created_at")
+                    ),
+                },
+            )
+            if key == "pending_reconciliation":
+                increment = int(row.get("pending_item_count") or 0)
+            elif key == "pending_delivery":
+                increment = int(row.get("item_count") or 0)
+            else:
+                increment = 1
+            group["count"] += max(increment, 1)
+            group["amount"] = _money(
+                group["amount"] + Decimal(str(row.get("amount") or 0))
+            )
+        label, unit_text, action_text = configs[key]
+        for group in grouped.values():
+            target_filter = dict(target_by_key[key])
+            target_filter["customer_id"] = group["customer_id"]
+            message = f"该客户有 {group['count']} {unit_text}。"
+            if group["amount"] > 0:
+                message = f"该客户{label}金额为 {group['amount']} 元。"
+            todos.append(
+                {
+                    **group,
+                    "type": label,
+                    "month": data["snapshot"]["statement_month"] if key.startswith("pending_") and key in {"pending_reconciliation", "pending_invoice", "pending_payment"} else None,
+                    "message": message,
+                    "target": data["snapshot"]["metrics"][key]["target"],
+                    "target_filter": target_filter,
+                    "action_text": action_text,
+                }
+            )
+    todos.sort(key=_todo_sort_key)
+    return todos
+
+
 @router.get("/overview")
 def dashboard_overview(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
     raw_db = db
-    today = beijing_today()
-    month = today.strftime("%Y-%m")
+    now = datetime.now(_BEIJING).replace(microsecond=0)
+    today = now.date()
+    month = now.strftime("%Y-%m")
+    as_of = now.isoformat()
     visible_customer_ids = (
         None
         if has_unrestricted_customer_access(user, db)
@@ -591,6 +887,33 @@ def dashboard_overview(
     can_view_warehouse = has_permission(user, "warehouse.view")
     can_view_deliveries = has_permission(user, "deliveries.view")
     can_view_finance = has_permission(user, "finance.view")
+    can_view_production = can_view_orders and user.role in {
+        "admin",
+        "boss",
+        "workshop",
+    }
+    authoritative_data = _authoritative_dashboard_data(
+        raw_db,
+        user=user,
+        visible_customer_ids=visible_customer_ids,
+        statement_month=month,
+        as_of=as_of,
+        can_view_requisition=can_view_requisition,
+        can_view_incoming=can_view_incoming,
+        can_view_orders=can_view_production,
+        can_view_deliveries=can_view_deliveries,
+        can_view_finance=can_view_finance,
+    )
+    metric_permissions = {
+        "pending_material": can_view_requisition,
+        "pending_incoming": can_view_incoming,
+        "pending_production": can_view_production,
+        "pending_delivery": can_view_deliveries,
+        "pending_receipt": can_view_deliveries,
+        "pending_reconciliation": can_view_finance,
+        "pending_invoice": can_view_finance,
+        "pending_payment": can_view_finance,
+    }
     db = _CustomerScopedSession(db, visible_customer_ids)
     workflow_rows = (
         _workflow_projection_rows(
@@ -667,7 +990,7 @@ def dashboard_overview(
             for row in workflow_rows
             if row["business_status"] == "pending_reconciliation"
         )
-        if can_view_finance
+        if False and can_view_finance  # authoritative finance rows are built above
         else 0
     )
     unsettled_statements = (
@@ -680,7 +1003,7 @@ def dashboard_overview(
                 ),
             ).where(Statement.status == "unsettled")
         ).one()
-        if can_view_finance
+        if False and can_view_finance  # authoritative balance rows ignore stale status text
         else (0, 0)
     )
     unsettled_count = _safe_int(unsettled_statements[0])
@@ -763,6 +1086,10 @@ def dashboard_overview(
                 },
             ]
         )
+    cards = _authoritative_dashboard_cards(
+        authoritative_data,
+        permissions=metric_permissions,
+    )
     if user.role == "boss" and has_permission(user, "warehouse.view"):
         inventory_insights = build_inventory_insights(raw_db)
         action_items = inventory_insights.get("action_items") or []
@@ -787,17 +1114,27 @@ def dashboard_overview(
                     "key": "inventory_risk",
                     "title": "库存风险",
                     "count": inventory_risk_count,
+                    "count_unit": "事项",
                     "description": "库存洞察待处理项",
                     "button_label": "查看库存",
                     "target": "warehouse",
+                    "target_filter": {},
+                    "identity_key": "库存洞察事项 ID",
+                    "as_of": as_of,
+                    "statement_month": month,
                 },
                 {
                     "key": "business_anomaly",
                     "title": "经营异常",
                     "count": high_priority_count,
+                    "count_unit": "事项",
                     "description": "高优先级库存异常",
                     "button_label": "查看异常",
                     "target": "warehouse",
+                    "target_filter": {},
+                    "identity_key": "库存洞察事项 ID",
+                    "as_of": as_of,
+                    "statement_month": month,
                 },
             ]
         )
@@ -913,7 +1250,7 @@ def dashboard_overview(
             func.min(ReturnReceipt.created_at),
         )
         ).mappings().all()
-        if can_view_finance
+        if False and can_view_finance  # authoritative finance rows are built above
         else []
     )
     unsettled_rows = (
@@ -934,7 +1271,7 @@ def dashboard_overview(
             Statement.created_at,
         )
         ).mappings().all()
-        if can_view_finance
+        if False and can_view_finance  # balance rows above ignore stale status text
         else []
     )
 
@@ -1117,7 +1454,7 @@ def dashboard_overview(
         )
         todos.append(group)
 
-    todos.sort(key=_todo_sort_key)
+    todos = _authoritative_dashboard_todos(authoritative_data)
     remaining_todo_count = max(len(todos) - 8, 0)
     todos = todos[:8]
 
@@ -1151,13 +1488,19 @@ def dashboard_overview(
             }
         )
     if can_view_finance:
+        pending_payment_amount = Decimal(
+            authoritative_data["snapshot"]["metrics"]["pending_payment"][
+                "amount"
+            ]
+            or "0"
+        )
         summary.update(
             {
-                "month_unsettled_amount": unsettled_amount,
+                "month_unsettled_amount": _money(pending_payment_amount),
                 "month_settled_amount": _money(
                     db.scalar(
                         select(func.coalesce(func.sum(Statement.settled_amount), 0)).where(
-                            Statement.status == "settled"
+                            Statement.statement_month == month
                         )
                     )
                 ),
@@ -1198,6 +1541,9 @@ def dashboard_overview(
             )
         ),
         "month": month,
+        "statement_month": month,
+        "as_of": as_of,
+        "timezone": "Asia/Shanghai",
     }
     if can_view_requisition and can_view_warehouse:
         low_stock_warnings = _common_box_low_stock_warnings(

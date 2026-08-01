@@ -1422,19 +1422,20 @@
             </section>
 
             <template v-if="activePage === 'dashboard'">
-              <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p></div></div>
+              <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
               <div v-if="dashboardCards.length" class="dashboard-cards">
-                <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="go(card.target)">
+                <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="openDashboardTarget(card)">
                   <div class="card-label">{{ card.title }}</div>
                   <div class="dashboard-card-value">
                     <span class="dashboard-card-count">{{ card.count || 0 }}</span>
-                    <span v-if="card.amount !== undefined" class="dashboard-card-amount">{{ canViewCosts ? ` / ￥ ${money(card.amount)}` : " / 无权限" }}</span>
+                    <span class="dashboard-card-unit">{{ card.count_unit || "项" }}</span>
+                    <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount"> / ￥ {{ money(card.amount) }}</span>
                   </div>
                   <div class="card-hint">{{ card.description }}</div>
                   <div class="dashboard-card-actions">
-                    <button class="btn small primary" @click.stop="go(card.target)">{{ card.button_label || "去处理" }}</button>
+                    <button class="btn small primary" @click.stop="openDashboardTarget(card)">{{ card.button_label || "去处理" }}</button>
                   </div>
                 </div>
               </div>
@@ -1500,7 +1501,7 @@
                       </div>
                       <div class="todo-message">{{ todo.message }}</div>
                       <div class="toolbar-group">
-                        <button class="btn small" @click="go(todo.target)">{{ todo.action_text || "查看对应页面" }}</button>
+                        <button class="btn small" @click="openDashboardTarget(todo)">{{ todo.action_text || "查看对应页面" }}</button>
                       </div>
                     </div>
                     <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
@@ -2429,6 +2430,13 @@
 
             <template v-else-if="activePage === 'deliveries'">
               <page-head title="送货与回单" desc="支持多订单合并、分批发货、打印及客户实收确认。"></page-head>
+              <div v-if="deliveryDashboardMode==='pending_customers'" class="panel" style="margin-bottom:10px">
+                <div class="toolbar"><div><strong>待送货客户 {{ pendingDeliveryCustomerGroups.length }} 户</strong><span class="muted" style="margin-left:8px">与首页同一批送货候选</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
+                <div v-if="pendingDeliveryCustomerGroups.length" class="toolbar-group" style="flex-wrap:wrap;margin-top:8px">
+                  <button v-for="group in pendingDeliveryCustomerGroups" :key="group.customer_id" class="btn" @click="openDelivery(group.customer_id)">{{ group.customer_name }}（{{ group.item_count }} 款）</button>
+                </div>
+                <div v-else class="empty">当前没有待送货客户</div>
+              </div>
               <div class="toolbar"><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button></div><div><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <div class="list-filterbar">
                 <search-select v-model="deliveryListFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.deliveries=1; loadDeliveries()"></search-select>
@@ -2493,6 +2501,10 @@
 
             <template v-else-if="activePage === 'finance'">
               <page-head title="对账、开票与收款" desc="对账金额按客户实际签收数量计算。"></page-head>
+              <div v-if="financeFilters.balance_type" class="status blue" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                <span>首页筛选：{{ financeFilters.balance_type==='pending_invoice' ? '待开票' : '待结款' }} · {{ financeFilters.statement_month }} · {{ financeCustomersTotal }} 位客户 / {{ statementsTotal }} 张对账单</span>
+                <button class="btn small" @click="clearFinanceDashboardFilter">查看全部</button>
+              </div>
               <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
               <div class="panel">
                 <div class="section-title">对账单</div>
@@ -5282,8 +5294,12 @@
       const bossOverviewCardOrder = Object.freeze([
         { key: "pending_material", title: "待报料" },
         { key: "pending_incoming", title: "待入库" },
+        { key: "pending_production", title: "待生产" },
         { key: "pending_delivery", title: "待送货" },
-        { key: "unsettled_statements", title: "应收" },
+        { key: "pending_receipt", title: "待回单" },
+        { key: "pending_reconciliation", title: "待对账" },
+        { key: "pending_invoice", title: "待开票" },
+        { key: "pending_payment", title: "待结款" },
         { key: "inventory_risk", title: "库存风险" },
         { key: "business_anomaly", title: "异常" },
       ]);
@@ -5558,7 +5574,9 @@
             finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             deliveryListFilters: { customer_id:"", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"", return_status:"" },
-            statementsTotal: 0, invoicesTotal: 0, pageSize: 25,
+            deliveryDashboardMode: "",
+            financeFilters: { statement_month:"", balance_type:"", customer_id:"" },
+            statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
             pages: { customers: 1, products: 1, orders: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
@@ -6131,6 +6149,20 @@
           deliveryCustomers() {
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
             return this.customerOptions.filter(row => ids.includes(row.id));
+          },
+          pendingDeliveryCustomerGroups() {
+            const groups = new Map();
+            for (const row of (this.pendingDeliveryItems || [])) {
+              const customerId = Number(row.customer_id || 0);
+              if (!customerId) continue;
+              if (!groups.has(customerId)) groups.set(customerId, {
+                customer_id:customerId,
+                customer_name:row.customer_name || "未命名客户",
+                item_count:0,
+              });
+              groups.get(customerId).item_count += 1;
+            }
+            return [...groups.values()].sort((a,b) => a.customer_name.localeCompare(b.customer_name, "zh-CN"));
           },
           deliveryOptions() { return this.pendingDeliveryItems.filter(row => row.customer_id === Number(this.deliveryForm.customer_id)); },
           deliveryActiveLines() {
@@ -8362,6 +8394,54 @@
             this.activePage = page;
             await this.loadPage(page);
           },
+          async openDashboardTarget(entry) {
+            const key = entry?.key || "";
+            const target = entry?.target || "dashboard";
+            const filter = entry?.target_filter || {};
+            if (key === "pending_material" || entry?.type === "待报料") {
+              this.requisitionTab = "pending";
+              this.invalidatePageCache("requisition");
+              return this.go("requisition");
+            }
+            if (key === "pending_incoming" || entry?.type === "待入库") {
+              this.incomingTab = "pending";
+              this.invalidatePageCache("incoming");
+              return this.go("incoming");
+            }
+            if (key === "pending_production" || entry?.type === "待生产") {
+              this.productionTab = "pending";
+              this.invalidatePageCache("production");
+              return this.go("production");
+            }
+            if (key === "pending_delivery" || entry?.type === "待送货") {
+              this.deliveryDashboardMode = "pending_customers";
+              this.deliveryListFilters = { customer_id:"", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"", return_status:"" };
+              this.invalidatePageCache("deliveries");
+              await this.go("deliveries");
+              return this.loadDeliveryPendingItems();
+            }
+            if (key === "pending_receipt" || entry?.type === "待回单") {
+              this.deliveryDashboardMode = "";
+              this.deliveryListFilters = { customer_id:filter.customer_id || "", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"dispatched", return_status:"waiting_receipt" };
+              this.pages.deliveries = 1;
+              this.invalidatePageCache("deliveries");
+              return this.go("deliveries");
+            }
+            if (key === "pending_reconciliation" || entry?.type === "待对账") {
+              this.financeFilters = { statement_month:"", balance_type:"", customer_id:"" };
+              this.invalidatePageCache("finance");
+              await this.go("finance");
+              return this.openStatement(filter.statement_month || this.overview.statement_month || month(), filter.customer_id || null);
+            }
+            if (["pending_invoice", "pending_payment"].includes(key) || ["待开票", "待结款"].includes(entry?.type)) {
+              const balanceType = filter.balance_type || (entry?.type === "待开票" ? "pending_invoice" : "pending_payment");
+              this.financeFilters = { statement_month:filter.statement_month || this.overview.statement_month || month(), balance_type:balanceType, customer_id:filter.customer_id || "" };
+              this.pages.statements = 1;
+              this.invalidatePageCache("finance");
+              return this.go("finance");
+            }
+            return this.go(target);
+          },
           async loadPage(page, { force=false } = {}) {
             if (!force && this.pageCacheFresh(page)) return;
             this.loading = true;
@@ -8410,6 +8490,7 @@
           async loadOverview() {
             this.overviewLoading = true;
             this.overviewError = "";
+            this.overview = { cards: [], todos: [], summary: {} };
             try {
               this.overview = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
             } catch (error) {
@@ -10241,11 +10322,24 @@
           },
           async loadFinance() {
             const [statements, invoices] = await Promise.all([
-              axios.get("/api/finance/statements", { params: { page: this.pages.statements, page_size: this.pageSize } }),
+              axios.get("/api/finance/statements", { params: {
+                page: this.pages.statements,
+                page_size: this.pageSize,
+                statement_month:this.financeFilters.statement_month || undefined,
+                balance_type:this.financeFilters.balance_type || undefined,
+                customer_id:this.financeFilters.customer_id || undefined,
+              } }),
               axios.get("/api/finance/invoices", { params: { page: this.pages.invoices, page_size: this.pageSize } })
             ]);
             this.statements = statements.data.items; this.statementsTotal = statements.data.total;
+            this.financeCustomersTotal = Number(statements.data.customer_count || 0);
             this.invoices = invoices.data.items; this.invoicesTotal = invoices.data.total;
+          },
+          async clearFinanceDashboardFilter() {
+            this.financeFilters = { statement_month:"", balance_type:"", customer_id:"" };
+            this.pages.statements = 1;
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
           },
           auditQueryParams() {
             const filters = this.auditLogState.filters || {};
@@ -15623,9 +15717,12 @@
               candidate_error: false,
             }));
           },
-          async openDelivery() {
+          async openDelivery(preferredCustomerId = null) {
+            if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
             await this.loadDeliveryPendingItems();
-            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", customer_id: this.deliveryCustomers[0]?.id || null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"" };
+            const availableCustomerIds = new Set(this.deliveryCustomers.map(row => Number(row.id)));
+            const selectedCustomerId = availableCustomerIds.has(Number(preferredCustomerId)) ? Number(preferredCustomerId) : (this.deliveryCustomers[0]?.id || null);
+            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", customer_id:selectedCustomerId, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"" };
             this.deliveryBatchPicker = { visible: false, loading: false, keyword: "", items: [], selected: {}, message: "", error: false };
             this.unorderedFinishedPicker = { visible: false, loading: false, items: [], message: "", error: false };
             this.resetDeliveryLines();
@@ -15744,8 +15841,9 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
-          async openStatement() {
-            this.statementForm = { customer_id:null, statement_month:month(), selected:{} };
+          async openStatement(statementMonth = null, preferredCustomerId = null) {
+            if (statementMonth && typeof statementMonth !== "string") statementMonth = null;
+            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{} };
             this.expandedStatementDeliveries = {};
             this.statementCyclePeriod = "";
             this.modal = { type:"statement", title:"生成月结对账单" };

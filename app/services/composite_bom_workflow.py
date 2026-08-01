@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from math import ceil, floor
 from typing import Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.delivery import DeliveryItem
@@ -682,6 +682,278 @@ def kit_availability(db: Session, order_item_id: int) -> dict:
         "components": components,
         "missing_components": missing,
     }
+
+
+def kit_available_sets_by_order_item_ids(
+    db: Session,
+    order_item_ids: Iterable[int],
+) -> dict[int, int]:
+    """Return composite-kit delivery capacity with a fixed query count.
+
+    This is the batched count-only counterpart of :func:`kit_availability`.
+    It deliberately returns no display payload; callers needing component
+    details continue to use the single-item service.  The formulas and active
+    reservation/allocation rules are kept identical to that service so a
+    dashboard customer summary does not introduce one query group per order
+    item.
+    """
+
+    item_ids = sorted({int(value) for value in order_item_ids if int(value) > 0})
+    if not item_ids:
+        return {}
+
+    items = {
+        int(item.id): item
+        for item in db.scalars(
+            select(OrderItem).where(OrderItem.id.in_(item_ids))
+        ).all()
+    }
+    snapshots = list(
+        db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids))
+            .order_by(
+                SalesOrderItemBomComponent.sales_order_item_id,
+                SalesOrderItemBomComponent.display_order,
+                SalesOrderItemBomComponent.id,
+            )
+        ).all()
+    )
+    if not snapshots:
+        return {}
+    snapshot_ids = [int(snapshot.id) for snapshot in snapshots]
+
+    adjustments = {
+        int(snapshot_id): (int(delta_sets or 0), int(delta_pieces or 0))
+        for snapshot_id, delta_sets, delta_pieces in db.execute(
+            select(
+                SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id,
+                func.coalesce(
+                    func.sum(
+                        SalesOrderItemBomDemandAdjustment.delta_order_set_quantity
+                    ),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(
+                        SalesOrderItemBomDemandAdjustment.delta_required_piece_quantity
+                    ),
+                    0,
+                ),
+            )
+            .where(
+                SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                )
+            )
+            .group_by(
+                SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+            )
+        ).all()
+    }
+
+    remaining_stock = (
+        InventoryReservation.reserved_stock_quantity
+        - InventoryReservation.consumed_stock_quantity
+        - InventoryReservation.released_stock_quantity
+    )
+    stock_by_snapshot = {
+        int(snapshot_id): int(quantity or 0)
+        for snapshot_id, quantity in db.execute(
+            select(
+                InventoryReservation.sales_order_item_bom_component_id,
+                func.coalesce(
+                    func.sum(
+                        case((remaining_stock > 0, remaining_stock), else_=0)
+                    ),
+                    0,
+                ),
+            )
+            .where(
+                InventoryReservation.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                ),
+                InventoryReservation.reservation_type == "finished_order",
+                InventoryReservation.status.in_(ACTIVE_RESERVATION_STATUSES),
+            )
+            .group_by(InventoryReservation.sales_order_item_bom_component_id)
+        ).all()
+    }
+
+    allocated_direct = func.coalesce(
+        func.sum(
+            BomComponentDirectDeliveryAllocation.consumed_quantity
+            - BomComponentDirectDeliveryAllocation.reversed_quantity
+        ),
+        0,
+    )
+    direct_by_snapshot: dict[int, int] = {}
+    for snapshot_id, _completion_id, quantity, allocated in db.execute(
+        select(
+            ProductionTask.sales_order_item_bom_component_id,
+            ProductionCompletion.id,
+            ProductionCompletion.quantity,
+            allocated_direct.label("allocated_quantity"),
+        )
+        .join(ProductionTask, ProductionTask.id == ProductionCompletion.task_id)
+        .outerjoin(
+            ProductionStockTransfer,
+            ProductionStockTransfer.completion_id == ProductionCompletion.id,
+        )
+        .outerjoin(
+            BomComponentDirectDeliveryAllocation,
+            (
+                BomComponentDirectDeliveryAllocation.production_completion_id
+                == ProductionCompletion.id
+            )
+            & (
+                BomComponentDirectDeliveryAllocation.status.in_(
+                    ACTIVE_RESERVATION_STATUSES
+                )
+            ),
+        )
+        .where(
+            ProductionTask.sales_order_item_bom_component_id.in_(snapshot_ids),
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.initial_disposition == DIRECT_DISPOSITION,
+            ProductionStockTransfer.id.is_(None),
+        )
+        .group_by(
+            ProductionTask.sales_order_item_bom_component_id,
+            ProductionCompletion.id,
+            ProductionCompletion.quantity,
+        )
+    ).all():
+        key = int(snapshot_id)
+        direct_by_snapshot[key] = direct_by_snapshot.get(key, 0) + max(
+            int(quantity or 0) - int(allocated or 0),
+            0,
+        )
+
+    delivered_direct = {
+        int(snapshot_id): int(quantity or 0)
+        for snapshot_id, quantity in db.execute(
+            select(
+                BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id,
+                func.coalesce(
+                    func.sum(
+                        BomComponentDirectDeliveryAllocation.consumed_quantity
+                        - BomComponentDirectDeliveryAllocation.reversed_quantity
+                    ),
+                    0,
+                ),
+            )
+            .where(
+                BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                ),
+                BomComponentDirectDeliveryAllocation.status.in_(
+                    ACTIVE_RESERVATION_STATUSES
+                ),
+            )
+            .group_by(
+                BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id
+            )
+        ).all()
+    }
+    delivered_stock = {
+        int(snapshot_id): int(quantity or 0)
+        for snapshot_id, quantity in db.execute(
+            select(
+                InventoryReservation.sales_order_item_bom_component_id,
+                func.coalesce(
+                    func.sum(
+                        DeliveryInventoryAllocation.credited_requirement_quantity
+                        - DeliveryInventoryAllocation.reversed_requirement_quantity
+                    ),
+                    0,
+                ),
+            )
+            .join(
+                InventoryReservation,
+                InventoryReservation.id
+                == DeliveryInventoryAllocation.reservation_id,
+            )
+            .where(
+                InventoryReservation.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                ),
+                DeliveryInventoryAllocation.status.in_(
+                    ACTIVE_RESERVATION_STATUSES
+                ),
+            )
+            .group_by(InventoryReservation.sales_order_item_bom_component_id)
+        ).all()
+    }
+
+    demands_by_item: dict[int, list[tuple[int, int, bool, int, int]]] = {}
+    fallback_sets_by_item: dict[int, int] = {}
+    for snapshot in snapshots:
+        delta_sets, delta_pieces = adjustments.get(int(snapshot.id), (0, 0))
+        per_set = _as_positive_integer(
+            snapshot.quantity_per_set,
+            field="每套组件数量",
+        )
+        effective_sets = int(snapshot.order_set_quantity) + delta_sets
+        if effective_sets < 0:
+            raise CompositeBomWorkflowError("组件调整后的有效套数不能小于0")
+        required_pieces = (
+            _as_positive_integer(
+                snapshot.required_piece_quantity,
+                field="组件需求件数",
+            )
+            + delta_pieces
+        )
+        if required_pieces <= 0:
+            raise CompositeBomWorkflowError("组件调整后的需求件数必须大于0")
+        item_id = int(snapshot.sales_order_item_id)
+        demands_by_item.setdefault(item_id, []).append(
+            (
+                int(snapshot.id),
+                per_set,
+                bool(snapshot.is_required),
+                required_pieces,
+                effective_sets,
+            )
+        )
+        fallback_sets_by_item[item_id] = max(
+            fallback_sets_by_item.get(item_id, 0),
+            effective_sets,
+        )
+
+    result: dict[int, int] = {}
+    for item_id, demands in demands_by_item.items():
+        item = items.get(item_id)
+        effective_sets = (
+            max(int(item.quantity or 0), 0)
+            if item is not None
+            else fallback_sets_by_item.get(item_id, 0)
+        )
+        delivered_sets = max(
+            int(item.delivered_quantity or 0) if item is not None else 0,
+            0,
+        )
+        available_sets = max(effective_sets - delivered_sets, 0)
+        for snapshot_id, per_set, is_required, required_pieces, _ in demands:
+            if not is_required:
+                continue
+            consumed_pieces = (
+                delivered_direct.get(snapshot_id, 0)
+                + delivered_stock.get(snapshot_id, 0)
+            )
+            available_pieces = (
+                stock_by_snapshot.get(snapshot_id, 0)
+                + direct_by_snapshot.get(snapshot_id, 0)
+            )
+            total_coverable = consumed_pieces + available_pieces
+            if total_coverable < required_pieces:
+                component_sets = max(
+                    total_coverable // per_set - delivered_sets,
+                    0,
+                )
+                available_sets = min(available_sets, component_sets)
+        result[item_id] = available_sets
+    return result
 
 
 def build_delivery_component_consumption_plan(

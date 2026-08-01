@@ -57,11 +57,12 @@ def test_warehouse_page_route_returns_warehouse_html_not_dashboard() -> None:
 
 
 def test_homepage_keeps_warehouse_inside_lazy_persistent_erp_shell() -> None:
-    assert '{ key: "warehouse", label: "仓库库存管理" }' in INDEX_HTML
-    assert '@click="go(\'warehouse\')">仓库库存管理</button>' in INDEX_HTML
+    assert '{ key: "workbench", label: "订单与仓库"' in INDEX_HTML
+    assert '{key:"warehouse",label:"仓库地图"}' in INDEX_HTML
+    assert '@click="go(page.key)">{{ page.label }}</button>' in INDEX_HTML
     assert 'v-if="warehouseFrameUrl" v-show="activePage === \'warehouse\'"' in INDEX_HTML
     assert 'warehouseFrameUrl: "", warehouseFrameRevision: 0' in INDEX_HTML
-    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1"' in INDEX_HTML
+    assert 'this.warehouseFrameUrl = "/warehouse.html?embedded=1&tab=locations&location_view=floor3"' in INDEX_HTML
     assert 'window.location.href = "/warehouse.html";' not in INDEX_HTML
     assert 'this.warehouseFrameUrl = "";' in INDEX_HTML
     assert '"incoming", "production", "warehouse", "deliveries"' in INDEX_HTML

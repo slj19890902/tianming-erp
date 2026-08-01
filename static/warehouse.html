@@ -704,8 +704,9 @@
       }
     }
     async function applyWarehouseDeepLink(){
-      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),locationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id")),keyword=String(params.get("keyword")||"").trim();
-      if(requestedTab&&["finished","semi_finished"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
+      const params=new URLSearchParams(location.search),requestedTab=params.get("tab"),requestedLocationView=params.get("location_view"),locationId=Number(params.get("location_id")),lotId=Number(params.get("lot_id")),keyword=String(params.get("keyword")||"").trim();
+      if(requestedTab&&["finished","semi_finished","locations"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
+      if(state.tab==="locations"&&requestedLocationView==="floor3"&&state.locationView!=="floor3")await switchLocationView("floor3");
       if(locationId)selectInventoryLocationCascade("floorFilter","areaFilter","locationFilter",locationId,state.tab);
       if(keyword)$("keywordFilter").value=keyword;
       if(lotId){

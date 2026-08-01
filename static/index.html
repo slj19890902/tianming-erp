@@ -1331,6 +1331,24 @@
         border-radius: 10px; background: var(--panel);
       }
       .list-filterbar .input, .list-filterbar .select { min-width: 118px; max-width: 190px; }
+      .workbench-nav {
+        display:flex; align-items:center; justify-content:space-between; gap:12px;
+        margin:0 0 12px; padding:10px 12px; border:1px solid var(--line);
+        border-radius:12px; background:linear-gradient(135deg,#f8fbff,#fff);
+      }
+      .workbench-nav-title { min-width:0; }
+      .workbench-nav-title strong { display:block; color:var(--text); }
+      .workbench-nav-title span { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
+      .workbench-tabs { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+      .workbench-tab { min-height:30px; padding:4px 10px; border:1px solid var(--line-strong); border-radius:999px; background:#fff; color:var(--text-secondary); font-weight:700; }
+      .workbench-tab.active { border-color:var(--primary); background:var(--primary); color:#fff; }
+      .warehouse-wayfinding { display:flex; align-items:stretch; gap:8px; flex-wrap:wrap; }
+      .warehouse-floor-card { min-width:130px; padding:7px 10px; border:1px solid #b8cae2; border-radius:8px; background:#f7fbff; color:#163b66; text-align:left; }
+      button.warehouse-floor-card { cursor:pointer; }
+      .warehouse-floor-card.active { border-color:var(--primary); background:#eaf4ff; box-shadow:inset 3px 0 0 var(--primary); }
+      .warehouse-floor-card.future { border-style:dashed; background:#fafafa; color:var(--muted); }
+      .warehouse-floor-card strong,.warehouse-floor-card small { display:block; }
+      .warehouse-floor-card small { margin-top:2px; font-size:11px; font-weight:500; }
       .warehouse-shell { min-height: calc(100vh - 116px); }
       .warehouse-shell-head {
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1429,6 +1447,7 @@
         .audit-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
       @media(max-width:900px) {
+        .workbench-nav { align-items:flex-start; flex-direction:column; }
         .warehouse-shell-frame { height: calc(100vh - 188px); min-height: 520px; }
         .production-location-picker { grid-template-columns: 1fr; }
         .audit-filter-grid, .audit-detail-grid { grid-template-columns: 1fr; }
@@ -1469,7 +1488,7 @@
         <div class="layout">
           <aside class="sidebar">
             <div class="menu-title">业务中心</div>
-            <button v-for="item in menus" :key="item.key" :class="['menu-item', {active: activePage === item.key}]" @click="go(item.key)">
+            <button v-for="item in menus" :key="item.key" :class="['menu-item', {active: isMenuActive(item.key)}]" @click="goMenu(item.key)">
               <span class="menu-item-inner"><span class="menu-icon" v-html="navIcon(item.key)"></span><span>{{ item.label }}</span></span>
               <span v-if="item.count !== undefined" class="status">{{ item.count }}</span>
             </button>
@@ -1477,9 +1496,20 @@
           <main class="main">
             <div v-if="loading" class="loading-bar"></div>
 
+            <section v-if="currentNavigationGroup" class="workbench-nav" :aria-label="`${currentNavigationGroup.label}工作台`">
+              <div class="workbench-nav-title"><strong>{{ currentNavigationGroup.label }}</strong><span>{{ currentNavigationGroup.description }}</span></div>
+              <div class="workbench-tabs">
+                <button v-for="page in currentNavigationGroup.pages" v-if="pageAllowed(page.key)" :key="page.key" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
+              </div>
+            </section>
+
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
               <div class="warehouse-shell-head">
-                <div><strong>仓库库存管理</strong><span class="muted" style="margin-left:10px">保持在 ERP 内操作，切换其它模块不会丢失当前仓库页面。</span></div>
+                <div><strong>仓库地图与库存</strong><span class="muted" style="margin-left:10px">默认先看真实三楼地图；切换其它模块不会丢失当前仓库页面。</span></div>
+                <div class="warehouse-wayfinding" aria-label="厂房楼层导视">
+                  <button class="warehouse-floor-card active" type="button" @click="openWarehouseMap"><strong>三楼</strong><small>成品与半成品 · 已接入</small></button>
+                  <div class="warehouse-floor-card future" aria-label="一楼台账未建立"><strong>一楼</strong><small>台账未建立 / 建设中</small></div>
+                </div>
                 <button class="btn small" type="button" @click="refreshWarehouseFrame">刷新仓库页面</button>
               </div>
               <iframe
@@ -6519,30 +6549,42 @@
           pdfTemplateFormReadonly() {
             return !!this.pdfTemplateForm.id && this.pdfTemplateForm.status !== "draft";
           },
+          navigationGroups() {
+            return [
+              { key:"workbench", label:"订单与仓库", description:"订单、报料、来料入库与仓库地图", pages:[
+                {key:"orders",label:"订单"}, {key:"requisition",label:"报料"},
+                {key:"incoming",label:"来料入库"}, {key:"warehouse",label:"仓库地图"},
+              ]},
+              { key:"master", label:"主数据", description:"客户、常用箱与材质资料", pages:[
+                {key:"customers",label:"客户"}, {key:"products",label:"常用箱与材质"},
+              ]},
+              { key:"system_hub", label:"系统管理", description:"操作记录、备份与账号权限", pages:[
+                {key:"audit",label:"操作记录"}, {key:"system",label:"系统备份"},
+                {key:"permissions",label:"用户权限"},
+              ]},
+            ];
+          },
+          currentNavigationGroup() {
+            return this.navigationGroups.find(group => group.pages.some(page => page.key === this.activePage)) || null;
+          },
           menus() {
             const items = [
-              { key: "dashboard", label: "首页仪表盘" },
-              { key: "orders", label: "订单管理", count: this.ordersUnfinishedTotal },
-              { key: "requisition", label: "报料管理", count: this.requisitionPending.length },
-              { key: "incoming", label: "仓库来料入库", count: this.incomingPending.length },
+              { key: "dashboard", label: "首页" },
+              { key: "workbench", label: "订单与仓库", count: this.ordersUnfinishedTotal + this.requisitionPending.length + this.incomingPending.length },
               { key: "production", label: "生产确认", count: this.productionPending.length },
-              { key: "warehouse", label: "仓库库存管理" },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账开票收款" },
-              { key: "customers", label: "客户管理" },
-              { key: "products", label: "常用箱与材质" },
-              { key: "audit", label: "操作记录" },
-              { key: "system", label: "系统备份" }
+              { key: "master", label: "主数据" },
+              { key: "system_hub", label: "系统管理" }
             ];
-            if (this.canManagePermissions) items.push({ key: "permissions", label: "用户权限管理" });
             const allowed = roleMenus[this.user?.role] || [];
             return items.filter(item => (
-                item.key === "permissions"
-                  ? this.canManagePermissions
+                ["workbench","master","system_hub"].includes(item.key)
+                  ? this.navigationGroups.find(group => group.key === item.key).pages.some(page => allowed.includes(page.key) || (!!this.pagePermission(page.key) && this.pageAllowed(page.key)))
                   : allowed.includes(item.key) || (!!this.pagePermission(item.key) && this.pageAllowed(item.key))
               ))
-              .filter(item => item.key !== "system" || this.user?.role !== "boss")
-              .filter(item => item.key === "permissions" || this.pageAllowed(item.key));
+              .filter(item => item.key !== "system_hub" || this.user?.role !== "boss")
+              .filter(item => ["workbench","master","system_hub"].includes(item.key) || this.pageAllowed(item.key));
           },
           deliveryCustomers() {
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
@@ -6858,9 +6900,14 @@
             const permission = this.pagePermission(page);
             return !permission || this.hasPermission(permission);
           },
-          firstAllowedPage() { return this.menus[0]?.key || "dashboard"; },
+          firstAllowedPage() {
+            const first = this.menus[0];
+            const group = this.navigationGroups.find(item => item.key === first?.key);
+            return group?.pages.find(page => this.pageAllowed(page.key))?.key || first?.key || "dashboard";
+          },
           roleLabel(role) { return ({admin:"管理员",finance:"财务",sales:"业务",boss:"老板",workshop:"车间",delivery_picker:"送货拿货员"})[role] || role; },
           navIcon(key) {
+            key = ({workbench:"orders",master:"products",system_hub:"system"}[key] || key);
             const icons = {
               dashboard: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
               customers: `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M2 21c0-4 3.134-7 7-7s7 3 7 7"/><circle cx="19" cy="9" r="2.5"/><path d="M19 14c2.5 0 4 1.8 4 4"/></svg>`,
@@ -8909,6 +8956,26 @@
             this.activePage = page;
             await this.loadPage(page);
           },
+          isMenuActive(menuKey) {
+            const group = this.navigationGroups.find(item => item.key === menuKey);
+            return group ? group.pages.some(page => page.key === this.activePage) : this.activePage === menuKey;
+          },
+          async goMenu(menuKey) {
+            const group = this.navigationGroups.find(item => item.key === menuKey);
+            if (!group) return this.go(menuKey);
+            const target = group.pages.find(page => this.pageAllowed(page.key));
+            if (target) return this.go(target.key);
+            this.showToast("当前账号没有访问该工作台的权限", true);
+          },
+          async openWarehouseMap() {
+            if (!this.pageAllowed("warehouse")) {
+              this.showToast("当前账号没有访问仓库地图的权限", true);
+              return;
+            }
+            this.ensureWarehouseFrame("/warehouse.html?embedded=1&tab=locations&location_view=floor3");
+            this.activePage = "warehouse";
+            await this.loadPage("warehouse");
+          },
           async openDashboardTarget(entry) {
             const key = entry?.key || "";
             const target = entry?.target || "dashboard";
@@ -8998,7 +9065,7 @@
           },
           ensureWarehouseFrame(target = "") {
             if (target) this.warehouseFrameUrl = target;
-            else if (!this.warehouseFrameUrl) this.warehouseFrameUrl = "/warehouse.html?embedded=1";
+            else if (!this.warehouseFrameUrl) this.warehouseFrameUrl = "/warehouse.html?embedded=1&tab=locations&location_view=floor3";
           },
           refreshWarehouseFrame() {
             this.ensureWarehouseFrame();

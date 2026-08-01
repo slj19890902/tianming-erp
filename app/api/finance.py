@@ -355,6 +355,8 @@ def list_statements(
                     "invoiced_amount": statement.invoiced_amount,
                     "settled_amount": statement.settled_amount,
                     "status": statement.status,
+                    "confirmation_status": statement.confirmation_status,
+                    "version": statement.version,
                     "created_at": statement.created_at,
                 },
                 user,
@@ -550,6 +552,8 @@ def _statement_detail_response(
             "invoiced_amount": statement.invoiced_amount,
             "settled_amount": statement.settled_amount,
             "status": statement.status,
+            "confirmation_status": statement.confirmation_status,
+            "version": statement.version,
             "status_label": "已结清" if statement.status == "settled" else "未结清",
             "item_count": len(items),
             "invoice_count": len(invoices),
@@ -3039,7 +3043,12 @@ def create_invoice(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    _statement_for_user(db, payload.statement_id, user)
+    statement_for_task = _statement_for_user(db, payload.statement_id, user)
+    if statement_for_task.confirmation_status == "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="已确认对账单必须通过开票任务登记结果，不能绕过冻结快照。",
+        )
     try:
         updated = db.execute(
             text(
@@ -3299,6 +3308,11 @@ def update_statement(
 ) -> dict:
     try:
         statement = _statement_for_user(db, statement_id, user)
+        if statement.confirmation_status == "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail="对账单已确认；如需修改来源，请先作废对应开票任务并重新核对。",
+            )
         if db.scalar(
             select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
         ) is not None:
@@ -3382,6 +3396,11 @@ def cancel_statement(
 ) -> dict:
     try:
         statement = _statement_for_user(db, statement_id, user)
+        if statement.confirmation_status == "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail="对账单已确认；如需取消，请先作废对应开票任务并重新核对。",
+            )
         if db.scalar(
             select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
         ) is not None:

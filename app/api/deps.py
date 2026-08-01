@@ -55,6 +55,12 @@ PERMISSION_CATALOG = frozenset(
         "deliveries.pick",
         "finance.view",
         "finance.execute",
+        "finance.statement.confirm",
+        "finance.invoice_task.generate",
+        "finance.invoice_result.register",
+        "finance.invoice_profile.manage",
+        "finance.invoice_attachment.view",
+        "finance.invoice_attachment.manage",
         "cost.view",
         "pdf_training.view",
         "pdf_training.manage",
@@ -97,6 +103,14 @@ BOSS_DEFAULT_PERMISSIONS = frozenset(
     if not permission.startswith(("system.", "pdf_training."))
     and permission != "users.manage"
     and permission != "deliveries.over_delivery"
+    and permission
+    not in {
+        "finance.statement.confirm",
+        "finance.invoice_task.generate",
+        "finance.invoice_result.register",
+        "finance.invoice_profile.manage",
+        "finance.invoice_attachment.manage",
+    }
     and permission not in ADMIN_ONLY_PERMISSIONS
 )
 ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
@@ -113,6 +127,12 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "deliveries.view",
             "finance.view",
             "finance.execute",
+            "finance.statement.confirm",
+            "finance.invoice_task.generate",
+            "finance.invoice_result.register",
+            "finance.invoice_profile.manage",
+            "finance.invoice_attachment.view",
+            "finance.invoice_attachment.manage",
             "cost.view",
         }
     ),

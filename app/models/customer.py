@@ -21,6 +21,7 @@ from app.models import Base
 if TYPE_CHECKING:
     from app.models.customer_quote_preference import CustomerQuotePreference
     from app.models.product import Product
+    from app.models.invoice_task import CustomerInvoiceProfile
 
 
 class Customer(Base):
@@ -104,4 +105,9 @@ class Customer(Base):
     quote_preferences: Mapped[list["CustomerQuotePreference"]] = relationship(
         back_populates="customer",
         passive_deletes=True,
+    )
+    invoice_profile: Mapped["CustomerInvoiceProfile | None"] = relationship(
+        back_populates="customer",
+        passive_deletes=True,
+        uselist=False,
     )

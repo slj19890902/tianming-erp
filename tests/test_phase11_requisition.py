@@ -789,6 +789,7 @@ def test_merge_group_lifecycle_creates_supplier_order_only_at_final_step(
 def test_pending_selection_creates_one_supplier_order_for_merge_group_and_regular_item(
     requisition_app,
 ) -> None:
+    from app.models.audit import OperationLog
     from app.models.order import OrderItem
     from app.models.requisition import Requisition
     from app.models.supplier_requisition_order import (
@@ -842,6 +843,166 @@ def test_pending_selection_creates_one_supplier_order_for_merge_group_and_regula
         assert session.get(OrderItem, 1).requisition_status == "已报料"
         assert session.get(OrderItem, second_id).requisition_status == "已报料"
         assert session.get(OrderItem, regular_id).requisition_status == "已报料"
+        audit_rows = session.scalars(
+            select(OperationLog)
+            .where(OperationLog.module_code == "requisition")
+            .order_by(OperationLog.id)
+        ).all()
+        created_events = [
+            row
+            for row in audit_rows
+            if row.action_code == "requisition.supplier_order.create"
+        ]
+        batch_events = [
+            row
+            for row in audit_rows
+            if row.action_code
+            == "requisition.supplier_orders.create_batch"
+        ]
+        assert len(created_events) == 1
+        assert len(batch_events) == 1
+        assert created_events[0].batch_id == batch_events[0].batch_id
+        assert created_events[0].customer_id_snapshot == 1
+        assert created_events[0].object_ref.startswith("SRO-")
+
+
+def test_supplier_order_create_and_void_audit_failures_roll_back_business(
+    requisition_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import requisition as requisition_api
+    from app.models.audit import OperationLog
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    pending_id = _add_pending_candidate(
+        session_factory,
+        30,
+        product_code="Q1-AUDIT-REPLAY",
+    )
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": pending_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                }
+            ],
+        )
+
+        original_append = requisition_api.append_audit_event
+
+        def reject_audit(*args, **kwargs):
+            original_append(*args, **kwargs)
+            raise RuntimeError("forced requisition audit failure")
+
+        monkeypatch.setattr(
+            requisition_api,
+            "append_audit_event",
+            reject_audit,
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="forced requisition audit failure",
+        ):
+            _save_supplier_order_draft(client, draft)
+
+        with session_factory() as session:
+            assert session.query(SupplierRequisitionOrder).count() == 0
+            assert session.get(OrderItem, pending_id).requisition_status == "未报料"
+
+        monkeypatch.undo()
+        created = _save_supplier_order_draft(client, draft)
+        assert created.status_code == 201, created.text
+        supplier_order_id = created.json()["created_orders"][0][
+            "supplier_order_id"
+        ]
+
+        monkeypatch.setattr(
+            requisition_api,
+            "append_audit_event",
+            reject_audit,
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="forced requisition audit failure",
+        ):
+            client.put(
+                f"/api/requisition/supplier-orders/{supplier_order_id}/void"
+            )
+
+    with session_factory() as session:
+        supplier_order = session.get(
+            SupplierRequisitionOrder,
+            supplier_order_id,
+        )
+        assert supplier_order.status != "voided"
+        assert session.get(OrderItem, pending_id).requisition_status == "已报料"
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action_code
+                == "requisition.supplier_order.void"
+            )
+        ) == 0
+
+
+def test_supplier_order_void_writes_structured_audit(
+    requisition_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.order import OrderItem
+
+    app, session_factory = requisition_app
+    pending_id = _add_pending_candidate(
+        session_factory,
+        31,
+        product_code="Q1-AUDIT-VOID",
+    )
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": pending_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                }
+            ],
+        )
+        created = _save_supplier_order_draft(client, draft)
+        supplier_order_id = created.json()["created_orders"][0][
+            "supplier_order_id"
+        ]
+        response = client.put(
+            f"/api/requisition/supplier-orders/{supplier_order_id}/void"
+        )
+
+    assert response.status_code == 200, response.text
+    with session_factory() as session:
+        log = session.scalar(
+            select(OperationLog).where(
+                OperationLog.action_code
+                == "requisition.supplier_order.void"
+            )
+        )
+        assert log is not None
+        assert log.action == "VOID_SUPPLIER_ORDER"
+        assert log.event_category == "business"
+        assert log.result == "success"
+        assert log.customer_id_snapshot == 1
+        assert log.object_ref.startswith("SRO-")
+        assert session.get(OrderItem, pending_id).requisition_status == "未报料"
 
 
 def test_pending_selection_aggregates_supplier_draft_by_purchase_spec(
@@ -1041,6 +1202,7 @@ def test_pending_selection_groups_multiple_suppliers_separately(
 def test_pending_selection_rejects_missing_supplier_and_duplicate_generation(
     requisition_app,
 ) -> None:
+    from app.models.audit import OperationLog
     from app.models.order import OrderItem
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
 
@@ -1088,6 +1250,18 @@ def test_pending_selection_rejects_missing_supplier_and_duplicate_generation(
     with session_factory() as session:
         assert session.query(SupplierRequisitionOrder).count() == 1
         assert session.get(OrderItem, regular_id).requisition_status == "已报料"
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action_code
+                == "requisition.supplier_order.create"
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action_code
+                == "requisition.supplier_orders.create_batch"
+            )
+        ) == 1
 
 
 def test_pending_selection_rejects_fabricated_deduction_and_invalid_requisition_qty(

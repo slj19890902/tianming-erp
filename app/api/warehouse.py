@@ -105,6 +105,7 @@ from app.services.warehouse_inventory import (
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
+from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
     list_operational_locations,
     operational_location_payload,
@@ -5027,22 +5028,35 @@ def list_movements(
 @router.post("/finished/manual-in")
 def finished_manual_in(
     payload: FinishedManualInPayload,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
     require_customer_access(payload.customer_id, user, db)
     try:
+        replayed = _inventory_operation_replayed(db, payload.idempotency_key)
         row = manual_finished_in(db, operator_id=user.id, **payload.model_dump())
+        if not replayed:
+            _append_inventory_lot_audit(
+                db, request=request, user=user,
+                action_code="warehouse.finished.manual_in", row=row,
+                before=None, reason=payload.remarks,
+                idempotency_key=payload.idempotency_key,
+            )
         db.commit()
         return _lot_dict(row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/semi-finished/manual-in")
 def semi_finished_manual_in(
     payload: SemiFinishedManualInPayload,
+    request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
@@ -5052,12 +5066,23 @@ def semi_finished_manual_in(
         require_customer_access(payload.customer_id, user, db)
     _reject_floor3_for_semi_finished_inventory(db, payload.location_id)
     try:
+        replayed = _inventory_operation_replayed(db, payload.idempotency_key)
         row = manual_semi_finished_in(db, operator_id=user.id, **payload.model_dump())
+        if not replayed:
+            _append_inventory_lot_audit(
+                db, request=request, user=user,
+                action_code="warehouse.semi_finished.manual_in", row=row,
+                before=None, reason=payload.remarks,
+                idempotency_key=payload.idempotency_key,
+            )
         db.commit()
         return _lot_dict(row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/lots/{lot_id}/edit-semi-finished")
@@ -5132,6 +5157,84 @@ def edit_finished_inventory_lot(
         _handle_integrity(error)
 
 
+def _inventory_lot_audit_state(row: InventoryLot | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    return {
+        "available": row.quantity_available,
+        "reserved": row.quantity_reserved,
+        "consumed": row.quantity_consumed,
+        "damaged": row.quantity_damaged,
+        "scrapped": row.quantity_scrapped,
+        "status": row.status,
+        "version": row.version,
+    }
+
+
+def _inventory_operation_replayed(db: Session, idempotency_key: str | None) -> bool:
+    if not idempotency_key:
+        return False
+    return db.scalar(
+        select(InventoryMovement.id).where(
+            InventoryMovement.idempotency_key == idempotency_key
+        ).limit(1)
+    ) is not None
+
+
+def _inventory_lot_audit_customer(row: InventoryLot) -> tuple[int | None, str | None]:
+    detail = row.finished_detail or row.semi_finished_detail
+    if detail is None:
+        return None, None
+    return detail.owner_customer_id, detail.owner_customer_name_snapshot
+
+
+def _append_inventory_lot_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    user: User,
+    action_code: str,
+    row: InventoryLot,
+    before: dict[str, object] | None,
+    reason: str | None,
+    idempotency_key: str | None,
+    customer_id: int | None = None,
+    customer_name: str | None = None,
+) -> None:
+    current_customer_id, current_customer_name = _inventory_lot_audit_customer(row)
+    customer_id = current_customer_id if customer_id is None else customer_id
+    customer_name = current_customer_name if customer_name is None else customer_name
+    location = db.get(WarehouseLocation, row.warehouse_location_id)
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="business",
+        result="success",
+        source="web",
+        module_code="warehouse",
+        action_code=action_code,
+        legacy_action=action_code.upper().replace(".", "_")[:30],
+        resource="InventoryLot",
+        entity_type="inventory_lot",
+        entity_id=row.id,
+        object_ref=row.lot_number,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        description="库存批次操作",
+        details={
+            "before": before,
+            "after": _inventory_lot_audit_state(row),
+            "inventory_type": row.inventory_type,
+            "location_id": row.warehouse_location_id,
+            "location_code": location.location_code if location is not None else None,
+            "owner_customer_id_after": current_customer_id,
+            "reason": reason,
+            "idempotency_key": idempotency_key,
+        },
+    )
+
+
 def _operate(
     db: Session,
     user: User,
@@ -5139,9 +5242,14 @@ def _operate(
     operation: str,
     payload: VersionPayload,
     quantity: int = 0,
+    request: Request | None = None,
 ) -> dict:
     _require_lot_customer_access(db, lot_id, user)
     try:
+        lot_before = db.get(InventoryLot, lot_id)
+        before = _inventory_lot_audit_state(lot_before)
+        customer_id, customer_name = _inventory_lot_audit_customer(lot_before)
+        replayed = _inventory_operation_replayed(db, payload.idempotency_key)
         row = mutate_lot(
             db,
             lot_id=lot_id,
@@ -5152,38 +5260,54 @@ def _operate(
             reason=payload.reason,
             idempotency_key=payload.idempotency_key,
         )
+        if not replayed:
+            _append_inventory_lot_audit(
+                db,
+                request=request,
+                user=user,
+                action_code=f"warehouse.lot.{operation}",
+                row=row,
+                before=before,
+                reason=payload.reason,
+                idempotency_key=payload.idempotency_key,
+                customer_id=customer_id,
+                customer_name=customer_name,
+            )
         db.commit()
         return _lot_dict(row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/lots/{lot_id}/adjust")
-def adjust_lot(lot_id: int, payload: AdjustPayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
-    return _operate(db, user, lot_id, "adjust", payload, payload.quantity_delta)
+def adjust_lot(lot_id: int, payload: AdjustPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    return _operate(db, user, lot_id, "adjust", payload, payload.quantity_delta, request)
 
 
 @router.post("/lots/{lot_id}/freeze")
-def freeze_lot(lot_id: int, payload: VersionPayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
-    return _operate(db, user, lot_id, "freeze", payload)
+def freeze_lot(lot_id: int, payload: VersionPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    return _operate(db, user, lot_id, "freeze", payload, request=request)
 
 
 @router.post("/lots/{lot_id}/unfreeze")
-def unfreeze_lot(lot_id: int, payload: VersionPayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
-    return _operate(db, user, lot_id, "unfreeze", payload)
+def unfreeze_lot(lot_id: int, payload: VersionPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    return _operate(db, user, lot_id, "unfreeze", payload, request=request)
 
 
 @router.post("/lots/{lot_id}/damage")
-def damage_lot(lot_id: int, payload: QuantityOperationPayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
-    return _operate(db, user, lot_id, "damage", payload, payload.quantity)
+def damage_lot(lot_id: int, payload: QuantityOperationPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    return _operate(db, user, lot_id, "damage", payload, payload.quantity, request)
 
 
 @router.post("/lots/{lot_id}/scrap")
-def scrap_lot(lot_id: int, payload: QuantityOperationPayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
-    return _operate(db, user, lot_id, "scrap", payload, payload.quantity)
+def scrap_lot(lot_id: int, payload: QuantityOperationPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    return _operate(db, user, lot_id, "scrap", payload, payload.quantity, request)
 
 
 @router.post("/lots/{lot_id}/transfer-to-general")
-def transfer_to_general(lot_id: int, payload: VersionPayload, db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
-    return _operate(db, user, lot_id, "transfer_to_general", payload)
+def transfer_to_general(lot_id: int, payload: VersionPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
+    return _operate(db, user, lot_id, "transfer_to_general", payload, request=request)

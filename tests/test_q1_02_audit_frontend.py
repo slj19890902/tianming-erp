@@ -36,6 +36,8 @@ def test_audit_page_has_two_simple_tabs_and_all_filters() -> None:
         "source",
     ):
         assert f"auditLogState.filters.{field}" in AUDIT_PAGE
+    for value in ("partial", "legacy"):
+        assert f'<option value="{value}">' in AUDIT_PAGE
     assert "@click=\"queryAuditLogs\"" in AUDIT_PAGE
     assert "@click=\"resetAuditFilters\"" in AUDIT_PAGE
 

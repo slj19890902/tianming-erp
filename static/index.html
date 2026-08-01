@@ -2504,10 +2504,11 @@
             </template>
 
             <template v-else-if="activePage === 'finance'">
-              <page-head title="对账、开票与收款" desc="当前处理按客户和月份汇总；展开后处理具体对账单。"></page-head>
+              <page-head title="对账、开票与收款" desc="当前待办和已结清历史分开显示；均按客户和月份汇总。"></page-head>
               <div class="toolbar" style="margin-bottom:10px">
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">当前处理</button>
+                  <button :class="['btn',{primary:financeView==='settled_history'}]" @click="setFinanceView('settled_history')">已结清历史</button>
                   <button :class="['btn',{primary:financeView==='statements'}]" @click="setFinanceView('statements')">全部单据</button>
                 </div>
               </div>
@@ -2566,10 +2567,64 @@
                 <pager :page="pages.financeCurrent" :total="financeCurrentTotal" :page-size="pageSize" @change="pages.financeCurrent=$event; loadFinance()"></pager>
               </div>
               </template>
+              <template v-else-if="financeView==='settled_history'">
+                <div class="panel" style="margin-bottom:10px">
+                  <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                      <div class="field" style="width:105px"><label>年份</label><input class="input" type="number" min="2000" max="2100" v-model="financeSettledFilters.year" @change="reloadFinanceSettled" /></div>
+                      <div class="field" style="width:150px"><label>月份（可不选）</label><input class="input" type="month" v-model="financeSettledFilters.statement_month" @change="reloadFinanceSettled" /></div>
+                      <div class="field" style="width:220px"><label>客户（可不选）</label><search-select v-model="financeSettledFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" @change="reloadFinanceSettled"></search-select></div>
+                      <div class="field" style="width:150px"><label>对账单号</label><input class="input" v-model.trim="financeSettledFilters.statement_number" placeholder="输入单号" @keyup.enter="reloadFinanceSettled" /></div>
+                      <div class="field" style="width:150px"><label>发票号</label><input class="input" v-model.trim="financeSettledFilters.invoice_number" placeholder="输入发票号" @keyup.enter="reloadFinanceSettled" /></div>
+                      <div class="field" style="width:140px"><label>收款日期从</label><input class="input" type="date" v-model="financeSettledFilters.settlement_date_from" /></div>
+                      <div class="field" style="width:140px"><label>收款日期至</label><input class="input" type="date" v-model="financeSettledFilters.settlement_date_to" /></div>
+                    </div>
+                    <div class="toolbar-group">
+                      <button class="btn" @click="clearFinanceSettledFilters">清空</button>
+                      <button class="btn primary" :disabled="financeSettledState.loading" @click="reloadFinanceSettled">{{ financeSettledState.loading ? '查询中…' : '查询' }}</button>
+                    </div>
+                  </div>
+                  <div v-if="financeSettledState.loaded && !financeSettledState.error" class="muted" style="margin-top:8px">
+                    {{ financeSettledFilters.statement_month || financeSettledFilters.year + ' 年' }}：{{ financeSettledSummary.customer_month_count || 0 }} 个客户月份 · {{ financeSettledSummary.statement_count || 0 }} 张对账单 · 已收款 ¥{{ money(financeSettledSummary.settled_amount) }}
+                  </div>
+                </div>
+                <div v-if="financeSettledState.error" class="notice warning" style="margin-bottom:10px">已结清历史加载失败：{{ financeSettledState.error }}</div>
+                <div class="panel">
+                  <div class="section-title">已结清历史（年度 → 月份 → 客户）</div>
+                  <div v-if="financeSettledState.loading" class="empty">正在读取已结清历史…</div>
+                  <div v-else-if="financeSettledState.error" class="empty">请检查连接或筛选条件后重新查询。</div>
+                  <div v-else-if="financeSettledState.loaded && !financeSettledRows.length" class="empty">当前条件下没有已结清记录。</div>
+                  <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:56px"></th><th style="width:18%">客户</th><th style="width:12%">年度 / 月份</th><th style="width:10%">对账单</th><th class="sensitive-price" style="width:17%">应收 / 已开票</th><th class="sensitive-price" style="width:17%">已收款</th><th style="width:18%">最后收款 / 状态</th></tr></thead>
+                    <tbody v-for="row in financeSettledRows" :key="financeSettledGroupKey(row)">
+                      <tr>
+                        <td><button class="btn small" @click="toggleFinanceSettledGroup(row)">{{ financeSettledExpanded[financeSettledGroupKey(row)] ? '收起' : '展开' }}</button></td>
+                        <td><strong>{{ row.customer_name }}</strong></td>
+                        <td>{{ row.year }} 年<div class="muted">{{ row.statement_month }}</div></td>
+                        <td>{{ row.statement_count }} 张</td>
+                        <td class="sensitive-price">¥ {{ money(row.total_receivable) }}<div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
+                        <td class="sensitive-price"><strong>¥ {{ money(row.settled_amount) }}</strong></td>
+                        <td>{{ row.latest_settlement_date || '未记录日期' }}<div><span class="status green">已结清</span><span v-if="row.status_anomaly_count" class="status red">状态需核对</span></div></td>
+                      </tr>
+                      <tr v-if="financeSettledExpanded[financeSettledGroupKey(row)]"><td colspan="7" style="padding:8px 12px;background:#f8fafc">
+                        <div class="table-wrap"><table><thead><tr><th>对账单号</th><th class="sensitive-price">应收</th><th>发票</th><th>收款记录</th><th>操作</th></tr></thead><tbody>
+                          <tr v-for="statement in row.statements" :key="statement.id">
+                            <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td>
+                            <td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td>
+                            <td><div v-for="invoice in statement.invoices" :key="invoice.id">{{ invoice.invoice_number }} · ¥{{ money(invoice.invoice_amount) }}</div><span v-if="!statement.invoices.length" class="muted">无记录</span></td>
+                            <td><div v-for="payment in statement.settlements" :key="payment.id">{{ payment.settlement_date }} · ¥{{ money(payment.settled_amount) }}</div><span v-if="!statement.settlements.length" class="muted">无记录</span></td>
+                            <td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button></td>
+                          </tr>
+                        </tbody></table></div>
+                      </td></tr>
+                    </tbody>
+                  </table></div>
+                  <pager :page="pages.financeSettled" :total="financeSettledTotal" :page-size="pageSize" @change="pages.financeSettled=$event; loadFinance()"></pager>
+                </div>
+              </template>
               <template v-else>
                 <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
                 <div class="panel">
-                  <div class="section-title">全部对账单（历史分区将在下一阶段完善）</div>
+                  <div class="section-title">全部对账单</div>
                   <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
                   <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(row.total_receivable)-Number(row.settled_amount)<=0" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                   <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
@@ -5642,8 +5697,11 @@
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
             financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {},
             financeCurrentState: { loading:false, error:"", loaded:false }, financeCurrentExpanded: {},
+            financeSettledFilters: { year:month().slice(0,4), statement_month:"", customer_id:"", statement_number:"", invoice_number:"", settlement_date_from:"", settlement_date_to:"" },
+            financeSettledRows: [], financeSettledTotal: 0, financeSettledSummary: {},
+            financeSettledState: { loading:false, error:"", loaded:false }, financeSettledExpanded: {},
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1 },
+            pages: { customers: 1, products: 1, orders: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -10389,6 +10447,37 @@
             this.loadDeliveries();
           },
           async loadFinance() {
+            if (this.financeView === "settled_history") {
+              this.financeSettledState.loading = true;
+              this.financeSettledState.error = "";
+              this.financeSettledState.loaded = false;
+              this.financeSettledRows = [];
+              try {
+                const filters = this.financeSettledFilters;
+                const { data } = await axios.get("/api/finance/settled-customer-months", { params: {
+                  page:this.pages.financeSettled,
+                  page_size:this.pageSize,
+                  year:filters.year || month().slice(0,4),
+                  statement_month:filters.statement_month || undefined,
+                  customer_id:filters.customer_id || undefined,
+                  statement_number:filters.statement_number || undefined,
+                  invoice_number:filters.invoice_number || undefined,
+                  settlement_date_from:filters.settlement_date_from || undefined,
+                  settlement_date_to:filters.settlement_date_to || undefined,
+                } });
+                this.financeSettledRows = data.items || [];
+                this.financeSettledTotal = Number(data.total || 0);
+                this.financeSettledSummary = data.summary || {};
+                this.financeSettledState.loaded = true;
+              } catch (error) {
+                this.financeSettledTotal = 0;
+                this.financeSettledSummary = {};
+                this.financeSettledState.error = this.errorMessage(error);
+              } finally {
+                this.financeSettledState.loading = false;
+              }
+              return;
+            }
             if (this.financeView === "statements") {
               const [statements, invoices] = await Promise.all([
                 axios.get("/api/finance/statements", { params:{ page:this.pages.statements, page_size:this.pageSize } }),
@@ -10429,8 +10518,11 @@
           financeGroupKey(row) {
             return `${row.statement_month}:${row.customer_id}`;
           },
+          financeSettledGroupKey(row) {
+            return `${row.year}:${row.statement_month}:${row.customer_id}`;
+          },
           async setFinanceView(view) {
-            if (!['current','statements'].includes(view)) return;
+            if (!['current','settled_history','statements'].includes(view)) return;
             this.financeView = view;
             this.invalidatePageCache("finance");
             await this.loadFinance();
@@ -10459,6 +10551,23 @@
           async clearFinanceDashboardFilter() {
             this.financeFilters = { statement_month:this.financeFilters.statement_month || month(), balance_type:"", customer_id:"" };
             this.pages.financeCurrent = 1;
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
+          },
+          toggleFinanceSettledGroup(row) {
+            const key = this.financeSettledGroupKey(row);
+            this.financeSettledExpanded = { ...this.financeSettledExpanded, [key]:!this.financeSettledExpanded[key] };
+          },
+          async reloadFinanceSettled() {
+            const selectedMonth = String(this.financeSettledFilters.statement_month || "");
+            if (selectedMonth) this.financeSettledFilters.year = selectedMonth.slice(0, 4);
+            this.pages.financeSettled = 1;
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
+          },
+          async clearFinanceSettledFilters() {
+            this.financeSettledFilters = { year:month().slice(0,4), statement_month:"", customer_id:"", statement_number:"", invoice_number:"", settlement_date_from:"", settlement_date_to:"" };
+            this.pages.financeSettled = 1;
             this.invalidatePageCache("finance");
             await this.loadFinance();
           },

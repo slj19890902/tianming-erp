@@ -309,6 +309,19 @@ def test_selected_scope_filters_finance_reads_and_redacts_costs(
             ).status_code
             == 403
         )
+        settled_history = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+        assert settled_history.status_code == 200
+        assert settled_history.json()["total"] == 0
+        assert (
+            client.get(
+                "/api/finance/settled-customer-months",
+                params={"year": 2026, "customer_id": ids["customer_b"]},
+            ).status_code
+            == 403
+        )
 
         detail = client.get(f"/api/finance/statements/{ids['statement_a']}")
         assert detail.status_code == 200
@@ -496,6 +509,13 @@ def test_empty_selected_scope_returns_zero_lists_and_forbids_resources(
         assert current.status_code == 200
         assert current.json()["total"] == 0
         assert current.json()["items"] == []
+        settled_history = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+        assert settled_history.status_code == 200
+        assert settled_history.json()["total"] == 0
+        assert settled_history.json()["items"] == []
         assert client.get("/api/finance/statement-customers").json()["items"] == []
         invoices = client.get("/api/finance/invoices")
         assert invoices.status_code == 200

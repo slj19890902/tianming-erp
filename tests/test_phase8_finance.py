@@ -1463,6 +1463,278 @@ def test_current_finance_prioritizes_pending_reconciliation(finance_api_app) -> 
     assert denied.status_code == 403
 
 
+def _fully_process_statement(
+    client: TestClient,
+    statement: dict,
+    *,
+    invoice_number: str,
+    transaction_date: str,
+) -> None:
+    amount = str(statement["total_receivable"])
+    invoice = client.post(
+        "/api/finance/invoices",
+        json={
+            "statement_id": statement["id"],
+            "invoice_number": invoice_number,
+            "invoice_date": transaction_date,
+            "invoice_amount": amount,
+        },
+    )
+    settlement = client.put(
+        f"/api/finance/statements/{statement['id']}/settle",
+        json={
+            "amount": amount,
+            "settlement_date": transaction_date,
+            "account": "测试账户",
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+    assert settlement.status_code == 200, settlement.text
+
+
+def test_settled_history_groups_full_customer_month_and_supports_search(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Invoice, SettlementRecord, Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        first = _create_statement(client)
+        _fully_process_statement(
+            client,
+            first,
+            invoice_number="INV-HIST-001",
+            transaction_date="2026-06-18",
+        )
+        with session_factory() as session:
+            second = Statement(
+                statement_number="ST-202606-HIST-002",
+                customer_id=1,
+                statement_month="2026-06",
+                total_receivable=Decimal("100.00"),
+                total_gross_profit=Decimal("0.00"),
+                invoiced_amount=Decimal("100.00"),
+                settled_amount=Decimal("100.00"),
+                status="unsettled",
+                created_by=1,
+            )
+            session.add(second)
+            session.flush()
+            session.add_all(
+                [
+                    Invoice(
+                        statement_id=second.id,
+                        invoice_number="INV-HIST-002",
+                        invoice_date=date(2026, 6, 20),
+                        invoice_amount=Decimal("100.00"),
+                        created_by=1,
+                    ),
+                    SettlementRecord(
+                        statement_id=second.id,
+                        settled_amount=Decimal("100.00"),
+                        settlement_date=date(2026, 6, 20),
+                        account="测试账户",
+                        created_by=1,
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+        by_statement = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026, "statement_number": "HIST-002"},
+        )
+        by_invoice = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026, "invoice_number": "HIST-002"},
+        )
+        by_settlement_date = client.get(
+            "/api/finance/settled-customer-months",
+            params={
+                "year": 2026,
+                "settlement_date_from": "2026-06-20",
+                "settlement_date_to": "2026-06-20",
+            },
+        )
+        no_match = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026, "invoice_number": "不存在"},
+        )
+        bad_month = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2025, "statement_month": "2026-06"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["summary"]["customer_month_count"] == 1
+    assert body["summary"]["statement_count"] == 2
+    row = body["items"][0]
+    assert row["statement_month"] == "2026-06"
+    assert row["customer_id"] == 1
+    assert row["statement_count"] == 2
+    assert len(row["statements"]) == 2
+    assert Decimal(str(row["total_receivable"])) == Decimal("380.80")
+    assert Decimal(str(row["invoiced_amount"])) == Decimal("380.80")
+    assert Decimal(str(row["settled_amount"])) == Decimal("380.80")
+    assert row["status_anomaly_count"] == 1
+    assert set(row["invoice_numbers"]) == {"INV-HIST-001", "INV-HIST-002"}
+    assert row["latest_settlement_date"] == "2026-06-20"
+    assert "total_gross_profit" not in row
+    assert "total_gross_profit" not in row["statements"][0]
+    assert by_statement.json()["total"] == 1
+    assert by_invoice.json()["total"] == 1
+    assert by_settlement_date.json()["total"] == 1
+    assert no_match.json()["total"] == 0
+    assert bad_month.status_code == 400
+
+
+def test_settled_history_excludes_customer_month_with_any_balance(
+    finance_api_app,
+) -> None:
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        first = _create_statement(client)
+        _fully_process_statement(
+            client,
+            first,
+            invoice_number="INV-BALANCE-001",
+            transaction_date="2026-06-18",
+        )
+        with session_factory() as session:
+            second = Statement(
+                statement_number="ST-202606-BALANCE-002",
+                customer_id=1,
+                statement_month="2026-06",
+                total_receivable=Decimal("100.00"),
+                total_gross_profit=Decimal("0.00"),
+                invoiced_amount=Decimal("90.00"),
+                settled_amount=Decimal("100.00"),
+                status="settled",
+                created_by=1,
+            )
+            session.add(second)
+            session.commit()
+
+        history_before = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+        current_before = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-06"},
+        )
+        with session_factory() as session:
+            second = session.scalar(
+                select(Statement).where(
+                    Statement.statement_number == "ST-202606-BALANCE-002"
+                )
+            )
+            second.invoiced_amount = Decimal("100.00")
+            second.settled_amount = Decimal("100.00")
+            second.status = "settled"
+            session.commit()
+        history_after = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+
+    assert history_before.status_code == 200
+    assert history_before.json()["total"] == 0
+    assert current_before.status_code == 200
+    assert current_before.json()["total"] == 1
+    assert current_before.json()["items"][0]["primary_action"] == "invoice"
+    assert history_after.status_code == 200
+    assert history_after.json()["total"] == 1
+
+
+def test_settled_history_excludes_month_with_new_pending_reconciliation(
+    finance_api_app,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        first = _create_statement(client)
+        _fully_process_statement(
+            client,
+            first,
+            invoice_number="INV-PENDING-001",
+            transaction_date="2026-06-18",
+        )
+        with session_factory() as session:
+            delivery = Delivery(
+                delivery_number="DH-20260620-PENDING",
+                customer_id=1,
+                delivery_date=date(2026, 6, 19),
+                status="dispatched",
+                total_quantity=1,
+                dispatched_at=datetime(2026, 6, 19, 9, 0, 0),
+            )
+            session.add(delivery)
+            session.flush()
+            delivery_item = DeliveryItem(
+                delivery_id=delivery.id,
+                order_item_id=1,
+                delivered_quantity=1,
+            )
+            session.add(delivery_item)
+            session.flush()
+            receipt = ReturnReceipt(
+                delivery_id=delivery.id,
+                actual_received_date=date(2026, 6, 19),
+                status="confirmed",
+                created_by=1,
+            )
+            session.add(receipt)
+            session.flush()
+            session.add(
+                ReturnReceiptItem(
+                    return_receipt_id=receipt.id,
+                    delivery_item_id=delivery_item.id,
+                    actual_received_quantity=1,
+                )
+            )
+            session.commit()
+
+        history = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+        current = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-06"},
+        )
+
+    assert history.status_code == 200, history.text
+    assert history.json()["total"] == 0
+    assert current.status_code == 200, current.text
+    assert current.json()["items"][0]["primary_action"] == "reconcile"
+
+
+def test_settled_history_requires_finance_view_permission(finance_api_app) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        denied = client.get(
+            "/api/finance/settled-customer-months",
+            params={"year": 2026},
+        )
+
+    assert denied.status_code == 403
+
+
 def _append_second_delivery_line(session_factory) -> int:
     from app.models.delivery import Delivery, DeliveryItem
     from app.models.order import OrderItem

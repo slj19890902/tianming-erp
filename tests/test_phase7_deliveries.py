@@ -814,6 +814,91 @@ def test_print_data_uses_product_name_and_customer_remark_only(
     assert "production_notes" not in item
 
 
+def test_delivery_freezes_product_name_and_specification_at_draft_creation(
+    delivery_api_app,
+) -> None:
+    from app.models.delivery import DeliveryItem
+    from app.models.order import OrderItem
+    from app.models.product import Product
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+
+        with session_factory() as session:
+            delivery_item = session.scalar(
+                select(DeliveryItem).where(
+                    DeliveryItem.delivery_id == delivery_id,
+                    DeliveryItem.order_item_id == 1,
+                )
+            )
+            assert delivery_item is not None
+            assert delivery_item.product_name_snapshot == "五层加强纸箱"
+            assert delivery_item.specification_snapshot == "520×350×300mm"
+
+            order_item = session.get(OrderItem, 1)
+            product = session.get(Product, order_item.product_id)
+            order_item.snapshot_product_name = "订单后来被改名"
+            order_item.snapshot_spec = "999×999×999mm"
+            product.product_name = "常用箱后来被改名"
+            product.length_mm = Decimal("999")
+            session.commit()
+
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+        detail = client.get(f"/api/deliveries/{delivery_id}")
+
+    assert printed.status_code == 200, printed.text
+    assert detail.status_code == 200, detail.text
+    for response in (printed.json(), detail.json()):
+        item = response["items"][0]
+        assert item["product_name"] == "五层加强纸箱"
+        assert item["specification"] == "520×350×300mm"
+
+
+def test_legacy_delivery_missing_own_and_order_snapshots_does_not_guess_product(
+    delivery_api_app,
+) -> None:
+    from app.models.delivery import DeliveryItem
+    from app.models.order import OrderItem
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+
+        with session_factory() as session:
+            delivery_item = session.scalar(
+                select(DeliveryItem).where(
+                    DeliveryItem.delivery_id == delivery_id,
+                    DeliveryItem.order_item_id == 1,
+                )
+            )
+            order_item = session.get(OrderItem, 1)
+            delivery_item.product_code_snapshot = None
+            delivery_item.product_name_snapshot = None
+            delivery_item.specification_snapshot = None
+            order_item.snapshot_product_code = None
+            order_item.snapshot_product_name = ""
+            order_item.snapshot_spec = None
+            session.commit()
+
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+        detail = client.get(f"/api/deliveries/{delivery_id}")
+
+    assert printed.status_code == 200, printed.text
+    assert detail.status_code == 200, detail.text
+    for response in (printed.json(), detail.json()):
+        item = response["items"][0]
+        assert item["product_code"] == "存货编码未登记"
+        assert item["product_name"] == "产品名称未登记"
+        assert item["specification"] == "规格未登记"
+
+
 def test_clearing_customer_remark_hides_it_from_detail_and_print(
     delivery_api_app,
 ) -> None:
@@ -1062,7 +1147,7 @@ def test_print_html_has_required_text_and_no_money_bindings() -> None:
         "客户单号",
         "<th>序号</th>",
         "款号",
-        "产品名称",
+        "产品名称 / 规格",
         "<th>单位</th>",
         "备注说明",
         "白联:存档",
@@ -1071,6 +1156,7 @@ def test_print_html_has_required_text_and_no_money_bindings() -> None:
         "@media print",
         "size: 241mm 139.5mm",
         ".product-name.long-name",
+        ".product-spec",
         "overflow-wrap: anywhere",
         'data-field="pageNumber"',
         "本页数量",
@@ -1079,10 +1165,12 @@ def test_print_html_has_required_text_and_no_money_bindings() -> None:
         "当前纸张高度无法完整打印",
         "break-after: page",
         "`${pageNumber}/${totalPages}页`",
-        "/api/system/delivery-print-settings",
-        "--paper-width",
-        "--paper-height",
-    ):
+            "/api/system/delivery-print-settings",
+            "--paper-width",
+            "--paper-height",
+            "BroadcastChannel",
+            "open_token",
+        ):
         assert required in source
     assert "单位(PCS)" not in source
     assert "production_notes" not in source

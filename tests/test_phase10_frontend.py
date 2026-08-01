@@ -35,7 +35,7 @@ def test_phase10_frontend_uses_core_real_api_contracts() -> None:
         "/api/finance/statements",
         "/api/finance/invoices",
         "/settle",
-        "window.open(`/delivery-print.html?id=${",
+        "openDeliveryPrintTab",
     )
     for marker in required:
         assert marker in source

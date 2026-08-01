@@ -114,6 +114,7 @@
     .sequence { width: 5%; }
     .product-name { text-align: left; overflow-wrap: anywhere; }
     .product-name.long-name { font-size: 11px; line-height: 1.18; }
+    .product-spec { margin-top: 1px; color: #222; font-size: 10px; line-height: 1.15; }
     .item-remark { font-size: 11px; }
     .component-line td { background: #fafafa; }
     .component-line .product-name { padding-left: 10px; }
@@ -247,7 +248,7 @@
           <th>序号</th>
           <th>客户单号</th>
           <th>款号</th>
-          <th>产品名称</th>
+          <th>产品名称 / 规格</th>
           <th>单位</th>
           <th>数量</th>
           <th>备注</th>
@@ -322,6 +323,7 @@
         customer_po: component.customer_po ?? parentItem.customer_po ?? "",
         product_code: component.product_code ?? component.component_code ?? "",
         product_name: component.product_name ?? component.component_name ?? "未命名组件",
+        specification: component.specification ?? parentItem.specification ?? "规格未登记",
         unit: component.unit || parentItem.unit || "PCS",
         quantity: component.quantity
           ?? component.planned_delivery_quantity
@@ -391,7 +393,8 @@
       );
       getField(sheet, "itemRows").innerHTML = entries.map((entry) => {
         const item = entry.item;
-        const productName = String(item.product_name || "").trim();
+        const productName = String(item.product_name || "").trim() || "产品名称未登记";
+        const specification = String(item.specification || "").trim() || "规格未登记";
         const customerRemark = String(item.remarks || "").trim();
         const pricingNote = item.pricing_included === false ? "套内子件，不单独计价" : "";
         const fullRemark = [pricingNote, customerRemark].filter(Boolean).join("；");
@@ -405,7 +408,7 @@
           <td class="sequence">${entry.index + 1}</td>
           <td>${escapeHtml(item.customer_po)}</td>
           <td class="product-code">${escapeHtml(item.product_code)}</td>
-          <td class="product-name${longNameClass}">${componentMarker}${escapeHtml(productName)}</td>
+          <td class="product-name${longNameClass}"><div>${componentMarker}${escapeHtml(productName)}</div><div class="product-spec">${escapeHtml(specification)}</div></td>
           <td>${escapeHtml(item.unit)}</td>
           <td>${escapeHtml(item.quantity)}</td>
           <td class="item-remark">${escapeHtml(tableRemark)}</td>
@@ -505,12 +508,36 @@
         }
         renderDelivery(data);
       } catch (error) {
-        showError(error.message);
+        const message = error instanceof TypeError
+          ? "无法连接 ERP 服务，请确认服务正常后在本打印页重试。"
+          : (error.message || "读取送货单失败。");
+        showError(message);
       }
     }
 
+    const printOpenParams = new URLSearchParams(window.location.search);
+    const printOpenToken = printOpenParams.get("open_token") || "";
+    const deferDeliveryLoad = printOpenParams.get("defer") === "1";
+    const printOpenChannel = printOpenToken && typeof BroadcastChannel === "function"
+      ? new BroadcastChannel(`erp-delivery-print-${printOpenToken}`)
+      : null;
+    const startDeliveryPrint = () => loadPaperSettings().then(loadDelivery);
+
+    if (printOpenChannel) {
+      printOpenChannel.onmessage = (event) => {
+        if (event?.data?.type === "activate") {
+          printOpenChannel.close();
+          startDeliveryPrint();
+        } else if (event?.data?.type === "abort") {
+          printOpenChannel.close();
+          showError(event?.data?.message || "送货单处理失败，未打开打印内容。");
+        }
+      };
+      printOpenChannel.postMessage({ type: "ready" });
+    }
+
     document.getElementById("printButton").addEventListener("click", () => window.print());
-    loadPaperSettings().then(loadDelivery);
+    if (!deferDeliveryLoad) startDeliveryPrint();
   </script>
 </body>
 </html>

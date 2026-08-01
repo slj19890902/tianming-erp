@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.19"
-    assert APP_VERSION_NAME == "供应商材质批量入口暂停"
+    assert APP_VERSION == "v0.22.20"
+    assert APP_VERSION_NAME == "送货打印独立页与历史规格"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -58,7 +58,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "系统版本" in item and "v0.22.19" in item
+        "如何验证｜" in item and "系统版本" in item and "v0.22.20" in item
         for item in current_release
     )
     assert any(

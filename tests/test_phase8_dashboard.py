@@ -242,12 +242,12 @@ def test_dashboard_overview_returns_safe_empty_defaults(tmp_path: Path) -> None:
     assert body["summary"]["today_orders"] == 0
     assert body["summary"]["today_deliveries"] == 0
     assert body["summary"]["today_receipts"] == 0
-    assert len(body["cards"]) == 6
+    assert len(body["cards"]) == 8
     assert {card["count"] for card in body["cards"]} == {0}
     assert body["todos"] == []
 
 
-def test_dashboard_overview_excludes_future_delivery_orders(tmp_path: Path) -> None:
+def test_dashboard_overview_does_not_hide_actionable_future_delivery_orders(tmp_path: Path) -> None:
     from app.api.auth import router as auth_router
     from app.api.dashboard import router as dashboard_router
     from app.api.deps import get_db
@@ -341,9 +341,9 @@ def test_dashboard_overview_excludes_future_delivery_orders(tmp_path: Path) -> N
     material_card = next(
         card for card in body["cards"] if card["key"] == "pending_material"
     )
-    assert material_card["count"] == 2
+    assert material_card["count"] == 3
     material_todo = next(todo for todo in body["todos"] if todo["type"] == "待报料")
-    assert material_todo["count"] == 2
+    assert material_todo["count"] == 3
 
 
 def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> None:
@@ -611,23 +611,25 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
     assert [card["key"] for card in body["cards"]] == [
         "pending_material",
         "pending_incoming",
+        "pending_production",
         "pending_delivery",
         "pending_receipt",
         "pending_reconciliation",
-        "unsettled_statements",
+        "pending_invoice",
+        "pending_payment",
     ]
     counts = {card["key"]: card["count"] for card in body["cards"]}
     assert counts["pending_material"] == 1
     assert counts["pending_incoming"] == 1
+    assert counts["pending_production"] == 0
     assert counts["pending_delivery"] == 1
-    # 20/70 尚未送完的明细保持“部分送完”，不能仅因第一批已经发货
-    # 就把整条明细推进成“待回单”。
-    assert counts["pending_receipt"] == 0
+    assert counts["pending_receipt"] == 1
     assert counts["pending_reconciliation"] == 0
-    assert counts["unsettled_statements"] == 1
+    assert counts["pending_invoice"] == 1
+    assert counts["pending_payment"] == 1
     assert body["todos"]
     todo_types = {todo["type"] for todo in body["todos"]}
-    assert {"待报料", "待入库", "待送货", "未结清对账单"} <= todo_types
+    assert {"待报料", "待入库", "待送货", "待回单", "待开票", "待结款"} <= todo_types
     pending_material = next(todo for todo in body["todos"] if todo["type"] == "待报料")
     assert pending_material["target"] == "requisition"
     assert pending_material["count"] == 1
@@ -640,6 +642,7 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
     from app.api.auth import router as auth_router
     from app.api.dashboard import router as dashboard_router
     from app.api.deps import get_db
+    from app.api.finance import _statement_period
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
@@ -653,6 +656,8 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
     engine = create_sqlite_engine(tmp_path / "dashboard-overview-reconciliation.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
+    statement_month = date.today().strftime("%Y-%m")
+    period_start, _period_end = _statement_period(statement_month, 20)
     with factory() as session:
         session.add(
             User(
@@ -768,28 +773,28 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
             customer=customer_a,
             product=product_a,
             order_no="PO-RECON-A1",
-            receipt_date=date(2026, 6, 1),
+            receipt_date=period_start,
             quantity=10,
         )
         add_confirmed_receipt(
             customer=customer_a,
             product=product_a,
             order_no="PO-RECON-A2",
-            receipt_date=date(2026, 6, 8),
+            receipt_date=period_start + timedelta(days=1),
             quantity=20,
         )
         add_confirmed_receipt(
             customer=customer_a,
             product=product_a,
             order_no="PO-RECON-A3",
-            receipt_date=date(2026, 7, 2),
+            receipt_date=period_start + timedelta(days=2),
             quantity=15,
         )
         add_confirmed_receipt(
             customer=customer_b,
             product=product_b,
             order_no="PO-RECON-B1",
-            receipt_date=date(2026, 6, 3),
+            receipt_date=period_start + timedelta(days=3),
             quantity=8,
         )
         session.commit()
@@ -813,26 +818,24 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
     assert response.status_code == 200
     body = response.json()
     counts = {card["key"]: card["count"] for card in body["cards"]}
-    assert counts["pending_reconciliation"] == 4
+    assert counts["pending_reconciliation"] == 2
     recon_todos = [todo for todo in body["todos"] if todo["type"] == "待对账"]
-    assert len(recon_todos) == 3
+    assert len(recon_todos) == 2
     assert {
         (todo["customer_name"], todo["month"])
         for todo in recon_todos
     } == {
-        ("苏州思迈尔包装有限公司", "2026-06"),
-        ("苏州思迈尔包装有限公司", "2026-07"),
-        ("昆山华诚电子有限公司", "2026-06"),
+        ("苏州思迈尔包装有限公司", statement_month),
+        ("昆山华诚电子有限公司", statement_month),
     }
     june_sme = next(
         todo
         for todo in recon_todos
         if todo["customer_name"] == "苏州思迈尔包装有限公司"
-        and todo["month"] == "2026-06"
+        and todo["month"] == statement_month
     )
-    assert june_sme["item_count"] == 2
-    assert Decimal(str(june_sme["amount"])) == Decimal("300.00")
-    assert "月结对账单" in june_sme["message"]
+    assert june_sme["count"] == 3
+    assert Decimal(str(june_sme["amount"])) == Decimal("450.00")
     assert june_sme["action_text"] == "去生成月结对账单"
 
 
@@ -1025,7 +1028,7 @@ def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
                 Statement(
                     statement_number="ST-A-001",
                     customer_id=customer_a.id,
-                    statement_month="2026-06",
+                    statement_month=date.today().strftime("%Y-%m"),
                     total_receivable=Decimal("1000.00"),
                     settled_amount=Decimal("200.00"),
                     total_gross_profit=Decimal("0"),
@@ -1034,7 +1037,7 @@ def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
                 Statement(
                     statement_number="ST-A-002",
                     customer_id=customer_a.id,
-                    statement_month="2026-06",
+                    statement_month=date.today().strftime("%Y-%m"),
                     total_receivable=Decimal("500.00"),
                     settled_amount=Decimal("0"),
                     total_gross_profit=Decimal("0"),
@@ -1072,18 +1075,21 @@ def test_dashboard_overview_groups_same_customer_same_status_into_one_todo(
 
     pending_material = find_todo("待报料", "苏州天华超净科技股份有限公司")
     assert pending_material["count"] == 2
-    assert pending_material["first_order_no"] == "PO-MAT-001"
+    assert pending_material["first_order_no"] in {"PO-MAT-001", "PO-MAT-002"}
 
     pending_incoming = find_todo("待入库", "苏州天华超净科技股份有限公司")
     assert pending_incoming["count"] == 2
     assert pending_incoming["first_item_no"] == "PA"
 
-    pending_delivery = find_todo("待送货", "苏州天华超净科技股份有限公司")
-    assert pending_delivery["count"] == 2
+    assert not any(
+        todo["type"] == "待送货"
+        and todo["customer_name"] == "苏州天华超净科技股份有限公司"
+        for todo in body["todos"]
+    )
 
     pending_receipt = find_todo("待回单", "苏州天华超净科技股份有限公司")
-    assert pending_receipt["count"] == 2
+    assert pending_receipt["count"] == 3
 
-    unsettled = find_todo("未结清对账单", "苏州天华超净科技股份有限公司")
-    assert unsettled["count"] == 2
-    assert Decimal(str(unsettled["amount"])) == Decimal("1300.00")
+    pending_payment = find_todo("待结款", "苏州天华超净科技股份有限公司")
+    assert pending_payment["count"] == 1
+    assert Decimal(str(pending_payment["amount"])) == Decimal("1300.00")

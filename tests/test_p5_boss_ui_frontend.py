@@ -62,7 +62,7 @@ def test_p5_large_mode_has_zoom_safe_responsive_shell() -> None:
 
 def test_p5_large_mode_keeps_delivery_and_production_history_columns_readable() -> None:
     for marker in (
-        '<data-panel class="delivery-list-panel" :empty="!deliveries.length">',
+        '<div v-else class="panel delivery-list-panel">',
         '<table class="delivery-list-table">',
         'class="toolbar-group delivery-list-actions"',
         ".ui-large .delivery-list-panel .table-wrap {",
@@ -78,7 +78,7 @@ def test_p5_large_mode_keeps_delivery_and_production_history_columns_readable() 
         assert marker in INDEX
 
 
-def test_p5_boss_dashboard_uses_only_the_six_business_cards_in_fixed_order() -> None:
+def test_p5_boss_dashboard_uses_authoritative_business_cards_in_fixed_order() -> None:
     match = re.search(
         r"const bossOverviewCardOrder = Object\.freeze\(\[(.*?)\]\);",
         INDEX,
@@ -89,16 +89,24 @@ def test_p5_boss_dashboard_uses_only_the_six_business_cards_in_fixed_order() -> 
     assert re.findall(r'key: "([^"]+)"', block) == [
         "pending_material",
         "pending_incoming",
+        "pending_production",
         "pending_delivery",
-        "unsettled_statements",
+        "pending_receipt",
+        "pending_reconciliation",
+        "pending_invoice",
+        "pending_payment",
         "inventory_risk",
         "business_anomaly",
     ]
     assert re.findall(r'title: "([^"]+)"', block) == [
         "待报料",
         "待入库",
+        "待生产",
         "待送货",
-        "应收",
+        "待回单",
+        "待对账",
+        "待开票",
+        "待结款",
         "库存风险",
         "异常",
     ]

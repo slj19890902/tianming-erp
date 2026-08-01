@@ -37,7 +37,7 @@ from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
     SalesOrderItemBomComponent,
 )
-from app.models.production import ProductionTask
+from app.models.production import ProductionCompletion, ProductionTask
 from app.models.requisition import RequisitionItem
 from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryDraft,
@@ -67,6 +67,7 @@ from app.services.delivery_snapshots import (
 from app.services.production_workflow import (
     ProductionWorkflowError,
     lock_order_rows_for_production_transition,
+    normalized_completion_output,
     production_ready_quantity,
 )
 from app.services.composite_bom_workflow import (
@@ -79,6 +80,7 @@ from app.services.composite_bom_workflow import (
     execute_delivery_component_consumption,
     is_composite_order_item,
     kit_availability,
+    kit_available_sets_by_order_item_ids,
     reverse_delivery_component_allocations,
 )
 from app.services.semi_finished_inventory import (
@@ -90,6 +92,7 @@ from app.services.semi_finished_inventory import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
+    active_finished_reservations_by_item_ids,
     inventory_fifo_order_columns,
 )
 from app.services.unordered_finished_delivery import (
@@ -3381,20 +3384,28 @@ class _PendingDeliveryReadContext:
             self.fast_item_ids: set[int] = set()
             return
 
-        composite_ids = set(
+        self.composite_ids = set(
             db.scalars(
                 select(SalesOrderItemBomComponent.sales_order_item_id)
                 .where(SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids))
                 .distinct()
             ).all()
         )
-        task_item_ids = set(
+        self.composite_available_sets = kit_available_sets_by_order_item_ids(
+            db,
+            self.composite_ids,
+        )
+        tasks = list(
             db.scalars(
-                select(ProductionTask.order_item_id)
-                .where(ProductionTask.order_item_id.in_(item_ids))
-                .distinct()
+                select(ProductionTask).where(ProductionTask.order_item_id.in_(item_ids))
             ).all()
         )
+        task_item_ids = {int(task.order_item_id) for task in tasks}
+        regular_tasks = {
+            int(task.order_item_id): task
+            for task in tasks
+            if task.sales_order_item_bom_component_id is None
+        }
         reservation_item_ids = set(
             db.scalars(
                 select(InventoryReservation.order_item_id)
@@ -3402,28 +3413,37 @@ class _PendingDeliveryReadContext:
                 .distinct()
             ).all()
         )
-        semi_requirement_item_ids = set(
+        semi_requirements = list(
             db.scalars(
-                select(OrderItemSemiRequirement.order_item_id)
-                .where(OrderItemSemiRequirement.order_item_id.in_(item_ids))
-                .distinct()
-            ).all()
-        )
-        telescoping_item_ids = set(
-            db.scalars(
-                select(RequisitionItem.order_item_id)
-                .where(
-                    RequisitionItem.order_item_id.in_(item_ids),
-                    or_(
-                        RequisitionItem.product_name_snapshot.like("%-盖"),
-                        RequisitionItem.product_name_snapshot.like("%-底"),
-                    ),
+                select(OrderItemSemiRequirement).where(
+                    OrderItemSemiRequirement.order_item_id.in_(item_ids)
                 )
-                .distinct()
             ).all()
         )
+        semi_requirement_item_ids = {
+            int(requirement.order_item_id) for requirement in semi_requirements
+        }
+        telescoping_rows = db.execute(
+            select(
+                RequisitionItem.order_item_id,
+                RequisitionItem.product_name_snapshot,
+                RequisitionItem.requisition_qty,
+                RequisitionItem.status,
+            ).where(RequisitionItem.order_item_id.in_(item_ids))
+        ).all()
+        telescoping: dict[int, dict[str, int | bool]] = {}
+        for item_id, product_name, quantity, item_status in telescoping_rows:
+            component = _component_kind(product_name)
+            if not component:
+                continue
+            state = telescoping.setdefault(
+                int(item_id), {"has": True, "base": 0, "cover": 0}
+            )
+            if item_status == "已入库":
+                state[component] = int(state[component]) + int(quantity or 0)
+        telescoping_item_ids = set(telescoping)
         excluded_ids = (
-            composite_ids
+            self.composite_ids
             | task_item_ids
             | reservation_item_ids
             | semi_requirement_item_ids
@@ -3434,6 +3454,129 @@ class _PendingDeliveryReadContext:
             for item_id, item in self.order_items.items()
             if item.material_status == "received" and item_id not in excluded_ids
         }
+        completions_by_item: dict[int, list[ProductionCompletion]] = {}
+        for completion in db.scalars(
+            select(ProductionCompletion).where(
+                ProductionCompletion.order_item_id.in_(item_ids),
+                ProductionCompletion.status == "posted",
+            )
+        ).all():
+            completions_by_item.setdefault(
+                int(completion.order_item_id), []
+            ).append(completion)
+        reserved_by_item = active_finished_reservations_by_item_ids(
+            db, sorted(item_ids)
+        )
+        semi_credited_by_requirement: dict[int, int] = {}
+        semi_requirement_ids = [requirement.id for requirement in semi_requirements]
+        if semi_requirement_ids:
+            for reservation in db.scalars(
+                select(InventoryReservation).where(
+                    InventoryReservation.semi_requirement_id.in_(
+                        semi_requirement_ids
+                    ),
+                    InventoryReservation.reservation_type == "semi_order",
+                    InventoryReservation.status != "cancelled",
+                )
+            ).all():
+                requirement_id = int(reservation.semi_requirement_id)
+                credited = max(
+                    int(reservation.credited_requirement_quantity or 0)
+                    - int(reservation.released_requirement_quantity or 0),
+                    0,
+                )
+                semi_credited_by_requirement[requirement_id] = (
+                    semi_credited_by_requirement.get(requirement_id, 0)
+                    + credited
+                )
+        product_styles = {
+            int(product_id): str(box_style or "")
+            for product_id, box_style in db.execute(
+                select(Product.id, Product.box_style).where(
+                    Product.id.in_(
+                        {
+                            int(item.product_id)
+                            for item in self.order_items.values()
+                        }
+                    )
+                )
+            ).all()
+        }
+        requirements_by_item: dict[int, dict[str, OrderItemSemiRequirement]] = {}
+        for requirement in semi_requirements:
+            requirements_by_item.setdefault(
+                int(requirement.order_item_id), {}
+            )[requirement.component_type] = requirement
+        semi_fully_covered_ids: set[int] = set()
+        for item_id, requirements in requirements_by_item.items():
+            item = self.order_items.get(item_id)
+            if item is None:
+                continue
+            box_style = product_styles.get(int(item.product_id), "")
+            expected_components = (
+                {"cover", "base"}
+                if "天地盖" in box_style or "A3" in box_style.upper()
+                else {"whole"}
+            )
+            if not expected_components.issubset(requirements):
+                continue
+            production_boxes = max(
+                int(item.quantity or 0)
+                - int(reserved_by_item.get(item_id, 0)),
+                0,
+            )
+            if all(
+                semi_credited_by_requirement.get(requirements[component].id, 0)
+                >= production_boxes
+                * max(int(requirements[component].pieces_per_box or 1), 1)
+                for component in expected_components
+            ):
+                semi_fully_covered_ids.add(item_id)
+        self.remaining_by_item: dict[int, int] = {}
+        for item_id, item in self.order_items.items():
+            if item_id in self.composite_ids:
+                continue
+            delivered = max(int(item.delivered_quantity or 0), 0)
+            task = regular_tasks.get(item_id)
+            if task is not None:
+                if task.status not in {"completed", "not_required"}:
+                    self.remaining_by_item[item_id] = 0
+                    continue
+                completions = completions_by_item.get(item_id, [])
+                if completions:
+                    ready_quantity = max(
+                        int(task.finished_coverage_snapshot or 0)
+                        + sum(
+                            normalized_completion_output(item, completion)
+                            for completion in completions
+                        ),
+                        0,
+                    )
+                else:
+                    ready_quantity = max(int(reserved_by_item.get(item_id, 0)), 0)
+                self.remaining_by_item[item_id] = max(
+                    ready_quantity - delivered, 0
+                )
+                continue
+
+            max_deliverable = max(int(item.quantity or 0), 0)
+            component_state = telescoping.get(item_id)
+            if component_state is not None:
+                max_deliverable = min(
+                    max_deliverable,
+                    int(component_state["base"]),
+                    int(component_state["cover"]),
+                )
+            elif (
+                item.material_status != "received"
+                and int(reserved_by_item.get(item_id, 0)) < max_deliverable
+                and item_id not in semi_fully_covered_ids
+            ):
+                self.remaining_by_item[item_id] = 0
+                continue
+            self.remaining_by_item[item_id] = max(
+                max_deliverable - delivered, 0
+            )
 
     def order(self, order_id: int) -> Order | None:
         return self.orders.get(int(order_id))
@@ -3443,6 +3586,14 @@ class _PendingDeliveryReadContext:
 
     def is_fast(self, order_item: OrderItem | None) -> bool:
         return bool(order_item and order_item.id in self.fast_item_ids)
+
+    def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
+        if order_item.id in self.composite_ids:
+            return max(
+                int(self.composite_available_sets.get(order_item.id, 0)),
+                0,
+            )
+        return max(int(self.remaining_by_item.get(order_item.id, 0)), 0)
 
 
 def _pending_delivery_item_payload(
@@ -3484,11 +3635,35 @@ def _pending_delivery_item_payload(
         }
         inventory_sources: list[dict] = []
     else:
-        remaining_quantity = _delivery_remaining_quantity(db, order_item)
+        remaining_quantity = context.remaining_quantity(db, order_item)
         if remaining_quantity <= 0:
             return None
-        quantity_facts = _delivery_quantity_facts(db, order_item)
-        kit_metadata = _delivery_kit_metadata(db, order_item)
+        ordered = max(int(order_item.quantity or 0), 0)
+        delivered = max(int(order_item.delivered_quantity or 0), 0)
+        order_remaining = max(ordered - delivered, 0)
+        quantity_facts = {
+            "ordered_quantity": ordered,
+            "delivered_quantity": delivered,
+            "order_remaining_quantity": order_remaining,
+            "deliverable_quantity": remaining_quantity,
+            "over_delivery_quantity": max(
+                remaining_quantity - order_remaining, 0
+            ),
+            "surplus_finished_quantity": max(
+                remaining_quantity - order_remaining, 0
+            ),
+        }
+        kit_metadata = (
+            _delivery_kit_metadata(db, order_item)
+            if order_item.id in context.composite_ids
+            else {
+                "is_composite_bom": False,
+                "kit_availability": None,
+                "available_sets": None,
+                "missing_components": [],
+                "component_lines": [],
+            }
+        )
         inventory_sources = _inventory_sources_for_order_item(
             db,
             order_item=order_item,
@@ -3531,6 +3706,62 @@ def pending_delivery_items(
         if payload is not None:
             items.append(payload)
     return {"items": items}
+
+
+def pending_delivery_customer_summaries(
+    db: Session,
+    *,
+    user: User,
+) -> list[dict]:
+    """Return the exact pending-delivery customer set without item payload N+1.
+
+    Qualification reuses ``_pending_query`` and the same request-scoped
+    remaining-quantity context as ``pending_delivery_items``.  The dashboard
+    needs customer identities and counts only, so inventory source and BOM
+    display payloads are deliberately not expanded here.
+    """
+
+    rows = list(db.execute(_pending_query(customer_ids=_visible_customer_ids(user, db))))
+    context = _PendingDeliveryReadContext(db, rows)
+    grouped: dict[int, dict] = {}
+    for row in rows:
+        mapping = row._mapping
+        order_item = context.order_item(mapping["order_item_id"])
+        if order_item is None:
+            continue
+        remaining_quantity = context.remaining_quantity(db, order_item)
+        if remaining_quantity <= 0:
+            continue
+        customer_id = int(mapping["customer_id"])
+        group = grouped.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": mapping["customer_name"],
+                "item_count": 0,
+                "pending_quantity": 0,
+                "order_item_ids": [],
+                "delivery_date": mapping["delivery_date"],
+            },
+        )
+        group["item_count"] += 1
+        group["pending_quantity"] += int(remaining_quantity)
+        group["order_item_ids"].append(int(mapping["order_item_id"]))
+        candidate_date = mapping["delivery_date"]
+        if candidate_date is not None and (
+            group["delivery_date"] is None
+            or candidate_date < group["delivery_date"]
+        ):
+            group["delivery_date"] = candidate_date
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            row["delivery_date"] is None,
+            row["delivery_date"] or date.max,
+            row["customer_name"],
+            row["customer_id"],
+        ),
+    )
 
 
 @router.get("/pending-items/search")
@@ -3707,12 +3938,18 @@ def list_deliveries(
     }
     if normalized_return_statuses:
         return_conditions = []
-        receipt_exists = exists(
-            select(1).where(ReturnReceipt.delivery_id == Delivery.id)
+        confirmed_receipt_exists = exists(
+            select(1).where(
+                ReturnReceipt.delivery_id == Delivery.id,
+                ReturnReceipt.status == "confirmed",
+            )
         )
         for receipt_status in normalized_return_statuses:
             if receipt_status in {"waiting", "waiting_receipt", "pending"}:
-                return_conditions.append(~receipt_exists)
+                # A cancelled receipt is not an effective receipt.  The delivery
+                # therefore remains actionable in the same waiting set used by
+                # the dashboard until a confirmed receipt exists.
+                return_conditions.append(~confirmed_receipt_exists)
             else:
                 return_conditions.append(
                     exists(

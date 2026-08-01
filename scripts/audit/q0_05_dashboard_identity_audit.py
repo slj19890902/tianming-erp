@@ -26,14 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.api.dashboard import _workflow_projection_rows, dashboard_overview
+from app.api.dashboard import _workflow_projection_rows
 from app.api.deps import customer_scope_ids, has_unrestricted_customer_access
-from app.api.deliveries import pending_delivery_items
-from app.api.finance import _pending_statement_groups, _statement_period
+from app.api.deliveries import pending_delivery_customer_summaries
+from app.api.finance import pending_statement_customer_summaries
 from app.api.incoming import pending_items as pending_incoming_items
 from app.api.requisition import pending_requisitions
 from app.api.production import get_production_tasks
-from app.models.customer import Customer
 from app.models.delivery import Delivery
 from app.models.finance import ReturnReceipt, Statement
 from app.models.user import User
@@ -124,14 +123,34 @@ def _legacy_snapshot(db: Session, user: User, today) -> dict:
             if row["business_status"] == "pending_reconciliation"
         ),
     }
-    overview = dashboard_overview(db=db, user=user)
+    statement_query = select(Statement).where(Statement.status == "unsettled")
+    if visible_customer_ids is not None:
+        statement_query = statement_query.where(
+            Statement.customer_id.in_(visible_customer_ids)
+        )
+    unsettled = db.scalars(statement_query).all()
     return {
         "cards": {
-            card["key"]: {
-                "count": int(card.get("count") or 0),
-                "amount": str(card["amount"]) if card.get("amount") is not None else None,
+            key: {
+                "count": len(values),
+                "amount": None,
             }
-            for card in overview.get("cards", [])
+            for key, values in identities.items()
+        }
+        | {
+            "unsettled_statements": {
+                "count": len(unsettled),
+                "amount": str(
+                    sum(
+                        (
+                            Decimal(str(row.total_receivable or 0))
+                            - Decimal(str(row.settled_amount or 0))
+                            for row in unsettled
+                        ),
+                        Decimal("0.00"),
+                    )
+                ),
+            }
         },
         "identities": identities,
     }
@@ -156,7 +175,7 @@ def _authoritative_snapshot(
         db=db,
         user=user,
     ).get("items", [])
-    pending_delivery = pending_delivery_items(db=db, user=user).get("items", [])
+    pending_delivery = pending_delivery_customer_summaries(db=db, user=user)
 
     pending_receipt_query = select(Delivery.id, Delivery.customer_id).where(
         Delivery.status == "dispatched",
@@ -176,37 +195,15 @@ def _authoritative_snapshot(
         for delivery_id, customer_id in db.execute(pending_receipt_query)
     ]
 
-    pending_reconciliation: list[dict] = []
-    customer_query = select(Customer).order_by(Customer.id)
-    if visible_customer_ids is not None:
-        customer_query = customer_query.where(Customer.id.in_(visible_customer_ids))
-    for customer in db.scalars(customer_query).all():
-        period_start, period_end = _statement_period(
-            statement_month,
-            customer.statement_cycle_start_day,
-        )
-        groups = _pending_statement_groups(
-            db,
-            customer.id,
-            period_start=period_start,
-            period_end=period_end,
-        )
-        pending_groups = [row for row in groups if int(row.get("pending_item_count") or 0) > 0]
-        if not pending_groups:
-            continue
-        pending_reconciliation.append(
-            {
-                "customer_id": customer.id,
-                "statement_month": statement_month,
-                "amount": sum(
-                    (Decimal(str(row.get("total_receivable_amount") or 0)) for row in pending_groups),
-                    Decimal("0.00"),
-                ),
-                "delivery_ids": sorted(int(row["delivery_id"]) for row in pending_groups),
-            }
-        )
+    pending_reconciliation = pending_statement_customer_summaries(
+        db,
+        statement_month=statement_month,
+        visible_customer_ids=visible_customer_ids,
+    )
 
-    statement_query = select(Statement).order_by(Statement.id)
+    statement_query = select(Statement).where(
+        Statement.statement_month == statement_month
+    ).order_by(Statement.id)
     if visible_customer_ids is not None:
         statement_query = statement_query.where(
             Statement.customer_id.in_(visible_customer_ids)

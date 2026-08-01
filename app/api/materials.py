@@ -4,16 +4,12 @@ from datetime import date
 from decimal import Decimal
 import re
 from typing import Literal
-from urllib.parse import quote
-
 from fastapi import (
     APIRouter,
     Depends,
-    File,
     HTTPException,
     Query,
     Response,
-    UploadFile,
     status,
 )
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -43,7 +39,6 @@ from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
 )
-from app.services import supplier_material_workbook
 from app.services.supplier_master import (
     SupplierLookupError,
     clean_supplier_name,
@@ -223,10 +218,6 @@ class MaterialComposeSavePayload(MaterialComposePreviewPayload):
     parsed_material_code: str = Field(min_length=1, max_length=7)
     parsed_layer_count: int = Field(ge=3, le=7)
     price_source: Literal["manual", "suggested"]
-
-
-class SupplierMaterialWorkbookApplyPayload(BaseModel):
-    preview_token: str = Field(min_length=1, max_length=200)
 
 
 WORKSHOP_FIELDS = (
@@ -1231,82 +1222,38 @@ def save_material_composition(
     }
 
 
-def _supplier_workbook_error(
-    error: supplier_material_workbook.SupplierMaterialWorkbookError,
-) -> HTTPException:
-    return HTTPException(
-        status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+_SUPPLIER_MATERIAL_WORKBOOK_DISABLED_DETAIL = {
+    "code": "SUPPLIER_MATERIAL_WORKBOOK_DISABLED",
+    "message": "供应商材质 Excel 导入导出功能已暂停，请使用页面维护",
+}
+
+
+def _raise_supplier_material_workbook_disabled() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_SUPPLIER_MATERIAL_WORKBOOK_DISABLED_DETAIL,
     )
 
 
 @router.get("/import-template.xlsx")
 def download_supplier_material_workbook(
-    db: Session = Depends(get_db),
     _user: User = Depends(admin_only),
-) -> Response:
-    content = supplier_material_workbook.build_supplier_material_workbook(db)
-    filename = "天明ERP_供应商材质批量维护.xlsx"
-    encoded = quote(filename)
-    return Response(
-        content=content,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-        headers={
-            "Content-Disposition": (
-                'attachment; filename="supplier_materials.xlsx"; '
-                f"filename*=UTF-8''{encoded}"
-            )
-        },
-    )
+) -> None:
+    _raise_supplier_material_workbook_disabled()
 
 
 @router.post("/import/preview")
-async def preview_supplier_material_workbook(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
-) -> dict:
-    try:
-        return await supplier_material_workbook.preview_supplier_material_workbook(
-            db,
-            upload=file,
-            user=user,
-        )
-    except supplier_material_workbook.SupplierMaterialWorkbookError as error:
-        raise _supplier_workbook_error(error) from error
+def preview_supplier_material_workbook(
+    _user: User = Depends(admin_only),
+) -> None:
+    _raise_supplier_material_workbook_disabled()
 
 
 @router.post("/import/apply")
 def apply_supplier_material_workbook(
-    payload: SupplierMaterialWorkbookApplyPayload,
-    db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
-) -> dict:
-    try:
-        result = supplier_material_workbook.apply_supplier_material_workbook(
-            db,
-            preview_token=payload.preview_token,
-            user=user,
-        )
-        db.commit()
-        return result
-    except supplier_material_workbook.SupplierMaterialWorkbookError as error:
-        db.rollback()
-        raise _supplier_workbook_error(error) from error
-    except IntegrityError as error:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "SUPPLIER_MATERIAL_IMPORT_CONFLICT",
-                "message": "导入应用时发生主数据冲突，整批已回滚，请重新预览",
-            },
-        ) from error
-    except Exception:
-        db.rollback()
-        raise
+    _user: User = Depends(admin_only),
+) -> None:
+    _raise_supplier_material_workbook_disabled()
 
 
 @router.get("/{material_id}")

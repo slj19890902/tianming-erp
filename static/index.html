@@ -1713,13 +1713,6 @@
                     <input class="input" style="width:220px" v-model.trim="supplierSearch" placeholder="供应商名称 / 简称 / 业务代码" />
                     <button class="btn primary" @click="openSupplier()">新增供应商</button>
                   </div>
-                  <div class="toolbar-group">
-                    <button class="btn" :disabled="supplierMaterialWorkbook.loading" @click="downloadSupplierMaterialWorkbook">下载材质模板</button>
-                    <label class="btn" :class="{disabled:supplierMaterialWorkbook.loading}">
-                      导入材质 Excel
-                      <input type="file" accept=".xlsx" style="display:none" :disabled="supplierMaterialWorkbook.loading" @change="previewSupplierWorkbookFromSupplierTab" />
-                    </label>
-                  </div>
                 </div>
                 <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }}</div>
                 <div v-if="supplierLoading" class="muted" style="padding:18px;text-align:center">供应商正在加载…</div>
@@ -1735,7 +1728,7 @@
                       <td>{{ [row.contact_name,row.phone].filter(Boolean).join(" / ") || "-" }}</td>
                       <td class="toolbar-group">
                         <button class="btn small" @click="openSupplier(row)">编辑</button>
-                        <button class="btn small" @click="openSupplierMaterials(row)">材质 / Excel</button>
+                        <button class="btn small" @click="openSupplierMaterials(row)">材质维护</button>
                       </td>
                     </tr></tbody>
                   </table>
@@ -1785,30 +1778,7 @@
                       <input class="input" style="width:170px" v-model.trim="paperCodeKeyword" placeholder="搜索代码/纸种/等级" @keyup.enter="loadPaperCodes" />
                       <button class="btn small" @click="loadPaperCodes">查询</button>
                       <button class="btn small" @click="resetPaperCodeForm">新增代码</button>
-                      <button class="btn small" :disabled="supplierMaterialWorkbook.loading" @click="downloadSupplierMaterialWorkbook">导出材质 Excel</button>
-                      <label class="btn small success" :class="{disabled:supplierMaterialWorkbook.loading}">
-                        {{ supplierMaterialWorkbook.loading ? '正在预检…' : '导入材质 Excel' }}
-                        <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" :disabled="supplierMaterialWorkbook.loading" @change="previewSupplierMaterialWorkbook" />
-                      </label>
                     </div>
-                  </div>
-                  <div v-if="supplierMaterialWorkbook.preview" :class="['notice',supplierMaterialWorkbook.preview.valid ? 'success' : 'danger']" style="margin:8px 0">
-                    <div class="toolbar" style="margin-bottom:6px">
-                      <strong>{{ supplierMaterialWorkbook.preview.valid ? 'Excel 预检通过' : 'Excel 需要修正' }} · {{ supplierMaterialWorkbook.preview.filename }}</strong>
-                      <div class="toolbar-group">
-                        <button class="btn small" :disabled="supplierMaterialWorkbook.loading" @click="clearSupplierMaterialWorkbook">取消</button>
-                        <button v-if="supplierMaterialWorkbook.preview.valid" class="btn small primary" :disabled="supplierMaterialWorkbook.loading" @click="applySupplierMaterialWorkbook">确认批量导入</button>
-                      </div>
-                    </div>
-                    <div>
-                      基础纸种：新增 {{ supplierMaterialWorkbook.preview.summary?.paper_create || 0 }}、更新 {{ supplierMaterialWorkbook.preview.summary?.paper_update || 0 }}、不变 {{ supplierMaterialWorkbook.preview.summary?.paper_unchanged || 0 }}；
-                      组合材质：新增 {{ supplierMaterialWorkbook.preview.summary?.material_create || 0 }}、更新 {{ supplierMaterialWorkbook.preview.summary?.material_update || 0 }}、不变 {{ supplierMaterialWorkbook.preview.summary?.material_unchanged || 0 }}。
-                    </div>
-                    <div v-if="supplierMaterialWorkbook.preview.errors?.length" style="margin-top:6px">
-                      <div v-for="(error,index) in supplierMaterialWorkbook.preview.errors.slice(0,20)" :key="`${error.sheet}-${error.row_number}-${index}`">{{ error.sheet }} 第 {{ error.row_number }} 行：{{ error.message }}</div>
-                      <div v-if="supplierMaterialWorkbook.preview.errors.length > 20">另有 {{ supplierMaterialWorkbook.preview.errors.length - 20 }} 条错误，请修正后重新导入。</div>
-                    </div>
-                    <div v-else class="muted" style="margin-top:6px">确认后一次写入；若中途发生错误，整批回滚，不会留下半批数据。</div>
                   </div>
                   <div class="notice" style="margin:8px 0">嘉林亿规则：最小修边225mm；最小切宽270mm；最小切长500mm；100米以下接受随机配料并按牌价计价；分纸加价金额待确认，暂不参与自动报价。</div>
                   <div class="form-grid" style="margin:10px 0">
@@ -5500,7 +5470,6 @@
             paperCodeKeyword: "",
             paperCodes: [],
             paperCodeForm: blankPaperCode(),
-            supplierMaterialWorkbook: { loading:false, preview:null },
             showMaterialComposer: false,
             materialComposer: blankMaterialComposer(),
             materialComposerPreview: null,
@@ -8577,13 +8546,6 @@
             this.showPaperCodePanel = true;
             await Promise.all([this.loadMaterials(),this.loadPaperCodes()]);
             this.resetPaperCodeForm();
-          },
-          async previewSupplierWorkbookFromSupplierTab(event) {
-            await this.previewSupplierMaterialWorkbook(event);
-            if (!this.supplierMaterialWorkbook.preview) return;
-            this.productTab = "materials";
-            this.showPaperCodePanel = true;
-            await Promise.all([this.loadMaterials(),this.loadPaperCodes()]);
           },
           async loadMaterials() {
             const controller = this.beginLatestRequest("materials:list");
@@ -11852,94 +11814,6 @@
             if (this.paperCodeKeyword) params.keyword = this.paperCodeKeyword;
             const {data} = await axios.get("/api/master/materials/paper-codes", {params});
             this.paperCodes = data.items || [];
-          },
-          supplierMaterialWorkbookError(error) {
-            const detail = error?.response?.data?.detail;
-            if (detail && typeof detail === "object" && detail.message) return detail.message;
-            return this.errorMessage(error);
-          },
-          clearSupplierMaterialWorkbook() {
-            this.supplierMaterialWorkbook = { loading:false, preview:null };
-          },
-          async downloadSupplierMaterialWorkbook() {
-            if (this.supplierMaterialWorkbook.loading) return;
-            this.supplierMaterialWorkbook.loading = true;
-            try {
-              const response = await axios.get(
-                "/api/master/materials/import-template.xlsx",
-                {responseType:"blob"},
-              );
-              const blob = response.data instanceof Blob
-                ? response.data
-                : new Blob(
-                    [response.data],
-                    {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-                  );
-              const url = URL.createObjectURL(blob);
-              const anchor = document.createElement("a");
-              anchor.href = url;
-              anchor.download = "天明ERP_供应商材质批量维护.xlsx";
-              document.body.appendChild(anchor);
-              anchor.click();
-              anchor.remove();
-              setTimeout(() => URL.revokeObjectURL(url), 1000);
-              this.showToast("材质 Excel 已导出，可直接修改后再导入");
-            } catch(error) {
-              this.showToast(this.supplierMaterialWorkbookError(error),true);
-            } finally {
-              this.supplierMaterialWorkbook.loading = false;
-            }
-          },
-          async previewSupplierMaterialWorkbook(event) {
-            const input = event?.target;
-            const file = input?.files?.[0];
-            if (input) input.value = "";
-            if (!file || this.supplierMaterialWorkbook.loading) return;
-            this.supplierMaterialWorkbook = { loading:true, preview:null };
-            try {
-              const form = new FormData();
-              form.append("file",file);
-              const {data} = await axios.post(
-                "/api/master/materials/import/preview",
-                form,
-              );
-              this.supplierMaterialWorkbook.preview = data;
-              this.showToast(
-                data.valid
-                  ? "Excel 预检通过，请核对数量后确认导入"
-                  : `Excel 有 ${data.errors?.length || 0} 条错误，请修正后重试`,
-                !data.valid,
-              );
-            } catch(error) {
-              this.showToast(this.supplierMaterialWorkbookError(error),true);
-            } finally {
-              this.supplierMaterialWorkbook.loading = false;
-            }
-          },
-          async applySupplierMaterialWorkbook() {
-            const preview = this.supplierMaterialWorkbook.preview;
-            if (
-              this.supplierMaterialWorkbook.loading
-              || !preview?.valid
-              || !preview?.preview_token
-            ) return;
-            this.supplierMaterialWorkbook.loading = true;
-            try {
-              const {data} = await axios.post(
-                "/api/master/materials/import/apply",
-                {preview_token:preview.preview_token},
-              );
-              this.allMaterials = [];
-              this.materialSuppliers = [];
-              await this.loadMaterials();
-              await this.loadPaperCodes();
-              this.supplierMaterialWorkbook.preview = null;
-              this.showToast(data.message || "供应商材质已批量导入");
-            } catch(error) {
-              this.showToast(this.supplierMaterialWorkbookError(error),true);
-            } finally {
-              this.supplierMaterialWorkbook.loading = false;
-            }
           },
           resetPaperCodeForm() {
             this.paperCodeForm = {

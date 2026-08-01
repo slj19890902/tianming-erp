@@ -6,16 +6,25 @@ INDEX = (
 ).read_text(encoding="utf-8")
 
 
-def test_supplier_material_workbook_has_simple_preview_then_apply_ui() -> None:
-    assert "导出材质 Excel" in INDEX
-    assert "导入材质 Excel" in INDEX
-    assert "Excel 预检通过" in INDEX
-    assert "确认批量导入" in INDEX
-    assert "整批回滚" in INDEX
-    assert '"/api/master/materials/import-template.xlsx"' in INDEX
-    assert '"/api/master/materials/import/preview"' in INDEX
-    assert '"/api/master/materials/import/apply"' in INDEX
-    assert "{preview_token:preview.preview_token}" in INDEX
+def test_supplier_material_workbook_ui_is_paused_but_page_maintenance_remains() -> None:
+    for removed in (
+        "下载材质模板",
+        "导出材质 Excel",
+        "导入材质 Excel",
+        "Excel 预检通过",
+        "确认批量导入",
+        '"/api/master/materials/import-template.xlsx"',
+        '"/api/master/materials/import/preview"',
+        '"/api/master/materials/import/apply"',
+        "supplierMaterialWorkbook",
+    ):
+        assert removed not in INDEX
+
+    assert "材质维护" in INDEX
+    assert "供应商材质规则维护" in INDEX
+    assert "新增代码" in INDEX
+    assert "保存修改" in INDEX
+    assert "供应商调价" in INDEX
 
 
 def test_supplier_aliases_are_only_used_for_display() -> None:
@@ -27,11 +36,7 @@ def test_supplier_aliases_are_only_used_for_display() -> None:
     assert ":value=\"s\">{{ supplierDisplayName(s) }}</option>" in INDEX
 
 
-def test_import_refreshes_materials_and_supplier_options() -> None:
-    method = INDEX.split("async applySupplierMaterialWorkbook()", 1)[1].split(
-        "resetPaperCodeForm()", 1
-    )[0]
-    assert "this.allMaterials = []" in method
-    assert "this.materialSuppliers = []" in method
-    assert "await this.loadMaterials()" in method
-    assert "await this.loadPaperCodes()" in method
+def test_other_order_pdf_and_excel_entries_are_not_removed() -> None:
+    assert "识别PDF订单" in INDEX
+    assert "导入常用箱" in INDEX
+    assert "导出 Excel" in INDEX

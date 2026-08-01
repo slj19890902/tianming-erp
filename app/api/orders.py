@@ -43,6 +43,7 @@ from app.core.time_contract import (
     beijing_now_naive,
     beijing_today,
     utc_naive_to_api,
+    utc_now_naive,
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -66,7 +67,7 @@ from app.models.product_bom import (
     SalesOrderItemBomComponent,
     SalesOrderItemBomDemandAdjustment,
 )
-from app.models.requisition import Requisition, RequisitionItem
+from app.models.requisition import Requisition, RequisitionHold, RequisitionItem
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
@@ -538,6 +539,8 @@ class OrderCreate(BaseModel):
     delivery_date: date | None = None
     status: str = "pending_production"
     payment_status: str = "unpaid"
+    requisition_strategy: Literal["normal", "wait_previous_batch"] = "normal"
+    previous_batch_selections: list["PreviousBatchSelection"] = Field(default_factory=list)
     remark: str | None = None
     items: list[OrderItemCreate] | None = None
     import_integrity_status: str | None = None
@@ -563,6 +566,11 @@ class OrderCreate(BaseModel):
     cost_unit_price: float | None = None
     warning_confirmed: bool = False
     created_by: int | None = None
+
+
+class PreviousBatchSelection(BaseModel):
+    client_line_id: str = Field(min_length=1, max_length=80)
+    previous_order_item_id: int = Field(ge=0)
 
 
 def _validated_order_quantity(value: int | float, index: int) -> int:
@@ -1613,6 +1621,7 @@ def _order_response(
     completion_dates: dict[int, date] | None = None,
     bom_components_by_item_id: dict[int, list[dict]] | None = None,
     business_projection: dict | None = None,
+    active_holds_by_item_id: dict[int, RequisitionHold] | None = None,
 ) -> dict:
     item_ids = [item.id for item in order.items]
     reservation_map = (
@@ -1622,6 +1631,22 @@ def _order_response(
         if db is not None
         else {}
     )
+    active_hold_map = active_holds_by_item_id
+    if active_hold_map is None:
+        active_hold_map = (
+            {
+                int(hold.order_item_id): hold
+                for hold in db.scalars(
+                    select(RequisitionHold).where(
+                        RequisitionHold.order_item_id.in_(item_ids),
+                        RequisitionHold.status == "active",
+                    )
+                ).all()
+                if hold.order_item_id is not None
+            }
+            if db is not None and item_ids
+            else {}
+        )
     completion_date_map = completion_dates
     if completion_date_map is None and db is not None:
         completion_date_map = _completion_dates_by_item(
@@ -1808,6 +1833,20 @@ def _order_response(
                 ),
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": item.requisition_status,
+                "requisition_hold": (
+                    {
+                        "id": active_hold_map[item.id].id,
+                        "status": "active",
+                        "label": "等候中",
+                        "release_mode": active_hold_map[item.id].release_mode,
+                        "expected_requisition_date": (
+                            active_hold_map[item.id].expected_requisition_date
+                        ),
+                        "version": active_hold_map[item.id].version,
+                    }
+                    if item.id in active_hold_map
+                    else None
+                ),
                 "special_process": item.special_process,
                 "requisition_spec": item.requisition_spec,
                 "cardboard_len": item.cardboard_len,
@@ -2175,6 +2214,21 @@ def list_orders(
         db,
         [item.id for order in orders for item in order.items],
     )
+    page_item_ids = [item.id for order in orders for item in order.items]
+    active_holds_by_item_id = (
+        {
+            int(hold.order_item_id): hold
+            for hold in db.scalars(
+                select(RequisitionHold).where(
+                    RequisitionHold.order_item_id.in_(page_item_ids),
+                    RequisitionHold.status == "active",
+                )
+            ).all()
+            if hold.order_item_id is not None
+        }
+        if page_item_ids
+        else {}
+    )
     business_projections = (
         {
             order_id: candidate_projection[order_id]
@@ -2259,6 +2313,7 @@ def list_orders(
                 completion_dates=completion_dates,
                 bom_components_by_item_id=bom_components_by_item_id,
                 business_projection=business_projections.get(int(order.id)),
+                active_holds_by_item_id=active_holds_by_item_id,
             )
             for order in orders
         ],
@@ -3456,6 +3511,60 @@ def _production_meaning_changes(
     return list(dict.fromkeys(changes))
 
 
+def _invalidate_requisition_holds_before_item_delete(
+    db: Session,
+    *,
+    item_ids: list[int],
+    user: User,
+    request: Request | None = None,
+    batch_id: str | None = None,
+) -> None:
+    if not item_ids:
+        return
+    holds = db.scalars(
+        select(RequisitionHold).where(
+            RequisitionHold.order_item_id.in_(item_ids),
+            RequisitionHold.status == "active",
+        )
+    ).all()
+    now = utc_now_naive()
+    for hold in holds:
+        hold.status = "invalidated"
+        hold.released_by = user.id
+        hold.released_at = now
+        hold.release_source = "order_item_deleted"
+        hold.release_note = "订单明细删除，等候报料记录自动失效"
+        hold.updated_by = user.id
+        hold.version = int(hold.version or 0) + 1
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="requisition",
+            action_code="requisition.hold.invalidate",
+            legacy_action="INVALIDATE_REQUISITION_HOLD",
+            resource="Requisition",
+            entity_type="order_item",
+            entity_id=hold.order_item_id_snapshot,
+            object_ref=(
+                f"{hold.order_number_snapshot}:"
+                f"{hold.order_item_sequence_snapshot or hold.order_item_id_snapshot}"
+            ),
+            customer_id=hold.customer_id_snapshot,
+            customer_name=hold.customer_name_snapshot,
+            batch_id=batch_id,
+            description="订单明细删除，等候报料记录自动失效",
+            details={
+                "hold_id": hold.id,
+                "order_item_id": hold.order_item_id_snapshot,
+                "source": "order_item_deleted",
+            },
+        )
+
+
 def _delete_orders_in_transaction(
     db: Session,
     *,
@@ -3491,6 +3600,13 @@ def _delete_orders_in_transaction(
         operator_id=user.id,
         reason="删除订单前自动释放成品库存预占",
         idempotency_prefix="delete-order-reservation",
+    )
+    _invalidate_requisition_holds_before_item_delete(
+        db,
+        item_ids=item_ids,
+        user=user,
+        request=request,
+        batch_id=batch_id,
     )
     if item_ids:
         requisition_ids = set(
@@ -4316,6 +4432,94 @@ def _finalize_order_drawing_consumptions(
             )
 
 
+def _create_wait_previous_batch_holds(
+    db: Session, *, order: Order, items: list[OrderItem], payload_items: list[OrderItemCreate],
+    selections: list[PreviousBatchSelection], user: User, request: Request | None
+) -> None:
+    """Create one fail-closed queue hold per eligible new line.
+
+    A hold is intentionally only a pending-requisition queue gate; it never
+    changes the existing order or requisition status fields.
+    """
+    selection_by_line = {row.client_line_id.strip(): row.previous_order_item_id for row in selections}
+    if len(selection_by_line) != len(selections):
+        raise HTTPException(status_code=422, detail="上一批选择不能重复")
+    for index, (item, payload_item) in enumerate(zip(items, payload_items, strict=True), start=1):
+        requested_previous_id = selection_by_line.get((payload_item.client_line_id or "").strip())
+        if requested_previous_id == 0:
+            append_audit_event(db, request=request, actor=user, event_category="business", result="success", source="web", module_code="requisition", action_code="requisition.hold.skip", legacy_action="SKIP_REQUISITION_HOLD", resource="Requisition", entity_type="order_item", entity_id=item.id, object_ref=item.item_order_number, customer_id=order.customer_id, description="新建订单明确正常待报料", details={"source": "order_create_strategy", "previous_order_item_id": 0})
+            continue
+        if active_finished_reserved_qty(db, item.id) >= int(item.quantity):
+            continue
+        code = (item.snapshot_product_code or "").strip()
+        if not code:
+            raise HTTPException(status_code=409, detail=f"第{index}条明细缺少存货编码，不能等待上一批")
+        candidates = db.execute(
+            select(OrderItem, Order).join(Order, Order.id == OrderItem.order_id).where(
+                Order.customer_id == order.customer_id,
+                OrderItem.id != item.id,
+                OrderItem.order_id != order.id,
+                func.trim(OrderItem.snapshot_product_code) == code,
+                OrderItem.delivered_quantity < OrderItem.quantity,
+                OrderItem.is_force_closed.is_(False),
+                Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
+            ).order_by(OrderItem.created_at.desc(), OrderItem.id.desc()).limit(20)
+        ).all()
+        if not candidates:
+            continue
+        latest, latest_order = candidates[0]
+        latest_is_held = db.scalar(select(RequisitionHold.id).where(
+            RequisitionHold.order_item_id == latest.id, RequisitionHold.status == "active"
+        ).limit(1)) is not None
+        if latest_is_held and requested_previous_id not in (None, latest.id):
+            raise HTTPException(status_code=409, detail=f"第{index}条明细必须等待最新等候批次，不能绕过链式依赖")
+        if requested_previous_id is not None:
+            selected = next((row for row in candidates if row[0].id == requested_previous_id), None)
+            if selected is None:
+                raise HTTPException(status_code=409, detail=f"第{index}条明细所选上一批不再可用，请重新预检")
+            previous, previous_order = selected
+        elif len(candidates) == 1:
+            previous, previous_order = candidates[0]
+        else:
+            chained = db.scalar(select(RequisitionHold.id).where(
+                RequisitionHold.order_item_id == latest.id, RequisitionHold.status == "active"
+            ).limit(1))
+            if chained is None:
+                raise HTTPException(status_code=409, detail=f"第{index}条明细存在多个未送完的同款上一批，请选择要等待的批次")
+            previous, previous_order = latest, latest_order
+        mismatches = [
+            label for label, left, right in (
+                ("规格", previous.snapshot_spec, item.snapshot_spec),
+                ("材质", previous.snapshot_material, item.snapshot_material),
+                ("楞型", previous.flute_type, item.flute_type),
+            ) if (left or "").strip() != (right or "").strip()
+        ]
+        if mismatches and requested_previous_id is None:
+            raise HTTPException(status_code=409, detail=f"第{index}条明细与上一批快照{ '、'.join(mismatches) }不一致，不能自动等待")
+        hold = RequisitionHold(
+            order_item_id=item.id, order_item_id_snapshot=item.id,
+            customer_id_snapshot=order.customer_id, customer_name_snapshot="",
+            order_number_snapshot=order.order_number, order_item_sequence_snapshot=item.item_sequence,
+            product_code_snapshot=code, product_name_snapshot=item.snapshot_product_name or "",
+            specification_snapshot=item.snapshot_spec, quantity_snapshot=item.quantity,
+            release_mode="previous_batch_completed", previous_order_item_id=previous.id,
+            previous_order_item_id_snapshot=previous.id, status="active", version=1,
+            created_by=user.id, updated_by=user.id,
+        )
+        customer = db.get(Customer, order.customer_id)
+        hold.customer_name_snapshot = customer.name if customer is not None else ""
+        db.add(hold)
+        db.flush()
+        append_audit_event(db, request=request, actor=user, event_category="business", result="success",
+            source="web", module_code="requisition", action_code="requisition.hold.create",
+            legacy_action="CREATE_REQUISITION_HOLD", resource="Requisition", entity_type="order_item",
+            entity_id=item.id, object_ref=item.item_order_number, customer_id=order.customer_id,
+            customer_name=hold.customer_name_snapshot, description="新建订单选择等待上一批送完后再报料",
+            details={"source": "order_create_strategy", "strategy": "wait_previous_batch",
+                     "previous_order_item_id": previous.id, "previous_order_number": previous_order.order_number,
+                     "snapshot_warnings": mismatches, "selected_by_operator": requested_previous_id is not None})
+
+
 def _create_order_impl(
     payload: OrderCreate,
     db: Session,
@@ -4664,6 +4868,7 @@ def _create_order_impl(
             delivery_date=payload.delivery_date,
             status=payload.status,
             payment_status=payload.payment_status,
+            requisition_strategy=payload.requisition_strategy,
             total_amount=Decimal("0"),
             remark=(payload.remark or "").strip() or None,
             created_by=user.id,
@@ -4932,6 +5137,11 @@ def _create_order_impl(
             states=reservation_plan_states,
             operator_id=user.id,
         )
+        if payload.requisition_strategy == "wait_previous_batch":
+            _create_wait_previous_batch_holds(
+                db, order=order, items=created_items, payload_items=payload.items,
+                selections=payload.previous_batch_selections, user=user, request=request
+            )
         for index, created_item in enumerate(created_items, start=1):
             if created_item.combination_role != "set_parent":
                 refresh_production_task(db, created_item.id)
@@ -5660,6 +5870,22 @@ def update_order_item(
         )
         if error:
             raise HTTPException(status_code=400, detail=error)
+    active_hold = db.scalar(
+        select(RequisitionHold)
+        .where(
+            RequisitionHold.order_item_id == item.id,
+            RequisitionHold.status == "active",
+        )
+        .limit(1)
+    )
+    if (
+        active_hold is not None
+        and payload.product_code.strip() != (item.snapshot_product_code or "").strip()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该明细正在等候报料，请先恢复待报料，再修改存货编码",
+        )
     before = {
         "quantity": item.quantity,
         "unit_price": str(item.unit_price),
@@ -6032,6 +6258,12 @@ def delete_order_item(
         operator_id=user.id,
         reason="删除订单明细前自动释放成品库存预占",
         idempotency_prefix=f"delete-order-item-{item.id}",
+    )
+    _invalidate_requisition_holds_before_item_delete(
+        db,
+        item_ids=[item.id],
+        user=user,
+        request=request,
     )
     db.delete(item)
     db.flush()

@@ -1937,3 +1937,165 @@ def test_partially_reconciled_delivery_is_returned_as_blocked_exception(
     assert "先处理原对账单" in blocked["exception_reason"]
     assert pending.json()["items"] == []
     assert create.status_code == 409
+
+
+def test_monthly_yearly_report_uses_same_customer_month_totals_and_aging(
+    finance_api_app,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        june_statement = _create_statement(client)
+        with session_factory() as session:
+            second_customer = Customer(
+                customer_number=2,
+                customer_code="REPORT-2",
+                name="报表第二客户",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            session.add(second_customer)
+            session.flush()
+            session.add_all(
+                [
+                    Statement(
+                        statement_number="ST-202607-REPORT-1",
+                        customer_id=1,
+                        statement_month="2026-07",
+                        total_receivable=Decimal("100.00"),
+                        total_gross_profit=Decimal("999.00"),
+                        invoiced_amount=Decimal("60.00"),
+                        settled_amount=Decimal("40.00"),
+                        status="unsettled",
+                        created_by=1,
+                    ),
+                    Statement(
+                        statement_number="ST-202607-REPORT-2",
+                        customer_id=second_customer.id,
+                        statement_month="2026-07",
+                        total_receivable=Decimal("50.00"),
+                        total_gross_profit=Decimal("888.00"),
+                        invoiced_amount=Decimal("50.00"),
+                        settled_amount=Decimal("50.00"),
+                        status="unsettled",
+                        created_by=1,
+                    ),
+                    Statement(
+                        statement_number="ST-202605-REPORT-1",
+                        customer_id=1,
+                        statement_month="2026-05",
+                        total_receivable=Decimal("90.00"),
+                        total_gross_profit=Decimal("777.00"),
+                        invoiced_amount=Decimal("0.00"),
+                        settled_amount=Decimal("0.00"),
+                        status="unsettled",
+                        created_by=1,
+                    ),
+                    Statement(
+                        statement_number="ST-202603-REPORT-2",
+                        customer_id=second_customer.id,
+                        statement_month="2026-03",
+                        total_receivable=Decimal("300.00"),
+                        total_gross_profit=Decimal("666.00"),
+                        invoiced_amount=Decimal("300.00"),
+                        settled_amount=Decimal("100.00"),
+                        status="settled",
+                        created_by=1,
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={"year": 2026, "statement_month": "2026-07"},
+        )
+        only_second = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={
+                "year": 2026,
+                "statement_month": "2026-07",
+                "customer_id": 2,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["selected_month"] == "2026-07"
+    assert body["included_through_statement_month"] == "2026-07"
+    assert body["balance_basis"] == "current_balance_by_statement_month"
+    assert len(body["monthly"]) == 12
+    july = next(row for row in body["monthly"] if row["statement_month"] == "2026-07")
+    assert Decimal(str(july["reconciled_receivable_amount"])) == Decimal("150.00")
+    assert Decimal(str(july["invoiced_amount"])) == Decimal("110.00")
+    assert Decimal(str(july["settled_amount"])) == Decimal("90.00")
+    assert Decimal(str(july["pending_payment_amount"])) == Decimal("60.00")
+    assert july["reconciled_customer_count"] == 2
+    assert july["pending_payment_customer_count"] == 1
+
+    detail = body["selected_month_customers"]
+    assert len(detail) == 2
+    assert sum(
+        (Decimal(str(row["reconciled_receivable_amount"])) for row in detail),
+        Decimal("0.00"),
+    ) == Decimal(str(july["reconciled_receivable_amount"]))
+    assert sum(
+        (Decimal(str(row["pending_payment_amount"])) for row in detail),
+        Decimal("0.00"),
+    ) == Decimal(str(july["pending_payment_amount"]))
+    assert all("total_gross_profit" not in row for row in detail)
+
+    balances = {row["customer_id"]: row for row in body["customer_balances"]}
+    assert Decimal(str(balances[1]["outstanding_amount"])) == Decimal("430.80")
+    assert Decimal(str(balances[2]["outstanding_amount"])) == Decimal("200.00")
+    aging = {row["key"]: row for row in body["aging"]}
+    assert Decimal(str(aging["current"]["outstanding_amount"])) == Decimal("60.00")
+    assert Decimal(str(aging["one_month"]["outstanding_amount"])) == Decimal("280.80")
+    assert Decimal(str(aging["two_months"]["outstanding_amount"])) == Decimal("90.00")
+    assert Decimal(str(aging["three_plus"]["outstanding_amount"])) == Decimal("200.00")
+    assert only_second.status_code == 200, only_second.text
+    assert {row["customer_id"] for row in only_second.json()["selected_month_customers"]} == {2}
+    assert june_statement["id"] > 0
+
+
+def test_monthly_yearly_report_keeps_unreconciled_receipts_out_of_receivables(
+    finance_api_app,
+) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+        response = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={"year": 2026, "statement_month": "2026-06"},
+        )
+        bad_month = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={"year": 2025, "statement_month": "2026-06"},
+        )
+        denied_login = client.post(
+            "/api/auth/login",
+            json={"username": "workshop", "password": "RolePass123!"},
+        )
+        assert denied_login.status_code == 200
+        denied = client.get(
+            "/api/finance/reports/monthly-yearly",
+            params={"year": 2026, "statement_month": "2026-06"},
+        )
+
+    assert receipt.status_code == 201, receipt.text
+    assert response.status_code == 200, response.text
+    june = response.json()["selected_month_summary"]
+    assert Decimal(str(june["pending_reconciliation_amount"])) == Decimal("280.80")
+    assert june["pending_reconciliation_customer_count"] == 1
+    assert Decimal(str(june["reconciled_receivable_amount"])) == Decimal("0.00")
+    assert response.json()["customer_balances"] == []
+    assert response.json()["yearly_summary"]["record_count"] == 1
+    assert bad_month.status_code == 400
+    assert denied.status_code == 403

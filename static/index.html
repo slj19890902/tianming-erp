@@ -384,6 +384,42 @@
       .finance-current-table th,
       .finance-current-table td { padding: 8px 6px; line-height: 1.35; vertical-align: middle; overflow-wrap: anywhere; }
       .finance-current-table .toolbar-group { gap: 4px; flex-wrap: wrap; }
+      .finance-report-summary,
+      .finance-report-aging {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .finance-report-aging { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .finance-report-months {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .finance-report-card,
+      .finance-report-month {
+        min-width: 0;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #fff;
+      }
+      .finance-report-month { cursor: pointer; text-align: left; color: inherit; }
+      .finance-report-month:hover,
+      .finance-report-month.active { border-color: var(--primary); background: #eef7ff; }
+      .finance-report-card strong,
+      .finance-report-month strong { display: block; margin-top: 3px; font-size: 15px; }
+      .finance-report-card .muted,
+      .finance-report-month .muted { line-height: 1.35; }
+      @media (max-width: 1100px) {
+        .finance-report-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .finance-report-months { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+      @media (max-width: 760px) {
+        .finance-report-summary,
+        .finance-report-aging,
+        .finance-report-months { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
       .statement-delivery-detail { padding: 10px 14px 12px 54px; border-top: 1px solid var(--line); }
       .statement-delivery-detail table { margin: 0; background: #fff; }
       .statement-delivery-disabled { opacity: .62; background: #fff8f8; }
@@ -2509,6 +2545,7 @@
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">当前处理</button>
                   <button :class="['btn',{primary:financeView==='settled_history'}]" @click="setFinanceView('settled_history')">已结清历史</button>
+                  <button :class="['btn',{primary:financeView==='reports'}]" @click="setFinanceView('reports')">月度年度报表</button>
                   <button :class="['btn',{primary:financeView==='statements'}]" @click="setFinanceView('statements')">全部单据</button>
                 </div>
               </div>
@@ -2620,6 +2657,70 @@
                   </table></div>
                   <pager :page="pages.financeSettled" :total="financeSettledTotal" :page-size="pageSize" @change="pages.financeSettled=$event; loadFinance()"></pager>
                 </div>
+              </template>
+              <template v-else-if="financeView==='reports'">
+                <div class="panel" style="margin-bottom:10px">
+                  <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                      <div class="field" style="width:105px"><label>年份</label><input class="input" type="number" min="2000" max="2100" v-model="financeReportFilters.year" @change="changeFinanceReportYear" /></div>
+                      <div class="field" style="width:150px"><label>查看月份</label><input class="input" type="month" v-model="financeReportFilters.statement_month" @change="reloadFinanceReport" /></div>
+                      <div class="field" style="width:220px"><label>客户（可不选）</label><search-select v-model="financeReportFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" @change="reloadFinanceReport"></search-select></div>
+                    </div>
+                    <div class="toolbar-group"><button class="btn" @click="clearFinanceReportFilters">清空</button><button class="btn primary" :disabled="financeReportState.loading" @click="reloadFinanceReport">{{ financeReportState.loading ? '查询中…' : '查询' }}</button></div>
+                  </div>
+                  <div class="muted" style="margin-top:8px">报表直接汇总现有对账、开票和收款；未结账龄按对账月份归类，不另建一套账。</div>
+                </div>
+                <div v-if="financeReportState.error" class="notice warning" style="margin-bottom:10px">月度年度报表加载失败：{{ financeReportState.error }}</div>
+                <div v-if="financeReportState.loading" class="panel empty">正在读取财务报表…</div>
+                <div v-else-if="financeReportState.error" class="panel empty">请检查连接或筛选条件后重新查询。</div>
+                <div v-else-if="financeReportState.loaded && !Number(financeReportData.yearly_summary.record_count || 0)" class="panel empty">该年度暂无对账、开票、收款或待对账记录。</div>
+                <template v-else-if="financeReportState.loaded">
+                  <div class="muted" style="margin:0 0 8px">余额统计截至 {{ financeReportData.as_of }}；客户余额与账龄只纳入对账月份不晚于 {{ financeReportData.included_through_statement_month }} 的对账单。</div>
+                  <div class="finance-report-summary" style="margin-bottom:10px">
+                    <div class="finance-report-card"><span class="muted">全年待对账</span><strong class="sensitive-price">¥ {{ money(financeReportData.yearly_summary.pending_reconciliation_amount) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">全年已对账</span><strong class="sensitive-price">¥ {{ money(financeReportData.yearly_summary.reconciled_receivable_amount) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">全年已开票</span><strong class="sensitive-price">¥ {{ money(financeReportData.yearly_summary.invoiced_amount) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">全年已收款</span><strong class="sensitive-price">¥ {{ money(financeReportData.yearly_summary.settled_amount) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">当前未结余额</span><strong class="sensitive-price">¥ {{ money(financeReportData.yearly_summary.pending_payment_amount) }}</strong><span class="muted">{{ financeReportData.yearly_summary.customer_count || 0 }} 位客户</span></div>
+                  </div>
+                  <div class="panel" style="margin-bottom:10px">
+                    <div class="section-title">{{ financeReportFilters.year }} 年 12 个月</div>
+                    <div class="finance-report-months">
+                      <button v-for="row in financeReportData.monthly" :key="row.statement_month" type="button" :class="['finance-report-month',{active:row.statement_month===financeReportFilters.statement_month}]" @click="selectFinanceReportMonth(row)">
+                        <strong>{{ row.statement_month.slice(5) }} 月</strong>
+                        <div class="muted sensitive-price">应收 ¥{{ money(row.reconciled_receivable_amount) }}</div>
+                        <div class="muted sensitive-price">开票 ¥{{ money(row.invoiced_amount) }} · 收款 ¥{{ money(row.settled_amount) }}</div>
+                        <div class="sensitive-price">未结 ¥{{ money(row.pending_payment_amount) }}</div>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="panel" style="margin-bottom:10px">
+                    <div class="section-title">{{ financeReportFilters.statement_month }} 客户明细</div>
+                    <div v-if="!financeReportData.selected_month_customers.length" class="empty">这个月份没有待对账或正式财务记录。</div>
+                    <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:19%">客户</th><th class="sensitive-price" style="width:16%">待对账</th><th class="sensitive-price" style="width:17%">应收 / 已开票</th><th class="sensitive-price" style="width:17%">已收款 / 未结</th><th style="width:13%">对账单</th><th style="width:18%">状态</th></tr></thead><tbody>
+                      <tr v-for="row in financeReportData.selected_month_customers" :key="row.statement_month + ':' + row.customer_id">
+                        <td><strong>{{ row.customer_name }}</strong></td>
+                        <td class="sensitive-price">¥ {{ money(row.pending_reconciliation_amount) }}<div class="muted">{{ row.pending_reconciliation_item_count || 0 }} 条明细</div></td>
+                        <td class="sensitive-price">¥ {{ money(row.reconciled_receivable_amount) }}<div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
+                        <td class="sensitive-price">¥ {{ money(row.settled_amount) }}<div class="muted">未结 ¥ {{ money(row.pending_payment_amount) }}</div></td>
+                        <td>{{ row.statement_count || 0 }} 张</td>
+                        <td><span v-if="row.pending_reconciliation_count || row.blocked_reconciliation_count" class="status orange">待对账</span><span v-if="Number(row.pending_invoice_amount)>0" class="status blue">待开票</span><span v-if="Number(row.pending_payment_amount)>0" class="status orange">待结款</span><span v-if="row.status_anomaly_count" class="status red">需核对</span></td>
+                      </tr>
+                    </tbody></table></div>
+                  </div>
+                  <div class="finance-report-aging" style="margin-bottom:10px">
+                    <div v-for="row in financeReportData.aging" :key="row.key" class="finance-report-card">
+                      <span class="muted">{{ row.label }}未结</span><strong class="sensitive-price">¥ {{ money(row.outstanding_amount) }}</strong><span class="muted">{{ row.customer_count || 0 }} 位客户</span>
+                    </div>
+                  </div>
+                  <div class="panel">
+                    <div class="section-title">对账月份截至 {{ financeReportFilters.statement_month }} 的当前未结余额</div>
+                    <div v-if="!financeReportData.customer_balances.length" class="empty">当前没有未结余额。</div>
+                    <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:27%">客户</th><th class="sensitive-price" style="width:20%">未结余额</th><th style="width:17%">涉及月份</th><th style="width:24%">最早 / 最近</th><th style="width:12%">查看</th></tr></thead><tbody>
+                      <tr v-for="row in financeReportData.customer_balances" :key="row.customer_id"><td><strong>{{ row.customer_name }}</strong></td><td class="sensitive-price"><strong>¥ {{ money(row.outstanding_amount) }}</strong></td><td>{{ row.outstanding_month_count }} 个月</td><td>{{ row.earliest_statement_month }} / {{ row.latest_statement_month }}</td><td><button class="btn small" @click="selectFinanceReportCustomer(row)">只看此客户</button></td></tr>
+                    </tbody></table></div>
+                  </div>
+                </template>
               </template>
               <template v-else>
                 <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
@@ -5700,6 +5801,9 @@
             financeSettledFilters: { year:month().slice(0,4), statement_month:"", customer_id:"", statement_number:"", invoice_number:"", settlement_date_from:"", settlement_date_to:"" },
             financeSettledRows: [], financeSettledTotal: 0, financeSettledSummary: {},
             financeSettledState: { loading:false, error:"", loaded:false }, financeSettledExpanded: {},
+            financeReportFilters: { year:month().slice(0,4), statement_month:month(), customer_id:"" },
+            financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
+            financeReportState: { loading:false, error:"", loaded:false },
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
             pages: { customers: 1, products: 1, orders: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
@@ -10447,6 +10551,38 @@
             this.loadDeliveries();
           },
           async loadFinance() {
+            if (this.financeView === "reports") {
+              this.financeReportState.loading = true;
+              this.financeReportState.error = "";
+              this.financeReportState.loaded = false;
+              this.financeReportData = { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" };
+              try {
+                const filters = this.financeReportFilters;
+                const { data } = await axios.get("/api/finance/reports/monthly-yearly", { params: {
+                  year:filters.year || month().slice(0,4),
+                  statement_month:filters.statement_month || undefined,
+                  customer_id:filters.customer_id || undefined,
+                } });
+                this.financeReportData = {
+                  monthly:data.monthly || [],
+                  yearly_summary:data.yearly_summary || {},
+                  selected_month_summary:data.selected_month_summary || {},
+                  selected_month_customers:data.selected_month_customers || [],
+                  customer_balances:data.customer_balances || [],
+                  aging:data.aging || [],
+                  as_of:data.as_of || "",
+                  included_through_statement_month:data.included_through_statement_month || data.selected_month || "",
+                };
+                this.financeReportFilters.year = String(data.year || filters.year || month().slice(0,4));
+                this.financeReportFilters.statement_month = data.selected_month || filters.statement_month || month();
+                this.financeReportState.loaded = true;
+              } catch (error) {
+                this.financeReportState.error = this.errorMessage(error);
+              } finally {
+                this.financeReportState.loading = false;
+              }
+              return;
+            }
             if (this.financeView === "settled_history") {
               this.financeSettledState.loading = true;
               this.financeSettledState.error = "";
@@ -10522,7 +10658,7 @@
             return `${row.year}:${row.statement_month}:${row.customer_id}`;
           },
           async setFinanceView(view) {
-            if (!['current','settled_history','statements'].includes(view)) return;
+            if (!['current','settled_history','reports','statements'].includes(view)) return;
             this.financeView = view;
             this.invalidatePageCache("finance");
             await this.loadFinance();
@@ -10568,6 +10704,33 @@
           async clearFinanceSettledFilters() {
             this.financeSettledFilters = { year:month().slice(0,4), statement_month:"", customer_id:"", statement_number:"", invoice_number:"", settlement_date_from:"", settlement_date_to:"" };
             this.pages.financeSettled = 1;
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
+          },
+          async reloadFinanceReport() {
+            const selectedMonth = String(this.financeReportFilters.statement_month || "");
+            if (selectedMonth) this.financeReportFilters.year = selectedMonth.slice(0, 4);
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
+          },
+          async changeFinanceReportYear() {
+            const selectedYear = String(this.financeReportFilters.year || month().slice(0,4));
+            const currentMonth = month();
+            const monthNumber = selectedYear === currentMonth.slice(0,4) ? currentMonth.slice(5) : "12";
+            this.financeReportFilters.statement_month = `${selectedYear}-${monthNumber}`;
+            await this.reloadFinanceReport();
+          },
+          async selectFinanceReportMonth(row) {
+            this.financeReportFilters.year = String(row.statement_month || month()).slice(0,4);
+            this.financeReportFilters.statement_month = row.statement_month;
+            await this.reloadFinanceReport();
+          },
+          async selectFinanceReportCustomer(row) {
+            this.financeReportFilters.customer_id = row.customer_id;
+            await this.reloadFinanceReport();
+          },
+          async clearFinanceReportFilters() {
+            this.financeReportFilters = { year:month().slice(0,4), statement_month:month(), customer_id:"" };
             this.invalidatePageCache("finance");
             await this.loadFinance();
           },

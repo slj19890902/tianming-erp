@@ -71,6 +71,6 @@ def test_settled_history_distinguishes_loading_error_and_empty_states() -> None:
 
 
 def test_finance_view_switch_keeps_dashboard_on_current_workbench() -> None:
-    assert "['current','settled_history','statements'].includes(view)" in INDEX
+    assert "['current','settled_history','reports','statements'].includes(view)" in INDEX
     assert 'this.financeView = "current";' in INDEX
     assert "this.pages.financeCurrent = 1" in INDEX

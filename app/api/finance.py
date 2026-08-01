@@ -1669,6 +1669,452 @@ def _money_value(value: object) -> Decimal:
     return Decimal(str(value or 0)).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
+def _finance_report_months(year: int) -> list[str]:
+    return [f"{year:04d}-{month_number:02d}" for month_number in range(1, 13)]
+
+
+def _finance_report_selected_month(
+    year: int,
+    statement_month: str | None,
+) -> str:
+    if statement_month:
+        try:
+            _statement_period(statement_month, 1)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if int(statement_month[:4]) != year:
+            raise HTTPException(status_code=400, detail="月份与年份不一致")
+        return statement_month
+    today = beijing_today()
+    return (
+        today.strftime("%Y-%m")
+        if today.year == year
+        else f"{year:04d}-12"
+    )
+
+
+def _empty_finance_report_month(statement_month: str) -> dict:
+    return {
+        "statement_month": statement_month,
+        "pending_reconciliation_customer_count": 0,
+        "pending_reconciliation_item_count": 0,
+        "pending_reconciliation_amount": Decimal("0.00"),
+        "reconciled_customer_count": 0,
+        "reconciled_receivable_amount": Decimal("0.00"),
+        "pending_invoice_customer_count": 0,
+        "pending_invoice_amount": Decimal("0.00"),
+        "invoiced_customer_count": 0,
+        "invoiced_amount": Decimal("0.00"),
+        "pending_payment_customer_count": 0,
+        "pending_payment_amount": Decimal("0.00"),
+        "settled_customer_count": 0,
+        "settled_amount": Decimal("0.00"),
+        "statement_count": 0,
+        "status_anomaly_count": 0,
+    }
+
+
+def _month_distance(selected_month: str, source_month: str) -> int:
+    selected_year, selected_number = (int(part) for part in selected_month.split("-"))
+    source_year, source_number = (int(part) for part in source_month.split("-"))
+    return (selected_year - source_year) * 12 + selected_number - source_number
+
+
+@router.get("/reports/monthly-yearly")
+def monthly_yearly_finance_report(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    statement_month: str | None = None,
+    customer_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return one read-only report over the existing finance facts.
+
+    The report deliberately keeps unreconciled receipts separate from formal
+    statements.  Outstanding and aging values use each statement's real
+    remaining balance and classify it by statement month; no second ledger or
+    historical balance snapshot is created.
+    """
+
+    selected_year = year or beijing_today().year
+    selected_month = _finance_report_selected_month(
+        selected_year,
+        statement_month,
+    )
+    report_months = _finance_report_months(selected_year)
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+        visible_customer_ids = {customer_id}
+
+    monthly_by_month = {
+        report_month: _empty_finance_report_month(report_month)
+        for report_month in report_months
+    }
+    empty_aging = [
+        {
+            "key": key,
+            "label": label,
+            "outstanding_amount": Decimal("0.00"),
+            "customer_count": 0,
+            "statement_month_count": 0,
+        }
+        for key, label in (
+            ("current", "当月"),
+            ("one_month", "1 个月"),
+            ("two_months", "2 个月"),
+            ("three_plus", "3 个月及以上"),
+        )
+    ]
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return {
+            "year": selected_year,
+            "selected_month": selected_month,
+            "as_of": beijing_today(),
+            "included_through_statement_month": selected_month,
+            "balance_basis": "current_balance_by_statement_month",
+            "monthly": list(monthly_by_month.values()),
+            "yearly_summary": {
+                "customer_count": 0,
+                "record_count": 0,
+                "pending_reconciliation_amount": Decimal("0.00"),
+                "reconciled_receivable_amount": Decimal("0.00"),
+                "invoiced_amount": Decimal("0.00"),
+                "settled_amount": Decimal("0.00"),
+                "pending_payment_amount": Decimal("0.00"),
+            },
+            "selected_month_summary": monthly_by_month[selected_month],
+            "selected_month_customers": [],
+            "customer_balances": [],
+            "aging": empty_aging,
+        }
+
+    pending_invoice_expression = case(
+        (
+            Statement.total_receivable > Statement.invoiced_amount,
+            Statement.total_receivable - Statement.invoiced_amount,
+        ),
+        else_=0,
+    )
+    pending_payment_expression = case(
+        (
+            Statement.total_receivable > Statement.settled_amount,
+            Statement.total_receivable - Statement.settled_amount,
+        ),
+        else_=0,
+    )
+    status_anomaly_expression = case(
+        (
+            and_(
+                Statement.status == "settled",
+                Statement.settled_amount < Statement.total_receivable,
+            ),
+            1,
+        ),
+        (
+            and_(
+                Statement.status != "settled",
+                Statement.settled_amount >= Statement.total_receivable,
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    statement_group_query = (
+        select(
+            Statement.customer_id,
+            Customer.name.label("customer_name"),
+            Statement.statement_month,
+            func.count(Statement.id).label("statement_count"),
+            func.sum(Statement.total_receivable).label("total_receivable"),
+            func.sum(Statement.invoiced_amount).label("invoiced_amount"),
+            func.sum(Statement.settled_amount).label("settled_amount"),
+            func.sum(pending_invoice_expression).label("pending_invoice_amount"),
+            func.sum(pending_payment_expression).label("pending_payment_amount"),
+            func.sum(status_anomaly_expression).label("status_anomaly_count"),
+        )
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.statement_month.in_(report_months))
+        .group_by(
+            Statement.customer_id,
+            Customer.name,
+            Statement.statement_month,
+        )
+        .order_by(Statement.statement_month, Customer.name, Statement.customer_id)
+    )
+    if visible_customer_ids is not None:
+        statement_group_query = statement_group_query.where(
+            Statement.customer_id.in_(visible_customer_ids)
+        )
+    statement_groups = [
+        {
+            "customer_id": int(row["customer_id"]),
+            "customer_name": row["customer_name"],
+            "statement_month": str(row["statement_month"]),
+            "statement_count": int(row["statement_count"] or 0),
+            "reconciled_receivable_amount": _money_value(row["total_receivable"]),
+            "invoiced_amount": _money_value(row["invoiced_amount"]),
+            "settled_amount": _money_value(row["settled_amount"]),
+            "pending_invoice_amount": _money_value(row["pending_invoice_amount"]),
+            "pending_payment_amount": _money_value(row["pending_payment_amount"]),
+            "status_anomaly_count": int(row["status_anomaly_count"] or 0),
+        }
+        for row in db.execute(statement_group_query).mappings()
+    ]
+
+    annual_customer_ids: set[int] = set()
+    for group in statement_groups:
+        month_row = monthly_by_month[group["statement_month"]]
+        group_customer_id = int(group["customer_id"])
+        annual_customer_ids.add(group_customer_id)
+        month_row["statement_count"] += group["statement_count"]
+        month_row["status_anomaly_count"] += group["status_anomaly_count"]
+        month_row["reconciled_receivable_amount"] = _money_value(
+            month_row["reconciled_receivable_amount"]
+            + group["reconciled_receivable_amount"]
+        )
+        month_row["invoiced_amount"] = _money_value(
+            month_row["invoiced_amount"] + group["invoiced_amount"]
+        )
+        month_row["settled_amount"] = _money_value(
+            month_row["settled_amount"] + group["settled_amount"]
+        )
+        month_row["pending_invoice_amount"] = _money_value(
+            month_row["pending_invoice_amount"] + group["pending_invoice_amount"]
+        )
+        month_row["pending_payment_amount"] = _money_value(
+            month_row["pending_payment_amount"] + group["pending_payment_amount"]
+        )
+        if group["reconciled_receivable_amount"] > 0:
+            month_row["reconciled_customer_count"] += 1
+        if group["invoiced_amount"] > 0:
+            month_row["invoiced_customer_count"] += 1
+        if group["settled_amount"] > 0:
+            month_row["settled_customer_count"] += 1
+        if group["pending_invoice_amount"] > 0:
+            month_row["pending_invoice_customer_count"] += 1
+        if group["pending_payment_amount"] > 0:
+            month_row["pending_payment_customer_count"] += 1
+
+    pending_by_month_customer: dict[tuple[str, int], dict] = {}
+    for report_month in report_months:
+        pending_rows = pending_statement_customer_summaries(
+            db,
+            statement_month=report_month,
+            visible_customer_ids=visible_customer_ids,
+        )
+        month_row = monthly_by_month[report_month]
+        for pending in pending_rows:
+            pending_count = int(pending["pending_count"] or 0)
+            blocked_count = int(pending["blocked_count"] or 0)
+            if pending_count + blocked_count <= 0:
+                continue
+            pending_customer_id = int(pending["customer_id"])
+            annual_customer_ids.add(pending_customer_id)
+            month_row["pending_reconciliation_customer_count"] += 1
+            month_row["pending_reconciliation_item_count"] += int(
+                pending["pending_item_count"] or 0
+            )
+            month_row["pending_reconciliation_amount"] = _money_value(
+                month_row["pending_reconciliation_amount"]
+                + _money_value(pending["amount"])
+            )
+            pending_by_month_customer[(report_month, pending_customer_id)] = pending
+
+    selected_customer_rows: dict[int, dict] = {}
+    for group in statement_groups:
+        if group["statement_month"] != selected_month:
+            continue
+        selected_customer_rows[int(group["customer_id"])] = {
+            **group,
+            "pending_reconciliation_count": 0,
+            "blocked_reconciliation_count": 0,
+            "pending_reconciliation_item_count": 0,
+            "pending_reconciliation_amount": Decimal("0.00"),
+        }
+    for (pending_month, pending_customer_id), pending in pending_by_month_customer.items():
+        if pending_month != selected_month:
+            continue
+        row = selected_customer_rows.setdefault(
+            pending_customer_id,
+            {
+                "customer_id": pending_customer_id,
+                "customer_name": pending["customer_name"],
+                "statement_month": selected_month,
+                "statement_count": 0,
+                "reconciled_receivable_amount": Decimal("0.00"),
+                "invoiced_amount": Decimal("0.00"),
+                "settled_amount": Decimal("0.00"),
+                "pending_invoice_amount": Decimal("0.00"),
+                "pending_payment_amount": Decimal("0.00"),
+                "status_anomaly_count": 0,
+                "pending_reconciliation_count": 0,
+                "blocked_reconciliation_count": 0,
+                "pending_reconciliation_item_count": 0,
+                "pending_reconciliation_amount": Decimal("0.00"),
+            },
+        )
+        row["pending_reconciliation_count"] = int(pending["pending_count"] or 0)
+        row["blocked_reconciliation_count"] = int(pending["blocked_count"] or 0)
+        row["pending_reconciliation_item_count"] = int(
+            pending["pending_item_count"] or 0
+        )
+        row["pending_reconciliation_amount"] = _money_value(pending["amount"])
+    selected_month_customers = sorted(
+        selected_customer_rows.values(),
+        key=lambda row: (str(row["customer_name"]), int(row["customer_id"])),
+    )
+
+    outstanding_group_query = (
+        select(
+            Statement.customer_id,
+            Customer.name.label("customer_name"),
+            Statement.statement_month,
+            func.count(Statement.id).label("statement_count"),
+            func.sum(Statement.total_receivable).label("total_receivable"),
+            func.sum(Statement.invoiced_amount).label("invoiced_amount"),
+            func.sum(Statement.settled_amount).label("settled_amount"),
+            func.sum(pending_payment_expression).label("outstanding_amount"),
+        )
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.statement_month <= selected_month)
+        .group_by(
+            Statement.customer_id,
+            Customer.name,
+            Statement.statement_month,
+        )
+        .having(func.sum(pending_payment_expression) > 0)
+        .order_by(Customer.name, Statement.customer_id, Statement.statement_month)
+    )
+    if visible_customer_ids is not None:
+        outstanding_group_query = outstanding_group_query.where(
+            Statement.customer_id.in_(visible_customer_ids)
+        )
+    outstanding_groups = [dict(row) for row in db.execute(outstanding_group_query).mappings()]
+
+    customer_balances_by_id: dict[int, dict] = {}
+    aging_by_key = {
+        row["key"]: {**row, "_customer_ids": set()}
+        for row in empty_aging
+    }
+    for outstanding in outstanding_groups:
+        outstanding_customer_id = int(outstanding["customer_id"])
+        source_month = str(outstanding["statement_month"])
+        outstanding_amount = _money_value(outstanding["outstanding_amount"])
+        balance = customer_balances_by_id.setdefault(
+            outstanding_customer_id,
+            {
+                "customer_id": outstanding_customer_id,
+                "customer_name": outstanding["customer_name"],
+                "outstanding_amount": Decimal("0.00"),
+                "total_receivable": Decimal("0.00"),
+                "invoiced_amount": Decimal("0.00"),
+                "settled_amount": Decimal("0.00"),
+                "statement_count": 0,
+                "outstanding_month_count": 0,
+                "earliest_statement_month": source_month,
+                "latest_statement_month": source_month,
+                "months": [],
+            },
+        )
+        balance["outstanding_amount"] = _money_value(
+            balance["outstanding_amount"] + outstanding_amount
+        )
+        balance["total_receivable"] = _money_value(
+            balance["total_receivable"] + _money_value(outstanding["total_receivable"])
+        )
+        balance["invoiced_amount"] = _money_value(
+            balance["invoiced_amount"] + _money_value(outstanding["invoiced_amount"])
+        )
+        balance["settled_amount"] = _money_value(
+            balance["settled_amount"] + _money_value(outstanding["settled_amount"])
+        )
+        balance["statement_count"] += int(outstanding["statement_count"] or 0)
+        balance["outstanding_month_count"] += 1
+        balance["earliest_statement_month"] = min(
+            balance["earliest_statement_month"], source_month
+        )
+        balance["latest_statement_month"] = max(
+            balance["latest_statement_month"], source_month
+        )
+        balance["months"].append(
+            {
+                "statement_month": source_month,
+                "statement_count": int(outstanding["statement_count"] or 0),
+                "outstanding_amount": outstanding_amount,
+            }
+        )
+
+        distance = _month_distance(selected_month, source_month)
+        if distance <= 0:
+            aging_key = "current"
+        elif distance == 1:
+            aging_key = "one_month"
+        elif distance == 2:
+            aging_key = "two_months"
+        else:
+            aging_key = "three_plus"
+        aging_row = aging_by_key[aging_key]
+        aging_row["outstanding_amount"] = _money_value(
+            aging_row["outstanding_amount"] + outstanding_amount
+        )
+        aging_row["statement_month_count"] += 1
+        aging_row["_customer_ids"].add(outstanding_customer_id)
+
+    customer_balances = sorted(
+        customer_balances_by_id.values(),
+        key=lambda row: (
+            -row["outstanding_amount"],
+            str(row["customer_name"]),
+            int(row["customer_id"]),
+        ),
+    )
+    aging = []
+    for key in ("current", "one_month", "two_months", "three_plus"):
+        aging_row = aging_by_key[key]
+        customer_ids = aging_row.pop("_customer_ids")
+        aging_row["customer_count"] = len(customer_ids)
+        aging.append(aging_row)
+
+    monthly = list(monthly_by_month.values())
+    yearly_summary = {
+        "customer_count": len(annual_customer_ids),
+        "record_count": sum(
+            int(row["statement_count"])
+            + int(row["pending_reconciliation_item_count"])
+            for row in monthly
+        ),
+        "pending_reconciliation_amount": _money_value(
+            sum((row["pending_reconciliation_amount"] for row in monthly), Decimal("0.00"))
+        ),
+        "reconciled_receivable_amount": _money_value(
+            sum((row["reconciled_receivable_amount"] for row in monthly), Decimal("0.00"))
+        ),
+        "invoiced_amount": _money_value(
+            sum((row["invoiced_amount"] for row in monthly), Decimal("0.00"))
+        ),
+        "settled_amount": _money_value(
+            sum((row["settled_amount"] for row in monthly), Decimal("0.00"))
+        ),
+        "pending_payment_amount": _money_value(
+            sum((row["pending_payment_amount"] for row in monthly), Decimal("0.00"))
+        ),
+    }
+    return {
+        "year": selected_year,
+        "selected_month": selected_month,
+        "as_of": beijing_today(),
+        "included_through_statement_month": selected_month,
+        "balance_basis": "current_balance_by_statement_month",
+        "monthly": monthly,
+        "yearly_summary": yearly_summary,
+        "selected_month_summary": monthly_by_month[selected_month],
+        "selected_month_customers": selected_month_customers,
+        "customer_balances": customer_balances,
+        "aging": aging,
+    }
+
+
 @router.get("/current-customer-months")
 def current_customer_months(
     statement_month: str | None = None,

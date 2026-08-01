@@ -13,9 +13,9 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import and_, case, delete, func, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import (
     PermissionChecker,
@@ -1935,6 +1935,389 @@ def current_customer_months(
         "page_size": page_size,
         "summary": summary,
         "items": items[start : start + page_size],
+    }
+
+
+@router.get("/settled-customer-months")
+def settled_customer_months(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    statement_month: str | None = None,
+    customer_id: int | None = None,
+    statement_number: str | None = Query(default=None, max_length=80),
+    invoice_number: str | None = Query(default=None, max_length=120),
+    settlement_date_from: date | None = None,
+    settlement_date_to: date | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return fully processed finance history by year, month and customer.
+
+    History is a read-only view over the existing statement, invoice and
+    settlement facts.  A customer-month enters history only when every
+    statement has no invoice or payment balance and no return receipt remains
+    pending reconciliation for the same customer-month.
+    """
+
+    selected_year = year or beijing_today().year
+    if statement_month:
+        try:
+            _statement_period(statement_month, 1)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if int(statement_month[:4]) != selected_year:
+            raise HTTPException(status_code=400, detail="月份与年份不一致")
+    if (
+        settlement_date_from is not None
+        and settlement_date_to is not None
+        and settlement_date_from > settlement_date_to
+    ):
+        raise HTTPException(status_code=400, detail="收款开始日期不能晚于结束日期")
+
+    statement_keyword = (statement_number or "").strip()
+    invoice_keyword = (invoice_number or "").strip()
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+        visible_customer_ids = {customer_id}
+
+    empty_summary = {
+        "customer_month_count": 0,
+        "statement_count": 0,
+        "total_receivable": Decimal("0.00"),
+        "invoiced_amount": Decimal("0.00"),
+        "settled_amount": Decimal("0.00"),
+    }
+    if visible_customer_ids is not None and not visible_customer_ids:
+        return {
+            "year": selected_year,
+            "statement_month": statement_month,
+            "as_of": beijing_today(),
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "summary": empty_summary,
+            "items": [],
+        }
+
+    status_anomaly = case(
+        (
+            and_(
+                Statement.status == "settled",
+                Statement.settled_amount < Statement.total_receivable,
+            ),
+            1,
+        ),
+        (
+            and_(
+                Statement.status != "settled",
+                Statement.settled_amount >= Statement.total_receivable,
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    selected_year_months = [
+        f"{selected_year:04d}-{month_number:02d}"
+        for month_number in range(1, 13)
+    ]
+    group_query = (
+        select(
+            Statement.customer_id,
+            Customer.name.label("customer_name"),
+            Statement.statement_month,
+            func.count(Statement.id).label("statement_count"),
+            func.sum(Statement.total_receivable).label("total_receivable"),
+            func.sum(Statement.invoiced_amount).label("invoiced_amount"),
+            func.sum(Statement.settled_amount).label("settled_amount"),
+            func.sum(status_anomaly).label("status_anomaly_count"),
+        )
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.statement_month.in_(selected_year_months))
+        .group_by(
+            Statement.customer_id,
+            Customer.name,
+            Statement.statement_month,
+        )
+        .having(func.sum(Statement.total_receivable) > 0)
+        .having(
+            func.sum(
+                case(
+                    (
+                        Statement.invoiced_amount < Statement.total_receivable,
+                        1,
+                    ),
+                    else_=0,
+                )
+            )
+            == 0
+        )
+        .having(
+            func.sum(
+                case(
+                    (
+                        Statement.settled_amount < Statement.total_receivable,
+                        1,
+                    ),
+                    else_=0,
+                )
+            )
+            == 0
+        )
+        .order_by(
+            Statement.statement_month.desc(),
+            Customer.name,
+            Statement.customer_id,
+        )
+    )
+    if statement_month:
+        group_query = group_query.where(
+            Statement.statement_month == statement_month
+        )
+    if visible_customer_ids is not None:
+        group_query = group_query.where(
+            Statement.customer_id.in_(visible_customer_ids)
+        )
+
+    if statement_keyword:
+        matched_statement = aliased(Statement)
+        group_query = group_query.where(
+            select(matched_statement.id)
+            .where(
+                matched_statement.customer_id == Statement.customer_id,
+                matched_statement.statement_month == Statement.statement_month,
+                matched_statement.statement_number.contains(
+                    statement_keyword,
+                    autoescape=True,
+                ),
+            )
+            .correlate(Statement)
+            .exists()
+        )
+    if invoice_keyword:
+        invoiced_statement = aliased(Statement)
+        group_query = group_query.where(
+            select(Invoice.id)
+            .join(
+                invoiced_statement,
+                Invoice.statement_id == invoiced_statement.id,
+            )
+            .where(
+                invoiced_statement.customer_id == Statement.customer_id,
+                invoiced_statement.statement_month == Statement.statement_month,
+                Invoice.invoice_number.contains(
+                    invoice_keyword,
+                    autoescape=True,
+                ),
+            )
+            .correlate(Statement)
+            .exists()
+        )
+    if settlement_date_from is not None or settlement_date_to is not None:
+        settled_statement = aliased(Statement)
+        settlement_filters = [
+            settled_statement.customer_id == Statement.customer_id,
+            settled_statement.statement_month == Statement.statement_month,
+        ]
+        if settlement_date_from is not None:
+            settlement_filters.append(
+                SettlementRecord.settlement_date >= settlement_date_from
+            )
+        if settlement_date_to is not None:
+            settlement_filters.append(
+                SettlementRecord.settlement_date <= settlement_date_to
+            )
+        group_query = group_query.where(
+            select(SettlementRecord.id)
+            .join(
+                settled_statement,
+                SettlementRecord.statement_id == settled_statement.id,
+            )
+            .where(*settlement_filters)
+            .correlate(Statement)
+            .exists()
+        )
+
+    candidate_groups = [dict(row) for row in db.execute(group_query).mappings()]
+
+    # Current and historical sections must never contain the same customer-month.
+    # The year bound keeps this check to at most twelve authoritative month
+    # queries instead of one query per customer or statement.
+    pending_keys: set[tuple[str, int]] = set()
+    candidate_months = sorted(
+        {str(row["statement_month"]) for row in candidate_groups}
+    )
+    for candidate_month in candidate_months:
+        pending_rows = pending_statement_customer_summaries(
+            db,
+            statement_month=candidate_month,
+            visible_customer_ids=visible_customer_ids,
+        )
+        pending_keys.update(
+            (candidate_month, int(row["customer_id"]))
+            for row in pending_rows
+            if int(row["pending_count"] or 0)
+            + int(row["blocked_count"] or 0)
+            > 0
+        )
+
+    groups: list[dict] = []
+    for row in candidate_groups:
+        group_key = (str(row["statement_month"]), int(row["customer_id"]))
+        if group_key in pending_keys:
+            continue
+        groups.append(
+            {
+                "year": int(str(row["statement_month"])[:4]),
+                "statement_month": str(row["statement_month"]),
+                "customer_id": int(row["customer_id"]),
+                "customer_name": row["customer_name"],
+                "statement_count": int(row["statement_count"] or 0),
+                "total_receivable": _money_value(row["total_receivable"]),
+                "invoiced_amount": _money_value(row["invoiced_amount"]),
+                "settled_amount": _money_value(row["settled_amount"]),
+                "status_anomaly_count": int(
+                    row["status_anomaly_count"] or 0
+                ),
+                "latest_settlement_date": None,
+                "statement_numbers": [],
+                "invoice_numbers": [],
+                "settlement_dates": [],
+                "statements": [],
+            }
+        )
+
+    total = len(groups)
+    summary = {
+        "customer_month_count": total,
+        "statement_count": sum(row["statement_count"] for row in groups),
+        "total_receivable": _money_value(
+            sum((row["total_receivable"] for row in groups), Decimal("0.00"))
+        ),
+        "invoiced_amount": _money_value(
+            sum((row["invoiced_amount"] for row in groups), Decimal("0.00"))
+        ),
+        "settled_amount": _money_value(
+            sum((row["settled_amount"] for row in groups), Decimal("0.00"))
+        ),
+    }
+    start = (page - 1) * page_size
+    page_groups = groups[start : start + page_size]
+    if page_groups:
+        group_conditions = [
+            and_(
+                Statement.customer_id == row["customer_id"],
+                Statement.statement_month == row["statement_month"],
+            )
+            for row in page_groups
+        ]
+        statement_rows = db.execute(
+            select(
+                Statement.id,
+                Statement.statement_number,
+                Statement.customer_id,
+                Statement.statement_month,
+                Statement.total_receivable,
+                Statement.invoiced_amount,
+                Statement.settled_amount,
+                Statement.status,
+                Statement.created_at,
+            )
+            .where(or_(*group_conditions))
+            .order_by(Statement.statement_month.desc(), Statement.id.desc())
+        ).mappings().all()
+        statement_ids = [int(row["id"]) for row in statement_rows]
+        invoice_rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.statement_id,
+                Invoice.invoice_number,
+                Invoice.invoice_date,
+                Invoice.invoice_amount,
+            )
+            .where(Invoice.statement_id.in_(statement_ids))
+            .order_by(Invoice.invoice_date, Invoice.id)
+        ).mappings().all()
+        settlement_rows = db.execute(
+            select(
+                SettlementRecord.id,
+                SettlementRecord.statement_id,
+                SettlementRecord.settled_amount,
+                SettlementRecord.settlement_date,
+                SettlementRecord.account,
+            )
+            .where(SettlementRecord.statement_id.in_(statement_ids))
+            .order_by(SettlementRecord.settlement_date, SettlementRecord.id)
+        ).mappings().all()
+
+        invoices_by_statement: dict[int, list[dict]] = {}
+        for invoice in invoice_rows:
+            invoices_by_statement.setdefault(
+                int(invoice["statement_id"]), []
+            ).append(dict(invoice))
+        settlements_by_statement: dict[int, list[dict]] = {}
+        for settlement in settlement_rows:
+            settlements_by_statement.setdefault(
+                int(settlement["statement_id"]), []
+            ).append(dict(settlement))
+
+        groups_by_key = {
+            (row["statement_month"], row["customer_id"]): row
+            for row in page_groups
+        }
+        for statement in statement_rows:
+            statement_id = int(statement["id"])
+            key = (
+                str(statement["statement_month"]),
+                int(statement["customer_id"]),
+            )
+            group = groups_by_key[key]
+            invoices = invoices_by_statement.get(statement_id, [])
+            settlements = settlements_by_statement.get(statement_id, [])
+            group["statement_numbers"].append(statement["statement_number"])
+            group["invoice_numbers"].extend(
+                invoice["invoice_number"] for invoice in invoices
+            )
+            group["settlement_dates"].extend(
+                settlement["settlement_date"] for settlement in settlements
+            )
+            group["statements"].append(
+                {
+                    "id": statement_id,
+                    "statement_number": statement["statement_number"],
+                    "customer_id": int(statement["customer_id"]),
+                    "statement_month": statement["statement_month"],
+                    "total_receivable": _money_value(
+                        statement["total_receivable"]
+                    ),
+                    "invoiced_amount": _money_value(
+                        statement["invoiced_amount"]
+                    ),
+                    "settled_amount": _money_value(
+                        statement["settled_amount"]
+                    ),
+                    "status": statement["status"],
+                    "created_at": statement["created_at"],
+                    "invoices": invoices,
+                    "settlements": settlements,
+                }
+            )
+        for group in page_groups:
+            group["invoice_numbers"] = list(dict.fromkeys(group["invoice_numbers"]))
+            group["settlement_dates"] = sorted(set(group["settlement_dates"]))
+            if group["settlement_dates"]:
+                group["latest_settlement_date"] = group["settlement_dates"][-1]
+
+    return {
+        "year": selected_year,
+        "statement_month": statement_month,
+        "as_of": beijing_today(),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": summary,
+        "items": page_groups,
     }
 
 

@@ -1358,6 +1358,111 @@ def test_finance_lists_statements_and_invoice_records(finance_api_app) -> None:
     assert invoices.json()["items"][0]["invoice_number"] == "INV-LIST-001"
 
 
+def test_current_finance_groups_customer_month_and_uses_real_balances(
+    finance_api_app,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        first = _create_statement(client)
+        with session_factory() as session:
+            first_statement = session.get(Statement, first["id"])
+            first_statement.invoiced_amount = Decimal("100.00")
+            first_statement.settled_amount = Decimal("80.00")
+            first_statement.status = "unsettled"
+            session.add(
+                Statement(
+                    statement_number="ST-202606-0002",
+                    customer_id=1,
+                    statement_month="2026-06",
+                    total_receivable=Decimal("100.00"),
+                    total_gross_profit=Decimal("0.00"),
+                    invoiced_amount=Decimal("40.00"),
+                    settled_amount=Decimal("20.00"),
+                    status="settled",
+                    created_by=1,
+                )
+            )
+            settled_customer = Customer(
+                customer_number=2,
+                customer_code="DONE",
+                name="已结清客户",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            session.add(settled_customer)
+            session.flush()
+            session.add(
+                Statement(
+                    statement_number="ST-202606-DONE",
+                    customer_id=settled_customer.id,
+                    statement_month="2026-06",
+                    total_receivable=Decimal("50.00"),
+                    total_gross_profit=Decimal("0.00"),
+                    invoiced_amount=Decimal("50.00"),
+                    settled_amount=Decimal("50.00"),
+                    status="unsettled",
+                    created_by=1,
+                )
+            )
+            session.commit()
+        response = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-06"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["summary"]["customer_count"] == 1
+    row = body["items"][0]
+    assert row["customer_id"] == 1
+    assert row["statement_count"] == 2
+    assert len(row["statements"]) == 2
+    assert Decimal(str(row["reconciled_receivable_amount"])) == Decimal("380.80")
+    assert Decimal(str(row["pending_invoice_amount"])) == Decimal("240.80")
+    assert Decimal(str(row["pending_payment_amount"])) == Decimal("280.80")
+    assert row["primary_action"] == "invoice"
+    assert row["status_anomaly_count"] == 1
+    assert "total_gross_profit" not in row
+    assert "total_gross_profit" not in row["statements"][0]
+
+
+def test_current_finance_prioritizes_pending_reconciliation(finance_api_app) -> None:
+    app, _ = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json=_receipt_payload(),
+        )
+        response = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-06"},
+        )
+        forbidden = client.post("/api/auth/login", json={
+            "username": "workshop",
+            "password": "RolePass123!",
+        })
+        assert forbidden.status_code == 200
+        denied = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-06"},
+        )
+
+    assert receipt.status_code == 201, receipt.text
+    assert response.status_code == 200, response.text
+    row = response.json()["items"][0]
+    assert row["primary_action"] == "reconcile"
+    assert row["pending_reconciliation_count"] == 1
+    assert Decimal(str(row["pending_reconciliation_amount"])) == Decimal("280.80")
+    assert row["statements"] == []
+    assert denied.status_code == 403
+
+
 def _append_second_delivery_line(session_factory) -> int:
     from app.models.delivery import Delivery, DeliveryItem
     from app.models.order import OrderItem

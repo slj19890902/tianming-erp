@@ -380,6 +380,10 @@
       .statement-delivery-table th,
       .statement-delivery-table td { vertical-align: middle; }
       .statement-delivery-detail-row td { padding: 0; background: #f7f7fa; }
+      .finance-current-table { table-layout: fixed; white-space: normal; }
+      .finance-current-table th,
+      .finance-current-table td { padding: 8px 6px; line-height: 1.35; vertical-align: middle; overflow-wrap: anywhere; }
+      .finance-current-table .toolbar-group { gap: 4px; flex-wrap: wrap; }
       .statement-delivery-detail { padding: 10px 14px 12px 54px; border-top: 1px solid var(--line); }
       .statement-delivery-detail table { margin: 0; background: #fff; }
       .statement-delivery-disabled { opacity: .62; background: #fff8f8; }
@@ -2500,24 +2504,83 @@
             </template>
 
             <template v-else-if="activePage === 'finance'">
-              <page-head title="对账、开票与收款" desc="对账金额按客户实际签收数量计算。"></page-head>
-              <div v-if="financeFilters.balance_type" class="status blue" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-                <span>首页筛选：{{ financeFilters.balance_type==='pending_invoice' ? '待开票' : '待结款' }} · {{ financeFilters.statement_month }} · {{ financeCustomersTotal }} 位客户 / {{ statementsTotal }} 张对账单</span>
-                <button class="btn small" @click="clearFinanceDashboardFilter">查看全部</button>
+              <page-head title="对账、开票与收款" desc="当前处理按客户和月份汇总；展开后处理具体对账单。"></page-head>
+              <div class="toolbar" style="margin-bottom:10px">
+                <div class="toolbar-group">
+                  <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">当前处理</button>
+                  <button :class="['btn',{primary:financeView==='statements'}]" @click="setFinanceView('statements')">全部单据</button>
+                </div>
               </div>
-              <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
+              <template v-if="financeView==='current'">
+              <div class="panel" style="margin-bottom:10px">
+                <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+                  <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                    <div class="field" style="width:150px"><label>对账月份</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="reloadFinanceCurrent" /></div>
+                    <div class="field" style="width:240px"><label>客户（可不选）</label><search-select v-model="financeFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" @change="reloadFinanceCurrent"></search-select></div>
+                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_invoice">待开票</option><option value="pending_payment">待结款</option></select></div>
+                  </div>
+                  <div class="toolbar-group">
+                    <button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month)">生成月结对账单</button>
+                    <button class="btn" :disabled="financeCurrentState.loading" @click="loadFinance">{{ financeCurrentState.loading ? '读取中…' : '刷新' }}</button>
+                  </div>
+                </div>
+                <div v-if="financeFilters.balance_type || financeFilters.customer_id" class="status blue" style="margin-top:8px;display:inline-flex;gap:8px;align-items:center">
+                  已筛选 {{ financeCurrentTotal }} 位客户
+                  <button class="btn small" @click="clearFinanceDashboardFilter">查看全部待办</button>
+                </div>
+                <div v-if="financeCurrentState.loaded && !financeCurrentState.error" class="muted" style="margin-top:8px">
+                  {{ financeFilters.statement_month }}：{{ financeCurrentSummary.customer_count || 0 }} 位客户 · 待对账 ¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }} · 待开票 ¥{{ money(financeCurrentSummary.pending_invoice_amount) }} · 待结款 ¥{{ money(financeCurrentSummary.pending_payment_amount) }}
+                </div>
+              </div>
+              <div v-if="financeCurrentState.error" class="notice warning" style="margin-bottom:10px">财务待办加载失败：{{ financeCurrentState.error }}</div>
               <div class="panel">
-                <div class="section-title">对账单</div>
-                <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
-                <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
+                <div class="section-title">当前处理</div>
+                <div v-if="financeCurrentState.loading" class="empty">正在读取本月财务待办…</div>
+                <div v-else-if="financeCurrentState.error" class="empty">请检查连接后重新刷新。</div>
+                <div v-else-if="financeCurrentState.loaded && !financeCurrentRows.length" class="empty">本月没有需要处理的对账、开票或收款。</div>
+                <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:56px"></th><th style="width:16%">客户</th><th style="width:14%">月份 / 实际周期</th><th class="sensitive-price" style="width:14%">待对账 / 已对账</th><th class="sensitive-price" style="width:13%">待开票 / 已开票</th><th class="sensitive-price" style="width:13%">待结款 / 已收款</th><th style="width:12%">状态</th><th style="width:12%">下一步</th></tr></thead>
+                  <tbody v-for="row in financeCurrentRows" :key="financeGroupKey(row)">
+                    <tr>
+                      <td><button class="btn small" @click="toggleFinanceCurrentGroup(row)">{{ financeCurrentExpanded[financeGroupKey(row)] ? '收起' : '展开' }}</button></td>
+                      <td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.statement_count }} 张对账单</div></td>
+                      <td>{{ row.statement_month }}<div class="muted">{{ row.period_start }} 至 {{ row.period_end }}</div></td>
+                      <td class="sensitive-price"><strong>¥ {{ money(row.pending_reconciliation_amount) }}</strong><div class="muted">已对账 ¥ {{ money(row.reconciled_receivable_amount) }}</div></td>
+                      <td class="sensitive-price"><strong>¥ {{ money(row.pending_invoice_amount) }}</strong><div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
+                      <td class="sensitive-price"><strong>¥ {{ money(row.pending_payment_amount) }}</strong><div class="muted">已收款 ¥ {{ money(row.settled_amount) }}</div></td>
+                      <td>
+                        <span v-if="row.pending_reconciliation_count || row.blocked_reconciliation_count" class="status orange">待对账</span>
+                        <span v-if="Number(row.pending_invoice_amount)>0" class="status blue">待开票</span>
+                        <span v-if="Number(row.pending_payment_amount)>0" class="status orange">待结款</span>
+                        <span v-if="row.status_anomaly_count" class="status red">状态需核对</span>
+                      </td>
+                      <td><button class="btn small primary" :disabled="row.primary_action_blocked" @click="runFinancePrimaryAction(row)">{{ financePrimaryActionLabel(row) }}</button><div v-if="row.primary_action_blocked" class="muted">先处理旧对账单</div></td>
+                    </tr>
+                    <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="8" style="padding:8px 12px;background:#f8fafc">
+                      <div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
+                      <div v-else class="table-wrap"><table><thead><tr><th>对账单号</th><th class="sensitive-price">应收</th><th class="sensitive-price">待开票</th><th class="sensitive-price">待结款</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                        <tr v-for="statement in row.statements" :key="statement.id"><td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td><td><status-tag :value="statement.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(statement)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(statement)">取消</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0" @click="registerInvoice(statement)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0" @click="settle(statement)">收款核销</button></td></tr>
+                      </tbody></table></div>
+                    </td></tr>
+                  </tbody>
+                </table></div>
+                <pager :page="pages.financeCurrent" :total="financeCurrentTotal" :page-size="pageSize" @change="pages.financeCurrent=$event; loadFinance()"></pager>
               </div>
-              <div class="panel" style="margin-top:10px">
-                <div class="section-title">开票记录</div>
-                <div class="table-wrap"><table><thead><tr><th>发票号码</th><th>对账单号</th><th>客户</th><th>开票日期</th><th class="sensitive-price">开票金额</th></tr></thead>
-                <tbody><tr v-for="row in invoices" :key="row.id"><td>{{ row.invoice_number }}</td><td>{{ row.statement_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.invoice_date }}</td><td class="sensitive-price">¥ {{ money(row.invoice_amount) }}</td></tr></tbody></table><div v-if="!invoices.length" class="empty">暂无开票记录</div></div>
-                <pager :page="pages.invoices" :total="invoicesTotal" :page-size="pageSize" @change="pages.invoices=$event; loadFinance()"></pager>
-              </div>
+              </template>
+              <template v-else>
+                <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
+                <div class="panel">
+                  <div class="section-title">全部对账单（历史分区将在下一阶段完善）</div>
+                  <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
+                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="Number(row.total_receivable)-Number(row.settled_amount)<=0" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                  <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
+                </div>
+                <div class="panel" style="margin-top:10px">
+                  <div class="section-title">开票记录</div>
+                  <div class="table-wrap"><table><thead><tr><th>发票号码</th><th>对账单号</th><th>客户</th><th>开票日期</th><th class="sensitive-price">开票金额</th></tr></thead>
+                  <tbody><tr v-for="row in invoices" :key="row.id"><td>{{ row.invoice_number }}</td><td>{{ row.statement_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.invoice_date }}</td><td class="sensitive-price">¥ {{ money(row.invoice_amount) }}</td></tr></tbody></table><div v-if="!invoices.length" class="empty">暂无开票记录</div></div>
+                  <pager :page="pages.invoices" :total="invoicesTotal" :page-size="pageSize" @change="pages.invoices=$event; loadFinance()"></pager>
+                </div>
+              </template>
             </template>
 
             <template v-else-if="activePage === 'audit'">
@@ -5575,9 +5638,12 @@
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             deliveryListFilters: { customer_id:"", delivery_no:"", order_no:"", customer_po:"", product_code:"", product_name:"", spec:"", date_from:"", date_to:"", status:"", return_status:"" },
             deliveryDashboardMode: "",
-            financeFilters: { statement_month:"", balance_type:"", customer_id:"" },
+            financeView: "current",
+            financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
+            financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {},
+            financeCurrentState: { loading:false, error:"", loaded:false }, financeCurrentExpanded: {},
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1 },
+            pages: { customers: 1, products: 1, orders: 1, requisitionReported: 1, incomingHistory: 1, productionHistory: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -8428,15 +8494,17 @@
               return this.go("deliveries");
             }
             if (key === "pending_reconciliation" || entry?.type === "待对账") {
-              this.financeFilters = { statement_month:"", balance_type:"", customer_id:"" };
+              this.financeView = "current";
+              this.financeFilters = { statement_month:filter.statement_month || this.overview.statement_month || month(), balance_type:"pending_reconciliation", customer_id:filter.customer_id || "" };
+              this.pages.financeCurrent = 1;
               this.invalidatePageCache("finance");
-              await this.go("finance");
-              return this.openStatement(filter.statement_month || this.overview.statement_month || month(), filter.customer_id || null);
+              return this.go("finance");
             }
             if (["pending_invoice", "pending_payment"].includes(key) || ["待开票", "待结款"].includes(entry?.type)) {
               const balanceType = filter.balance_type || (entry?.type === "待开票" ? "pending_invoice" : "pending_payment");
+              this.financeView = "current";
               this.financeFilters = { statement_month:filter.statement_month || this.overview.statement_month || month(), balance_type:balanceType, customer_id:filter.customer_id || "" };
-              this.pages.statements = 1;
+              this.pages.financeCurrent = 1;
               this.invalidatePageCache("finance");
               return this.go("finance");
             }
@@ -8466,7 +8534,7 @@
               if (page === "production") await this.loadProduction();
               if (page === "deliveries") await Promise.all([this.loadDeliveries(), this.loadCustomerOptions(force)]);
               if (page === "warehouse") this.ensureWarehouseFrame();
-              if (page === "finance") await this.loadFinance();
+              if (page === "finance") await Promise.all([this.loadCustomerOptions(force), this.loadFinance()]);
               if (page === "audit") await this.loadAuditLogs();
               if (page === "system") await this.loadSystem();
               if (page === "permissions") await this.loadPermissionUsers();
@@ -10321,23 +10389,76 @@
             this.loadDeliveries();
           },
           async loadFinance() {
-            const [statements, invoices] = await Promise.all([
-              axios.get("/api/finance/statements", { params: {
-                page: this.pages.statements,
-                page_size: this.pageSize,
-                statement_month:this.financeFilters.statement_month || undefined,
+            if (this.financeView === "statements") {
+              const [statements, invoices] = await Promise.all([
+                axios.get("/api/finance/statements", { params:{ page:this.pages.statements, page_size:this.pageSize } }),
+                axios.get("/api/finance/invoices", { params:{ page:this.pages.invoices, page_size:this.pageSize } }),
+              ]);
+              this.statements = statements.data.items || [];
+              this.statementsTotal = Number(statements.data.total || 0);
+              this.invoices = invoices.data.items || [];
+              this.invoicesTotal = Number(invoices.data.total || 0);
+              return;
+            }
+            this.financeCurrentState.loading = true;
+            this.financeCurrentState.error = "";
+            this.financeCurrentState.loaded = false;
+            this.financeCurrentRows = [];
+            try {
+              const { data } = await axios.get("/api/finance/current-customer-months", { params: {
+                page:this.pages.financeCurrent,
+                page_size:this.pageSize,
+                statement_month:this.financeFilters.statement_month || month(),
                 balance_type:this.financeFilters.balance_type || undefined,
                 customer_id:this.financeFilters.customer_id || undefined,
-              } }),
-              axios.get("/api/finance/invoices", { params: { page: this.pages.invoices, page_size: this.pageSize } })
-            ]);
-            this.statements = statements.data.items; this.statementsTotal = statements.data.total;
-            this.financeCustomersTotal = Number(statements.data.customer_count || 0);
-            this.invoices = invoices.data.items; this.invoicesTotal = invoices.data.total;
+              } });
+              this.financeCurrentRows = data.items || [];
+              this.financeCurrentTotal = Number(data.total || 0);
+              this.financeCustomersTotal = this.financeCurrentTotal;
+              this.financeCurrentSummary = data.summary || {};
+              this.financeCurrentState.loaded = true;
+            } catch (error) {
+              this.financeCurrentTotal = 0;
+              this.financeCustomersTotal = 0;
+              this.financeCurrentSummary = {};
+              this.financeCurrentState.error = this.errorMessage(error);
+            } finally {
+              this.financeCurrentState.loading = false;
+            }
+          },
+          financeGroupKey(row) {
+            return `${row.statement_month}:${row.customer_id}`;
+          },
+          async setFinanceView(view) {
+            if (!['current','statements'].includes(view)) return;
+            this.financeView = view;
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
+          },
+          toggleFinanceCurrentGroup(row) {
+            const key = this.financeGroupKey(row);
+            this.financeCurrentExpanded = { ...this.financeCurrentExpanded, [key]:!this.financeCurrentExpanded[key] };
+          },
+          financePrimaryActionLabel(row) {
+            if (row.primary_action_blocked) return "待对账异常";
+            if (row.primary_action === "reconcile") return "去对账";
+            if (row.primary_action === "invoice") return "查看待开票";
+            return "查看待结款";
+          },
+          async runFinancePrimaryAction(row) {
+            if (row.primary_action === "reconcile" && !row.primary_action_blocked) {
+              return this.openStatement(row.statement_month, row.customer_id);
+            }
+            if (!this.financeCurrentExpanded[this.financeGroupKey(row)]) this.toggleFinanceCurrentGroup(row);
+          },
+          async reloadFinanceCurrent() {
+            this.pages.financeCurrent = 1;
+            this.invalidatePageCache("finance");
+            await this.loadFinance();
           },
           async clearFinanceDashboardFilter() {
-            this.financeFilters = { statement_month:"", balance_type:"", customer_id:"" };
-            this.pages.statements = 1;
+            this.financeFilters = { statement_month:this.financeFilters.statement_month || month(), balance_type:"", customer_id:"" };
+            this.pages.financeCurrent = 1;
             this.invalidatePageCache("finance");
             await this.loadFinance();
           },

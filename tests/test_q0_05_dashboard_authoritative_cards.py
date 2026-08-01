@@ -99,6 +99,13 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
                 "balance_type": "pending_payment",
             },
         )
+        current_payment_response = client.get(
+            "/api/finance/current-customer-months",
+            params={
+                "statement_month": statement_month,
+                "balance_type": "pending_payment",
+            },
+        )
 
     assert overview_response.status_code == 200
     body = overview_response.json()
@@ -126,6 +133,15 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
         "ST-Q005-3",
         "ST-Q005-1"
     ]
+    assert current_payment_response.status_code == 200
+    current_payment_page = current_payment_response.json()
+    assert current_payment_page["total"] == cards["pending_payment"]["count"]
+    assert Decimal(
+        str(current_payment_page["summary"]["pending_payment_amount"])
+    ) == Decimal(cards["pending_payment"]["amount"])
+    assert [
+        row["customer_id"] for row in current_payment_page["items"]
+    ] == [customer.id]
 
 
 def test_dashboard_frontend_carries_deterministic_filters_and_clears_stale_data() -> None:
@@ -138,8 +154,9 @@ def test_dashboard_frontend_carries_deterministic_filters_and_clears_stale_data(
     assert 'status:"dispatched", return_status:"waiting_receipt"' in source
     assert 'deliveryDashboardMode = "pending_customers"' in source
     assert "balance_type:this.financeFilters.balance_type || undefined" in source
-    assert "statement_month:this.financeFilters.statement_month || undefined" in source
-    assert "{{ financeCustomersTotal }} 位客户 / {{ statementsTotal }} 张对账单" in source
+    assert "statement_month:this.financeFilters.statement_month || month()" in source
+    assert 'axios.get("/api/finance/current-customer-months"' in source
+    assert "已筛选 {{ financeCurrentTotal }} 位客户" in source
     loading_index = source.index("async loadOverview()")
     request_index = source.index('axios.get("/api/dashboard/overview")', loading_index)
     clear_index = source.index(

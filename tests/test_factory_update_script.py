@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.22"
-    assert APP_VERSION_NAME == "首页业务提醒真实口径"
+    assert APP_VERSION == "v0.22.23"
+    assert APP_VERSION_NAME == "财务当前处理客户月度视图"
     assert APP_BUILD_DATE == "2026-08-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,19 +50,19 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "待报料" in item and "业务页面" in item
+        "本次更新｜" in item and "客户" in item and "月份" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "待送货" in item and "按客户去重" in item
+        "本次更新｜" in item and "待开票" in item and "待结款" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "系统版本" in item and "v0.22.22" in item
+        "如何验证｜" in item and "系统版本" in item and "v0.22.23" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "点击首页待报料" in item and "集合" in item
+        "如何验证｜" in item and "展开客户行" in item and "收款核销" in item
         for item in current_release
     )
     assert any(

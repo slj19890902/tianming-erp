@@ -12,6 +12,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 
+pytestmark = pytest.mark.skip(
+    reason="P0-10 暂停供应商材质 XLSX；保留旧服务测试供后续独立清理或恢复评估"
+)
+
+
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 

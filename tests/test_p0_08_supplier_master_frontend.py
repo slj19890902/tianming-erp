@@ -44,8 +44,9 @@ def test_supplier_master_is_compact_dynamic_and_keeps_history_readable() -> None
 
     assert "供应商" in supplier_panel
     assert "新增供应商" in supplier_panel
-    assert "下载材质模板" in supplier_panel
-    assert "导入材质 Excel" in supplier_panel
+    assert "下载材质模板" not in supplier_panel
+    assert "导入材质 Excel" not in supplier_panel
+    assert "材质维护" in supplier_panel
     assert "@click=\"openSupplierMaterials(row)\"" in supplier_panel
 
     assert supplier_modal.count("*") == 1

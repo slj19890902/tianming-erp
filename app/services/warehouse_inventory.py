@@ -1833,7 +1833,7 @@ def release_finished_reservation(
     *,
     reservation_id: int,
     operator_id: int | None,
-    release_reason: str,
+    release_reason: str | None,
     idempotency_key: str,
     allow_downstream: bool = False,
     allow_production_reversal: bool = False,
@@ -1879,9 +1879,7 @@ def release_finished_reservation(
     )
     if remaining <= 0:
         raise WarehouseInventoryError("该预占已释放或已消耗，不能重复释放", 409)
-    reason = release_reason.strip()
-    if not reason:
-        raise WarehouseInventoryError("取消抵扣必须填写原因")
+    reason = (release_reason or "").strip() or "取消成品库存抵扣（系统记录）"
     item = db.get(OrderItem, reservation.order_item_id) if reservation.order_item_id else None
     if item is not None and not allow_downstream:
         if item.requisition_status != "未报料":

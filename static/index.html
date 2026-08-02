@@ -5102,6 +5102,10 @@
             </div>
             <div v-else-if="modal.type === 'supplierRequisitionDraft'">
               <div class="muted" style="margin-bottom:10px">当前只是报料草稿，点击保存后才正式生成供应商采购报料单。</div>
+              <div style="margin-bottom:10px;padding:10px 12px;border:1px solid #93c5fd;border-radius:8px;background:#eff6ff;white-space:normal">
+                <strong>报料防错检查</strong>
+                <div class="muted">系统会拦住重复报料和长宽填反；少报后自动保留剩余数量，超量只允许管理员确认。</div>
+              </div>
               <div v-if="supplierDraftSemiInventoryOptions().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #f59e0b;border-radius:8px;background:#fffbeb;color:#92400e;white-space:normal">
                 <strong>发现 {{ supplierDraftSemiInventoryOptions().length }} 条可抵扣半成品库存</strong>
                 <div>请先在下方逐项确认抵扣或选择“本次不用库存”，系统才会允许保存供应商报料单。</div>
@@ -5113,7 +5117,7 @@
               <div v-for="(group, groupIndex) in supplierRequisitionDraft.supplier_groups" :key="groupIndex" class="order-group-detail-card" style="margin-bottom:12px">
                 <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name" @focus="ensureRequisitionMaterials()"><option value="">请选择供应商</option><option v-if="group.supplier_name && !materialSupplierSelectOptions.includes(group.supplier_name)" :value="group.supplier_name">{{ supplierDisplayName(group.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <table style="font-size:12px">
-                  <thead><tr><th>采购规格</th><th>来源概览</th><th>材质</th><th>需生产</th><th>报料长</th><th>报料宽</th><th>开料方式</th><th>成品抵扣</th><th>采购张数</th><th>备注</th></tr></thead>
+                  <thead><tr><th>采购规格</th><th>来源概览</th><th>材质</th><th>需求换算</th><th>报料长</th><th>报料宽</th><th>开料方式</th><th>库存抵扣</th><th>本次报料</th><th>备注</th></tr></thead>
                   <tbody>
                     <template v-for="line in draftGroupLines(group)" :key="line.line_key || line.source_type + '-' + line.report_length_mm + '-' + line.report_width_mm">
                       <tr>
@@ -5144,12 +5148,12 @@
                           </div>
                         </td>
                         <td>{{ line.material_display || '-' }}</td>
-                        <td>{{ line.production_required_qty || line.quantity || 0 }}</td>
-                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" /></td>
-                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" /></td>
+                        <td><strong>订单 {{ line.production_required_qty || line.quantity || 0 }} 只</strong><div class="muted">每箱 {{ line.source_items?.[0]?.pieces_per_box || 1 }} 片｜{{ line.cutting_mode || '一开一' }}</div><div class="muted">理论 {{ line.theoretical_requisition_qty ?? line.requisition_qty ?? 0 }} 张</div></td>
+                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" @input="line.dimension_override_acknowledged=false" /><div v-if="supplierDraftLineIsSwapped(line)" class="status red" style="white-space:normal;margin-top:4px">疑似长宽填反</div></td>
+                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" @input="line.dimension_override_acknowledged=false" /><div v-if="supplierDraftLineIsSwapped(line)" class="muted" style="white-space:normal">推荐 {{ supplierDraftExpectedLength(line) }}×{{ supplierDraftExpectedWidth(line) }}</div><label v-if="supplierDraftLineIsSwapped(line) && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.dimension_override_acknowledged" /> 按人工尺寸继续</label></td>
                         <td><select class="select merge-cutter-select" v-model="line.cutting_mode" @change="recalculateSupplierDraftLine(line)"><option>一开一</option><option>一开二</option><option>一开三</option><option>一开四</option><option>一开五</option></select></td>
-                        <td><strong>{{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }}</strong><div class="muted">仅来自真实库存预占</div></td>
-                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.requisition_qty" /></td>
+                        <td><strong>{{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }}</strong><div class="muted">已报 {{ line.already_requisitioned_qty || 0 }} 张</div></td>
+                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.requisition_qty" @input="line.quantity_override_acknowledged=false" /><div :class="['muted', {'status red':supplierDraftQuantityAfter(line)<0}]">报后{{ supplierDraftQuantityAfter(line) >= 0 ? `还缺 ${supplierDraftQuantityAfter(line)} 张` : `超出 ${Math.abs(supplierDraftQuantityAfter(line))} 张` }}</div><label v-if="supplierDraftQuantityAfter(line)<0 && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.quantity_override_acknowledged" /> 确认超量报料</label></td>
                         <td><input class="input merge-remark-input" v-model.trim="line.remark" /></td>
                       </tr>
                       <tr v-if="line._expanded" class="order-detail-row">
@@ -16640,9 +16644,34 @@
             const remainingPieceQty = Math.max(Number(
               line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.production_required_qty ?? line.quantity ?? 0
             ), 0);
-            line.requisition_qty = Math.ceil(
+            line.theoretical_requisition_qty = Math.ceil(
               remainingPieceQty / this.cuttingModeFactor(line.cutting_mode)
             );
+            line.remaining_requisition_qty = Math.max(
+              line.theoretical_requisition_qty - Number(line.already_requisitioned_qty || 0),
+              0
+            );
+            line.requisition_qty = line.remaining_requisition_qty;
+            line.quantity_override_acknowledged = false;
+          },
+          supplierDraftExpectedLength(line) {
+            return Number(line?.recommended_report_length_mm || line?.source_items?.[0]?.recommended_report_length_mm || 0);
+          },
+          supplierDraftExpectedWidth(line) {
+            return Number(line?.recommended_report_width_mm || line?.source_items?.[0]?.recommended_report_width_mm || 0);
+          },
+          supplierDraftLineIsSwapped(line) {
+            const expectedLength = this.supplierDraftExpectedLength(line);
+            const expectedWidth = this.supplierDraftExpectedWidth(line);
+            return expectedLength > 0
+              && expectedWidth > 0
+              && expectedLength !== expectedWidth
+              && Number(line?.report_length_mm || 0) === expectedWidth
+              && Number(line?.report_width_mm || 0) === expectedLength;
+          },
+          supplierDraftQuantityAfter(line) {
+            const remaining = Number(line?.remaining_requisition_qty ?? line?.requisition_qty ?? 0);
+            return remaining - Number(line?.requisition_qty || 0);
           },
           mergeGroupPayload(row) {
             return {
@@ -16698,6 +16727,14 @@
                 if (Number(line.report_length_mm) <= 0) return `${label} 报料长必须大于 0`;
                 if (Number(line.report_width_mm) <= 0) return `${label} 报料宽必须大于 0`;
                 if (Number(line.requisition_qty) <= 0) return `${label} 采购张数必须大于 0`;
+                if (this.supplierDraftLineIsSwapped(line)) {
+                  if (!(this.canAdmin || this.user?.role === "boss")) return `${label} 疑似长宽填反，请修改后再保存`;
+                  if (!line.dimension_override_acknowledged) return `${label} 疑似长宽填反，请勾选“按人工尺寸继续”`;
+                }
+                if (this.supplierDraftQuantityAfter(line) < 0) {
+                  if (!(this.canAdmin || this.user?.role === "boss")) return `${label} 本次报料超过剩余待报数量，只有管理员可确认超量报料`;
+                  if (!line.quantity_override_acknowledged) return `${label} 请勾选“确认超量报料”`;
+                }
                 if (!Array.isArray(line.source_items) || !line.source_items.length) return `${label} 缺少来源明细`;
               }
             }
@@ -16709,6 +16746,7 @@
             const payload = {
               supplier_groups: (this.supplierRequisitionDraft.supplier_groups || []).map(group => ({
                 supplier_name: group.supplier_name,
+                request_key: group.request_key || null,
                 lines: this.draftGroupLines(group).map(line => ({
                   line_key: line.line_key || null,
                   source_type: line.source_type || null,
@@ -16716,6 +16754,8 @@
                   report_width_mm: line.report_width_mm,
                   cutting_mode: line.cutting_mode || "一开一",
                   requisition_qty: Number(line.requisition_qty || 0),
+                  dimension_override_acknowledged: !!line.dimension_override_acknowledged,
+                  quantity_override_acknowledged: !!line.quantity_override_acknowledged,
                   remark: line.remark || null,
                   source_items: (line.source_items || []).map(source => ({
                     source_type: source.source_type,

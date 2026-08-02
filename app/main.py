@@ -32,6 +32,7 @@ from app.api.invoice_tasks import (
     router as invoice_tasks_router,
 )
 from app.api.incoming import router as incoming_router
+from app.api.mobile_erp import router as mobile_erp_router
 from app.api.master_data_versions import router as master_data_versions_router
 from app.api.materials import router as materials_router
 from app.api.suppliers import router as suppliers_router
@@ -345,6 +346,18 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/erp.html" for route in application.routes):
+        mobile_erp_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_erp.html"
+        )
+        application.add_api_route(
+            "/mobile/erp.html",
+            lambda: FileResponse(mobile_erp_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(route.path == "/mold-label.html" for route in application.routes):
         mold_label_path = (
             Path(__file__).resolve().parents[1]
@@ -490,6 +503,12 @@ def create_app() -> FastAPI:
             tianhua_mobile_router,
             prefix="/api/mobile",
             tags=["tianhua-mobile-pick"],
+        )
+    if not any(route.path == "/api/mobile/erp/products" for route in application.routes):
+        application.include_router(
+            mobile_erp_router,
+            prefix="/api/mobile/erp",
+            tags=["mobile-erp"],
         )
     if not any(
         route.path == "/api/orders/items/{item_id}/force_close"

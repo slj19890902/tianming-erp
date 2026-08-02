@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>天明 ERP 手机版</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef3f1;
+      --card: #fff;
+      --ink: #17231d;
+      --muted: #66736d;
+      --line: #d4ded9;
+      --green: #14734a;
+      --green-soft: #e7f5ed;
+      --blue: #126aa8;
+      --blue-soft: #e8f3fb;
+      --orange: #9a5308;
+      --orange-soft: #fff1dc;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+    * { box-sizing: border-box; min-width: 0; }
+    html, body { width: 100%; margin: 0; overflow-x: hidden; background: var(--bg); color: var(--ink); }
+    body { min-height: 100vh; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #7ab8e5; outline-offset: 2px; }
+    [hidden] { display: none !important; }
+    .app { width: min(100%, 480px); min-height: 100vh; margin: auto; padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
+    .topbar {
+      position: sticky; top: 0; z-index: 10; display: flex; align-items: center;
+      justify-content: space-between; gap: 10px; padding: 12px 14px;
+      border-bottom: 1px solid var(--line); background: rgba(238, 243, 241, .97);
+    }
+    .brand strong { display: block; font-size: 19px; }
+    .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .desktop-link { color: var(--blue); font-size: 12px; font-weight: 800; text-decoration: none; }
+    main { padding: 12px 13px 20px; }
+    .page-title { margin: 0 0 4px; font-size: 20px; }
+    .page-help { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .card {
+      margin-bottom: 10px; padding: 12px; border: 1px solid var(--line);
+      border-radius: 13px; background: var(--card); box-shadow: 0 3px 12px rgba(34, 57, 46, .05);
+    }
+    .card h2, .card h3, .card p { margin-top: 0; }
+    .card h2 { margin-bottom: 7px; font-size: 17px; }
+    .card h3 { margin-bottom: 5px; font-size: 15px; }
+    .muted { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .status { padding: 14px; text-align: center; }
+    .status.error { border-color: #efb2ad; background: var(--red-soft); color: #861c15; }
+    .status.empty { background: #f8faf9; color: var(--muted); }
+    .retry, .small-btn {
+      min-height: 36px; padding: 6px 10px; border: 1px solid var(--line);
+      border-radius: 9px; background: #fff; color: var(--ink); font-weight: 800;
+    }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .metric { padding: 10px; border-radius: 10px; background: #f3f6f4; }
+    .metric strong { display: block; color: var(--green); font-size: 22px; }
+    .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
+    .searchbar input { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
+    .search-btn { min-height: 46px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-weight: 900; }
+    .candidate { display: block; width: 100%; padding: 11px; border: 1px solid var(--line); border-radius: 11px; background: #fff; text-align: left; }
+    .candidate + .candidate { margin-top: 8px; }
+    .candidate strong, .candidate span { display: block; overflow-wrap: anywhere; }
+    .candidate span { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .result-head .small-btn { flex: 0 0 auto; }
+    .stock-card.finished { border-left: 5px solid var(--green); }
+    .stock-card.semi { border-left: 5px solid var(--blue); }
+    .stock-card.raw { border-left: 5px solid var(--orange); background: #fffaf3; }
+    .stock-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+    .stock-total { padding: 8px 3px; border-radius: 8px; background: #f3f6f4; text-align: center; }
+    .stock-total strong { display: block; font-size: 17px; }
+    .stock-total span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .location { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fafcfb; }
+    .location-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; }
+    .location strong { overflow-wrap: anywhere; }
+    .location p { margin: 5px 0 0; }
+    .map-btn { flex: 0 0 auto; min-height: 34px; padding: 5px 8px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
+    .tag { display: inline-flex; margin-top: 5px; padding: 3px 7px; border-radius: 99px; font-size: 10px; font-weight: 900; }
+    .tag.mapped { background: var(--green-soft); color: var(--green); }
+    .tag.unplaced { background: var(--orange-soft); color: var(--orange); }
+    .tag.ledger_only { background: #edf0ee; color: #54615b; }
+    .bottom-nav {
+      position: fixed; right: 0; bottom: 0; left: 0; z-index: 12;
+      padding: 7px 10px calc(7px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(255, 255, 255, .98);
+    }
+    .bottom-inner { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; width: min(100%, 480px); margin: auto; }
+    .nav-btn { min-height: 50px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-weight: 900; }
+    .nav-btn.active { background: var(--green-soft); color: var(--green); }
+    .map-layer { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #fff; }
+    .map-layer-head { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--line); }
+    .map-layer-head strong { flex: 1; }
+    .map-layer iframe { width: 100%; height: 100%; border: 0; }
+    .skeleton { height: 82px; overflow: hidden; background: linear-gradient(90deg, #e4eae7, #f8faf9, #e4eae7); background-size: 220% 100%; animation: loading 1.2s linear infinite; }
+    @keyframes loading { to { background-position: -220% 0; } }
+    @media (max-width: 350px) {
+      main { padding-inline: 10px; }
+      .topbar { padding-inline: 11px; }
+      .stock-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><strong>天明 ERP 手机版</strong><span id="userText">正在核对账号…</span></div>
+      <a class="desktop-link" href="/">电脑版</a>
+    </header>
+
+    <main>
+      <section id="homePage">
+        <h1 class="page-title">今天先做什么</h1>
+        <p class="page-help">管理员只读查看当前待办；所有数字仍来自正式 ERP 接口。</p>
+        <div id="homeState" class="card status">正在读取首页…</div>
+        <div id="homeCards" class="metric-grid" hidden></div>
+      </section>
+
+      <section id="searchPage" hidden>
+        <h1 class="page-title">查产品和库存位置</h1>
+        <p class="page-help">输入存货编码、客户或产品名称；有多个结果时必须自己点选，不会自动选第一款。原料仓尚未建立时不会显示虚假数量。</p>
+        <div class="searchbar">
+          <input id="searchInput" maxlength="100" autocomplete="off" placeholder="例如：22000008 或 天华">
+          <button id="searchButton" class="search-btn" type="button">查找</button>
+        </div>
+        <div id="searchState" class="card status empty">请输入关键词开始查找。</div>
+        <div id="candidateList" hidden></div>
+        <div id="productResult" hidden></div>
+      </section>
+    </main>
+  </div>
+
+  <nav class="bottom-nav" aria-label="手机主导航">
+    <div class="bottom-inner">
+      <button class="nav-btn active" type="button" data-page="home">首页</button>
+      <button class="nav-btn" type="button" data-page="search">查产品</button>
+    </div>
+  </nav>
+
+  <section id="mapLayer" class="map-layer" hidden aria-label="仓库地图">
+    <div class="map-layer-head">
+      <button id="closeMap" class="small-btn" type="button">返回产品</button>
+      <strong id="mapTitle">仓库位置</strong>
+    </div>
+    <iframe id="mapFrame" title="只读仓库地图" src="about:blank"></iframe>
+  </section>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const state = {
+        auth: null,
+        dashboard: null,
+        query: "",
+        candidates: [],
+        selectedProductId: null,
+        selectedInventory: null,
+        searchTimer: null,
+        searchController: null,
+        detailController: null,
+        searchGeneration: 0,
+        detailGeneration: 0,
+      };
+      const byId = id => document.getElementById(id);
+
+      function node(tag, className, text) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== undefined) element.textContent = String(text);
+        return element;
+      }
+
+      async function apiGet(url, options = {}) {
+        const response = await fetch(url, {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+          signal: options.signal,
+        });
+        if (response.status === 401) {
+          window.location.replace("/?redirect=%2Fmobile%2Ferp.html");
+          throw new Error("登录已失效，正在返回登录页");
+        }
+        const text = await response.text();
+        let payload = null;
+        if (text) {
+          try { payload = JSON.parse(text); } catch (_error) { payload = null; }
+        }
+        if (!response.ok) {
+          const detail = payload && payload.detail;
+          throw new Error(typeof detail === "string" ? detail : `读取失败（HTTP ${response.status}）`);
+        }
+        return payload;
+      }
+
+      function setPage(page) {
+        const isHome = page === "home";
+        byId("homePage").hidden = !isHome;
+        byId("searchPage").hidden = isHome;
+        document.querySelectorAll(".nav-btn").forEach(button => {
+          button.classList.toggle("active", button.dataset.page === page);
+        });
+        if (!isHome) byId("searchInput").focus();
+      }
+
+      function showStatus(targetId, message, kind = "empty", retry = null) {
+        const target = byId(targetId);
+        target.hidden = false;
+        target.className = `card status ${kind}`;
+        target.replaceChildren(node("div", "", message));
+        if (retry) {
+          const button = node("button", "retry", "重试");
+          button.type = "button";
+          button.addEventListener("click", retry);
+          target.append(button);
+        }
+      }
+
+      async function loadHome() {
+        const role = state.auth && state.auth.user && state.auth.user.role;
+        if (!(["admin", "boss"].includes(role))) {
+          showStatus("homeState", "当前账号可使用产品查询；管理员总览仅对管理员和老板账号显示。", "empty");
+          return;
+        }
+        showStatus("homeState", "正在读取首页…", "");
+        try {
+          state.dashboard = await apiGet("/api/dashboard/overview");
+          const cards = Array.isArray(state.dashboard.cards) ? state.dashboard.cards.slice(0, 6) : [];
+          const container = byId("homeCards");
+          container.replaceChildren();
+          cards.forEach(item => {
+            const card = node("div", "metric");
+            const value = item.amount !== undefined && item.amount !== null
+              ? `¥${item.amount}`
+              : `${item.count || 0}${item.count_unit || ""}`;
+            card.append(node("strong", "", value), node("span", "", item.title || "待办"));
+            container.append(card);
+          });
+          if (!cards.length) {
+            showStatus("homeState", "当前没有需要显示的待办。", "empty", loadHome);
+            container.hidden = true;
+            return;
+          }
+          byId("homeState").hidden = true;
+          container.hidden = false;
+        } catch (error) {
+          showStatus("homeState", error.message || "首页读取失败", "error", loadHome);
+        }
+      }
+
+      function queueSearch() {
+        window.clearTimeout(state.searchTimer);
+        const query = byId("searchInput").value.trim();
+        if (!query) {
+          state.query = "";
+          state.candidates = [];
+          byId("candidateList").hidden = true;
+          byId("productResult").hidden = true;
+          showStatus("searchState", "请输入关键词开始查找。", "empty");
+          return;
+        }
+        state.searchTimer = window.setTimeout(runSearch, 280);
+      }
+
+      async function runSearch() {
+        const query = byId("searchInput").value.trim();
+        if (!query) return queueSearch();
+        state.searchController?.abort();
+        state.searchController = new AbortController();
+        const generation = ++state.searchGeneration;
+        state.query = query;
+        state.selectedProductId = null;
+        state.selectedInventory = null;
+        byId("candidateList").hidden = true;
+        byId("productResult").hidden = true;
+        showStatus("searchState", "正在查找产品…", "");
+        try {
+          const data = await apiGet(`/api/mobile/erp/products?q=${encodeURIComponent(query)}&limit=20`, {
+            signal: state.searchController.signal,
+          });
+          if (generation !== state.searchGeneration) return;
+          state.candidates = Array.isArray(data.items) ? data.items : [];
+          renderCandidates(data.requires_selection === true);
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.searchGeneration) return;
+          showStatus("searchState", error.message || "产品查找失败", "error", runSearch);
+        }
+      }
+
+      function renderCandidates(requiresSelection) {
+        const container = byId("candidateList");
+        container.replaceChildren();
+        if (!state.candidates.length) {
+          container.hidden = true;
+          showStatus("searchState", "没有找到匹配产品，请换一个关键词。", "empty", runSearch);
+          return;
+        }
+        const note = node(
+          "div",
+          "card muted",
+          requiresSelection ? `找到 ${state.candidates.length} 款，请点选正确产品。` : "找到 1 款，请点开查看库存。"
+        );
+        container.append(note);
+        state.candidates.forEach(product => {
+          const button = node("button", "candidate");
+          button.type = "button";
+          button.append(
+            node("strong", "", product.customer_material_code || product.product_code),
+            node("span", "", `${product.customer_name}｜${product.product_name}`),
+            node("span", "", product.specification || "未填写规格")
+          );
+          button.addEventListener("click", () => loadInventory(product.id));
+          container.append(button);
+        });
+        byId("searchState").hidden = true;
+        container.hidden = false;
+      }
+
+      async function loadInventory(productId) {
+        state.detailController?.abort();
+        state.detailController = new AbortController();
+        const generation = ++state.detailGeneration;
+        state.selectedProductId = productId;
+        byId("productResult").hidden = true;
+        showStatus("searchState", "正在读取库存和位置…", "");
+        try {
+          const data = await apiGet(`/api/mobile/erp/products/${productId}/inventory`, {
+            signal: state.detailController.signal,
+          });
+          if (generation !== state.detailGeneration) return;
+          state.selectedInventory = data;
+          renderInventory();
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.detailGeneration) return;
+          showStatus("searchState", error.message || "库存读取失败", "error", () => loadInventory(productId));
+        }
+      }
+
+      function totalCell(label, value, unit) {
+        const cell = node("div", "stock-total");
+        cell.append(node("strong", "", `${value || 0}${unit}`), node("span", "", label));
+        return cell;
+      }
+
+      function locationCard(position) {
+        const card = node("div", "location");
+        const top = node("div", "location-top");
+        top.append(node("strong", "", `${position.location_code}｜${position.quantity_available}${position.unit}可用`));
+        if (position.map_url) {
+          const button = node("button", "map-btn", "地图定位");
+          button.type = "button";
+          button.addEventListener("click", () => openMap(position));
+          top.append(button);
+        }
+        card.append(top);
+        const facts = [
+          position.location_name && position.location_name !== position.location_code ? position.location_name : "",
+          position.area_code ? `${position.area_code} 区` : "",
+          position.pallet_code ? `栈板 ${position.pallet_code}` : "",
+          position.quantity_reserved ? `已预留 ${position.quantity_reserved}${position.unit}` : "",
+        ].filter(Boolean).join("｜");
+        if (facts) card.append(node("p", "muted", facts));
+        card.append(node("span", `tag ${position.map_status}`, position.map_status_text));
+        return card;
+      }
+
+      function stockCard(title, className, data) {
+        const card = node("section", `card stock-card ${className}`);
+        card.append(node("h2", "", title));
+        const totals = node("div", "stock-totals");
+        totals.append(
+          totalCell("在库合计", data.quantity_total, data.unit),
+          totalCell("现在可用", data.quantity_available, data.unit),
+          totalCell("已经预留", data.quantity_reserved, data.unit),
+          totalCell("等待拿货", data.quantity_pending_pick, data.unit)
+        );
+        card.append(totals);
+        if (!data.positions.length) {
+          card.append(node("p", "muted", "当前没有正式在库记录。"));
+        } else {
+          data.positions.forEach(position => card.append(locationCard(position)));
+        }
+        return card;
+      }
+
+      function renderInventory() {
+        const data = state.selectedInventory;
+        const product = data.product;
+        const result = byId("productResult");
+        result.replaceChildren();
+        const header = node("section", "card");
+        const headerRow = node("div", "result-head");
+        const title = node("div");
+        title.append(
+          node("h2", "", product.customer_material_code || product.product_code),
+          node("p", "muted", `${product.customer_name}｜${product.product_name}｜${product.specification || "未填写规格"}`)
+        );
+        const refresh = node("button", "small-btn", "刷新");
+        refresh.type = "button";
+        refresh.addEventListener("click", () => loadInventory(product.id));
+        headerRow.append(title, refresh);
+        header.append(headerRow, node("p", "muted", `数据时间：${data.as_of || data.last_updated_at || "刚刚"}`));
+        result.append(
+          header,
+          stockCard("成品库存", "finished", data.inventory.finished),
+          stockCard("客户专用纸板备料", "semi", data.inventory.semi_finished)
+        );
+        const raw = node("section", "card stock-card raw");
+        raw.append(
+          node("h2", "", data.inventory.raw_material.label),
+          node("p", "muted", data.inventory.raw_material.message)
+        );
+        result.append(raw);
+        byId("searchState").hidden = true;
+        byId("candidateList").hidden = true;
+        result.hidden = false;
+      }
+
+      function openMap(position) {
+        byId("mapTitle").textContent = `${position.location_code}｜只读地图`;
+        byId("mapFrame").src = position.map_url;
+        byId("mapLayer").hidden = false;
+      }
+
+      function closeMap() {
+        byId("mapLayer").hidden = true;
+        byId("mapFrame").src = "about:blank";
+        // Search text, candidates and selected product remain in memory.
+      }
+
+      async function initialize() {
+        try {
+          state.auth = await apiGet("/api/auth/me");
+          const user = state.auth.user || {};
+          byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜只读`;
+          const permissions = Array.isArray(state.auth.permissions) ? state.auth.permissions : [];
+          if (!permissions.includes("warehouse.view")) {
+            document.querySelector("main").replaceChildren(
+              node("div", "card status error", "当前账号没有查看仓库库存的权限，请联系管理员。")
+            );
+            document.querySelector(".bottom-nav").hidden = true;
+            return;
+          }
+          await loadHome();
+        } catch (error) {
+          showStatus("homeState", error.message || "手机版初始化失败", "error", initialize);
+        }
+      }
+
+      document.querySelectorAll(".nav-btn").forEach(button => {
+        button.addEventListener("click", () => setPage(button.dataset.page));
+      });
+      byId("searchInput").addEventListener("input", queueSearch);
+      byId("searchInput").addEventListener("keydown", event => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          window.clearTimeout(state.searchTimer);
+          runSearch();
+        }
+      });
+      byId("searchButton").addEventListener("click", () => {
+        window.clearTimeout(state.searchTimer);
+        runSearch();
+      });
+      byId("closeMap").addEventListener("click", closeMap);
+      initialize();
+    })();
+  </script>
+</body>
+</html>

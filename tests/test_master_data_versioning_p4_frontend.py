@@ -35,7 +35,10 @@ def test_existing_master_save_builds_readable_diff_and_versioned_payload() -> No
 
 
 def test_confirmation_required_keeps_shared_modal_reason_and_requires_ack() -> None:
-    handler = _method_block("handleMaster409(error, entity", "closeMasterChangeConfirm()")
+    handler = _method_block(
+        "handleMaster409(error, entity",
+        "async putIndirectProductUpdate(",
+    )
 
     assert 'detail.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED"' in handler
     assert "current.reason" in handler or "...current" in handler
@@ -63,7 +66,7 @@ def test_version_conflict_preserves_editor_and_has_safe_resolution_actions() -> 
 
 def test_versioned_mutations_abort_when_confirmation_response_has_no_token() -> None:
     send_mutation = _method_block(
-        "async sendVersionedMasterMutation({method,url,row,body={},reasonLabel,defaultReason=\"\"})",
+        "async sendVersionedMasterMutation({method,url,row,body={}})",
         "async syncProductFieldsVersioned(",
     )
     sync_product = _method_block(
@@ -79,7 +82,7 @@ def test_versioned_mutations_abort_when_confirmation_response_has_no_token() -> 
 
 def test_version_conflict_errors_include_expected_and_current_versions() -> None:
     send_mutation = _method_block(
-        "async sendVersionedMasterMutation({method,url,row,body={},reasonLabel,defaultReason=\"\"})",
+        "async sendVersionedMasterMutation({method,url,row,body={}})",
         "async syncProductFieldsVersioned(",
     )
     sync_product = _method_block(
@@ -424,6 +427,6 @@ def test_material_deactivation_keeps_versioning_without_reason_prompt() -> None:
     assert 'method:"delete"' in deactivate
     assert 'url:`/api/master/materials/${row.id}`' in deactivate
     assert "sendVersionedMasterMutation" in deactivate
-    assert "reasonLabel:false" in deactivate
+    assert "reasonLabel" not in deactivate
     assert "defaultReason" not in deactivate
     assert "await this.loadMaterials()" in deactivate

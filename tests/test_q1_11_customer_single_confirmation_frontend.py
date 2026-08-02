@@ -20,8 +20,7 @@ def test_customer_update_previews_before_one_confirmation() -> None:
 def test_customer_update_confirmation_does_not_request_or_fabricate_reason() -> None:
     assert '["customer","material"].includes(state.entity)' in INDEX
     assert "masterSingleConfirmNoReasonUpdate" in INDEX
-    assert 'reasonLabel:false' in INDEX
-    assert "if (reason) mutationPayload.change_reason = reason;" in INDEX
+    assert "askMasterMutationReason(" not in INDEX
     assert 'change_reason:"确认"' not in INDEX
     assert 'change_reason:"同意"' not in INDEX
 
@@ -29,5 +28,5 @@ def test_customer_update_confirmation_does_not_request_or_fabricate_reason() -> 
 def test_customer_status_and_delete_keep_one_visible_confirmation() -> None:
     assert 'confirm(`确认停用客户“${row.name}”吗？`)' in INDEX
     assert 'confirm(`确认${action}客户“${row.name}”吗？`)' in INDEX
-    assert 'url:`/api/master/customers/${row.id}`,row,reasonLabel:false' in INDEX
-    assert 'body:{is_active:!row.is_active},reasonLabel:false' in INDEX
+    assert 'url:`/api/master/customers/${row.id}`,row' in INDEX
+    assert 'body:{is_active:!row.is_active}' in INDEX

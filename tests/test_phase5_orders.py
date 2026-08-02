@@ -1390,24 +1390,19 @@ def test_order_models_use_new_tables_and_leave_legacy_name_free() -> None:
     assert date.fromisoformat("2026-06-13").strftime("%Y%m%d") == "20260613"
 
 
-def test_order_status_closure_requires_remark_and_is_excluded_from_unfinished(
+def test_order_status_closure_needs_no_remark_and_is_excluded_from_unfinished(
     order_api_app,
 ) -> None:
     app, _ = order_api_app
     with TestClient(app) as client:
         _login(client)
         created = client.post("/api/orders", json=_payload()).json()
-        missing_remark = client.put(
-            f"/api/orders/{created['id']}/status",
-            json={"status": "dead", "remark": ""},
-        )
         closed = client.put(
             f"/api/orders/{created['id']}/status",
-            json={"status": "dead", "remark": "客户取消订单"},
+            json={"status": "dead"},
         )
         unfinished = client.get("/api/orders", params={"status": "unfinished"})
 
-    assert missing_remark.status_code == 400
     assert closed.status_code == 200
     assert closed.json()["status"] == "dead"
     assert all(item["is_force_closed"] for item in closed.json()["items"])

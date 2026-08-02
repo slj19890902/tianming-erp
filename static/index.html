@@ -15886,8 +15886,15 @@
           async dangerChangeOrderGroupStatus(status) {
             const orders = this.orderEditGroup?.orders || [];
             if (!orders.length) return;
-            for (const order of orders) { await this.changeOrderStatus(order, status); }
-            this.closeModal();
+            const label=({dead:"死单",closed:"已结档",cancelled:"已作废",archived:"已归档"})[status] || status;
+            if (!confirm(`确认把当前订单组的 ${orders.length} 张订单标记为${label}吗？\n系统会自动保留操作人、时间和原状态；有生产事实等不符合条件的订单会拒绝。`)) return;
+            let succeeded=0;
+            for (const order of orders) {
+              if (await this.changeOrderStatus(order,status,{confirmed:true,reload:false,quiet:true})) succeeded += 1;
+            }
+            await this.loadOrders();
+            if (succeeded === orders.length) this.closeModal();
+            this.showToast(`订单组处理完成：成功 ${succeeded} 张，失败 ${orders.length-succeeded} 张`,succeeded !== orders.length);
           },
           async dangerDeleteOrderGroup() {
             const orders = this.orderEditGroup?.orders || [];
@@ -16653,15 +16660,18 @@
             await this.deleteOrderItem(order, item);
             this.closeModal();
           },
-          async changeOrderStatus(order, status) {
+          async changeOrderStatus(order, status, options={}) {
             const label=({dead:"死单",closed:"已结档",cancelled:"已作废",archived:"已归档"})[status] || status;
-            const remark=prompt(`标记为${label}必须填写备注原因：`);
-            if (!remark?.trim()) { this.showToast(`${label}必须填写备注`,true); return; }
+            if (!options.confirmed && !confirm(`确认把订单 ${this.displayOrderNumber(order)} 标记为${label}吗？\n系统会自动记录操作人、时间和原状态。`)) return false;
             try {
-              await axios.put(`/api/orders/${order.id}/status`,{status,remark:remark.trim()});
-              await this.loadOrders();
-              this.showToast(`订单已标记为${label}`);
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              await axios.put(`/api/orders/${order.id}/status`,{status});
+              if (options.reload !== false) await this.loadOrders();
+              if (!options.quiet) this.showToast(`订单已标记为${label}`);
+              return true;
+            } catch(error) {
+              if (!options.quiet) this.showToast(this.errorMessage(error),true);
+              return false;
+            }
           },
           async deleteWholeOrder(order) {
             if (!confirm(`确认完全删除订单 ${this.displayOrderNumber(order)} 吗？此操作不可撤销，订单编号不会复用。`)) return;

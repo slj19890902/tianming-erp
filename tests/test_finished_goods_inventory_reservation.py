@@ -1041,7 +1041,7 @@ def test_cancel_order_releases_active_finished_reservation(reservation_db) -> No
     reservation = reserve(db, data, lot, 25, "cancel-reserve")
     result = update_order_status(
         order_id=data["order"].id,
-        payload=OrderStatusRequest(status="cancelled", remark="客户取消订单"),
+        payload=OrderStatusRequest(status="cancelled"),
         db=db,
         user=data["admin"],
     )

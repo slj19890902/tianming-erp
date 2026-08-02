@@ -1066,7 +1066,6 @@ def test_price_adjust_preview_versions_and_stale_apply_rejected(
                 "supplier_name": "P4批量供应商",
                 "adjust_percent": "5",
                 "expected_versions": preview.json()["expected_versions"],
-                "change_reason": "供应商统一涨价5%",
             },
         )
 
@@ -1093,7 +1092,11 @@ def test_price_adjust_success_versions_every_material_in_one_transaction(
     writer_app: FastAPI,
 ) -> None:
     from app.models.material import Material
-    from app.models.material_price_history import MaterialPriceHistory
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.material_price_history import (
+        MaterialPriceAdjustmentBatch,
+        MaterialPriceHistory,
+    )
 
     with TestClient(writer_app) as client:
         first = _create_material(
@@ -1118,7 +1121,6 @@ def test_price_adjust_success_versions_every_material_in_one_transaction(
                 "supplier_name": "P4成功调价供应商",
                 "adjust_percent": "5",
                 "expected_versions": preview.json()["expected_versions"],
-                "change_reason": "供应商统一涨价5%",
             },
         )
 
@@ -1134,7 +1136,24 @@ def test_price_adjust_success_versions_every_material_in_one_transaction(
         assert rows[first["id"]].quote_price == Decimal("1.05")
         assert rows[second["id"]].quote_price == Decimal("2.10")
         assert {row.version for row in rows.values()} == {2}
-        assert session.scalar(select(func.count()).select_from(MaterialPriceHistory)) == 2
+        history = session.scalars(select(MaterialPriceHistory)).all()
+        assert len(history) == 2
+        assert {row.adjust_reason for row in history} == {None}
+        assert {row.operator for row in history} == {"p4-writer-admin"}
+        batch = session.scalar(select(MaterialPriceAdjustmentBatch))
+        assert batch is not None
+        assert batch.remark is None
+        assert batch.operator == "p4-writer-admin"
+        revisions = session.scalars(
+            select(MasterDataObjectVersion).where(
+                MasterDataObjectVersion.object_type == "material",
+                MasterDataObjectVersion.object_id.in_([first["id"], second["id"]]),
+                MasterDataObjectVersion.version == 2,
+            )
+        ).all()
+        assert len(revisions) == 2
+        assert {row.reason for row in revisions} == {None}
+        assert {row.actor_username_snapshot for row in revisions} == {"p4-writer-admin"}
 
 
 def test_price_adjust_failure_rolls_back_all_material_versions_and_history(
@@ -1188,7 +1207,6 @@ def test_price_adjust_failure_rolls_back_all_material_versions_and_history(
                 "supplier_name": "P4事务供应商",
                 "adjust_percent": "5",
                 "expected_versions": preview.json()["expected_versions"],
-                "change_reason": "验证整批同事务",
             },
         )
 

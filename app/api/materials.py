@@ -445,7 +445,7 @@ class PriceAdjustPreviewRequest(BaseModel):
 
 class PriceAdjustApplyRequest(PriceAdjustPreviewRequest):
     expected_versions: dict[int, int]
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_tokens: dict[int, str] = Field(default_factory=dict)
 
     @field_validator("expected_versions")
@@ -455,13 +455,13 @@ class PriceAdjustApplyRequest(PriceAdjustPreviewRequest):
             raise ValueError("预期版本必须大于等于1")
         return value
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
 
 
 class BoardCostRequest(BaseModel):

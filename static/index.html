@@ -2157,7 +2157,6 @@
                       <div class="field"><label>调价幅度（如 +5% / -10% / 5 / -3）</label>
                         <input class="input" v-model.trim="priceAdjustForm.adjust_percent" placeholder="+5% 或 -10% 或 5" /></div>
                       <div class="field"><label>生效日期</label><input class="input" type="date" v-model="priceAdjustForm.effective_date" /></div>
-                      <div class="field wide"><label>修改原因 *</label><input class="input" required v-model.trim="priceAdjustForm.change_reason" placeholder="请填写本次批量调价原因" /></div>
                     </div>
                     <div class="toolbar-group" style="margin:10px 0">
                       <button class="btn" :disabled="priceAdjustLoading" @click="previewPriceAdjust()">预览调价</button>
@@ -6176,7 +6175,7 @@
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
-            priceAdjustForm: { supplier_name: "", adjust_percent: "", effective_date: "", change_reason: "" },
+            priceAdjustForm: { supplier_name: "", adjust_percent: "", effective_date: "" },
             priceAdjustPreview: null, priceAdjustPreviewKey: "",
             showPriceHistoryModal: false, priceHistory: { material_code: "", items: [] },
             productBoardCost: null,
@@ -10133,8 +10132,7 @@
             return JSON.stringify({
               supplier_name:String(form.supplier_name || "").trim(),
               adjust_percent:String(form.adjust_percent || "").trim(),
-              effective_date:String(form.effective_date || ""),
-              change_reason:String(form.change_reason || "").trim()
+              effective_date:String(form.effective_date || "")
             });
           },
           invalidatePriceAdjustPreview() {
@@ -10144,13 +10142,10 @@
           },
           priceAdjustRequestBody(includePreviewContract = false) {
             const form = this.priceAdjustForm || {};
-            const reason = String(form.change_reason || "").trim();
             const body = {
               supplier_name:String(form.supplier_name || "").trim(),
               adjust_percent:String(form.adjust_percent || "").trim(),
-              effective_date:form.effective_date || undefined,
-              remark:reason,
-              change_reason:reason
+              effective_date:form.effective_date || undefined
             };
             if (!body.effective_date) delete body.effective_date;
             if (includePreviewContract && this.priceAdjustPreview) {
@@ -10173,14 +10168,13 @@
             this.priceAdjustPreviewKey = "";
             this.priceAdjustForm = {
               supplier_name: this.materialSupplierFilter || this.defaultSupplierName(),
-              adjust_percent: "", effective_date: TmTime.beijingToday(), change_reason: ""
+              adjust_percent: "", effective_date: TmTime.beijingToday()
             };
             this.showPriceAdjustModal = true;
           },
           async previewPriceAdjust() {
             this.priceAdjustError = ""; this.priceAdjustPreview = null; this.priceAdjustLoading = true;
             try {
-              if (!String(this.priceAdjustForm.change_reason || "").trim()) throw new Error("请填写修改原因");
               const body = this.priceAdjustRequestBody(false);
               const { data } = await axios.post("/api/master/materials/price-adjustments/preview", body);
               this.priceAdjustPreview = data;

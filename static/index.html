@@ -4565,7 +4565,7 @@
                     <button v-if="canStatusOrders" class="btn small danger" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
                     <button v-if="canDeleteOrders" class="btn small danger" @click="dangerDeleteOrderGroup()">删除此订单组</button>
                   </div>
-                  <div class="muted" style="font-size:11px;margin-top:6px">以上操作不可逆，均会要求填写原因或二次确认。撤回会删除关联送货/对账/开票/收款记录。</div>
+                  <div class="muted" style="font-size:11px;margin-top:6px">以上操作会先显示一次影响确认。撤回会删除关联送货/对账/开票/收款记录。</div>
                 </div>
               </div>
             </div>
@@ -15880,8 +15880,14 @@
           async dangerRollbackOrderGroup() {
             const orders = (this.orderEditGroup?.orders || []).filter(o => !o.is_history_order);
             if (!orders.length) { this.showToast("无可撤回的订单（历史归档订单不可撤回）", true); return; }
-            for (const order of orders) { await this.rollbackOrderWorkflow(order); }
-            this.closeModal();
+            if (!confirm(`确认撤回当前订单组的 ${orders.length} 张订单吗？\n将删除各订单关联的送货、回单、对账、开票和收款记录，并退回未报料状态；不符合条件的订单会拒绝。`)) return;
+            let succeeded=0;
+            for (const order of orders) {
+              if (await this.rollbackOrderWorkflow(order,{confirmed:true,reload:false,quiet:true})) succeeded += 1;
+            }
+            await Promise.all([this.loadOrders(),this.loadRequisition(),this.loadDeliveries(),this.loadFinance(),this.loadKpi()]);
+            if (succeeded === orders.length) this.closeModal();
+            this.showToast(`订单组撤回完成：成功 ${succeeded} 张，失败 ${orders.length-succeeded} 张`,succeeded !== orders.length);
           },
           async dangerChangeOrderGroupStatus(status) {
             const orders = this.orderEditGroup?.orders || [];
@@ -16682,15 +16688,17 @@
               this.showToast("订单已删除");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
-          async rollbackOrderWorkflow(order) {
-            const reason=prompt("撤回将删除该订单关联的送货、回单、对账、开票和收款记录，并退回未报料状态。请输入原因：");
-            if (!reason?.trim()) return;
-            if (!confirm(`确认将订单 ${this.displayOrderNumber(order)} 撤回到未送货、未报料状态吗？`)) return;
+          async rollbackOrderWorkflow(order, options={}) {
+            if (!options.confirmed && !confirm(`确认撤回订单 ${this.displayOrderNumber(order)} 吗？\n将删除关联送货、回单、对账、开票和收款记录，并退回未报料状态。`)) return false;
             try {
-              await axios.put(`/api/orders/${order.id}/rollback-workflow`,{reason:reason.trim()});
-              await Promise.all([this.loadOrders(),this.loadRequisition(),this.loadDeliveries(),this.loadFinance(),this.loadKpi()]);
-              this.showToast("订单已撤回到未送货、未报料状态");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              await axios.put(`/api/orders/${order.id}/rollback-workflow`,{});
+              if (options.reload !== false) await Promise.all([this.loadOrders(),this.loadRequisition(),this.loadDeliveries(),this.loadFinance(),this.loadKpi()]);
+              if (!options.quiet) this.showToast("订单已撤回到未送货、未报料状态");
+              return true;
+            } catch(error) {
+              if (!options.quiet) this.showToast(this.errorMessage(error),true);
+              return false;
+            }
           },
           async openMobileEntry() {
             try {

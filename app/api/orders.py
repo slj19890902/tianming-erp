@@ -1386,7 +1386,7 @@ class OrderStatusRequest(BaseModel):
 
 
 class WorkflowRollbackRequest(BaseModel):
-    reason: str
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class OrderGroupDeleteRequest(BaseModel):
@@ -4162,9 +4162,7 @@ def rollback_order_workflow(
     db: Session = Depends(get_db),
     user: User = Depends(can_rollback),
 ) -> dict:
-    reason = payload.reason.strip()
-    if not reason:
-        raise HTTPException(status_code=400, detail="撤回原因不能为空")
+    reason = (payload.reason or "").strip() or "订单流程撤回（系统记录）"
     order = db.scalar(
         select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
     )

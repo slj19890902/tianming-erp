@@ -2049,11 +2049,9 @@ def reverse_production_completion(
     *,
     completion_id: int,
     operator_id: int | None,
-    reason: str,
+    reason: str | None,
 ) -> CompletionReversalResult:
-    normalized_reason = reason.strip()
-    if not normalized_reason:
-        raise ProductionWorkflowError("撤销生产确认必须填写原因")
+    normalized_reason = (reason or "").strip() or "撤销生产确认（系统记录）"
     completion = db.get(ProductionCompletion, completion_id)
     if completion is None:
         raise ProductionWorkflowError("生产完工记录不存在", 404)

@@ -11554,10 +11554,9 @@
           async revertProductionCompletion(row) {
             if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return;
             if (!confirm(`确认撤销 ${row.item_order_number || row.order_number || "该订单"} 的生产确认吗？\n\n系统会撤回本次生成的临时成品库存或直接完工效果，并把任务退回待生产确认。已经送货、占用或移动的库存不会允许撤销。`)) return;
-            const reason = "生产完工历史回退（管理员一次确认）";
             this.productionBusy = true;
             try {
-              await axios.post(`/api/production/completions/${row.id}/revert`, { reason });
+              await axios.post(`/api/production/completions/${row.id}/revert`, {});
               delete this.productionTransferAttempts[row.id];
               await Promise.all([this.loadProduction(), this.loadOrders(), this.loadKpi(), this.loadDeliveries()]);
               if (this.hasPermission("dashboard.view")) await this.loadOverview();
@@ -16459,7 +16458,7 @@
             const reason="订单追溯逐级回退（管理员一次确认）";
             try {
               if (action.kind === "production") {
-                await axios.post(`/api/production/completions/${event.source_id}/revert`,{reason});
+                await axios.post(`/api/production/completions/${event.source_id}/revert`,{});
               } else if (action.kind === "incoming") {
                 await axios.put(`/api/incoming/receipt-items/${event.source_id}/revert`,{});
               } else if (action.kind === "supplier_requisition") {

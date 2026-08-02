@@ -35,7 +35,7 @@ def test_inventory_onboarding_entry_is_strictly_stocktake_view_gated() -> None:
     ) in WAREHOUSE
     assert (
         'const canEditInventoryOnboarding=()=>'
-        'hasPermission("warehouse.stocktake.submit")'
+        '!state.readOnly&&hasPermission("warehouse.stocktake.submit")'
     ) in WAREHOUSE
     assert 'class="onboarding-upload-box onboarding-submit-only"' in WAREHOUSE
     assert "revealInventoryOnboardingTab();" in WAREHOUSE
@@ -215,15 +215,11 @@ def test_line_editor_payload_matches_all_supported_correction_fields() -> None:
     assert "line.crease_middle_mm??" in ONBOARDING_SCRIPT
 
 
-def test_excluding_line_requires_a_reason_before_patch() -> None:
-    assert (
-        'const inventoryType=$("onboardingEditInventoryType").value||null,'
-        'actionDecision=$("onboardingEditActionDecision").value,'
-        'remarks=inventoryOnboardingNullable("onboardingEditRemarks");'
-        'if(actionDecision==="exclude"&&!remarks)'
-    ) in ONBOARDING_SCRIPT
-    assert "不计入本次盘点时必须填写原因" in ONBOARDING_SCRIPT
-    assert '$("onboardingEditRemarks").required=excluded' in ONBOARDING_SCRIPT
+def test_excluding_line_keeps_optional_note_and_needs_no_reason() -> None:
+    assert 'if(actionDecision==="exclude"&&!remarks)' not in ONBOARDING_SCRIPT
+    assert "不计入本次盘点时必须填写原因" not in ONBOARDING_SCRIPT
+    assert '$("onboardingEditRemarks").required=false' in ONBOARDING_SCRIPT
+    assert '$("onboardingEditRemarks").placeholder="可选备注"' in ONBOARDING_SCRIPT
     assert (
         '$("onboardingEditActionDecision").onchange='
         "updateInventoryOnboardingLineEditorVisibility"

@@ -1236,7 +1236,7 @@ def test_semi_finished_snapshot_requires_a_separate_supported_route(
     assert "SEMI_PALLET_SNAPSHOT_UNSUPPORTED" in line.error_codes_json
 
 
-def test_line_correction_and_rematch_are_audited_and_exclusion_needs_reason(
+def test_line_correction_and_rematch_are_audited_and_exclusion_needs_no_reason(
     onboarding_db,
 ) -> None:
     db, data = onboarding_db
@@ -1254,38 +1254,17 @@ def test_line_correction_and_rematch_are_audited_and_exclusion_needs_reason(
     line.remarks = None
     db.commit()
 
-    with pytest.raises(
-        InventoryOnboardingError,
-        match="必须填写备注",
-    ) as caught:
-        update_onboarding_line(
-            db,
-            batch_id=batch.id,
-            line_id=line.id,
-            expected_version=line.version,
-            values={"action_decision": "exclude"},
-            operator=data["admin"],
-        )
-    assert (
-        caught.value.code
-        == "INVENTORY_ONBOARDING_EXCLUDE_REASON_REQUIRED"
-    )
-    db.rollback()
-
-    line = get_onboarding_batch(db, batch.id).lines[0]
     updated = update_onboarding_line(
         db,
         batch_id=batch.id,
         line_id=line.id,
         expected_version=line.version,
-        values={
-            "remarks": "重复现场记录，人工排除",
-            "action_decision": "exclude",
-        },
+        values={"action_decision": "exclude"},
         operator=data["admin"],
     )
     db.commit()
     assert updated.match_status == "excluded"
+    assert updated.remarks is None
 
     from app.services.inventory_onboarding import rematch_onboarding_batch
 
@@ -1301,6 +1280,13 @@ def test_line_correction_and_rematch_are_audited_and_exclusion_needs_reason(
     }
     assert "N081_B1_LINE_UPDATE" in actions
     assert "N081_B1_REMATCH" in actions
+    line_update = db.scalar(
+        select(OperationLog)
+        .where(OperationLog.action == "N081_B1_LINE_UPDATE")
+        .order_by(OperationLog.id.desc())
+    )
+    assert line_update is not None
+    assert "不计入本次盘点" in line_update.description
 
 
 def test_batch_blocks_one_new_pallet_across_multiple_locations(

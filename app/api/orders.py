@@ -4564,6 +4564,50 @@ def get_order_item_documents(
     )
 
 
+@router.get(
+    "/{order_id}/items/{item_id}/documents/{source_type}/{source_id}"
+)
+def get_order_item_document_detail(
+    order_id: int,
+    item_id: int,
+    source_type: str,
+    source_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Revalidate and return one exact trace event without fuzzy lookup."""
+
+    trace = get_order_item_documents(
+        order_id=order_id,
+        item_id=item_id,
+        db=db,
+        user=user,
+    )
+    event = next(
+        (
+            row
+            for row in trace["events"]
+            if row["source_type"] == source_type
+            and row["source_id"] == source_id
+        ),
+        None,
+    )
+    if event is None:
+        raise HTTPException(status_code=404, detail="该阶段记录不属于当前订单明细")
+    return {
+        "order": trace["order"],
+        "item": trace["item"],
+        "navigation": {
+            "order_id": order_id,
+            "item_id": item_id,
+            "source_type": source_type,
+            "source_id": source_id,
+        },
+        "target": event["target"],
+        "event": event,
+    }
+
+
 @router.put("/{order_id}")
 def update_order(
     order_id: int,

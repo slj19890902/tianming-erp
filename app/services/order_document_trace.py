@@ -106,6 +106,53 @@ CONTEXT_STATUS_LABELS = {
 }
 
 
+TRACE_TARGETS = {
+    "sales_order": ("orders", "订单管理", "trace", "订单追溯"),
+    "material_requisition": ("requisition", "报料管理", "submitted", "已报料"),
+    "supplier_requisition_order": ("requisition", "报料管理", "submitted", "已报料"),
+    "supplier_requisition_void": ("requisition", "报料管理", "submitted", "已报料历史"),
+    "incoming_receipt": ("incoming", "仓库来料入库", "history", "入库历史"),
+    "incoming_receipt_reversal": ("incoming", "仓库来料入库", "history", "入库历史"),
+    "production_task": ("production", "生产确认", "pending", "待生产"),
+    "production_completion": ("production", "生产确认", "history", "完工历史"),
+    "production_completion_reversal": ("production", "生产确认", "history", "完工历史"),
+    "production_stock_transfer": ("production", "生产确认", "history", "完工入库历史"),
+    "production_stock_transfer_reversal": ("production", "生产确认", "history", "完工入库历史"),
+    "inventory_reservation": ("warehouse", "仓库库存管理", "reservations", "库存预占"),
+    "inventory_reservation_release": ("warehouse", "仓库库存管理", "reservations", "库存预占历史"),
+    "inventory_reservation_consume": ("warehouse", "仓库库存管理", "movements", "库存流水"),
+    "inventory_movement": ("warehouse", "仓库库存管理", "movements", "库存流水"),
+    "inventory_lot": ("warehouse", "仓库库存管理", "inventory", "库存批次"),
+    "delivery_draft": ("deliveries", "送货与回单", "deliveries", "送货单"),
+    "delivery_dispatch": ("deliveries", "送货与回单", "deliveries", "送货单"),
+    "delivery_void": ("deliveries", "送货与回单", "deliveries", "送货单历史"),
+    "return_receipt": ("deliveries", "送货与回单", "returns", "回单记录"),
+    "statement": ("finance", "对账开票收款", "statements", "对账单"),
+    "invoice": ("finance", "对账开票收款", "invoices", "开票记录"),
+    "settlement": ("finance", "对账开票收款", "settlements", "收款记录"),
+}
+
+
+def trace_event_target(
+    *,
+    stage: str,
+    source_type: str,
+    source_id: int,
+) -> dict[str, Any]:
+    module, module_label, section, section_label = TRACE_TARGETS.get(
+        source_type,
+        ("orders", "订单管理", "trace", STAGE_LABELS.get(stage, "阶段详情")),
+    )
+    return {
+        "module": module,
+        "module_label": module_label,
+        "section": section,
+        "section_label": section_label,
+        "source_type": source_type,
+        "source_id": source_id,
+    }
+
+
 def _api_datetime(value: datetime | None) -> str | None:
     return utc_naive_to_api(value) if value is not None else None
 
@@ -206,6 +253,11 @@ def build_order_item_document_trace(
                 "stage_label": STAGE_LABELS[stage],
                 "source_type": source_type,
                 "source_id": source_id,
+                "target": trace_event_target(
+                    stage=stage,
+                    source_type=source_type,
+                    source_id=source_id,
+                ),
                 "document_number": document_number,
                 "status": status,
                 "status_label": _status_label(
@@ -756,6 +808,10 @@ def build_order_item_document_trace(
     ]
 
     events.sort(key=lambda row: row.pop("_sort"))
+    current_event = next(
+        (row for row in reversed(events) if row["is_effective"]),
+        events[-1] if events else None,
+    )
     return {
         "order": {
             "id": order.id,
@@ -777,5 +833,6 @@ def build_order_item_document_trace(
         },
         "restricted_stages": restricted_stages,
         "current_inventory": current_inventory,
+        "current_event_key": current_event["key"] if current_event else None,
         "events": events,
     }

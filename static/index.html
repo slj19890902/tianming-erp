@@ -6771,7 +6771,7 @@
           masterSingleConfirmNoReasonUpdate() {
             const state = this.masterChangeConfirm;
             return this.masterSingleConfirmProductUpdate
-              || (state.visible && state.mode === "update" && state.entity === "customer");
+              || (state.visible && state.mode === "update" && ["customer","material"].includes(state.entity));
           },
           masterChangeCanSubmit() {
             const state = this.masterChangeConfirm;
@@ -7380,6 +7380,50 @@
               return false;
             } catch (error) {
               if (!this.handleMaster409(error,"customer",{entityId:customerId,expectedVersion})) {
+                this.showToast(`保存预检失败：${this.errorMessage(error)}`,true);
+              }
+              return false;
+            } finally {
+              this.loading = false;
+            }
+          },
+          buildMaterialWritePayload() {
+            const payload = {...this.materialForm};
+            delete payload.id;
+            delete payload.flute_type;
+            if (payload.quote_price === "") payload.quote_price = null;
+            return payload;
+          },
+          async prepareMaterialChangeConfirmation(changes) {
+            const materialId = Number(this.materialForm?.id);
+            const expectedVersion = this.masterCurrentVersion("material");
+            if (!Number.isInteger(materialId) || materialId <= 0) return false;
+            this.loading = true;
+            try {
+              const payload = this.buildMaterialWritePayload();
+              this.attachMasterUpdateMetadata("material",payload,{expected_version:expectedVersion});
+              const {data} = await axios.post(
+                `/api/master/materials/${encodeURIComponent(materialId)}/update-preview`,
+                payload
+              );
+              if (!data.can_update) {
+                this.closeModal();
+                this.showToast("未检测到可保存的变化");
+                return true;
+              }
+              this.masterVersionConflict = null;
+              this.masterChangeConfirm = {
+                ...blankMasterChangeConfirm(), visible:true, mode:"update", entity:"material", entityId:materialId,
+                expectedVersion, currentVersion:data.current_version ?? expectedVersion,
+                changes:this.cloneMasterRecord(changes),
+                backendChanges:this.normalizeMasterChanges(data.changes || data.diff || data.changed_fields,"material"),
+                warnings:Array.isArray(data.warnings) ? data.warnings : [],
+                confirmationToken:data.confirmation_token || null,
+                requireAcknowledgement:(Array.isArray(data.warnings) ? data.warnings.length : 0) > 0
+              };
+              return false;
+            } catch (error) {
+              if (!this.handleMaster409(error,"material",{entityId:materialId,expectedVersion})) {
                 this.showToast(`保存预检失败：${this.errorMessage(error)}`,true);
               }
               return false;
@@ -15057,7 +15101,7 @@
           },
           async deleteMaterial(row) {
             if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row,reasonLabel:`停用材质“${row.code}”`,defaultReason:"停用材质"}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row,reasonLabel:false}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
 	          async openOrder() {
@@ -18066,6 +18110,7 @@
               if (changes.length) {
                 if (masterEntity === "product") await this.prepareProductChangeConfirmation(changes);
                 else if (masterEntity === "customer") await this.prepareCustomerChangeConfirmation(changes);
+                else if (masterEntity === "material") await this.prepareMaterialChangeConfirmation(changes);
                 else this.openMasterChangeConfirmation(masterEntity,changes);
                 return false;
               }
@@ -18135,9 +18180,7 @@
                 }
               }
               if (this.modal.type === "material") {
-                const payload={...this.materialForm}; delete payload.id;
-                delete payload.flute_type;
-                if (payload.quote_price==="") payload.quote_price=null;
+                const payload = this.buildMaterialWritePayload();
                 this.attachMasterUpdateMetadata("material",payload,masterOptions);
                 if (this.materialForm.id) await axios.put(`/api/master/materials/${this.materialForm.id}`,payload);
                 else await axios.post("/api/master/materials",payload);

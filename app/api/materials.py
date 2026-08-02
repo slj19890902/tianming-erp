@@ -37,6 +37,7 @@ from app.services.flute_mapping import seven_layer_code_error, validate_flute_co
 from app.services.pricing import PricingError, calculate_price
 from app.services.master_data_versioning import (
     apply_versioned_update,
+    preview_versioned_update,
     record_versioned_create,
 )
 from app.services.supplier_master import (
@@ -133,30 +134,34 @@ class MaterialResponse(MaterialPayload):
 
 class MaterialMutationPayload(BaseModel):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
 
 
 class MaterialUpdatePayload(MaterialPayload):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
+
+
+class MaterialUpdatePreviewPayload(MaterialPayload):
+    expected_version: int = Field(ge=1)
 
 
 class SupplierPaperCodePayload(BaseModel):
@@ -1352,6 +1357,43 @@ def create_material(
         raise
     db.refresh(material)
     return _response(material, user)
+
+
+@router.post("/{material_id}/update-preview")
+def preview_material_update(
+    material_id: int,
+    payload: MaterialUpdatePreviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    material = _material_or_404(db, material_id)
+    supplier_name = _canonical_supplier_for_write(
+        db,
+        payload.supplier_name,
+        current_name=material.supplier_name,
+    )
+    duplicate = _find_dictionary_duplicate(
+        db,
+        supplier_name=supplier_name,
+        layer_count=payload.layer_count or len(payload.code),
+        material_code=payload.code,
+        exclude_material_id=material_id,
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该供应商下已存在材质代码 {payload.code}，不能重复保存",
+        )
+    updates = _material_write_data(payload)
+    updates["supplier_name"] = supplier_name
+    return preview_versioned_update(
+        db,
+        object_type="material",
+        entity=material,
+        updates=updates,
+        expected_version=payload.expected_version,
+        user=user,
+    )
 
 
 @router.put("/{material_id}")

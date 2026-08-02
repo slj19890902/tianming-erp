@@ -18,7 +18,7 @@ def test_customer_update_previews_before_one_confirmation() -> None:
 
 
 def test_customer_update_confirmation_does_not_request_or_fabricate_reason() -> None:
-    assert 'state.entity === "customer"' in INDEX
+    assert '["customer","material"].includes(state.entity)' in INDEX
     assert "masterSingleConfirmNoReasonUpdate" in INDEX
     assert 'reasonLabel:false' in INDEX
     assert "if (reason) mutationPayload.change_reason = reason;" in INDEX

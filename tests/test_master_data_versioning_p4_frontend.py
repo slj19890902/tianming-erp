@@ -417,12 +417,12 @@ def test_inline_javascript_is_syntactically_valid(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_material_deactivation_keeps_the_versioned_mutation_contract() -> None:
+def test_material_deactivation_keeps_versioning_without_reason_prompt() -> None:
     deactivate = _method_block("async deleteMaterial(row)", "openOrder()")
 
     assert 'method:"delete"' in deactivate
     assert 'url:`/api/master/materials/${row.id}`' in deactivate
     assert "sendVersionedMasterMutation" in deactivate
-    assert 'reasonLabel:`停用材质“${row.code}”`' in deactivate
-    assert 'defaultReason:"停用材质"' in deactivate
+    assert "reasonLabel:false" in deactivate
+    assert "defaultReason" not in deactivate
     assert "await this.loadMaterials()" in deactivate

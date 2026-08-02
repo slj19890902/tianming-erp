@@ -360,12 +360,17 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
         expected_version=1,
     )
     assert product_payload_without_reason.change_reason is None
-    with pytest.raises(ValidationError):
-        MaterialUpdatePayload(
-            **_material_payload("E1"),
-            expected_version=1,
-            change_reason="   ",
-        )
+    material_payload = MaterialUpdatePayload(
+        **_material_payload("E1"),
+        expected_version=1,
+        change_reason="   ",
+    )
+    assert material_payload.change_reason is None
+    material_payload_without_reason = MaterialUpdatePayload(
+        **_material_payload("E1"),
+        expected_version=1,
+    )
+    assert material_payload_without_reason.change_reason is None
 
     with TestClient(writer_app) as client:
         customer = _create_customer(client, "N", 102)
@@ -746,6 +751,83 @@ def test_customer_status_and_soft_delete_accept_no_reason_but_keep_version_gate(
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "MASTER_VERSION_CONFLICT"
     assert deleted.status_code == 204, deleted.text
+
+
+def test_material_update_and_soft_delete_accept_no_reason_with_preview_and_audit(
+    writer_app: FastAPI,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+
+    with TestClient(writer_app) as client:
+        material = _create_material(client, "LIF")
+        update_payload = {
+            **_material_payload("LIF", code="ML2", remarks="无需手填原因"),
+            "expected_version": 1,
+        }
+        preview = client.post(
+            f"/api/master/materials/{material['id']}/update-preview",
+            json=update_payload,
+        )
+        rejected_without_token = client.put(
+            f"/api/master/materials/{material['id']}",
+            json=update_payload,
+        )
+        updated = client.put(
+            f"/api/master/materials/{material['id']}",
+            json={
+                **update_payload,
+                "confirmation_token": preview.json()["confirmation_token"],
+            },
+        )
+        stale = client.put(
+            f"/api/master/materials/{material['id']}",
+            json={**update_payload, "remarks": "旧页面覆盖"},
+        )
+
+        removable = _create_material(client, "A1")
+        deleted = client.request(
+            "DELETE",
+            f"/api/master/materials/{removable['id']}",
+            json={"expected_version": 1},
+        )
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["can_update"] is True
+    assert preview.json()["confirmation_token"]
+    assert preview.json()["warnings"]
+    assert rejected_without_token.status_code == 409
+    assert rejected_without_token.json()["detail"]["code"] == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["version"] == 2
+    assert updated.json()["code"] == "ML2"
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "MASTER_VERSION_CONFLICT"
+    assert deleted.status_code == 204, deleted.text
+
+    with writer_app.state.session_factory() as session:
+        revision = session.scalar(
+            select(MasterDataObjectVersion)
+            .where(
+                MasterDataObjectVersion.object_type == "material",
+                MasterDataObjectVersion.object_id == material["id"],
+                MasterDataObjectVersion.version == 2,
+            )
+        )
+        audit = session.scalar(
+            select(OperationLog)
+            .where(
+                OperationLog.entity_type == "material",
+                OperationLog.entity_id == material["id"],
+                OperationLog.action == "MASTER_UPDATE",
+            )
+        )
+    assert revision is not None
+    assert revision.reason is None
+    assert revision.actor_username_snapshot == "p4-writer-admin"
+    assert revision.created_at is not None
+    assert audit is not None
+    assert audit.username == "p4-writer-admin"
 
 
 def test_status_sync_soft_delete_restore_and_physical_delete_protection(

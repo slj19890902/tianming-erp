@@ -99,9 +99,14 @@ def test_mobile_reentry_keeps_submitted_location_locked() -> None:
     assert "state.locked=Boolean(pending)" in MOBILE
 
 
-def test_warehouse_review_requires_reason_and_handles_drift_as_full_restart() -> None:
-    assert "驳回原因（必填）" in WAREHOUSE
-    assert "reason:normalizedReason" in WAREHOUSE
+def test_warehouse_reject_uses_one_confirmation_and_handles_drift_as_full_restart() -> None:
+    method = WAREHOUSE.split("async function rejectStocktake(id)", 1)[1].split(
+        "floor3InitAreaFilter()", 1
+    )[0]
+    assert method.count("confirm(") == 1
+    assert "prompt(" not in method
+    assert "reason:" not in method
+    assert "本操作不会修改库存" in method
     assert "请再次确认：审核通过后将由后端统一处理盘点差异" in WAREHOUSE
     assert "库存已变化，请重新发起盘点" in WAREHOUSE
     assert "closeStocktakeReview();loadStocktakeReviews()" in WAREHOUSE

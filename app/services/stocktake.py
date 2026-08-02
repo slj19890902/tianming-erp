@@ -775,18 +775,19 @@ def reject_stocktake(
     *,
     order_id: int,
     idempotency_key: str,
-    reason: str,
+    reason: str | None,
     reviewer: User,
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> StocktakeOrder:
     key = idempotency_key.strip()
+    normalized_reason = (reason or "").strip() or "驳回库存盘点单（系统记录）"
     replay = _review_replay(
         db,
         order_id=order_id,
         action="reject",
         idempotency_key=key,
-        reason=reason,
+        reason=normalized_reason,
     )
     if replay is not None:
         return replay
@@ -803,12 +804,12 @@ def reject_stocktake(
     order.version += 1
     order.reviewed_by = reviewer.id
     order.reviewed_at = reviewed_at
-    order.review_note = reason
+    order.review_note = normalized_reason
     details = {
         "order_id": order.id,
         "order_number": order.order_number,
         "idempotency_key": key,
-        "reason": reason,
+        "reason": normalized_reason,
     }
     db.add(
         StocktakeReview(
@@ -817,7 +818,7 @@ def reject_stocktake(
             action="reject",
             from_status="submitted",
             to_status="rejected",
-            reason=reason,
+            reason=normalized_reason,
             idempotency_key=key,
             details_json=details,
             reviewed_by=reviewer.id,

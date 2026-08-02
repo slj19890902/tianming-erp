@@ -416,6 +416,10 @@ def test_exact_item_trace_does_not_mix_same_customer_po(order_trace_app) -> None
     assert "INV-TRACE-001" in document_numbers
     assert body["item"]["id"] == ids["item_a"]
     assert body["current_inventory"] == []
+    assert body["current_event_key"] in {
+        event["key"] for event in body["events"] if event["is_effective"]
+    }
+    assert all(event["target"]["source_id"] == event["source_id"] for event in body["events"])
     assert not any("unit_cost" in str(event) for event in body["events"])
 
     assert empty_response.status_code == 200, empty_response.text
@@ -451,6 +455,87 @@ def test_scope_and_stage_permissions_are_enforced(order_trace_app) -> None:
     }
     assert {event["stage"] for event in body["events"]} == {"order"}
     assert denied.status_code == 403
+
+
+def test_exact_stage_detail_revalidates_order_item_and_source(order_trace_app) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        trace_response = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}/documents"
+        )
+        assert trace_response.status_code == 200, trace_response.text
+        trace = trace_response.json()
+        requisition_event = next(
+            event
+            for event in trace["events"]
+            if event["source_type"] == "material_requisition"
+        )
+
+        exact = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}"
+            f"/documents/{requisition_event['source_type']}"
+            f"/{requisition_event['source_id']}"
+        )
+        wrong_sibling = client.get(
+            f"/api/orders/{ids['order_a_same_po']}"
+            f"/items/{ids['item_a_same_po']}"
+            f"/documents/{requisition_event['source_type']}"
+            f"/{requisition_event['source_id']}"
+        )
+
+    assert exact.status_code == 200, exact.text
+    body = exact.json()
+    assert body["navigation"] == {
+        "order_id": ids["order_a"],
+        "item_id": ids["item_a"],
+        "source_type": requisition_event["source_type"],
+        "source_id": requisition_event["source_id"],
+    }
+    assert body["event"]["document_number"] == "REQ-TRACE-A"
+    assert body["target"]["module"] == "requisition"
+    assert wrong_sibling.status_code == 404
+
+
+def test_exact_stage_detail_cannot_bypass_stage_permissions(order_trace_app) -> None:
+    app, ids = order_trace_app
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        admin_trace = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}/documents"
+        ).json()
+        delivery_event = next(
+            event
+            for event in admin_trace["events"]
+            if event["source_type"] == "delivery_dispatch"
+        )
+
+        client.post("/api/auth/logout")
+        _login(client, "trace-sales")
+        response = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}"
+            f"/documents/{delivery_event['source_type']}"
+            f"/{delivery_event['source_id']}"
+        )
+
+    assert response.status_code == 404
+
+
+def test_trace_targets_production_completion_to_completion_history() -> None:
+    from app.services.order_document_trace import trace_event_target
+
+    assert trace_event_target(
+        stage="production",
+        source_type="production_completion",
+        source_id=57,
+    ) == {
+        "module": "production",
+        "module_label": "生产确认",
+        "section": "history",
+        "section_label": "完工历史",
+        "source_type": "production_completion",
+        "source_id": 57,
+    }
 
 
 def test_item_must_belong_to_order(order_trace_app) -> None:

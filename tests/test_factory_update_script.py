@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.37"
-    assert APP_VERSION_NAME == "模具90×60标签预览原型"
+    assert APP_VERSION == "v0.22.38"
+    assert APP_VERSION_NAME == "订单追溯阶段精确定位"
     assert APP_BUILD_DATE == "2026-08-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "90×60" in item and "自定义尺寸" in item
+        "本次更新｜" in item and "订单、明细、单据类型" in item and "精确定位" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "片料尺寸" in item and "纸箱规格" in item
+        "本次更新｜" in item and "生产完成记录" in item and "完工历史" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "匿名样式预览" in item and "不写入" in item
+        "本次更新｜" in item and "撤销或冲销" in item and "历史证据" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "横向和竖向" in item and "最终宽高" in item
+        "如何验证｜" in item and "阶段详情" in item and "完全一致" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "必须登录" in item and "返回入口" in item
+        "如何验证｜" in item and "筛选" in item and "滚动位置" in item
         for item in current_release
     )
     assert any(

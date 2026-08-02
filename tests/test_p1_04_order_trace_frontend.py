@@ -30,6 +30,31 @@ def test_trace_modal_is_compact_and_does_not_claim_completion_date() -> None:
     assert "客户、客户单号、产品" not in trace_template
 
 
+def test_trace_stage_detail_uses_exact_source_and_marks_reversed_history() -> None:
+    assert "current_event_key" in INDEX
+    assert "查看当前阶段" in INDEX
+    assert "阶段详情" in INDEX
+    assert (
+        "`/api/orders/${this.orderTrace.order.id}/items/${this.orderTrace.item.id}"
+        "/documents/${sourceType}/${event.source_id}`"
+        in INDEX
+    )
+    assert "该记录已撤销或冲销，仅作为历史查看" in INDEX
+
+
+def test_trace_return_restores_order_workbench_context() -> None:
+    method_start = INDEX.index("async openOrderTrace(order, item)")
+    method_end = INDEX.index("traceEventTime(event)", method_start)
+    methods = INDEX[method_start:method_end]
+    assert "filters:{...this.filters}" in methods
+    assert "orderPage:this.pages.orders" in methods
+    assert "expandedOrders:{...this.expandedOrders}" in methods
+    assert "scrollY:window.scrollY" in methods
+    assert "this.pages.orders=context.orderPage" in methods
+    assert "this.expandedOrders={...context.expandedOrders}" in methods
+    assert "window.scrollTo(0,context?.scrollY || 0)" in methods
+
+
 def test_inline_javascript_remains_syntactically_valid(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node is not None

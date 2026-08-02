@@ -4712,6 +4712,23 @@
               <div v-if="orderTrace.restricted_stages.length" class="status orange" style="display:block;white-space:normal;margin:10px 0">
                 当前账号未显示：{{ orderTrace.restricted_stages.map(row => row.stage_label).join("、") }}。
               </div>
+              <div v-if="traceCurrentEvent()" class="notice" style="margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div><strong>当前可定位阶段：{{ traceCurrentEvent().stage_label }} · {{ traceCurrentEvent().status_label }}</strong><div class="muted">{{ traceCurrentEvent().document_number }}</div></div>
+                <button class="btn small primary" type="button" @click="openTraceEventDetail(traceCurrentEvent())">查看当前阶段</button>
+              </div>
+              <div v-if="orderTraceEventDetail" id="orderTraceEventDetail" class="panel" style="margin:10px 0;border-color:var(--primary)">
+                <div class="toolbar-group" style="justify-content:space-between;margin-bottom:8px"><strong>阶段详情 · {{ orderTraceEventDetail.target.module_label }} → {{ orderTraceEventDetail.target.section_label }}</strong><button class="btn small" type="button" @click="orderTraceEventDetail=null">返回时间线</button></div>
+                <div v-if="!orderTraceEventDetail.event.is_effective" class="status orange" style="display:block;margin-bottom:8px">该记录已撤销或冲销，仅作为历史查看，不能当作当前有效事实。</div>
+                <div class="form-grid">
+                  <div class="field"><label>阶段</label><div>{{ orderTraceEventDetail.event.stage_label }}</div></div>
+                  <div class="field"><label>真实单据</label><div><strong>{{ orderTraceEventDetail.event.document_number }}</strong></div></div>
+                  <div class="field"><label>状态</label><div>{{ orderTraceEventDetail.event.status_label }}</div></div>
+                  <div class="field"><label>发生时间</label><div>{{ traceEventTime(orderTraceEventDetail.event) }}</div></div>
+                  <div class="field"><label>数量</label><div>{{ traceQuantityText(orderTraceEventDetail.event) }}</div></div>
+                  <div class="field"><label>位置</label><div>{{ traceLocationText(orderTraceEventDetail.event) }}</div></div>
+                  <div class="field"><label>精确定位</label><div class="muted">订单 {{ orderTraceEventDetail.navigation.order_id }} · 明细 {{ orderTraceEventDetail.navigation.item_id }} · 记录 {{ orderTraceEventDetail.navigation.source_type }} #{{ orderTraceEventDetail.navigation.source_id }}</div></div>
+                </div>
+              </div>
               <div class="section-title">当前关联库存位置</div>
               <div v-if="!orderTrace.current_inventory.length" class="muted">当前没有可按精确单据关联展示的库存批次。</div>
               <table v-else>
@@ -4724,7 +4741,7 @@
               </table>
               <div class="section-title">真实单据时间线</div>
               <table>
-                <thead><tr><th style="width:145px">时间</th><th style="width:70px">阶段</th><th>单据</th><th style="width:100px">数量</th><th style="width:135px">位置</th><th style="width:100px">状态</th></tr></thead>
+                <thead><tr><th style="width:145px">时间</th><th style="width:70px">阶段</th><th>单据</th><th style="width:100px">数量</th><th style="width:135px">位置</th><th style="width:100px">状态</th><th style="width:90px">操作</th></tr></thead>
                 <tbody><tr v-for="event in orderTrace.events" :key="event.key" :class="{muted:!event.is_effective}">
                   <td>{{ traceEventTime(event) }}</td>
                   <td><strong>{{ event.stage_label }}</strong></td>
@@ -4732,6 +4749,7 @@
                   <td>{{ traceQuantityText(event) }}</td>
                   <td>{{ traceLocationText(event) }}</td>
                   <td><span :class="['status', event.is_reversal || !event.is_effective ? 'orange' : 'green']">{{ event.status_label }}</span></td>
+                  <td><button class="btn small" type="button" @click="openTraceEventDetail(event)">阶段详情</button></td>
                 </tr></tbody>
               </table>
               <div v-if="orderTrace.events.length <= 1" class="muted" style="margin-top:10px">该明细目前尚无真实后续单据。</div>
@@ -6193,7 +6211,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, drawingFile:null,
+            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceReturnContext:null, drawingFile:null,
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
@@ -16278,9 +16296,46 @@
             this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
           },
           async openOrderTrace(order, item) {
+            this.orderTraceReturnContext = {
+              filters:{...this.filters},
+              orderPage:this.pages.orders,
+              expandedOrders:{...this.expandedOrders},
+              scrollY:window.scrollY,
+              orderId:order.id,
+              itemId:item.id,
+            };
             const { data } = await axios.get(`/api/orders/${order.id}/items/${item.id}/documents`);
             this.orderTrace = data;
+            this.orderTraceEventDetail = null;
             this.modal = { type:"orderTrace", title:`订单追溯 · 序号 ${data.item.item_sequence || "-"}` };
+          },
+          traceCurrentEvent() {
+            if (!this.orderTrace?.current_event_key) return null;
+            return this.orderTrace.events.find(event => event.key === this.orderTrace.current_event_key) || null;
+          },
+          async openTraceEventDetail(event) {
+            if (!this.orderTrace?.order?.id || !this.orderTrace?.item?.id || !event?.source_type || !event?.source_id) return;
+            try {
+              const sourceType=encodeURIComponent(event.source_type);
+              const { data } = await axios.get(`/api/orders/${this.orderTrace.order.id}/items/${this.orderTrace.item.id}/documents/${sourceType}/${event.source_id}`);
+              this.orderTraceEventDetail = data;
+              this.$nextTick(() => document.getElementById("orderTraceEventDetail")?.scrollIntoView({behavior:"smooth",block:"start"}));
+            } catch (error) {
+              this.showToast(`阶段详情读取失败：${this.errorMessage(error)}`, true);
+            }
+          },
+          returnFromOrderTrace() {
+            const context=this.orderTraceReturnContext;
+            if (context) {
+              this.filters={...this.filters,...context.filters};
+              this.pages.orders=context.orderPage;
+              this.expandedOrders={...context.expandedOrders};
+            }
+            this.modal=null;
+            this.orderTrace=null;
+            this.orderTraceEventDetail=null;
+            this.orderTraceReturnContext=null;
+            this.$nextTick(() => window.scrollTo(0,context?.scrollY || 0));
           },
           traceEventTime(event) {
             if (event.occurred_at) return this.formatDateTime(event.occurred_at);
@@ -17701,6 +17756,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "orderTrace") {
+                this.returnFromOrderTrace();
+                return;
+              }
             if (this.pdfWarehouseLocator.visible) {
               this.closePdfWarehouseLocator();
               return;

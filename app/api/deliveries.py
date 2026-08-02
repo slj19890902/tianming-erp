@@ -1055,15 +1055,14 @@ def _discard_delivery_pick_task(
 
 
 class ForceCloseRequest(BaseModel):
-    reason: str
+    reason: str | None = None
 
     @field_validator("reason")
     @classmethod
-    def validate_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("强制结案原因不能为空")
-        return reason
+    def validate_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 def _pending_query(
@@ -5485,6 +5484,7 @@ def force_close_order_item(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    reason = payload.reason or "订单未送尾数强制结案（系统记录）"
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
@@ -5527,7 +5527,7 @@ def force_close_order_item(
             resource="OrderItem",
             entity_id=item_id,
             details={
-                "reason": payload.reason,
+                "reason": reason,
                 "ordered_quantity": item.quantity,
                 "delivered_quantity": item.delivered_quantity,
             },
@@ -5537,7 +5537,7 @@ def force_close_order_item(
         return {
             "item_id": item_id,
             "is_force_closed": True,
-            "reason": payload.reason,
+            "reason": reason,
         }
     except HTTPException:
         db.rollback()

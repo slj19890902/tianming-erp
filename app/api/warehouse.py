@@ -740,16 +740,8 @@ class BomComponentAutoCoverPayload(BaseModel):
 
 
 class ReleaseReservationPayload(BaseModel):
-    release_reason: str = Field(min_length=1, max_length=500)
+    release_reason: str | None = Field(default=None, max_length=500)
     idempotency_key: str = Field(min_length=8, max_length=100)
-
-    @field_validator("release_reason")
-    @classmethod
-    def strip_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("取消抵扣必须填写原因")
-        return reason
 
 
 class SemiRequirementPayload(BaseModel):

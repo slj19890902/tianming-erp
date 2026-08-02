@@ -295,12 +295,13 @@ def test_release_restores_balances_and_cannot_repeat(reservation_db) -> None:
         db,
         reservation_id=reservation.id,
         operator_id=data["admin"].id,
-        release_reason="订单调整",
+        release_reason=None,
         idempotency_key="release-once",
     )
     db.flush()
     db.refresh(lot)
     assert released.status == "released"
+    assert released.release_reason == "取消成品库存抵扣（系统记录）"
     assert (lot.quantity_available, lot.quantity_reserved) == (50, 0)
     movement = db.scalar(
         select(InventoryMovement).where(

@@ -16641,12 +16641,9 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async releaseFinishedInventoryReservation(reservation) {
-            const reason=prompt("请输入取消成品库存抵扣原因");
-            if (!reason?.trim()) return;
-            if (!confirm(`确认释放批次 ${reservation.lot_number} 的 ${reservation.reserved_stock_quantity} 个预占吗？`)) return;
+            if (!confirm(`确认取消批次 ${reservation.lot_number} 的 ${reservation.reserved_stock_quantity} 个库存抵扣吗？\n取消后数量会回到可用库存，系统自动记录操作人和时间。`)) return;
             try {
               await axios.post(`/api/warehouse/reservations/${reservation.id}/release`,{
-                release_reason:reason.trim(),
                 idempotency_key:createIdempotencyKey(),
               });
               await Promise.all([

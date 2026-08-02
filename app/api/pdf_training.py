@@ -317,11 +317,11 @@ class TemplateClonePayload(BaseModel):
 
 
 class TemplateActivationPayload(BaseModel):
-    reason: str
+    reason: str | None = None
 
 
 class TemplateRetirePayload(BaseModel):
-    reason: str
+    reason: str | None = None
 
 
 def _apply_ground_truth(
@@ -1149,9 +1149,7 @@ def activate_template(
 ):
     candidate = _get_template_or_404(db, template_id)
     _require_draft(candidate, "激活")
-    reason = payload.reason.strip()
-    if not reason:
-        raise HTTPException(status_code=422, detail="激活原因不能为空")
+    reason = (payload.reason or "").strip() or "激活PDF订单模板（系统记录）"
     evidence = activation_dry_run(db, candidate)
     if not evidence["can_activate"]:
         raise HTTPException(
@@ -1209,9 +1207,7 @@ def retire_template(
     template = _get_template_or_404(db, template_id)
     if template.status != "active":
         raise HTTPException(status_code=409, detail="只有 active 模板可以退役")
-    reason = payload.reason.strip()
-    if not reason:
-        raise HTTPException(status_code=422, detail="退役原因不能为空")
+    reason = (payload.reason or "").strip() or "退役PDF订单模板（系统记录）"
     now = _now()
     template.status = "retired"
     template.is_active = False

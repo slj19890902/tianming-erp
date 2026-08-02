@@ -483,11 +483,12 @@ def test_template_clone_edit_delete_activate_retire_and_shared_pipeline(
     )
     active = pdf_training_api.activate_template(
         updated.id,
-        pdf_training_api.TemplateActivationPayload(reason="first evidence"),
+        pdf_training_api.TemplateActivationPayload(),
         session,
         admin,
     )
     assert (active.status, active.is_active, active.evidence_json is not None) == ("active", True, True)
+    assert active.activation_reason == "激活PDF订单模板（系统记录）"
     with pytest.raises(HTTPException, match="只有 draft"):
         pdf_training_api.update_template(
             active.id,
@@ -497,7 +498,7 @@ def test_template_clone_edit_delete_activate_retire_and_shared_pipeline(
         )
     second_active = pdf_training_api.activate_template(
         clone.id,
-        pdf_training_api.TemplateActivationPayload(reason="replace evidence"),
+        pdf_training_api.TemplateActivationPayload(reason="   "),
         session,
         admin,
     )
@@ -507,11 +508,12 @@ def test_template_clone_edit_delete_activate_retire_and_shared_pipeline(
     )
     retired = pdf_training_api.retire_template(
         second_active.id,
-        pdf_training_api.TemplateRetirePayload(reason="manual retirement"),
+        pdf_training_api.TemplateRetirePayload(),
         session,
         admin,
     )
     assert (retired.status, retired.is_active) == ("retired", False)
+    assert retired.retired_reason == "退役PDF订单模板（系统记录）"
     with pytest.raises(HTTPException, match="只有 draft"):
         pdf_training_api.delete_template(retired.id, session, admin)
 

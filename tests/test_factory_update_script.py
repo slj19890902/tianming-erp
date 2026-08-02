@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.34"
-    assert APP_VERSION_NAME == "手机版管理员产品库存反查"
+    assert APP_VERSION == "v0.22.35"
+    assert APP_VERSION_NAME == "送货员本人拿货任务与地图"
     assert APP_BUILD_DATE == "2026-08-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "统一手机版入口" in item and "只读" in item
+        "本次更新｜" in item and "分配给独立送货员" in item and "本人" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "成品只数" in item and "纸板备料张数" in item
+        "本次更新｜" in item and "送货操作权限" in item and "禁止改派" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "只读仓库地图" in item and "真实台账" in item
+        "本次更新｜" in item and "本单位置" in item and "全仓权限" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "多个候选" in item and "不能自动" in item
+        "如何验证｜" in item and "两个送货员账号" in item and "本人" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "客户受限账号" in item and "授权客户" in item
+        "如何验证｜" in item and "可发货打印" in item and "未正式发货" in item
         for item in current_release
     )
     assert any(

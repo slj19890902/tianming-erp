@@ -24,6 +24,20 @@ def test_n036_migration_follows_n035_linearly() -> None:
     assert 'down_revision: str | None = "be58v8x9z49"' in migration
 
 
+def test_p1_21c_assignment_migration_is_linear_and_fail_closed() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "dd86v8x9z75_assign_delivery_pick_tasks.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Revises: dc85v8x9z74" in migration
+    assert 'down_revision: str | None = "dc85v8x9z74"' in migration
+    assert '"assigned_to"' in migration
+    assert "WHERE assigned_to IS NOT NULL" in migration
+
+
 @pytest.fixture()
 def pick_app(tmp_path: Path):
     from app.api.auth import router as auth_router
@@ -192,6 +206,7 @@ def test_picker_permission_and_snapshot_contract(pick_app) -> None:
         task = _create_task(client, ids["delivery"])
         assert task["delivery_number"] == "TM-20260718-001"
         assert task["customer_name"] == "N036测试客户"
+        assert task["assigned_to_name"] == "delivery_picker"
         assert [row["planned_quantity"] for row in task["items"]] == [100, 50]
         repeated = _create_task(client, ids["delivery"])
         assert repeated["id"] == task["id"]
@@ -209,6 +224,51 @@ def test_picker_permission_and_snapshot_contract(pick_app) -> None:
             client.post(f"/api/deliveries/{ids['delivery']}/pick-task").status_code
             == 403
         )
+
+
+def test_p1_21c_picker_only_sees_assigned_task_and_dispatch_can_reassign(pick_app) -> None:
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    app, factory, ids, _ = pick_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        task = _create_task(client, ids["delivery"])
+
+    with factory() as db:
+        second = User(
+            username="delivery_picker_2",
+            password_hash=hash_password("RolePass123!"),
+            role="delivery_picker",
+            real_name="送货员二",
+            display_name="送货员二",
+            must_change_password=False,
+        )
+        db.add(second)
+        db.commit()
+        second_id = second.id
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        assignees = client.get("/api/delivery-picks/assignees")
+        assert assignees.status_code == 200
+        assert {row["id"] for row in assignees.json()["items"]} >= {second_id}
+        assigned = client.put(
+            f"/api/delivery-picks/{task['id']}/assignment",
+            json={"picker_user_id": second_id},
+        )
+        assert assigned.status_code == 200, assigned.text
+        assert assigned.json()["assigned_to"] == second_id
+
+        _login(client, "delivery_picker")
+        assert client.get("/api/delivery-picks").json()["items"] == []
+        hidden = client.get(f"/api/delivery-picks/{task['id']}")
+        assert hidden.status_code == 404
+
+        _login(client, "delivery_picker_2")
+        listed = client.get("/api/delivery-picks")
+        assert [row["id"] for row in listed.json()["items"]] == [task["id"]]
+        assert client.get(f"/api/delivery-picks/{task['id']}").status_code == 200
 
 
 def test_delivery_list_includes_pick_task_summary(pick_app) -> None:
@@ -355,6 +415,7 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
     from app.models.product import Product
     from app.models.user import User
     from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
         InventoryPallet,
         InventoryPalletItem,
         InventoryReservation,
@@ -373,7 +434,7 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
                 location_code="B2-L01",
                 location_name="二楼B区01",
                 warehouse_type="finished",
-                warehouse_floor=2,
+                warehouse_floor=3,
                 area_code="B2",
                 sort_order=10,
                 placement_status="placed",
@@ -390,6 +451,17 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
         ]
         db.add_all(locations)
         db.flush()
+        db.add(
+            Floor3LocationLayout(
+                location_id=locations[0].id,
+                left_pct=Decimal("12"),
+                top_pct=Decimal("18"),
+                width_pct=Decimal("8"),
+                height_pct=Decimal("7"),
+                source_type="manual",
+                created_by=admin.id,
+            )
+        )
         lots = []
         for index, (order_item, location, quantity) in enumerate(
             zip(order_items, locations, (60, 50), strict=True),
@@ -465,11 +537,16 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
         assert groups[0]["location_code"] == "B2-L01"
         assert groups[0]["pallet_code"] == "PLT-N083-1"
         assert groups[0]["lines"][0]["pick_quantity"] == 60
+        assert groups[0]["recommended_sequence"] == 1
+        assert groups[0]["map_status"] == "mapped"
+        assert groups[0]["map_point"]["left_pct"] == 12.0
         assert groups[1]["label"] == "生产区直接拿货"
+        assert groups[1]["map_status"] == "text_only"
         assert groups[1]["lines"][0]["pick_quantity"] == 40
         assert groups[2]["location_code"] == "E1-L09"
         assert groups[2]["pallet_code"] == "PLT-N083-2"
         assert groups[2]["needs_relocation"] is True
+        assert groups[2]["map_status"] == "text_only"
         assert task["location_plan_complete"] is True
 
         _login(client, "delivery_picker")

@@ -2688,7 +2688,11 @@
                     </td>
                     <td class="toolbar-group delivery-list-actions">
                       <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" @click="createDeliveryPickTask(row)">拿货</button>
-                      <button v-if="row.pick_task" class="btn small" @click="openDeliveryPickTask(row)">打开手机拿货</button>
+                      <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
+                        <option value="">未分配</option>
+                        <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
+                      </select>
+                      <button v-if="row.pick_task" class="btn small" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small success" @click="dispatchDelivery(row)">{{ row.pick_task ? '发货打印' : '直接发货打印' }}</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small" @click="editDelivery(row)">编辑</button>
                       <button v-if="canDelivery && row.status==='pending'" class="btn small danger" @click="deleteDelivery(row)">删除</button>
@@ -6109,7 +6113,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], deliveryPickers: [], deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null},
@@ -9575,7 +9579,7 @@
               if (page === "requisition") await this.loadRequisition();
               if (page === "incoming") await this.loadIncoming();
               if (page === "production") await this.loadProduction();
-              if (page === "deliveries") await Promise.all([this.loadDeliveries(), this.loadCustomerOptions(force)]);
+              if (page === "deliveries") await Promise.all([this.loadDeliveries(), this.loadCustomerOptions(force), this.loadDeliveryPickers()]);
               if (page === "warehouse") this.ensureWarehouseFrame();
               if (page === "finance") await Promise.all([this.loadCustomerOptions(force), this.loadFinance()]);
               if (page === "audit") await this.loadAuditLogs();
@@ -11681,7 +11685,7 @@
             try {
               const { data } = await axios.post(`/api/deliveries/${row.id}/pick-task`);
               row.pick_task = data.pick_task || data;
-              this.showToast("拿货任务已创建");
+              this.showToast(row.pick_task.assignment_required ? "拿货任务已创建，请选择送货员" : `已分配给 ${row.pick_task.assigned_to_name}`);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
             finally { this.loading = false; }
           },
@@ -11689,6 +11693,29 @@
             const task = this.normalizeDeliveryPickTask(row);
             if (!task?.id) return this.showToast("当前送货单尚未创建拿货任务", true);
             window.open(`/mobile/delivery-pick.html?task_id=${encodeURIComponent(task.id)}`, "_blank");
+          },
+          async loadDeliveryPickers() {
+            if (!this.canDelivery) return;
+            try {
+              const { data } = await axios.get("/api/delivery-picks/assignees");
+              this.deliveryPickers = data.items || [];
+            } catch (error) {
+              this.deliveryPickers = [];
+            }
+          },
+          async assignDeliveryPickTask(row, pickerUserId) {
+            const task = this.normalizeDeliveryPickTask(row);
+            if (!task?.id) return;
+            try {
+              const { data } = await axios.put(`/api/delivery-picks/${task.id}/assignment`, {
+                picker_user_id: pickerUserId ? Number(pickerUserId) : null,
+              });
+              row.pick_task = data;
+              this.showToast(data.assigned_to_name ? `已分配给 ${data.assigned_to_name}` : "已取消分配");
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              await this.loadDeliveries();
+            }
           },
           async applyDeliveryPickTask(row) {
             const task = this.normalizeDeliveryPickTask(row);

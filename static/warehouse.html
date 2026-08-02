@@ -100,12 +100,12 @@
   </header>
   <main class="wrap">
     <div class="tabs">
-      <button class="btn active" data-tab="finished">成品仓</button>
-      <button class="btn" data-tab="semi_finished">半成品仓</button>
+      <button class="btn active" data-tab="locations" aria-label="库位管理地图">仓库地图</button>
       <button class="btn" data-tab="insights">库存经营看板</button>
       <button class="btn" data-tab="movements">库存流水</button>
-      <button class="btn" data-tab="locations">库位管理</button>
       <button class="btn" data-tab="molds">模具位置</button>
+      <button class="btn admin-only inventory-ledger-tab" data-tab="finished">高级成品台账</button>
+      <button class="btn admin-only inventory-ledger-tab" data-tab="semi_finished">高级半成品台账</button>
       <button id="stocktakeReviewTab" class="btn stocktake-review-access hidden" data-tab="stocktake_review">盘点审核</button>
       <button id="inventoryOnboardingTab" class="btn inventory-onboarding-access hidden" data-tab="inventory_onboarding">首次盘点入库</button>
     </div>
@@ -138,7 +138,7 @@
       </div>
     </section>
 
-    <section id="inventorySection">
+    <section id="inventorySection" class="hidden">
       <div class="panel">
         <div class="toolbar">
           <button id="openInForm" class="btn primary operate-only">入成品仓</button>
@@ -288,7 +288,7 @@
       <div id="floor3FilterPanel" class="panel floor3-command-panel">
         <div class="floor3-command-title">
           <div><span class="floor3-command-eyebrow">三楼成品仓 · 真实货位数据</span><h2>仓库可视化库存</h2></div>
-          <div class="actions"><span id="floor3ModeBadge" class="tag floor3-mode-badge">浏览模式</span><button class="btn" type="button" onclick="switchTab('finished')">返回仓库菜单</button><button class="btn" type="button" onclick="switchTab('movements')">操作记录</button><button class="btn admin-only" type="button" onclick="switchLocationView('ledger')">全部库位台账</button></div>
+          <div class="actions"><span id="floor3ModeBadge" class="tag floor3-mode-badge">浏览模式</span><button class="btn" type="button" onclick="switchTab('movements')">操作记录</button><button class="btn admin-only" type="button" onclick="switchTab('finished')">高级库存台账</button><button class="btn admin-only" type="button" onclick="switchLocationView('ledger')">库位结构维护</button></div>
         </div>
         <div class="floor3-toolbar-row">
           <button id="floor3AreaNavToggle" class="btn" type="button" aria-expanded="true">收起区域</button>
@@ -599,7 +599,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"finished",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],finishedLocationCandidates:[],warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"locations",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"floor3",locations:[],finishedLocationCandidates:[],warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],lots:[],molds:[],insights:null,finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},floor3:{locations:[],mapLocations:[],moveLocations:[],detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>!state.readOnly&&hasPermission("warehouse.stocktake.review");
@@ -722,6 +722,8 @@
         await locateWarehouseLedger({lot,locationId,keyword,reason:`${driftPrefix}${reason}`});
         return;
       }
+      if(!requestedTab&&!locationId&&!lotId&&!keyword){await switchTab("locations");return}
+      if(requestedTab==="locations"&&!locationId){await switchTab("locations");return}
       if(requestedTab==="locations"&&requestedLocationView==="floor3"&&state.locationView!=="floor3")await switchLocationView("floor3");
       if(requestedTab&&["finished","semi_finished"].includes(requestedTab)&&requestedTab!==state.tab)await switchTab(requestedTab);
       if(locationId||lotId||keyword)await locateWarehouseLedger({lot,locationId,keyword});

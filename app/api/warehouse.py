@@ -3913,15 +3913,47 @@ def reference_products(
     }
 
 
-def _mold_tool_dict(row: MoldTool) -> dict:
+def _mold_customer_scope(user: User, db: Session) -> set[int] | None:
+    if has_unrestricted_customer_access(user, db):
+        return None
+    return customer_scope_ids(user, db)
+
+
+def _visible_mold_products(
+    row: MoldTool,
+    allowed_customer_ids: set[int] | None,
+) -> list[Product]:
     products = sorted(
         (
             product
             for product in row.products
             if product.deleted_at is None and product.is_active
+            and (
+                allowed_customer_ids is None
+                or product.customer_id in allowed_customer_ids
+            )
         ),
         key=lambda product: (product.customer.name if product.customer else "", product.product_code, product.id),
     )
+    return products
+
+
+def _require_mold_customer_scope(
+    row: MoldTool,
+    allowed_customer_ids: set[int] | None,
+) -> None:
+    if allowed_customer_ids is not None and not _visible_mold_products(
+        row,
+        allowed_customer_ids,
+    ):
+        raise HTTPException(status_code=403, detail="无客户访问权限")
+
+
+def _mold_tool_dict(
+    row: MoldTool,
+    allowed_customer_ids: set[int] | None = None,
+) -> dict:
+    products = _visible_mold_products(row, allowed_customer_ids)
     return {
         "id": row.id,
         "mold_code": row.mold_code,
@@ -3972,22 +4004,43 @@ def list_mold_tools(
     include_inactive: bool = False,
     limit: int = Query(default=200, ge=1, le=500),
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    if allowed_customer_ids == set():
+        return {"items": []}
     query = select(MoldTool).options(
         selectinload(MoldTool.products).selectinload(Product.customer)
     )
+    if allowed_customer_ids is not None:
+        query = query.where(
+            MoldTool.id.in_(
+                select(Product.mold_tool_id).where(
+                    Product.mold_tool_id.is_not(None),
+                    Product.deleted_at.is_(None),
+                    Product.is_active.is_(True),
+                    Product.customer_id.in_(allowed_customer_ids),
+                )
+            )
+        )
     if not include_inactive:
         query = query.where(MoldTool.is_active.is_(True))
     keyword = (q or "").strip()
     if keyword:
         pattern = f"%{keyword}%"
+        linked_scope_filters = []
+        if allowed_customer_ids is not None:
+            linked_scope_filters.append(
+                Product.customer_id.in_(allowed_customer_ids)
+            )
         linked_molds = (
             select(Product.mold_tool_id)
             .join(Customer, Customer.id == Product.customer_id)
             .where(
                 Product.mold_tool_id.is_not(None),
                 Product.deleted_at.is_(None),
+                Product.is_active.is_(True),
+                *linked_scope_filters,
                 or_(
                     Product.product_code.like(pattern),
                     Product.customer_material_code.like(pattern),
@@ -4008,13 +4061,28 @@ def list_mold_tools(
     rows = db.scalars(
         query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id).limit(limit)
     ).unique().all()
-    return {"items": [_mold_tool_dict(row) for row in rows]}
-
-
-def _mold_location_preview_dict(preview: MoldLocationPreview) -> dict:
-    occupant = preview.occupant
     return {
-        "mold": _mold_tool_dict(preview.mold),
+        "items": [
+            _mold_tool_dict(row, allowed_customer_ids)
+            for row in rows
+        ]
+    }
+
+
+def _mold_location_preview_dict(
+    preview: MoldLocationPreview,
+    allowed_customer_ids: set[int] | None = None,
+) -> dict:
+    occupant = preview.occupant
+    occupant_is_visible = (
+        occupant is not None
+        and (
+            allowed_customer_ids is None
+            or bool(_visible_mold_products(occupant, allowed_customer_ids))
+        )
+    )
+    return {
+        "mold": _mold_tool_dict(preview.mold, allowed_customer_ids),
         "target_location": preview.target_location,
         "target_guide": preview.target_guide,
         "expected_version": preview.mold.location_version,
@@ -4022,9 +4090,13 @@ def _mold_location_preview_dict(preview: MoldLocationPreview) -> dict:
         "can_confirm": occupant is None,
         "occupancy_conflict": (
             {
-                "mold_tool_id": occupant.id,
-                "mold_code": occupant.mold_code,
-                "mold_name": occupant.mold_name,
+                "mold_tool_id": occupant.id if occupant_is_visible else None,
+                "mold_code": occupant.mold_code if occupant_is_visible else "无权查看",
+                "mold_name": (
+                    occupant.mold_name
+                    if occupant_is_visible
+                    else "目标位置已被其他模具占用"
+                ),
             }
             if occupant is not None
             else None
@@ -4049,14 +4121,17 @@ def _mold_location_movement_dict(row: MoldLocationMovement) -> dict:
     }
 
 
-def _mold_location_move_response(result: MoldLocationMoveResult) -> dict:
+def _mold_location_move_response(
+    result: MoldLocationMoveResult,
+    allowed_customer_ids: set[int] | None = None,
+) -> dict:
     return {
         "message": (
             "模具已在目标位置，无需移动"
             if result.no_change
             else "模具位置移动已确认"
         ),
-        "mold": _mold_tool_dict(result.mold),
+        "mold": _mold_tool_dict(result.mold, allowed_customer_ids),
         "movement": (
             _mold_location_movement_dict(result.movement)
             if result.movement is not None
@@ -4071,16 +4146,17 @@ def _mold_location_move_response(result: MoldLocationMoveResult) -> dict:
 def preview_mold_location_movement(
     payload: MoldLocationPreviewPayload,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     try:
-        return _mold_location_preview_dict(
-            preview_mold_location_move(
-                db,
-                mold_code=payload.mold_code,
-                target_location=payload.target_location,
-            )
+        allowed_customer_ids = _mold_customer_scope(user, db)
+        preview = preview_mold_location_move(
+            db,
+            mold_code=payload.mold_code,
+            target_location=payload.target_location,
         )
+        _require_mold_customer_scope(preview.mold, allowed_customer_ids)
+        return _mold_location_preview_dict(preview, allowed_customer_ids)
     except MoldLocationError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
@@ -4093,6 +4169,13 @@ def confirm_mold_location_movement(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
+        allowed_customer_ids = _mold_customer_scope(user, db)
+        scoped_preview = preview_mold_location_move(
+            db,
+            mold_code=payload.mold_code,
+            target_location=payload.target_location,
+        )
+        _require_mold_customer_scope(scoped_preview.mold, allowed_customer_ids)
         result = confirm_mold_location_move(
             db,
             mold_code=payload.mold_code,
@@ -4133,7 +4216,7 @@ def confirm_mold_location_movement(
                 )
             )
         db.commit()
-        return _mold_location_move_response(result)
+        return _mold_location_move_response(result, allowed_customer_ids)
     except MoldLocationError as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
@@ -4161,7 +4244,7 @@ def get_mold_label(
     mold_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(can_read),
+    user: User = Depends(can_read),
 ) -> dict:
     row = db.scalar(
         select(MoldTool)
@@ -4170,6 +4253,8 @@ def get_mold_label(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="模具不存在")
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    _require_mold_customer_scope(row, allowed_customer_ids)
     port = request.url.port or 8000
     lookup_url = (
         f"http://{_lan_ip()}:{port}/mobile/mold-lookup"
@@ -4179,7 +4264,7 @@ def get_mold_label(
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return {
-        **_mold_tool_dict(row),
+        **_mold_tool_dict(row, allowed_customer_ids),
         "lookup_url": lookup_url,
         "qr_data_url": (
             "data:image/png;base64,"

@@ -393,16 +393,13 @@ class ProductBOMComponentPayload(BaseModel):
 
 class ProductBOMUpdatePayload(BaseModel):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1, max_length=500)
+    change_reason: str | None = Field(default=None, max_length=500)
     components: list[ProductBOMComponentPayload] = Field(max_length=99)
 
     @field_validator("change_reason")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def validate_change_reason(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
 
 
 class ProductMutationPayload(BaseModel):

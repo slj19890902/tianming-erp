@@ -19,6 +19,8 @@
     .name { font-size:19px; font-weight:800; line-height:1.3; } .spec { margin-top:3px; color:#385545; font-size:15px; } .code { margin-top:3px; color:#8b958e; font-size:11px; } .pick-components { margin-top:8px; padding:7px 8px; border:1px solid #d5e1d7; border-radius:7px; background:#f5faf5; } .pick-components-title { color:#385545; font-size:12px; font-weight:800; } .pick-component-row { display:flex; justify-content:space-between; gap:8px; margin-top:3px; color:#385545; font-size:12px; } .pick-component-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .pick-component-quantity { flex:0 0 auto; color:#17211b; font-weight:800; } .qty-row { display:grid; grid-template-columns:1fr 100px; gap:8px; align-items:center; margin-top:9px; } .qty-label { color:var(--muted); font-size:13px; } .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:9px; } .task-actions { display:flex; gap:8px; margin-top:12px; } .task-actions button { flex:1; }
     .normal-action { margin-bottom:10px; padding:12px; background:#e9f5ec; border:1px solid #bdd9c5; border-radius:11px; } .normal-action button { width:100%; min-height:52px; font-size:18px; } .normal-action p { margin:7px 0 0; color:#45604f; font-size:12px; text-align:center; }
     .location-card { margin-bottom:9px; padding:12px; background:#fffdf8; border:1px solid var(--line); border-left:6px solid var(--green); border-radius:11px; box-shadow:0 3px 12px #4b4b3518; } .location-card.direct { border-left-color:#3974a7; } .location-card.relocation { border-left-color:var(--orange); } .location-card.attention { border-left-color:var(--red); background:#fff5f2; } .location-title { font-size:21px; font-weight:900; line-height:1.25; } .location-meta { margin-top:4px; color:var(--muted); font-size:12px; } .location-line { display:grid; grid-template-columns:1fr auto; gap:9px; align-items:center; padding:9px 0; border-top:1px dashed #ddd7ca; } .location-line:first-of-type { margin-top:8px; } .location-product { font-size:15px; font-weight:800; } .location-spec { margin-top:2px; color:var(--muted); font-size:12px; } .location-qty { color:#143d27; font-size:22px; font-weight:900; white-space:nowrap; }
+    .location-heading { display:flex; gap:8px; align-items:center; justify-content:space-between; } .sequence { flex:0 0 auto; min-width:34px; padding:4px 7px; color:white; background:var(--green); border-radius:999px; font-size:12px; text-align:center; } .map-button { margin-top:8px; width:100%; }
+    [hidden] { display:none !important; } .map-overlay { position:fixed; inset:0; z-index:20; display:flex; flex-direction:column; background:#eef3ec; } .map-header { display:flex; gap:8px; align-items:center; padding:10px; color:white; background:#183f2c; } .map-header strong { flex:1; } .map-header button { color:white; border-color:#ffffff66; background:transparent; } .map-body { flex:1; overflow:auto; padding:10px; } .task-map { position:relative; width:100%; min-height:66vh; overflow:hidden; border:2px solid #8aa18f; border-radius:12px; background-color:#fffdf8; background-image:linear-gradient(#dce5dd 1px,transparent 1px),linear-gradient(90deg,#dce5dd 1px,transparent 1px); background-size:10% 10%; } .map-point { position:absolute; display:flex; align-items:center; justify-content:center; min-width:42px; min-height:36px; padding:4px; transform:translate(-1px,-1px); color:#153d27; background:#aee0bc; border:2px solid #287348; border-radius:7px; font-size:11px; font-weight:900; text-align:center; box-shadow:0 2px 7px #183f2c44; } .map-point.active { z-index:30 !important; color:white; background:#d8661f; border-color:#a53e0c; outline:4px solid #f3b18488; } .map-legend { margin-top:10px; padding:10px; background:white; border-radius:10px; } .map-legend-row { padding:7px 0; border-top:1px dashed var(--line); font-size:13px; } .map-legend-row:first-child { border-top:0; }
     .ready-banner { margin-bottom:10px; padding:13px; color:#145d36; background:#e1f4e8; border:1px solid #aad1b8; border-radius:10px; font-size:16px; font-weight:800; text-align:center; }
     details.exception-tools { margin-top:12px; padding:0 10px 10px; background:#fffdf8; border:1px solid var(--line); border-radius:11px; } details.exception-tools > summary { padding:13px 2px; color:#6c4631; font-weight:800; cursor:pointer; } .exception-help { margin:0 0 8px; color:var(--muted); font-size:12px; }
     .error { color:var(--red); margin-top:8px; font-size:13px; } .toast { position:fixed; left:50%; bottom:20px; z-index:10; transform:translateX(-50%); padding:10px 15px; color:white; background:#17211be8; border-radius:10px; }
@@ -54,10 +56,14 @@
       <div id="error" class="error"></div>
     </section>
   </main>
+  <section id="mapOverlay" class="map-overlay" hidden aria-label="本次拿货位置地图">
+    <div class="map-header"><button onclick="closeTaskMap()">返回拿货任务</button><strong id="mapTitle">三楼拿货位置</strong></div>
+    <div class="map-body"><div id="taskMap" class="task-map"></div><div id="mapLegend" class="map-legend"></div></div>
+  </section>
   <div id="toast" class="toast" hidden></div>
   <script>
     let taskId = new URLSearchParams(location.search).get("task_id");
-    let task = null; let activeFilter = "open";
+    let task = null; let activeFilter = "open"; let taskScrollY = 0; let activeMapGroupKey = "";
     const statusOf = item => item.pick_status || "pending";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
     const toast = text => { const node=document.getElementById("toast"); node.textContent=text; node.hidden=false; setTimeout(()=>node.hidden=true,2200); };
@@ -98,8 +104,21 @@
       const classes=["location-card"]; if(group.source_type==="production_direct") classes.push("direct"); if(group.needs_relocation) classes.push("relocation"); if(group.requires_attention) classes.push("attention");
       const pallet=group.pallet_code ? `栈板 ${group.pallet_code}` : (group.source_type==="finished_inventory" ? "未绑定栈板" : "");
       const lines=(group.lines || []).map(line=>`<div class="location-line"><div><div class="location-product">${escapeHtml([line.product_code || "-",line.product_name || "未命名产品"].join(" / "))}</div><div class="location-spec">${escapeHtml(line.specification || "-")}${line.lot_number ? ` · 批次 ${escapeHtml(line.lot_number)}` : ""}</div></div><div class="location-qty">${Number(line.pick_quantity || 0)} ${escapeHtml(line.unit || "个")}</div></div>`).join("");
-      return `<section class="${classes.join(" ")}"><div class="location-title">${escapeHtml(group.label || "拿货位置")}</div>${pallet ? `<div class="location-meta">${escapeHtml(pallet)}</div>` : ""}${lines}</section>`;
+      const sequence=Number(group.recommended_sequence || 0); const mapped=group.map_status==="mapped" && group.map_point;
+      const mapAction=mapped ? `<button class="map-button" onclick="openTaskMap('${escapeHtml(group.key)}')">地图定位此位置</button>` : `<div class="location-meta">${group.map_status==="unmapped"?"此库位尚未录入地图，按上方位置文字拿货":"此项按文字位置拿货"}</div>`;
+      return `<section class="${classes.join(" ")}"><div class="location-heading"><div class="location-title">${escapeHtml(group.label || "拿货位置")}</div>${sequence?`<span class="sequence">第${sequence}站</span>`:""}</div>${pallet ? `<div class="location-meta">${escapeHtml(pallet)}</div>` : ""}${lines}${mapAction}</section>`;
     }
+    function openTaskMap(groupKey) {
+      const mapped=(task?.location_groups || []).filter(group=>group.map_status==="mapped" && group.map_point);
+      if(!mapped.length) return toast("本任务没有已录入地图的位置");
+      taskScrollY=window.scrollY; activeMapGroupKey=groupKey || mapped[0].key;
+      document.getElementById("taskMap").innerHTML=mapped.map(group=>{ const point=group.map_point; const active=group.key===activeMapGroupKey; return `<button class="map-point ${active?"active":""}" style="left:${Number(point.left_pct)}%;top:${Number(point.top_pct)}%;width:${Math.max(Number(point.width_pct),7)}%;height:${Math.max(Number(point.height_pct),6)}%;z-index:${active?30:Number(point.z_index||1)}" onclick="focusMapGroup('${escapeHtml(group.key)}')">${Number(group.recommended_sequence||0)}<br>${escapeHtml(group.location_code || "库位")}</button>`; }).join("");
+      document.getElementById("mapLegend").innerHTML=mapped.map(group=>`<div class="map-legend-row"><strong>第${Number(group.recommended_sequence||0)}站 · ${escapeHtml(group.location_code || group.label)}</strong>　${Number(group.total_pick_quantity||0)} 个${group.pallet_code?` · ${escapeHtml(group.pallet_code)}`:""}</div>`).join("");
+      const selected=mapped.find(group=>group.key===activeMapGroupKey); document.getElementById("mapTitle").textContent=selected?`三楼地图 · ${selected.location_code}`:"三楼拿货位置";
+      document.getElementById("mapOverlay").hidden=false;
+    }
+    function focusMapGroup(groupKey) { activeMapGroupKey=groupKey; openTaskMap(groupKey); }
+    function closeTaskMap() { document.getElementById("mapOverlay").hidden=true; requestAnimationFrame(()=>window.scrollTo(0,taskScrollY)); }
     function renderPickComponents(item) {
       const components=(item.component_lines || []).filter(component=>Number(component.planned_delivery_quantity ?? component.quantity ?? 0)>0);
       if(!components.length) return "";

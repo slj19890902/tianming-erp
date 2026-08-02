@@ -105,6 +105,28 @@ def test_n083_mobile_page_is_location_first_and_keeps_exceptions_collapsed() -> 
     assert '<details id="exceptionTools"' in MOBILE
 
 
+def test_p1_21c_assignment_and_task_scoped_map_are_exposed_without_warehouse_page() -> None:
+    for marker in (
+        "/api/delivery-picks/assignees",
+        "assignDeliveryPickTask(row",
+        "picker_user_id",
+        "未分配",
+    ):
+        assert marker in INDEX
+    for marker in (
+        "map_status",
+        "map_point",
+        "recommended_sequence",
+        "地图定位此位置",
+        "返回拿货任务",
+        "taskScrollY",
+        "openTaskMap",
+        "closeTaskMap",
+    ):
+        assert marker in MOBILE
+    assert "/warehouse.html" not in MOBILE
+
+
 def test_n036_inline_javascript_is_syntactically_valid(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:

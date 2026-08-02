@@ -206,6 +206,7 @@ class DeliveryPickTask(Base):
         UniqueConstraint("delivery_id", name="uq_delivery_pick_tasks_delivery_id"),
         Index("ix_delivery_pick_tasks_customer_id", "customer_id"),
         Index("ix_delivery_pick_tasks_status", "status"),
+        Index("ix_delivery_pick_tasks_assigned_to_status", "assigned_to", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -218,6 +219,9 @@ class DeliveryPickTask(Base):
     status: Mapped[str] = mapped_column(String(24), default="pushed", nullable=False)
     snapshot_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_to: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     submitted_by: Mapped[int | None] = mapped_column(

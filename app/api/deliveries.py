@@ -16,6 +16,7 @@ from app.api.deps import (
     PermissionChecker,
     customer_scope_ids,
     get_db,
+    get_current_user,
     has_permission,
     has_unrestricted_customer_access,
     require_customer_access,
@@ -46,6 +47,7 @@ from app.models.tianhua_pre_delivery import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
+    Floor3LocationLayout,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
@@ -445,6 +447,10 @@ class DeliveryPickItemUpdate(BaseModel):
         return normalized
 
 
+class DeliveryPickAssignmentUpdate(BaseModel):
+    picker_user_id: int | None = Field(default=None, gt=0)
+
+
 def _pick_item_component_lines(
     db: Session,
     item: DeliveryPickTaskItem,
@@ -810,7 +816,7 @@ def _pick_item_location_plan(
     return lines, not any(line["requires_attention"] for line in lines)
 
 
-def _pick_location_groups(item_responses: list[dict]) -> list[dict]:
+def _pick_location_groups(db: Session, item_responses: list[dict]) -> list[dict]:
     groups: dict[tuple, dict] = {}
     for item in item_responses:
         for line in item.get("location_lines") or []:
@@ -875,7 +881,48 @@ def _pick_location_groups(item_responses: list[dict]) -> list[dict]:
             str(group["pallet_code"] or ""),
         )
 
-    return sorted(groups.values(), key=sort_key)
+    ordered = sorted(groups.values(), key=sort_key)
+    location_ids = {
+        int(group["location_id"])
+        for group in ordered
+        if group.get("location_id") is not None
+        and int(group.get("warehouse_floor") or 0) == 3
+        and not group.get("needs_relocation")
+        and not group.get("requires_attention")
+    }
+    layouts = {
+        row.location_id: row
+        for row in db.scalars(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id.in_(location_ids)
+            )
+        ).all()
+    } if location_ids else {}
+    for sequence, group in enumerate(ordered, start=1):
+        group["recommended_sequence"] = sequence
+        layout = layouts.get(group.get("location_id"))
+        if layout is not None:
+            group["map_status"] = "mapped"
+            group["map_point"] = {
+                "left_pct": float(layout.left_pct),
+                "top_pct": float(layout.top_pct),
+                "width_pct": float(layout.width_pct),
+                "height_pct": float(layout.height_pct),
+                "z_index": int(layout.z_index or 0),
+            }
+        else:
+            group["map_status"] = (
+                "text_only"
+                if group.get("source_type") == "production_direct"
+                or group.get("needs_relocation")
+                or group.get("requires_attention")
+                or group.get("location_id") is None
+                else "unmapped"
+            )
+            group["map_point"] = None
+    return ordered
+
+
 def _pick_item_response(
     db: Session,
     item: DeliveryPickTaskItem,
@@ -927,7 +974,7 @@ def _pick_task_response(
         for item in task.items
     ]
     location_groups = (
-        _pick_location_groups(item_responses) if include_location_plan else []
+        _pick_location_groups(db, item_responses) if include_location_plan else []
     )
     exception_items = [
         {
@@ -938,6 +985,7 @@ def _pick_task_response(
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
+    assigned_user = db.get(User, task.assigned_to) if task.assigned_to else None
     return {
         "id": task.id,
         "delivery_id": task.delivery_id,
@@ -948,6 +996,13 @@ def _pick_task_response(
         "has_exception": bool(exception_items) or task.status == "exception",
         "exceptions": exception_items,
         "snapshot_version": task.snapshot_version,
+        "assigned_to": task.assigned_to,
+        "assigned_to_name": (
+            assigned_user.display_name or assigned_user.real_name or assigned_user.username
+            if assigned_user is not None
+            else None
+        ),
+        "assignment_required": task.assigned_to is None,
         "created_at": utc_naive_to_api(task.created_at) if task.created_at else None,
         "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
         "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
@@ -1839,6 +1894,7 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
 
 
 def _delivery_pick_task_summary(
+    db: Session,
     task: DeliveryPickTask,
     *,
     customer_name: str | None,
@@ -1865,6 +1921,7 @@ def _delivery_pick_task_summary(
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
+    assigned_user = db.get(User, task.assigned_to) if task.assigned_to else None
     return {
         "id": task.id,
         "delivery_id": task.delivery_id,
@@ -1875,6 +1932,13 @@ def _delivery_pick_task_summary(
         "has_exception": bool(exception_items) or task.status == "exception",
         "exceptions": exception_items,
         "snapshot_version": task.snapshot_version,
+        "assigned_to": task.assigned_to,
+        "assigned_to_name": (
+            assigned_user.display_name or assigned_user.real_name or assigned_user.username
+            if assigned_user is not None
+            else None
+        ),
+        "assignment_required": task.assigned_to is None,
         "created_at": utc_naive_to_api(task.created_at) if task.created_at else None,
         "submitted_at": utc_naive_to_api(task.submitted_at) if task.submitted_at else None,
         "applied_at": utc_naive_to_api(task.applied_at) if task.applied_at else None,
@@ -2255,6 +2319,7 @@ def _delivery_response(
         ),
         "pick_task": (
             _delivery_pick_task_summary(
+                db,
                 pick_task,
                 customer_name=customer.name if customer else None,
                 delivery_number=delivery.delivery_number,
@@ -2453,6 +2518,13 @@ def _build_pick_task(
     if previous is not None:
         # The normal button is idempotent.  Editing the delivery explicitly
         # invalidates the task; a repeated click must never erase driver input.
+        if previous.assigned_to is None and previous.status == "pushed":
+            candidates = _eligible_delivery_pickers(
+                db,
+                customer_id=previous.customer_id,
+            )
+            if len(candidates) == 1:
+                previous.assigned_to = candidates[0].id
         return previous
     lines = db.scalars(
         select(DeliveryItem)
@@ -2468,6 +2540,9 @@ def _build_pick_task(
         snapshot_version=1,
         created_by=user.id,
     )
+    candidates = _eligible_delivery_pickers(db, customer_id=delivery.customer_id)
+    if len(candidates) == 1:
+        task.assigned_to = candidates[0].id
     db.add(task)
     db.flush()
     for line in lines:
@@ -2500,10 +2575,54 @@ def _build_pick_task(
             "delivery_number": delivery.delivery_number,
             "snapshot_version": task.snapshot_version,
             "item_count": len(lines),
+            "assigned_to": task.assigned_to,
         },
         description="创建送货拿货任务快照",
     )
     return task
+
+
+def _picker_can_access_customer(
+    db: Session,
+    picker: User,
+    customer_id: int,
+) -> bool:
+    return has_unrestricted_customer_access(picker, db) or customer_id in customer_scope_ids(
+        picker,
+        db,
+    )
+
+
+def _eligible_delivery_pickers(
+    db: Session,
+    *,
+    customer_id: int | None = None,
+) -> list[User]:
+    candidates = db.scalars(
+        select(User)
+        .where(User.is_active.is_(True), User.role == "delivery_picker")
+        .order_by(User.real_name, User.username)
+    ).all()
+    return [
+        picker
+        for picker in candidates
+        if has_permission(picker, "deliveries.pick")
+        and (
+            customer_id is None
+            or _picker_can_access_customer(db, picker, customer_id)
+        )
+    ]
+
+
+def _can_view_pick_tasks(
+    user: User = Depends(get_current_user),
+) -> User:
+    if not (
+        has_permission(user, "deliveries.pick")
+        or has_permission(user, "deliveries.execute")
+    ):
+        raise HTTPException(status_code=403, detail="权限不足")
+    return user
 
 
 def _pick_task_for_user(
@@ -2515,6 +2634,9 @@ def _pick_task_for_user(
     if task is None:
         raise HTTPException(status_code=404, detail="拿货任务不存在")
     require_customer_access(task.customer_id, user, db)
+    if not has_permission(user, "deliveries.execute") and task.assigned_to != user.id:
+        # Do not reveal whether another employee has this task.
+        raise HTTPException(status_code=404, detail="拿货任务不存在或未分配给当前账号")
     return task
 
 
@@ -2541,9 +2663,11 @@ def create_or_rebuild_delivery_pick_task(
 def list_delivery_pick_tasks(
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    user: User = Depends(can_pick),
+    user: User = Depends(_can_view_pick_tasks),
 ) -> dict:
     query = select(DeliveryPickTask).order_by(DeliveryPickTask.id.desc())
+    if not has_permission(user, "deliveries.execute"):
+        query = query.where(DeliveryPickTask.assigned_to == user.id)
     visible = _visible_customer_ids(user, db)
     if visible is not None:
         query = query.where(DeliveryPickTask.customer_id.in_(visible))
@@ -2561,11 +2685,70 @@ def list_delivery_pick_tasks(
     }
 
 
+@pick_router.get("/assignees")
+def list_delivery_pick_assignees(
+    customer_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
+    return {
+        "items": [
+            {
+                "id": picker.id,
+                "username": picker.username,
+                "name": picker.display_name or picker.real_name or picker.username,
+            }
+            for picker in _eligible_delivery_pickers(db, customer_id=customer_id)
+        ]
+    }
+
+
+@pick_router.put("/{task_id}/assignment")
+def assign_delivery_pick_task(
+    task_id: int,
+    payload: DeliveryPickAssignmentUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    task = _pick_task_for_user(db, task_id, user)
+    if task.status != "pushed" or any(
+        item.status != "pending" or int(item.picked_quantity or 0) != 0
+        for item in task.items
+    ):
+        raise HTTPException(status_code=409, detail="拿货已开始，不能改派送货员")
+    picker = None
+    if payload.picker_user_id is not None:
+        picker = db.get(User, payload.picker_user_id)
+        if (
+            picker is None
+            or picker not in _eligible_delivery_pickers(
+                db,
+                customer_id=task.customer_id,
+            )
+        ):
+            raise HTTPException(status_code=400, detail="请选择可执行本客户任务的送货拿货员")
+    previous = task.assigned_to
+    task.assigned_to = picker.id if picker is not None else None
+    _write_audit(
+        db,
+        user=user,
+        action="ASSIGN_PICK_TASK",
+        resource="DeliveryPickTask",
+        entity_id=task.id,
+        details={"previous_assigned_to": previous, "assigned_to": task.assigned_to},
+        description="分配送货拿货任务",
+    )
+    db.commit()
+    return _pick_task_response(db, task)
+
+
 @pick_router.get("/{task_id}")
 def get_delivery_pick_task(
     task_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(can_pick),
+    user: User = Depends(_can_view_pick_tasks),
 ) -> dict:
     return _pick_task_response(db, _pick_task_for_user(db, task_id, user))
 

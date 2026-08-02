@@ -5807,8 +5807,6 @@
                 </div>
               </div>
             </template>
-            <div v-if="!masterSingleConfirmNoReasonUpdate" class="field" style="margin-top:12px"><label>{{ masterChangeConfirm.mode === 'restore' ? '恢复原因 *' : '修改原因 *' }}</label><textarea class="textarea" rows="3" v-model.trim="masterChangeConfirm.reason" placeholder="请填写可追溯的业务原因"></textarea></div>
-            <label v-if="masterChangeConfirm.requireAcknowledgement && !masterSingleConfirmNoReasonUpdate" style="display:flex;align-items:flex-start;gap:8px;margin-top:12px"><input type="checkbox" v-model="masterChangeConfirm.acknowledged" /><span>{{ masterChangeConfirm.mode === 'restore' ? '我已核对恢复差异' : '我已核对异常修改' }}</span></label>
             <div v-if="masterChangeConfirm.error" class="notice danger" style="margin-top:12px">{{ masterChangeConfirm.error }}</div>
           </div>
           <div class="modal-foot">
@@ -6016,8 +6014,8 @@
       const blankMasterChangeConfirm = () => ({
         visible:false, loading:false, mode:"update", entity:null, entityId:null,
         expectedVersion:null, currentVersion:null, targetVersion:null,
-        changes:[], backendChanges:[], warnings:[], reason:"",
-        confirmationToken:null, requireAcknowledgement:false, acknowledged:false,
+        changes:[], backendChanges:[], warnings:[],
+        confirmationToken:null, requireAcknowledgement:false,
         conflict:null, error:""
       });
       const blankMasterVersionHistory = () => ({
@@ -6754,22 +6752,9 @@
             if (!this.modal || this.modal.type !== "delivery") return "";
             return this.validateDeliveryForm();
           },
-          masterSingleConfirmProductUpdate() {
-            const state = this.masterChangeConfirm;
-            return state.visible && state.mode === "update" && state.entity === "product";
-          },
-          masterSingleConfirmNoReasonUpdate() {
-            const state = this.masterChangeConfirm;
-            return (state.visible && state.mode === "restore")
-              || this.masterSingleConfirmProductUpdate
-              || (state.visible && state.mode === "update" && ["customer","material"].includes(state.entity));
-          },
           masterChangeCanSubmit() {
             const state = this.masterChangeConfirm;
-            const singleNoReasonUpdate = this.masterSingleConfirmNoReasonUpdate;
             if (!state.visible || state.loading || state.conflict) return false;
-            if (!singleNoReasonUpdate && !String(state.reason || "").trim()) return false;
-            if (state.requireAcknowledgement && !singleNoReasonUpdate && !state.acknowledged) return false;
             if ((state.mode === "restore" || state.requireAcknowledgement) && !state.confirmationToken) return false;
             return true;
           },
@@ -7569,7 +7554,7 @@
               if (entity === "product" && context.previewed) {
                 this.masterChangeConfirm = {
                   ...current, visible:true, loading:false, confirmationToken:null,
-                  requireAcknowledgement:true, acknowledged:false, conflict:null,
+                  requireAcknowledgement:true, conflict:null,
                   error:"确认信息已过期或内容已变化，请返回编辑后重新保存。"
                 };
                 return true;
@@ -7583,7 +7568,7 @@
                 changes:current.changes.length ? current.changes : this.masterLocalChanges(entity),
                 backendChanges:this.normalizeMasterChanges(detail.changed_fields || detail.diff || detail.changes, entity),
                 warnings, confirmationToken:detail.confirmation_token || detail.preview_token || detail.token || null,
-                requireAcknowledgement:true, acknowledged:false, conflict:null, error:""
+                requireAcknowledgement:true, conflict:null, error:""
               };
               return true;
             }
@@ -7637,8 +7622,7 @@
               expected_version:state.currentVersion ?? state.expectedVersion,
               confirmation_token:state.confirmationToken || undefined
             };
-            if (!this.masterSingleConfirmNoReasonUpdate) options.change_reason = String(state.reason || "").trim();
-            else options._previewed = true;
+            options._previewed = true;
             this.masterChangeConfirm.loading = true;
             this.masterChangeConfirm.error = "";
             this.masterPendingSaveOptions = options;

@@ -18,8 +18,7 @@ def test_material_update_previews_before_one_confirmation() -> None:
 
 
 def test_material_confirmation_has_no_reason_prompt_or_fabricated_reason() -> None:
-    assert '["customer","material"].includes(state.entity)' in INDEX
-    assert "masterSingleConfirmNoReasonUpdate" in INDEX
+    assert 'v-model.trim="masterChangeConfirm.reason"' not in INDEX
     assert 'url:`/api/master/materials/${row.id}`,row' in INDEX
     assert "askMasterMutationReason(" not in INDEX
     assert 'change_reason:"确认"' not in INDEX

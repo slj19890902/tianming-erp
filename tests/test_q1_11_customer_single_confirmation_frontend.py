@@ -18,8 +18,7 @@ def test_customer_update_previews_before_one_confirmation() -> None:
 
 
 def test_customer_update_confirmation_does_not_request_or_fabricate_reason() -> None:
-    assert '["customer","material"].includes(state.entity)' in INDEX
-    assert "masterSingleConfirmNoReasonUpdate" in INDEX
+    assert 'v-model.trim="masterChangeConfirm.reason"' not in INDEX
     assert "askMasterMutationReason(" not in INDEX
     assert 'change_reason:"确认"' not in INDEX
     assert 'change_reason:"同意"' not in INDEX

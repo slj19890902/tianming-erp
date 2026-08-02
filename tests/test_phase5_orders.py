@@ -2651,7 +2651,7 @@ def test_admin_can_rollback_order_to_unreported_state(order_api_app) -> None:
         created = client.post("/api/orders", json=_payload()).json()
         response = client.put(
             f"/api/orders/{created['id']}/rollback-workflow",
-            json={"reason": "流程录入错误"},
+            json={},
         )
 
     assert response.status_code == 200, response.text

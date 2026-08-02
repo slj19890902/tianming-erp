@@ -42,7 +42,7 @@ class Delivery(Base):
             name="ck_sales_deliveries_status",
         ),
         CheckConstraint(
-            "source_mode IN ('order', 'unordered_finished')",
+            "source_mode IN ('order', 'unordered_finished', 'mixed')",
             name="ck_sales_deliveries_source_mode",
         ),
         UniqueConstraint(

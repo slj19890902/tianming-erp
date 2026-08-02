@@ -138,6 +138,15 @@ def unordered_finished_delivery_app(tmp_path: Path):
                     box_style="普通箱",
                 ),
                 Product(
+                    customer_id=customer_a.id,
+                    product_code="P115B-ORDERED",
+                    customer_material_code="P115B-ORDERED-M",
+                    product_name="P1-15B 已有订单成品箱",
+                    box_category="normal",
+                    box_style="普通箱",
+                    sale_unit_price=Decimal("3.6000"),
+                ),
+                Product(
                     customer_id=customer_b.id,
                     product_code="P115B-BOX-B",
                     customer_material_code="P115B-BOX-B-M",
@@ -217,6 +226,8 @@ def _reserve_for_normal_order(
     product_id: int,
     lot_id: int,
     lot_version: int,
+    order_quantity: int = 10,
+    reserved_quantity: int = 5,
 ) -> tuple[int, int]:
     response = client.post(
         "/api/orders",
@@ -229,14 +240,14 @@ def _reserve_for_normal_order(
                 {
                     "client_line_id": "P115B-RESERVED-1",
                     "product_id": product_id,
-                    "quantity": 10,
+                    "quantity": order_quantity,
                     "unit_price": "3.60",
                     "reservation_plan": {
                         "finished": [
                             {
                                 "lot_id": lot_id,
                                 "expected_version": lot_version,
-                                "requested_qty": 5,
+                                "requested_qty": reserved_quantity,
                                 "recommendation_source": "dedicated",
                                 "confirmed": True,
                             }
@@ -258,10 +269,16 @@ def _seed(app: FastAPI, factory) -> UnorderedFinishedSeed:
         customer_b = db.scalar(select(Customer).where(Customer.customer_code == "P115B-B"))
         priced = db.scalar(select(Product).where(Product.product_code == "P115B-BOX-A"))
         no_price = db.scalar(select(Product).where(Product.product_code == "P115B-NOPRICE"))
+        ordered = db.scalar(select(Product).where(Product.product_code == "P115B-ORDERED"))
         other = db.scalar(select(Product).where(Product.product_code == "P115B-BOX-B"))
-        assert customer_a and customer_b and priced and no_price and other
+        assert customer_a and customer_b and priced and no_price and ordered and other
         customer_a_id, customer_b_id = customer_a.id, customer_b.id
-        priced_id, no_price_id, other_id = priced.id, no_price.id, other.id
+        priced_id, no_price_id, ordered_id, other_id = (
+            priced.id,
+            no_price.id,
+            ordered.id,
+            other.id,
+        )
 
     free_first_lot_id, _ = _add_finished(
         factory, customer_id=customer_a_id, product_id=priced_id, quantity=12, key="p115b-free-1"
@@ -270,7 +287,7 @@ def _seed(app: FastAPI, factory) -> UnorderedFinishedSeed:
         factory, customer_id=customer_a_id, product_id=priced_id, quantity=8, key="p115b-free-2"
     )
     reserved_lot_id, reserved_version = _add_finished(
-        factory, customer_id=customer_a_id, product_id=priced_id, quantity=10, key="p115b-reserved"
+        factory, customer_id=customer_a_id, product_id=ordered_id, quantity=10, key="p115b-reserved"
     )
     general_lot_id, _ = _add_finished(
         factory,
@@ -296,7 +313,7 @@ def _seed(app: FastAPI, factory) -> UnorderedFinishedSeed:
         _login(client)
         regular_order_id, regular_order_item_id = _reserve_for_normal_order(
             client,
-            product_id=priced_id,
+            product_id=ordered_id,
             lot_id=reserved_lot_id,
             lot_version=reserved_version,
         )
@@ -382,6 +399,62 @@ def _delivery_line(body: dict) -> dict:
     lines = body.get("lines") or body.get("items") or []
     assert len(lines) == 1, body
     return lines[0]
+
+
+def _mixed_delivery_fixture(
+    client: TestClient,
+    factory,
+    seed: UnorderedFinishedSeed,
+) -> tuple[int, int, int]:
+    order_lot_id, order_lot_version = _add_finished(
+        factory,
+        customer_id=seed.customer_a_id,
+        product_id=seed.priced_product_id,
+        quantity=10,
+        key="p115b-mixed-order-lot",
+    )
+    order_id, order_item_id = _reserve_for_normal_order(
+        client,
+        product_id=seed.priced_product_id,
+        lot_id=order_lot_id,
+        lot_version=order_lot_version,
+        order_quantity=10,
+        reserved_quantity=10,
+    )
+    return order_id, order_item_id, order_lot_id
+
+
+def _mixed_payload(
+    seed: UnorderedFinishedSeed,
+    *,
+    order_item_id: int,
+    order_quantity: int,
+    unordered_quantity: int = 3,
+) -> dict:
+    return {
+        "customer_id": seed.customer_a_id,
+        "delivery_date": "2026-08-02",
+        "source_mode": "mixed",
+        "items": [
+            {
+                "source_type": "order",
+                "order_item_id": order_item_id,
+                "delivered_quantity": order_quantity,
+            },
+            {
+                "source_type": "unordered_finished",
+                "product_id": seed.priced_product_id,
+                "delivered_quantity": unordered_quantity,
+                "unit_price": "3.60",
+                "allocations": [
+                    {
+                        "inventory_lot_id": seed.free_first_lot_id,
+                        "quantity": unordered_quantity,
+                    }
+                ],
+            },
+        ],
+    }
 
 
 def _dispatch_unordered_delivery(client: TestClient, seed: UnorderedFinishedSeed) -> tuple[dict, dict]:
@@ -860,3 +933,184 @@ def test_statement_uses_signed_quantity_and_frozen_price_without_order_item(
             json=_short_receipt_payload(delivery["id"], line["id"], quantity=9),
         )
     assert locked.status_code == 409, locked.text
+
+
+def test_unordered_candidates_are_server_filtered_and_paginated(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with TestClient(app) as client:
+        _login(client)
+        page_one = client.get(
+            UNORDERED_CANDIDATES_PATH,
+            params={
+                "customer_id": seed.customer_a_id,
+                "q": "P115B-BOX-A",
+                "page": 1,
+                "page_size": 1,
+            },
+        )
+        page_two = client.get(
+            UNORDERED_CANDIDATES_PATH,
+            params={
+                "customer_id": seed.customer_a_id,
+                "q": "P115B-BOX-A",
+                "page": 2,
+                "page_size": 1,
+            },
+        )
+        none = client.get(
+            UNORDERED_CANDIDATES_PATH,
+            params={
+                "customer_id": seed.customer_a_id,
+                "q": "不存在的规格",
+                "page": 1,
+                "page_size": 12,
+            },
+        )
+
+    assert page_one.status_code == 200, page_one.text
+    assert page_two.status_code == 200, page_two.text
+    assert none.status_code == 200, none.text
+    first = page_one.json()
+    second = page_two.json()
+    assert first["total"] == 2
+    assert first["total_pages"] == 2
+    assert len(first["items"]) == len(second["items"]) == 1
+    assert first["items"][0]["inventory_lot_id"] != second["items"][0]["inventory_lot_id"]
+    assert none.json()["total"] == 0
+    assert none.json()["items"] == []
+
+
+def test_same_product_requires_all_order_quantity_before_unordered_supplement(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with TestClient(app) as client:
+        _login(client)
+        _order_id, order_item_id, _order_lot_id = _mixed_delivery_fixture(
+            client,
+            factory,
+            seed,
+        )
+        pending = client.get(
+            "/api/deliveries/pending-items/search",
+            params={
+                "customer_id": seed.customer_a_id,
+                "inventory_code": "P115B-BOX-A",
+                "page": 1,
+                "page_size": 12,
+            },
+        )
+        assert pending.status_code == 200, pending.text
+        candidate = next(
+            item
+            for item in pending.json()["items"]
+            if int(item["order_item_id"]) == order_item_id
+        )
+        deliverable = int(candidate["deliverable_quantity"])
+        blocked = client.post(
+            "/api/deliveries",
+            json=_mixed_payload(
+                seed,
+                order_item_id=order_item_id,
+                order_quantity=deliverable - 1,
+            ),
+        )
+        accepted = client.post(
+            "/api/deliveries",
+            json=_mixed_payload(
+                seed,
+                order_item_id=order_item_id,
+                order_quantity=deliverable,
+            ),
+        )
+
+    assert deliverable > 1
+    assert blocked.status_code == 409, blocked.text
+    assert "请先把订单待送数量全部加入" in blocked.json()["detail"]
+    assert accepted.status_code == 201, accepted.text
+    body = accepted.json()
+    assert body["source_mode"] == "mixed"
+    assert {item["source_type"] for item in body["items"]} == {
+        "order",
+        "unordered_finished",
+    }
+
+
+def test_mixed_draft_dispatch_and_cancel_are_atomic_and_traceable(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with TestClient(app) as client:
+        _login(client)
+        order_id, order_item_id, order_lot_id = _mixed_delivery_fixture(
+            client,
+            factory,
+            seed,
+        )
+        pending = client.get(
+            "/api/deliveries/pending-items/search",
+            params={
+                "customer_id": seed.customer_a_id,
+                "inventory_code": "P115B-BOX-A",
+                "page_size": 12,
+            },
+        ).json()["items"]
+        deliverable = int(
+            next(
+                item
+                for item in pending
+                if int(item["order_item_id"]) == order_item_id
+            )["deliverable_quantity"]
+        )
+        with factory() as db:
+            order_lot_before = db.get(InventoryLot, order_lot_id)
+            assert order_lot_before is not None
+            order_lot_balance_before = (
+                int(order_lot_before.quantity_available or 0),
+                int(order_lot_before.quantity_reserved or 0),
+                int(order_lot_before.quantity_consumed or 0),
+            )
+        before = _stock_snapshot(factory, seed)
+        created = client.post(
+            "/api/deliveries",
+            json=_mixed_payload(
+                seed,
+                order_item_id=order_item_id,
+                order_quantity=deliverable,
+            ),
+        )
+        assert created.status_code == 201, created.text
+        after_draft = _stock_snapshot(factory, seed)
+        dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        cancelled = client.put(f"/api/deliveries/{created.json()['id']}/cancel")
+
+    assert before == after_draft
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "voided"
+    with factory() as db:
+        order = db.get(Order, order_id)
+        order_item = db.get(OrderItem, order_item_id)
+        order_lot = db.get(InventoryLot, order_lot_id)
+        free_lot = db.get(InventoryLot, seed.free_first_lot_id)
+        delivery = db.get(Delivery, created.json()["id"])
+        assert order is not None and order_item is not None and delivery is not None
+        assert order_lot is not None and free_lot is not None
+        assert int(order_item.delivered_quantity or 0) == 0
+        assert (
+            int(order_lot.quantity_available or 0),
+            int(order_lot.quantity_reserved or 0),
+            int(order_lot.quantity_consumed or 0),
+        ) == order_lot_balance_before
+        assert int(free_lot.quantity_available or 0) == 12
+        assert delivery.status == "voided"
+        assert db.scalar(
+            select(func.count())
+            .select_from(InventoryMovement)
+            .where(InventoryMovement.related_delivery_id == delivery.id)
+        ) >= 4

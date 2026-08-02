@@ -171,15 +171,14 @@ def apply(
     adjust_percent_raw: object,
     effective_date: dt.date | None,
     expected_versions: Mapping[int, int],
-    change_reason: str,
+    change_reason: str | None,
     confirmation_tokens: Mapping[int, str] | None,
     user: User,
     operator: str | None,
 ) -> dict:
     """执行调价：先备份，再写 materials + 批次 + 历史。"""
-    reason = change_reason.strip()
-    if not reason:
-        raise PriceAdjustError("修改原因不能为空")
+    reason = str(change_reason).strip() if change_reason is not None else None
+    reason = reason or None
     percent = parse_adjust_percent(adjust_percent_raw)
     affected = select_affected_materials(session, supplier_name)
     if not affected:

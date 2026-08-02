@@ -155,7 +155,7 @@ class TestApply:
             db, supplier_name="苏州嘉林亿", adjust_percent_raw="5",
             effective_date=eff,
             expected_versions=preview["expected_versions"],
-            change_reason="季度调价",
+            change_reason=None,
             confirmation_tokens={},
             user=admin,
             operator="admin",
@@ -172,8 +172,11 @@ class TestApply:
         assert c1.quote_date == eff
         hist = db.scalars(sa.select(MaterialPriceHistory)).all()
         assert len(hist) == 2
+        assert {row.adjust_reason for row in hist} == {None}
         batches = db.scalars(sa.select(MaterialPriceAdjustmentBatch)).all()
         assert len(batches) == 1 and batches[0].affected_count == 2
+        assert batches[0].remark is None
+        assert batches[0].operator == "admin"
 
     def test_apply_empty_raises(self, db, monkeypatch):
         monkeypatch.setattr(pa, "backup_database", lambda: Path("nope"))
@@ -181,7 +184,7 @@ class TestApply:
         with pytest.raises(pa.PriceAdjustError):
             pa.apply(db, supplier_name="不存在", adjust_percent_raw="5",
                      effective_date=None, expected_versions={},
-                     change_reason="季度调价", confirmation_tokens={},
+                     change_reason=None, confirmation_tokens={},
                      user=admin, operator="admin")
 
 

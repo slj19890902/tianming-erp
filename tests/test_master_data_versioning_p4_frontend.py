@@ -345,8 +345,9 @@ def test_customer_and_product_readonly_views_disable_real_controls() -> None:
 
 
 def test_price_adjust_preview_is_invalidated_and_apply_reuses_preview_contract() -> None:
-    assert "修改原因 *" in INDEX
-    assert 'v-model.trim="priceAdjustForm.change_reason"' in INDEX
+    assert "请填写本次批量调价原因" not in INDEX
+    assert 'v-model.trim="priceAdjustForm.change_reason"' not in INDEX
+    assert "请填写修改原因" not in _method_block("async previewPriceAdjust()", "async applyPriceAdjust()")
     assert "priceAdjustPreviewKey !== this.priceAdjustFormKey()" in INDEX
     assert "invalidatePriceAdjustPreview()" in INDEX
     assert ':disabled="!priceAdjustPreviewValid || priceAdjustLoading"' in INDEX

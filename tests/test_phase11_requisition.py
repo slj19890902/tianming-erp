@@ -572,6 +572,24 @@ def test_frontend_merge_suggestion_confirm_does_not_create_supplier_order() -> N
     assert "`/api/requisition/merge-groups/${row.merge_group_id}/supplier-order`" not in index
     assert "merge-size-input" in index
     assert "merge-supplier-select" in index
+
+
+def test_frontend_supplier_draft_shows_duplicate_dimension_and_quantity_checks() -> None:
+    index = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    for expected in (
+        "报料防错检查",
+        "疑似长宽填反",
+        "按人工尺寸继续",
+        "确认超量报料",
+        "supplierDraftLineIsSwapped(line)",
+        "supplierDraftQuantityAfter(line)",
+        "request_key: group.request_key || null",
+        "dimension_override_acknowledged",
+        "quantity_override_acknowledged",
+    ):
+        assert expected in index
     assert "/api/requisition/reported-documents" in index
     assert "draftGroupLines(group)" in index
     assert "line.source_items || []" in index
@@ -1303,10 +1321,28 @@ def test_pending_selection_rejects_missing_supplier_and_duplicate_generation(
         )
         created = _save_supplier_order_draft(client, draft)
         duplicate = _save_supplier_order_draft(client, draft)
+        fresh_duplicate = client.post(
+            "/api/requisition/supplier-orders/preview-from-pending-selection",
+            json={
+                "selections": [
+                    {
+                        "type": "order_item",
+                        "order_item_id": regular_id,
+                        "supplier_name": "苏州纸板供应商",
+                        "report_length_mm": 1000,
+                        "report_width_mm": 800,
+                        "cutting_mode": "一开一",
+                    }
+                ]
+            },
+        )
 
     assert missing_supplier.status_code == 400
     assert created.status_code == 201, created.text
-    assert duplicate.status_code == 409
+    assert duplicate.status_code == 201
+    assert duplicate.json()["idempotent_replay"] is True
+    assert fresh_duplicate.status_code == 409
+    assert "已有报料" in fresh_duplicate.json()["detail"]
     with session_factory() as session:
         assert session.query(SupplierRequisitionOrder).count() == 1
         assert session.get(OrderItem, regular_id).requisition_status == "已报料"
@@ -1369,11 +1405,146 @@ def test_pending_selection_rejects_fabricated_deduction_and_invalid_requisition_
     assert "真实库存预占" in fabricated.json()["detail"]
     assert fabricated_source_response.status_code == 400
     assert "真实库存预占" in fabricated_source_response.json()["detail"]
-    assert zero_qty.status_code == 201
+    assert zero_qty.status_code == 400
     with session_factory() as session:
-        saved = session.query(SupplierRequisitionOrder).one()
-        assert saved.requisition_qty > 0
+        assert session.query(SupplierRequisitionOrder).count() == 0
+        assert session.get(OrderItem, 1).requisition_status == "未报料"
+
+
+def test_supplier_draft_partial_quantity_stays_pending_and_retry_is_idempotent(
+    requisition_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        selection = {
+            "type": "order_item",
+            "order_item_id": 1,
+            "supplier_name": "苏州纸板供应商",
+            "report_length_mm": 1000,
+            "report_width_mm": 800,
+            "cutting_mode": "一开一",
+        }
+        draft = _preview_supplier_order_draft(client, [selection])
+        line = draft["supplier_groups"][0]["lines"][0]
+        assert line["theoretical_requisition_qty"] == 100
+        assert line["already_requisitioned_qty"] == 0
+        assert line["remaining_requisition_qty"] == 100
+        line["requisition_qty"] = 40
+
+        first = _save_supplier_order_draft(client, draft)
+        retry = _save_supplier_order_draft(client, draft)
+        pending = client.get("/api/requisition/pending")
+        second_draft = _preview_supplier_order_draft(client, [selection])
+        second_line = second_draft["supplier_groups"][0]["lines"][0]
+        second = _save_supplier_order_draft(client, second_draft)
+        pending_after = client.get("/api/requisition/pending")
+
+    assert first.status_code == 201, first.text
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["idempotent_replay"] is True
+    assert second_line["already_requisitioned_qty"] == 40
+    assert second_line["remaining_requisition_qty"] == 60
+    assert second_line["requisition_qty"] == 60
+    assert second.status_code == 201, second.text
+    pending_row = next(row for row in pending.json()["items"] if row["item_id"] == 1)
+    assert pending_row["already_requisitioned_qty"] == 40
+    assert pending_row["remaining_requisition_qty"] == 60
+    assert not [row for row in pending_after.json()["items"] if row.get("item_id") == 1]
+    first_order_id = first.json()["created_orders"][0]["supplier_order_id"]
+    with TestClient(app) as admin_client:
+        _login(admin_client, "admin")
+        voided = admin_client.put(
+            f"/api/requisition/supplier-orders/{first_order_id}/void"
+        )
+        pending_after_void = admin_client.get("/api/requisition/pending")
+    assert voided.status_code == 200, voided.text
+    reopened = next(
+        row for row in pending_after_void.json()["items"] if row.get("item_id") == 1
+    )
+    assert reopened["already_requisitioned_qty"] == 60
+    assert reopened["remaining_requisition_qty"] == 40
+    with session_factory() as session:
+        assert session.query(SupplierRequisitionOrder).count() == 2
+        assert session.get(OrderItem, 1).requisition_qty == 60
         assert session.get(OrderItem, 1).requisition_status == "已报料"
+
+
+def test_supplier_draft_blocks_swapped_dimensions_and_controls_overage(
+    requisition_app,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.order import OrderItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        item.snapshot_report_length_mm = 1000
+        item.snapshot_report_width_mm = 800
+        session.commit()
+
+    selection = {
+        "type": "order_item",
+        "order_item_id": 1,
+        "supplier_name": "苏州纸板供应商",
+        "report_length_mm": 1000,
+        "report_width_mm": 800,
+        "cutting_mode": "一开一",
+    }
+    with TestClient(app) as sales_client:
+        _login(sales_client, "sales")
+        swapped_draft = _preview_supplier_order_draft(sales_client, [selection])
+        swapped_line = swapped_draft["supplier_groups"][0]["lines"][0]
+        swapped_line["report_length_mm"] = 800
+        swapped_line["report_width_mm"] = 1000
+        swapped_line["dimension_override_acknowledged"] = True
+        sales_swapped = _save_supplier_order_draft(sales_client, swapped_draft)
+
+        over_draft = _preview_supplier_order_draft(sales_client, [selection])
+        over_line = over_draft["supplier_groups"][0]["lines"][0]
+        over_line["requisition_qty"] = over_line["remaining_requisition_qty"] + 1
+        over_line["quantity_override_acknowledged"] = True
+        sales_over = _save_supplier_order_draft(sales_client, over_draft)
+
+    assert sales_swapped.status_code == 403
+    assert "长宽颠倒" in sales_swapped.json()["detail"]
+    assert sales_over.status_code == 403
+    assert "只有管理员" in sales_over.json()["detail"]
+
+    with TestClient(app) as admin_client:
+        _login(admin_client, "admin")
+        admin_draft = _preview_supplier_order_draft(admin_client, [selection])
+        admin_line = admin_draft["supplier_groups"][0]["lines"][0]
+        admin_line["report_length_mm"] = 800
+        admin_line["report_width_mm"] = 1000
+        admin_line["requisition_qty"] = admin_line["remaining_requisition_qty"] + 5
+        missing_ack = _save_supplier_order_draft(admin_client, admin_draft)
+        admin_line["quantity_override_acknowledged"] = True
+        missing_dimension_ack = _save_supplier_order_draft(admin_client, admin_draft)
+        admin_line["dimension_override_acknowledged"] = True
+        accepted = _save_supplier_order_draft(admin_client, admin_draft)
+
+    assert missing_ack.status_code == 409
+    assert "确认超量报料" in missing_ack.json()["detail"]
+    assert missing_dimension_ack.status_code == 409
+    assert "按人工尺寸继续" in missing_dimension_ack.json()["detail"]
+    assert accepted.status_code == 201, accepted.text
+    with session_factory() as session:
+        order = session.query(SupplierRequisitionOrder).one()
+        assert order.requisition_qty == 105
+        assert order.request_key
+        event = session.scalar(
+            select(OperationLog).where(
+                OperationLog.action_code == "requisition.supplier_order.create"
+            )
+        )
+        assert event is not None
+        assert '"dimension_override": true' in event.details
+        assert '"quantity_override": true' in event.details
 
 
 def test_reported_documents_unifies_supplier_orders_and_legacy_requisitions(

@@ -27,6 +27,9 @@ class SupplierRequisitionOrder(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_number: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    request_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
     supplier_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     material_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("materials.id"), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -77,6 +80,7 @@ class SupplierRequisitionOrderItem(Base):
     order_item_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sales_order_items.id", ondelete="SET NULL"), nullable=True
     )
+    source_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     product_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True
     )
@@ -94,6 +98,8 @@ class SupplierRequisitionOrderItem(Base):
     order_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     product_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     product_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     stock_deduction_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requisition_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

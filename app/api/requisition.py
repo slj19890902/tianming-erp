@@ -847,6 +847,8 @@ class PendingSupplierOrderDraftLine(BaseModel):
     cutting_mode: str = DEFAULT_CUTTING_MODE
     inventory_deducted_qty: int = 0
     requisition_qty: int
+    dimension_override_acknowledged: bool = False
+    quantity_override_acknowledged: bool = False
     remark: str | None = None
     source_items: list[PendingSupplierOrderDraftSourceItem] = Field(min_length=1)
 
@@ -861,9 +863,20 @@ class PendingSupplierOrderDraftLine(BaseModel):
 
 class PendingSupplierOrderDraftGroup(BaseModel):
     supplier_name: str | None = None
+    request_key: str | None = None
     lines: list[PendingSupplierOrderDraftLine] = Field(default_factory=list)
     # Backward-compatible input for the previous flat source-item draft shape.
     items: list[dict] = Field(default_factory=list)
+
+    @field_validator("request_key")
+    @classmethod
+    def validate_request_key(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", normalized):
+            raise ValueError("报料请求编号格式不正确，请刷新草稿后重试")
+        return normalized
 
 
 class PendingSupplierOrderFinalizePayload(BaseModel):
@@ -3427,6 +3440,170 @@ def _active_supplier_order_item_exists(db: Session, order_item_id: int) -> bool:
     )
 
 
+def _supplier_requisition_source_key(
+    item: OrderItem,
+    req_item: RequisitionItem | None = None,
+) -> str:
+    if req_item is not None:
+        return f"requisition_item:{req_item.id}"
+    return f"order_item:{item.id}"
+
+
+def _active_supplier_requisition_facts(
+    db: Session,
+    *,
+    item: OrderItem,
+    req_item: RequisitionItem | None = None,
+) -> dict[str, object]:
+    source_key = _supplier_requisition_source_key(item, req_item)
+    rows = db.execute(
+        select(SupplierRequisitionOrderItem, SupplierRequisitionOrder, User)
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .outerjoin(User, User.id == SupplierRequisitionOrder.created_by)
+        .where(
+            SupplierRequisitionOrderItem.order_item_id == item.id,
+            SupplierRequisitionOrder.status != "voided",
+        )
+        .order_by(
+            SupplierRequisitionOrder.created_at.asc(),
+            SupplierRequisitionOrder.id.asc(),
+        )
+    ).all()
+    facts: list[dict[str, object]] = []
+    for order_line, supplier_order, operator in rows:
+        if order_line.source_key:
+            if order_line.source_key != source_key:
+                continue
+        elif req_item is not None:
+            expected_code = str(req_item.product_code_snapshot or "").strip()
+            if expected_code and str(order_line.product_code or "").strip() != expected_code:
+                continue
+        facts.append(
+            {
+                "supplier_order_id": supplier_order.id,
+                "supplier_order_number": supplier_order.order_number,
+                "supplier_name": supplier_order.supplier_name,
+                "requisition_qty": int(order_line.requisition_qty or 0),
+                "created_at": (
+                    beijing_naive_to_api(supplier_order.created_at)
+                    if supplier_order.created_at is not None
+                    else None
+                ),
+                "operator": (
+                    operator.display_name
+                    or operator.real_name
+                    or operator.username
+                    if operator is not None
+                    else None
+                ),
+            }
+        )
+    return {
+        "source_key": source_key,
+        "quantity": sum(int(row["requisition_qty"]) for row in facts),
+        "orders": facts,
+    }
+
+
+def _duplicate_requisition_detail(facts: dict[str, object]) -> str:
+    orders = list(facts.get("orders") or [])
+    if not orders:
+        return "当前采购需求已经报完，不能重复普通报料"
+    summary = "；".join(
+        f"{row['supplier_order_number']} {row['requisition_qty']}张"
+        + (f" {str(row['created_at'])[:10]}" if row.get("created_at") else "")
+        + (f"（{row['operator']}）" if row.get("operator") else "")
+        for row in orders[:3]
+    )
+    return f"当前采购需求已经报完。已有报料：{summary}。如确需增加，请使用超量报料确认。"
+
+
+def _active_supplier_requisition_facts_by_item_ids(
+    db: Session,
+    item_ids: list[int],
+) -> dict[int, dict[str, object]]:
+    clean_ids = sorted({int(item_id) for item_id in item_ids if int(item_id) > 0})
+    if not clean_ids:
+        return {}
+    rows = db.execute(
+        select(SupplierRequisitionOrderItem, SupplierRequisitionOrder, User)
+        .join(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .outerjoin(User, User.id == SupplierRequisitionOrder.created_by)
+        .where(
+            SupplierRequisitionOrderItem.order_item_id.in_(clean_ids),
+            SupplierRequisitionOrder.status != "voided",
+        )
+        .order_by(
+            SupplierRequisitionOrder.created_at.asc(),
+            SupplierRequisitionOrder.id.asc(),
+        )
+    ).all()
+    result: dict[int, dict[str, object]] = {
+        item_id: {
+            "source_key": f"order_item:{item_id}",
+            "quantity": 0,
+            "orders": [],
+        }
+        for item_id in clean_ids
+    }
+    for order_line, supplier_order, operator in rows:
+        item_id = int(order_line.order_item_id or 0)
+        if item_id not in result:
+            continue
+        if order_line.source_key and order_line.source_key != f"order_item:{item_id}":
+            continue
+        fact = {
+            "supplier_order_id": supplier_order.id,
+            "supplier_order_number": supplier_order.order_number,
+            "supplier_name": supplier_order.supplier_name,
+            "requisition_qty": int(order_line.requisition_qty or 0),
+            "created_at": (
+                beijing_naive_to_api(supplier_order.created_at)
+                if supplier_order.created_at is not None
+                else None
+            ),
+            "operator": (
+                operator.display_name
+                or operator.real_name
+                or operator.username
+                if operator is not None
+                else None
+            ),
+        }
+        result[item_id]["quantity"] = int(result[item_id]["quantity"]) + int(
+            fact["requisition_qty"]
+        )
+        item_orders = result[item_id]["orders"]
+        if isinstance(item_orders, list):
+            item_orders.append(fact)
+    return result
+
+
+def _recommended_supplier_dimensions(
+    item: OrderItem,
+    product: Product,
+    req_item: RequisitionItem | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
+    if req_item is not None and req_item.cardboard_len and req_item.cardboard_width:
+        return Decimal(req_item.cardboard_len), Decimal(req_item.cardboard_width)
+    suggested_len, suggested_width = _purchase_dimensions(
+        item.snapshot_report_length_mm,
+        item.snapshot_report_width_mm,
+        DEFAULT_CUTTING_MODE,
+    )
+    if suggested_len is None or suggested_width is None:
+        suggested_len, suggested_width = _suggested_dimensions(product)
+    return suggested_len, suggested_width
+
+
 def _order_item_crease_width_error(item: OrderItem) -> str | None:
     errors = (
         crease_width_error(
@@ -3481,10 +3658,8 @@ def _ensure_pending_order_item_for_supplier_order(
         raise HTTPException(status_code=409, detail="强制结档明细不能生成供应商报料单")
     if item.material_status != "pending":
         raise HTTPException(status_code=409, detail="已入库或非待生产明细不能生成供应商报料单")
-    if item.requisition_status != "未报料":
-        raise HTTPException(status_code=409, detail="订单明细已经报料")
-    if _active_supplier_order_item_exists(db, item.id):
-        raise HTTPException(status_code=409, detail="订单明细已经存在有效供应商报料单")
+    if item.requisition_status not in {"未报料", "已报料"}:
+        raise HTTPException(status_code=409, detail="订单明细当前状态不能继续报料")
     if _active_requisition_hold(db, item.id) is not None:
         raise HTTPException(
             status_code=409,
@@ -3752,6 +3927,20 @@ def _pending_entry_dict(entry: dict) -> dict:
             "remaining_required_piece_qty", entry["required_piece_qty"]
         ),
         "requisition_qty": entry["requisition_qty"],
+        "theoretical_requisition_qty": entry.get(
+            "theoretical_requisition_qty", entry["requisition_qty"]
+        ),
+        "already_requisitioned_qty": entry.get("already_requisitioned_qty", 0),
+        "remaining_requisition_qty": entry.get(
+            "remaining_requisition_qty", entry["requisition_qty"]
+        ),
+        "existing_supplier_orders": entry.get("existing_supplier_orders", []),
+        "recommended_report_length_mm": entry.get(
+            "recommended_report_length_mm"
+        ),
+        "recommended_report_width_mm": entry.get(
+            "recommended_report_width_mm"
+        ),
         "remark": entry["remark"] or "",
         "late_finished_inventory": entry.get(
             "late_finished_inventory",
@@ -3859,6 +4048,16 @@ def _aggregate_entries_to_purchase_lines(
                 "semi_finished_reserved_piece_qty": 0,
                 "remaining_required_piece_qty": 0,
                 "requisition_qty": 0,
+                "theoretical_requisition_qty": 0,
+                "already_requisitioned_qty": 0,
+                "remaining_requisition_qty": 0,
+                "existing_supplier_orders": [],
+                "recommended_report_length_mm": entry.get(
+                    "recommended_report_length_mm"
+                ),
+                "recommended_report_width_mm": entry.get(
+                    "recommended_report_width_mm"
+                ),
                 "source_items": [],
             }
             line_map[line_key] = line
@@ -3876,6 +4075,18 @@ def _aggregate_entries_to_purchase_lines(
             entry.get("remaining_required_piece_qty") or 0
         )
         line["requisition_qty"] += int(entry.get("requisition_qty") or 0)
+        line["theoretical_requisition_qty"] += int(
+            entry.get("theoretical_requisition_qty") or 0
+        )
+        line["already_requisitioned_qty"] += int(
+            entry.get("already_requisitioned_qty") or 0
+        )
+        line["remaining_requisition_qty"] += int(
+            entry.get("remaining_requisition_qty") or 0
+        )
+        line["existing_supplier_orders"].extend(
+            entry.get("existing_supplier_orders") or []
+        )
         line["source_items"].append(_source_item_from_entry(entry))
 
     lines = list(line_map.values())
@@ -4015,6 +4226,25 @@ def _pending_selection_preview_groups(
                 )
             pieces_per_box = int(requirements["pieces_per_box"])
             required_piece_qty = int(requirements["required_piece_qty"])
+            active_requisition = _active_supplier_requisition_facts(
+                db,
+                item=item,
+            )
+            theoretical_requisition_qty = int(requirements["requisition_qty"])
+            remaining_requisition_qty = max(
+                theoretical_requisition_qty
+                - int(active_requisition["quantity"]),
+                0,
+            )
+            if remaining_requisition_qty <= 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_duplicate_requisition_detail(active_requisition),
+                )
+            recommended_len, recommended_width = _recommended_supplier_dimensions(
+                item,
+                product,
+            )
             material = db.get(Material, item.material_id) if item.material_id else None
             add_preview(
                 supplier_name,
@@ -4041,7 +4271,15 @@ def _pending_selection_preview_groups(
                     "remaining_required_piece_qty": int(
                         requirements["remaining_required_piece_qty"]
                     ),
-                    "requisition_qty": int(requirements["requisition_qty"]),
+                    "requisition_qty": remaining_requisition_qty,
+                    "theoretical_requisition_qty": theoretical_requisition_qty,
+                    "already_requisitioned_qty": int(
+                        active_requisition["quantity"]
+                    ),
+                    "remaining_requisition_qty": remaining_requisition_qty,
+                    "existing_supplier_orders": active_requisition["orders"],
+                    "recommended_report_length_mm": recommended_len,
+                    "recommended_report_width_mm": recommended_width,
                 },
             )
             continue
@@ -4079,6 +4317,24 @@ def _pending_selection_preview_groups(
                 continue
             if not _requires_supplier_purchase(requirements):
                 continue
+            active_requisition = _active_supplier_requisition_facts(
+                db,
+                item=order_item,
+                req_item=req_item,
+            )
+            theoretical_requisition_qty = int(requirements["requisition_qty"])
+            remaining_requisition_qty = max(
+                theoretical_requisition_qty
+                - int(active_requisition["quantity"]),
+                0,
+            )
+            if remaining_requisition_qty <= 0:
+                continue
+            recommended_len, recommended_width = _recommended_supplier_dimensions(
+                order_item,
+                product,
+                req_item,
+            )
             add_preview(
                 supplier_name,
                 {
@@ -4108,7 +4364,15 @@ def _pending_selection_preview_groups(
                     "remaining_required_piece_qty": int(
                         requirements["remaining_required_piece_qty"]
                     ),
-                    "requisition_qty": int(requirements["requisition_qty"]),
+                    "requisition_qty": remaining_requisition_qty,
+                    "theoretical_requisition_qty": theoretical_requisition_qty,
+                    "already_requisitioned_qty": int(
+                        active_requisition["quantity"]
+                    ),
+                    "remaining_requisition_qty": remaining_requisition_qty,
+                    "existing_supplier_orders": active_requisition["orders"],
+                    "recommended_report_length_mm": recommended_len,
+                    "recommended_report_width_mm": recommended_width,
                 },
             )
         if len(seen_order_item_ids) == preview_count_before_group:
@@ -4123,6 +4387,7 @@ def _pending_selection_preview_groups(
         supplier_groups.append(
             {
                 "supplier_name": supplier_name,
+                "request_key": uuid4().hex,
                 "lines": lines,
                 # Compatibility alias. These are purchase-spec lines, not flat sources.
                 "items": lines,
@@ -4138,11 +4403,15 @@ def _draft_group_entries(
     grouped: dict[str, list[dict]] = {}
     touched_groups_by_id: dict[int, Requisition] = {}
     seen_order_item_ids: set[int] = set()
+    seen_suppliers: set[str] = set()
 
     for group_payload in payload.supplier_groups:
         supplier_name = (group_payload.supplier_name or "").strip()
         if not supplier_name:
             raise HTTPException(status_code=400, detail="每个供应商组必须选择供应商")
+        if supplier_name in seen_suppliers:
+            raise HTTPException(status_code=400, detail="同一供应商只能保留一个报料组")
+        seen_suppliers.add(supplier_name)
         for draft_item in group_payload.items:
             if draft_item.order_item_id in seen_order_item_ids:
                 raise HTTPException(status_code=409, detail="同一订单明细不能重复生成供应商报料单")
@@ -4253,11 +4522,15 @@ def _draft_group_entries_by_purchase_lines(
     grouped: dict[str, list[dict]] = {}
     touched_groups_by_id: dict[int, Requisition] = {}
     seen_order_item_ids: set[int] = set()
+    seen_suppliers: set[str] = set()
 
     for group_payload in payload.supplier_groups:
         supplier_name = (group_payload.supplier_name or "").strip()
         if not supplier_name:
             raise HTTPException(status_code=400, detail="每个供应商组必须选择供应商")
+        if supplier_name in seen_suppliers:
+            raise HTTPException(status_code=400, detail="同一供应商只能保留一个报料组")
+        seen_suppliers.add(supplier_name)
         draft_lines = _draft_lines_from_group(group_payload)
         if not draft_lines:
             raise HTTPException(status_code=400, detail="每个供应商组必须至少包含一条采购规格行")
@@ -4329,6 +4602,122 @@ def _draft_group_entries_by_purchase_lines(
                 )
                 for ref in source_refs
             ]
+            active_requisitions = [
+                _active_supplier_requisition_facts(
+                    db,
+                    item=ref["item"],
+                    req_item=ref["req_item"],
+                )
+                for ref in source_refs
+            ]
+            if not group_payload.request_key and any(
+                int(active["quantity"]) > 0 for active in active_requisitions
+            ):
+                combined_orders = [
+                    row
+                    for active in active_requisitions
+                    for row in list(active.get("orders") or [])
+                ]
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        _duplicate_requisition_detail({"orders": combined_orders})
+                        + " 旧页面不能直接追加，请刷新后从当前报料草稿进入。"
+                    ),
+                )
+            remaining_requisition_quantities = [
+                max(
+                    int(requirements["requisition_qty"])
+                    - int(active["quantity"]),
+                    0,
+                )
+                for requirements, active in zip(
+                    current_requirements,
+                    active_requisitions,
+                )
+            ]
+            remaining_line_total = sum(remaining_requisition_quantities)
+            if remaining_line_total <= 0:
+                combined_orders = [
+                    row
+                    for active in active_requisitions
+                    for row in list(active.get("orders") or [])
+                ]
+                raise HTTPException(
+                    status_code=409,
+                    detail=_duplicate_requisition_detail(
+                        {"orders": combined_orders}
+                    ),
+                )
+            requested_line_total = int(draft_line.requisition_qty or 0)
+            if requested_line_total <= 0:
+                raise HTTPException(status_code=400, detail="本次报料张数必须大于 0")
+            is_over_quantity = requested_line_total > remaining_line_total
+            if is_over_quantity and user.role not in {"admin", "boss"}:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"本次报料 {requested_line_total} 张，超过剩余待报 "
+                        f"{remaining_line_total} 张；只有管理员可确认超量报料"
+                    ),
+                )
+            if is_over_quantity and not draft_line.quantity_override_acknowledged:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"本次报料 {requested_line_total} 张，超过剩余待报 "
+                        f"{remaining_line_total} 张。请勾选“确认超量报料”后再保存"
+                    ),
+                )
+
+            recommended_dimensions = [
+                _recommended_supplier_dimensions(
+                    ref["item"],
+                    ref["product"],
+                    ref["req_item"],
+                )
+                for ref in source_refs
+            ]
+            swapped_sources = [
+                (ref, expected_len, expected_width)
+                for ref, (expected_len, expected_width) in zip(
+                    source_refs,
+                    recommended_dimensions,
+                )
+                if expected_len is not None
+                and expected_width is not None
+                and expected_len != expected_width
+                and Decimal(draft_line.report_length_mm) == Decimal(expected_width)
+                and Decimal(draft_line.report_width_mm) == Decimal(expected_len)
+            ]
+            if swapped_sources and user.role not in {"admin", "boss"}:
+                expected_len, expected_width = swapped_sources[0][1:]
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "疑似长宽颠倒："
+                        f"系统推荐 {_plain(expected_len)}×{_plain(expected_width)}，"
+                        f"人工输入 {_plain(draft_line.report_length_mm)}×"
+                        f"{_plain(draft_line.report_width_mm)}。请修改后再保存"
+                    ),
+                )
+            if swapped_sources and not draft_line.dimension_override_acknowledged:
+                expected_len, expected_width = swapped_sources[0][1:]
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "疑似长宽颠倒："
+                        f"系统推荐 {_plain(expected_len)}×{_plain(expected_width)}，"
+                        f"人工输入 {_plain(draft_line.report_length_mm)}×"
+                        f"{_plain(draft_line.report_width_mm)}。"
+                        "请勾选“按人工尺寸继续”后再保存"
+                    ),
+                )
+
+            requisition_allocations = _allocate_integer_total(
+                requested_line_total,
+                remaining_requisition_quantities,
+            )
             actual_inventory_allocations = [
                 int(requirements["finished_inventory_reserved_qty"])
                 for requirements in current_requirements
@@ -4352,8 +4741,13 @@ def _draft_group_entries_by_purchase_lines(
                         detail="成品库存抵扣只能来自当前有效的真实库存预占，请刷新后重试",
                     )
 
-            for ref, requirements in zip(
-                source_refs, current_requirements
+            for ref, requirements, active_requisition, remaining_before, allocated_qty, expected_dimensions in zip(
+                source_refs,
+                current_requirements,
+                active_requisitions,
+                remaining_requisition_quantities,
+                requisition_allocations,
+                recommended_dimensions,
             ):
                 item: OrderItem = ref["item"]
                 order: Order = ref["order"]
@@ -4365,7 +4759,9 @@ def _draft_group_entries_by_purchase_lines(
                 inventory_deducted_qty = int(
                     requirements["finished_inventory_reserved_qty"]
                 )
-                requisition_qty = int(requirements["requisition_qty"])
+                requisition_qty = int(allocated_qty)
+                if requisition_qty <= 0:
+                    continue
 
                 if inventory_deducted_qty < 0:
                     raise HTTPException(status_code=400, detail="成品库存抵扣不能小于 0")
@@ -4413,12 +4809,31 @@ def _draft_group_entries_by_purchase_lines(
                         requirements["remaining_required_piece_qty"]
                     ),
                     "requisition_qty": requisition_qty,
+                    "theoretical_requisition_qty": int(
+                        requirements["requisition_qty"]
+                    ),
+                    "already_requisitioned_qty": int(
+                        active_requisition["quantity"]
+                    ),
+                    "remaining_requisition_qty": int(remaining_before),
+                    "remaining_after_requisition_qty": max(
+                        int(remaining_before) - requisition_qty,
+                        0,
+                    ),
+                    "source_key": active_requisition["source_key"],
+                    "request_key": group_payload.request_key,
+                    "recommended_report_length_mm": expected_dimensions[0],
+                    "recommended_report_width_mm": expected_dimensions[1],
+                    "dimension_override": bool(swapped_sources),
+                    "quantity_override": is_over_quantity,
                 }
                 if req_item is not None:
                     req_item.cardboard_len = draft_line.report_length_mm
                     req_item.cardboard_width = draft_line.report_width_mm
                     req_item.special_process = draft_line.cutting_mode
-                    req_item.requisition_qty = requisition_qty
+                    req_item.requisition_qty = int(
+                        active_requisition["quantity"]
+                    ) + requisition_qty
                     req_item.required_piece_qty = required_piece_qty
                     req_item.remark = entry["remark"]
                 grouped.setdefault(supplier_name, []).append(entry)
@@ -4447,6 +4862,7 @@ def _create_supplier_order_for_pending_entries(
         raise HTTPException(status_code=400, detail=flute_error)
     order = SupplierRequisitionOrder(
         order_number=_supplier_order_number(db),
+        request_key=first.get("request_key"),
         supplier_name=supplier_name,
         material_id=first_item.material_id,
         layer_count=layer_count,
@@ -4496,6 +4912,9 @@ def _create_supplier_order_for_pending_entries(
                     if req_item is not None
                     else order_item.snapshot_product_name
                 ),
+                source_key=entry.get("source_key"),
+                report_length_mm=int(entry["cardboard_len"]),
+                report_width_mm=int(entry["cardboard_width"]),
                 quantity=int(entry["production_required_qty"] or 0),
                 stock_deduction_qty=int(entry.get("inventory_deducted_qty") or 0),
                 requisition_qty=int(entry["requisition_qty"] or 0),
@@ -4510,7 +4929,9 @@ def _create_supplier_order_for_pending_entries(
         # by InventoryReservation and copied only to supplier-order snapshots.
         order_item.inventory_deducted_qty = 0
         order_item.requisition_status = "已报料"
-        order_item.requisition_qty = int(entry["requisition_qty"] or 0)
+        order_item.requisition_qty = int(
+            entry.get("already_requisitioned_qty") or 0
+        ) + int(entry["requisition_qty"] or 0)
         order_item.special_process = entry["cutting_mode"]
         order_item.cardboard_len = entry["cardboard_len"]
         order_item.cardboard_width = entry["cardboard_width"]
@@ -4521,7 +4942,11 @@ def _create_supplier_order_for_pending_entries(
         order_item.supplier_order_number = order.order_number
         order_item.requisition_remark = entry["remark"]
         if req_item is not None:
-            req_item.status = "supplier_requisition_created"
+            req_item.status = (
+                "supplier_requisition_created"
+                if int(entry.get("remaining_after_requisition_qty") or 0) <= 0
+                else "merged_pending"
+            )
     return order
 
 
@@ -5016,7 +5441,7 @@ def pending_requisitions(
         .join(Customer, Customer.id == Order.customer_id)
         .join(Product, Product.id == OrderItem.product_id)
         .where(
-            OrderItem.requisition_status == "未报料",
+            OrderItem.requisition_status.in_(["未报料", "已报料"]),
             OrderItem.material_status == "pending",
             Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
             OrderItem.is_force_closed.is_(False),
@@ -5395,6 +5820,41 @@ def pending_requisitions(
                 ),
             }
         )
+    item_models = {item.id: item for item, *_ in rows}
+    active_requisition_map = _active_supplier_requisition_facts_by_item_ids(
+        db,
+        list(item_models),
+    )
+    remaining_items: list[dict] = []
+    for row in items:
+        if row.get("is_composite_bom"):
+            remaining_items.append(row)
+            continue
+        item_model = item_models.get(int(row.get("item_id") or 0))
+        if item_model is None:
+            continue
+        active_requisition = active_requisition_map.get(
+            item_model.id,
+            {
+                "source_key": f"order_item:{item_model.id}",
+                "quantity": 0,
+                "orders": [],
+            },
+        )
+        theoretical_qty = int(row.get("requisition_qty") or 0)
+        remaining_qty = max(
+            theoretical_qty - int(active_requisition["quantity"]),
+            0,
+        )
+        if remaining_qty <= 0:
+            continue
+        row["theoretical_requisition_qty"] = theoretical_qty
+        row["already_requisitioned_qty"] = int(active_requisition["quantity"])
+        row["remaining_requisition_qty"] = remaining_qty
+        row["requisition_qty"] = remaining_qty
+        row["existing_supplier_orders"] = active_requisition["orders"]
+        remaining_items.append(row)
+    items = remaining_items
     merge_group_items = [
         _merge_group_dict(group, db, display_registry=registry)
         for group in merge_groups
@@ -10587,12 +11047,61 @@ def preview_supplier_orders_from_pending_selection(
     return _pending_selection_preview_groups(db, payload, _user)
 
 
+def _created_supplier_orders_response(
+    orders: list[SupplierRequisitionOrder],
+    *,
+    idempotent_replay: bool = False,
+) -> dict:
+    return {
+        "created_orders": [
+            {
+                "supplier_name": order.supplier_name,
+                "supplier_order_id": order.id,
+                "supplier_order_number": order.order_number,
+                "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
+                "item_count": len(order.items),
+            }
+            for order in orders
+        ],
+        "idempotent_replay": idempotent_replay,
+    }
+
+
 @router.post("/supplier-orders/from-pending-selection", status_code=status.HTTP_201_CREATED)
 def create_supplier_orders_from_pending_selection(
     payload: PendingSupplierOrderFinalizePayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    request_keys = [
+        group.request_key
+        for group in payload.supplier_groups
+        if group.request_key
+    ]
+    if request_keys:
+        if len(request_keys) != len(payload.supplier_groups):
+            raise HTTPException(
+                status_code=400,
+                detail="报料草稿请求编号不完整，请刷新草稿后重试",
+            )
+        if len(set(request_keys)) != len(request_keys):
+            raise HTTPException(status_code=400, detail="报料草稿请求编号重复")
+        existing_orders = db.scalars(
+            select(SupplierRequisitionOrder)
+            .options(selectinload(SupplierRequisitionOrder.items))
+            .where(SupplierRequisitionOrder.request_key.in_(request_keys))
+            .order_by(SupplierRequisitionOrder.id)
+        ).all()
+        if existing_orders:
+            if len(existing_orders) == len(request_keys):
+                return _created_supplier_orders_response(
+                    list(existing_orders),
+                    idempotent_replay=True,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="该批报料已有部分请求完成，请刷新已报料列表核对，禁止重复生成",
+            )
     try:
         grouped, touched_groups = _draft_group_entries_by_purchase_lines(
             db,
@@ -10600,17 +11109,25 @@ def create_supplier_orders_from_pending_selection(
             user,
         )
         created_orders: list[SupplierRequisitionOrder] = []
+        created_entries: dict[int, list[dict]] = {}
         for supplier_name, entries in grouped.items():
-            created_orders.append(
-                _create_supplier_order_for_pending_entries(
-                    db,
-                    supplier_name=supplier_name,
-                    entries=entries,
-                    user=user,
-                )
+            created_order = _create_supplier_order_for_pending_entries(
+                db,
+                supplier_name=supplier_name,
+                entries=entries,
+                user=user,
             )
+            created_orders.append(created_order)
+            created_entries[created_order.id] = entries
         for group in touched_groups:
-            group.status = "supplier_requisition_created"
+            group.status = (
+                "supplier_requisition_created"
+                if all(
+                    item.status == "supplier_requisition_created"
+                    for item in group.items
+                )
+                else "merged_pending"
+            )
         db.flush()
         batch_id = uuid4().hex
         all_customer_ids: set[int] = set()
@@ -10652,6 +11169,15 @@ def create_supplier_orders_from_pending_selection(
                             for item in order.items
                             if item.order_item_id is not None
                         }
+                    ),
+                    "request_key": order.request_key,
+                    "dimension_override": any(
+                        bool(entry.get("dimension_override"))
+                        for entry in created_entries.get(order.id, [])
+                    ),
+                    "quantity_override": any(
+                        bool(entry.get("quantity_override"))
+                        for entry in created_entries.get(order.id, [])
                     ),
                 },
             )
@@ -10698,20 +11224,24 @@ def create_supplier_orders_from_pending_selection(
         db.commit()
         for order in created_orders:
             db.refresh(order)
-        return {
-            "created_orders": [
-                {
-                    "supplier_name": order.supplier_name,
-                    "supplier_order_id": order.id,
-                    "supplier_order_number": order.order_number,
-                    "pdf_url": f"/api/requisition/supplier-orders/{order.id}/pdf",
-                    "item_count": len(order.items),
-                }
-                for order in created_orders
-            ]
-        }
+        return _created_supplier_orders_response(created_orders)
     except HTTPException:
         db.rollback()
+        raise
+    except IntegrityError:
+        db.rollback()
+        if request_keys:
+            existing_orders = db.scalars(
+                select(SupplierRequisitionOrder)
+                .options(selectinload(SupplierRequisitionOrder.items))
+                .where(SupplierRequisitionOrder.request_key.in_(request_keys))
+                .order_by(SupplierRequisitionOrder.id)
+            ).all()
+            if len(existing_orders) == len(request_keys):
+                return _created_supplier_orders_response(
+                    list(existing_orders),
+                    idempotent_replay=True,
+                )
         raise
     except Exception:
         db.rollback()
@@ -11436,17 +11966,29 @@ def void_supplier_order(
                         ),
                     }
                 )
-                oi.requisition_status = "未报料"
+                remaining_facts = _active_supplier_requisition_facts(
+                    db,
+                    item=oi,
+                )
+                remaining_qty = int(remaining_facts["quantity"])
                 oi.inventory_deducted_qty = 0
-                oi.requisition_qty = None
-                oi.special_process = DEFAULT_CUTTING_MODE
-                oi.requisition_spec = None
-                oi.cardboard_len = None
-                oi.cardboard_width = None
-                oi.requisition_date = None
-                oi.supplier_delivery_time = None
-                oi.supplier_order_number = None
-                oi.requisition_remark = None
+                oi.requisition_qty = remaining_qty or None
+                if remaining_qty > 0:
+                    oi.requisition_status = "已报料"
+                    latest = list(remaining_facts.get("orders") or [])[-1]
+                    oi.supplier_order_number = str(
+                        latest.get("supplier_order_number") or ""
+                    ) or None
+                else:
+                    oi.requisition_status = "未报料"
+                    oi.special_process = DEFAULT_CUTTING_MODE
+                    oi.requisition_spec = None
+                    oi.cardboard_len = None
+                    oi.cardboard_width = None
+                    oi.requisition_date = None
+                    oi.supplier_delivery_time = None
+                    oi.supplier_order_number = None
+                    oi.requisition_remark = None
 
     try:
         if order_item_ids:

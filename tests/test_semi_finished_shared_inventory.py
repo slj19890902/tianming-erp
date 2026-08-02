@@ -1055,11 +1055,13 @@ def test_partial_consume_release_remaining_and_reverse_consumption(semi_db) -> N
         reservation_id=reservation.id,
         expected_version=lot.version,
         operator_id=data["admin"].id,
-        release_reason="订单撤回，释放未消耗部分",
+        release_reason=None,
         idempotency_key="lifecycle-release-rest",
     )
     db.refresh(lot)
     assert released.reservation.released_stock_quantity == 6
+    assert released.reservation.release_reason == "释放半成品库存预占（系统记录）"
+    assert released.movement.reason == "释放半成品库存预占（系统记录）"
     assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed) == (
         16,
         0,

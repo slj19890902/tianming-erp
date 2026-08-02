@@ -766,7 +766,7 @@ class BomComponentSemiRequirementPayload(BaseModel):
 class SemiReleasePayload(BaseModel):
     expected_version: int = Field(gt=0)
     stock_quantity: int | None = Field(default=None, gt=0)
-    release_reason: str = Field(min_length=1, max_length=500)
+    release_reason: str | None = Field(default=None, max_length=500)
     idempotency_key: str = Field(min_length=1, max_length=100)
 
 

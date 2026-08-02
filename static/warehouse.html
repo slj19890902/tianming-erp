@@ -1297,7 +1297,7 @@
     }
     async function openSemiLotProductAssignments(){const lotId=state.semiLotEdit?.id,isDedicated=Boolean(state.semiLotEdit?.detail?.owner_customer_id);if(!lotId)return;closeSemiLotEditor();await openProductAssignments(lotId,isDedicated)}
     async function voidSemiLot(){
-      const row=state.semiLotEdit,reason=prompt("请输入删除误录批次的原因（必填）","");if(!row||reason===null)return;if(!reason.trim()){toast("删除误录批次必须填写原因",true);return}if(!confirm(`确认将 ${row.lot_number} 作废关闭并保留原流水？`))return;try{await api(`/api/warehouse/lots/${row.id}/void-semi-finished`,{method:"POST",body:JSON.stringify({expected_version:row.version,reason:reason.trim()})});closeSemiLotEditor();toast("批次已作废关闭并保留流水");await loadLots()}catch(err){toast(err.message,true)}
+      const row=state.semiLotEdit;if(!row||!confirm(`确认将 ${row.lot_number} 作废关闭并保留原流水吗？已有预占、消耗、报损、报废或业务来源时系统会拒绝。`))return;try{await api(`/api/warehouse/lots/${row.id}/void-semi-finished`,{method:"POST",body:JSON.stringify({expected_version:row.version})});closeSemiLotEditor();toast("批次已作废关闭并保留流水");await loadLots()}catch(err){toast(err.message,true)}
     }
     async function openProductAssignments(lotId,isDedicated=null){
       try{
@@ -1341,9 +1341,9 @@
     }
     async function operate(id,operation,version){
       let body={expected_version:version,idempotency_key:createIdempotencyKey()},label=operation;
-      if(operation==="adjust"){const value=prompt("输入调整数量：增加填正数，减少填负数");if(value===null)return;body.quantity_delta=+value;body.reason=prompt("请输入调整原因")||""}
-      if(["damage","scrap"].includes(operation)){const value=prompt(operation==="damage"?"输入报损数量":"输入报废数量");if(value===null)return;body.quantity=+value;body.reason=prompt("请输入原因")||""}
-      if(operation==="transfer-to-general"){if(!confirm("确认转为通用成品库存？后续跨客户使用仍需人工确认。"))return;body.reason=prompt("请输入转通用原因")||""}
+      if(operation==="adjust"){const value=prompt("输入调整数量：增加填正数，减少填负数");if(value===null)return;body.quantity_delta=+value;if(!Number.isInteger(body.quantity_delta)||body.quantity_delta===0){toast("调整数量必须为非零整数",true);return}if(!confirm(`确认调整库存 ${body.quantity_delta>0?'+':''}${body.quantity_delta}？系统会记录操作人、时间和调整前后数量。`))return}
+      if(["damage","scrap"].includes(operation)){const value=prompt(operation==="damage"?"输入报损数量":"输入报废数量");if(value===null)return;body.quantity=+value;if(!Number.isInteger(body.quantity)||body.quantity<=0){toast("数量必须为正整数",true);return}if(!confirm(`确认${operation==="damage"?"报损":"报废"} ${body.quantity}？系统会减少可用库存并保留流水。`))return}
+      if(operation==="transfer-to-general"){if(!confirm("确认转为通用成品库存？后续跨客户使用仍需人工确认。"))return}
       try{await api(`/api/warehouse/lots/${id}/${operation}`,{method:"POST",body:JSON.stringify(body)});toast("库存操作成功");await loadLots()}catch(err){toast(err.message,true)}
     }
     async function loadMovements(){

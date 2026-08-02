@@ -1892,7 +1892,7 @@ def release_semi_finished_reservation(
     reservation_id: int,
     expected_version: int,
     operator_id: int | None,
-    release_reason: str,
+    release_reason: str | None,
     idempotency_key: str,
     stock_quantity: int | None = None,
 ) -> SemiFinishedReservationMutation:
@@ -1904,9 +1904,7 @@ def release_semi_finished_reservation(
     )
     if repeated is not None:
         return repeated
-    reason = release_reason.strip()
-    if not reason:
-        raise WarehouseInventoryError("释放半成品预占必须填写原因")
+    reason = (release_reason or "").strip() or "释放半成品库存预占（系统记录）"
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         if reservation is None:

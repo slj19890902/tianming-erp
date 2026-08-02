@@ -6807,10 +6807,7 @@ def update_pending_material(
             }.items()
             if getattr(product, field_name) != value
         }
-        product_change_reason = (
-            (payload.product_change_reason or "").strip()
-            or "报料人工修改材质并同步常用箱"
-        )
+        product_change_reason = (payload.product_change_reason or "").strip() or None
     source_reference = (
         (payload.source_reference or "").strip()
         or item.item_order_number

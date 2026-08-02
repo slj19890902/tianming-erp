@@ -4684,12 +4684,7 @@
               <div v-if="orderItemForm.product_id" class="panel" style="margin-top:10px;padding:10px">
                 <div class="muted">修改材质并保存时会自动同步关联常用箱；其他资料需要同步时再勾选。</div>
                 <label class="remember-line"><input type="checkbox" v-model="orderItemForm.sync_product" /> 同步本页其他常用箱资料</label>
-                <div v-if="orderItemForm.sync_product" class="field" style="margin-top:8px"><label>同步原因 *</label><input class="input" v-model.trim="orderItemForm.product_change_reason" placeholder="例如：订单确认后同步最新材质和报料尺寸" /></div>
                 <div v-if="orderItemForm._product_error" class="status orange" style="display:block;white-space:normal;margin-top:8px">{{ orderItemForm._product_error }}</div>
-                <div v-if="orderItemForm._product_warnings?.length" class="status orange" style="display:block;white-space:normal;margin-top:8px">
-                  <div v-for="warning in orderItemForm._product_warnings" :key="warning.code || warning.message">{{ masterWarningText(warning) }}</div>
-                  <label class="remember-line" style="margin-top:6px"><input type="checkbox" v-model="orderItemForm._product_confirmed" /> 我已核对上述异常修改</label>
-                </div>
               </div>
               <div v-else class="status orange">当前明细未关联常用箱，本次只保存订单明细。</div>
               <div v-if="canDeleteOrders" class="danger-zone">
@@ -5025,10 +5020,6 @@
                 <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
                 <div v-if="requisitionMaterialForm.product_id" class="muted">保存后自动同步订单关联的常用箱，避免下次报料恢复旧材质。</div>
                 <div v-if="requisitionMaterialForm._product_error" class="status orange" style="display:block;white-space:normal">{{ requisitionMaterialForm._product_error }}</div>
-                <div v-if="requisitionMaterialForm._product_warnings?.length" class="status orange" style="display:block;white-space:normal">
-                  <div v-for="warning in requisitionMaterialForm._product_warnings" :key="warning.code || warning.message">{{ masterWarningText(warning) }}</div>
-                  <label class="remember-line"><input type="checkbox" v-model="requisitionMaterialForm._product_confirmed" /> 我已核对上述异常修改</label>
-                </div>
               </div>
             </div>
             <div v-else-if="modal.type === 'mobileEntry'" style="text-align:center">
@@ -7609,21 +7600,26 @@
             }
             return false;
           },
-          handleIndirectProduct409(error, form) {
-            if (Number(error?.response?.status) !== 409 || !form) return false;
-            const detail = this.masterErrorDetail(error);
-            if (detail?.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED") {
-              form.product_confirmation_token = detail.confirmation_token || null;
-              form._product_warnings = Array.isArray(detail.warnings) ? detail.warnings : [];
-              form._product_confirmed = false;
-              form._product_error = "检测到常用箱关键字段异常变化，请核对并勾选确认后再次保存。";
-              return true;
+          async putIndirectProductUpdate(url, payload, form, actionLabel) {
+            const send = body => axios.put(url, body);
+            try {
+              return await send(payload);
+            } catch (error) {
+              const detail = this.masterErrorDetail(error);
+              if (Number(error?.response?.status) === 409 && detail?.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED") {
+                const warnings = (detail.warnings || []).map(item => this.masterWarningText(item)).join("\n");
+                const message = `${warnings || "常用箱关键资料变化较大"}\n\n确认${actionLabel}吗？保存后会同时更新当前单据和关联常用箱。`;
+                if (!confirm(message)) return null;
+                const token = detail.confirmation_token || null;
+                if (!token) throw new Error("服务器未返回变更确认令牌，已停止保存，请刷新后重试");
+                return await send({...payload, product_confirmation_token:token});
+              }
+              if (Number(error?.response?.status) === 409 && detail?.code === "MASTER_VERSION_CONFLICT") {
+                form._product_error = `常用箱已被其他人修改（打开版本 ${detail.expected_version || "-"}，当前版本 ${detail.current_version || "-"}），请关闭并重新打开后再保存。`;
+                return null;
+              }
+              throw error;
             }
-            if (detail?.code === "MASTER_VERSION_CONFLICT") {
-              form._product_error = `常用箱已被其他人修改（打开版本 ${detail.expected_version || "-"}，当前版本 ${detail.current_version || "-"}），请关闭并重新打开后再保存。`;
-              return true;
-            }
-            return false;
           },
           closeMasterChangeConfirm() {
             if (this.masterChangeConfirm.loading) return;
@@ -14064,10 +14060,6 @@
               product_id: row.product_id || null,
               product_version: productVersion,
               sync_product: !!row.product_id,
-              product_change_reason: "报料人工修改材质并同步常用箱",
-              product_confirmation_token: null,
-              _product_warnings: [],
-              _product_confirmed: false,
               _product_error: "",
               candidate_options: [],
               candidate_loading: false,
@@ -14576,9 +14568,6 @@
               && this.boxTypeLookupKey(form.box_style) !== this.boxTypeLookupKey(form._original_box_style)
             ) {
               form.sync_product = true;
-              if (!String(form.product_change_reason || "").trim()) {
-                form.product_change_reason = "订单编辑修改箱型并同步常用箱";
-              }
             }
             if (!this.usesProductSplice(form.box_style)) {
               form.snapshot_splice_mode = "single";
@@ -16567,10 +16556,6 @@
               drawing_file:item.drawing_file || item.product_drawing_file || product.drawings?.[0]?.image_path || null,
               product_version:product.version || null,
               sync_product:false,
-              product_change_reason:"",
-              product_confirmation_token:null,
-              _product_warnings:[],
-              _product_confirmed:false,
               _product_error:"",
               _material_supplier: mat?.supplier_name || item.snapshot_supplier_name || product.material_supplier_name || "",
               _material_display: mat ? this.buildMaterialDisplay(mat) : (item.display_material || ""),
@@ -18303,19 +18288,18 @@
                 payload.sync_product = !!this.orderItemForm.product_id && (materialChanged || !!this.orderItemForm.sync_product);
                 if (payload.sync_product) {
                   if (!this.orderItemForm.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开明细");
-                  const syncReason = String(this.orderItemForm.product_change_reason || "").trim() || (materialChanged ? "订单人工修改材质并同步常用箱" : "");
-                  if (!syncReason) throw new Error("同步本页其他常用箱资料时必须填写原因");
-                  if (this.orderItemForm.product_confirmation_token && !this.orderItemForm._product_confirmed) throw new Error("请先勾选已核对异常修改");
                   payload.product_expected_version = Number(this.orderItemForm.product_version);
-                  payload.product_change_reason = syncReason;
-                  payload.product_confirmation_token = this.orderItemForm._product_confirmed ? this.orderItemForm.product_confirmation_token : null;
                 }
                 delete payload._original_material_id;
                 delete payload.product_version;
-                delete payload._product_warnings;
-                delete payload._product_confirmed;
                 delete payload._product_error;
-                await axios.put(`/api/orders/items/${this.orderItemForm.id}`, payload);
+                const orderItemSaved = await this.putIndirectProductUpdate(
+                  `/api/orders/items/${this.orderItemForm.id}`,
+                  payload,
+                  this.orderItemForm,
+                  "保存订单并同步常用箱",
+                );
+                if (!orderItemSaved) return false;
                 await Promise.all([this.loadOrders(), this.loadProducts()]);
                 successMessage = payload.sync_product ? "订单明细已保存，并同步更新常用箱资料" : "订单明细已保存";
               }
@@ -18325,20 +18309,24 @@
                 if (!form.flute_type) throw new Error("请选择楞型");
                 const syncProduct = !!form.product_id;
                 if (syncProduct && !form.product_version) throw new Error("常用箱版本读取失败，请关闭后重新打开");
-                if (syncProduct && form.product_confirmation_token && !form._product_confirmed) throw new Error("请先勾选已核对异常修改");
-                const { data } = await axios.put(`/api/requisition/pending/${form.item_id}/material`, {
+                const requisitionMaterialSaved = await this.putIndirectProductUpdate(
+                  `/api/requisition/pending/${form.item_id}/material`,
+                  {
                   material_id:form.material_id,
                   layer_count:form.layer_count || null,
                   flute_type:form.flute_type || null,
                   sync_product:syncProduct,
                   product_expected_version:syncProduct ? Number(form.product_version) : null,
-                  product_change_reason:syncProduct ? "报料人工修改材质并同步常用箱" : null,
-                  product_confirmation_token:syncProduct && form._product_confirmed ? form.product_confirmation_token : null,
                   candidate_id:form.candidate_id || null,
                   source_type:form.source_type || "manual",
                   source_reference:form.source_reference || null,
                   selection_reason:String(form.selection_reason || "").trim() || null,
-                });
+                  },
+                  form,
+                  "保存报料材质并同步常用箱",
+                );
+                if (!requisitionMaterialSaved) return false;
+                const { data } = requisitionMaterialSaved;
                 await Promise.all([this.loadRequisition(), this.loadProducts()]);
                 successMessage = data.message || "供应商和材质已更新";
               }
@@ -18493,8 +18481,6 @@
                 expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion(masterEntity),
                 previewed:!!(masterOptions?._previewed)
               })) return false;
-              if (this.modal?.type === "orderItem" && this.handleIndirectProduct409(error,this.orderItemForm)) return false;
-              if (this.modal?.type === "requisitionMaterial" && this.handleIndirectProduct409(error,this.requisitionMaterialForm)) return false;
               const message = this.modal?.type === "order"
                 ? this.normalizeOrderSaveError(error)
                 : this.modal?.type === "requisition"

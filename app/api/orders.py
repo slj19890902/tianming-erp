@@ -5993,15 +5993,7 @@ def update_order_item(
                 status_code=400,
                 detail="同步常用箱必须提供 product_expected_version",
             )
-        product_change_reason = (
-            (payload.product_change_reason or "").strip()
-            or ("订单人工修改材质并同步常用箱" if material_changed else "")
-        )
-        if not product_change_reason:
-            raise HTTPException(
-                status_code=400,
-                detail="同步常用箱必须填写 product_change_reason",
-            )
+        product_change_reason = (payload.product_change_reason or "").strip() or None
     production_changes = _production_meaning_changes(
         item,
         payload,

@@ -18,22 +18,23 @@ def test_common_box_update_uses_read_only_preview_before_single_confirmation() -
 
 def test_common_box_confirmation_has_no_reason_or_acknowledgement_gate() -> None:
     assert "masterSingleConfirmProductUpdate" in INDEX
+    assert "masterSingleConfirmNoReasonUpdate" in INDEX
     assert (
-        'v-if="!masterSingleConfirmProductUpdate"'
+        'v-if="!masterSingleConfirmNoReasonUpdate"'
         in INDEX
     )
     assert (
         'v-if="masterChangeConfirm.requireAcknowledgement && '
-        '!masterSingleConfirmProductUpdate"'
+        '!masterSingleConfirmNoReasonUpdate"'
         in INDEX
     )
-    assert "const singleProductUpdate = this.masterSingleConfirmProductUpdate;" in INDEX
+    assert "const singleNoReasonUpdate = this.masterSingleConfirmNoReasonUpdate;" in INDEX
     assert (
-        "if (!singleProductUpdate && !String(state.reason || \"\").trim()) return false;"
+        "if (!singleNoReasonUpdate && !String(state.reason || \"\").trim()) return false;"
         in INDEX
     )
     assert (
-        "if (state.requireAcknowledgement && !singleProductUpdate && "
+        "if (state.requireAcknowledgement && !singleNoReasonUpdate && "
         "!state.acknowledged) return false;"
         in INDEX
     )
@@ -41,7 +42,7 @@ def test_common_box_confirmation_has_no_reason_or_acknowledgement_gate() -> None
 
 def test_common_box_confirm_submits_token_without_fabricated_reason() -> None:
     assert (
-        "if (!this.masterSingleConfirmProductUpdate) "
+        "if (!this.masterSingleConfirmNoReasonUpdate) "
         "options.change_reason = String(state.reason || \"\").trim();"
         in INDEX
     )

@@ -338,12 +338,17 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
     from app.api.products import ProductUpdatePayload
     from app.models.master_data_object_version import MasterDataObjectVersion
 
-    with pytest.raises(ValidationError):
-        CustomerUpdatePayload(
-            **_customer_payload(1, "EMPTY", "空原因"),
-            expected_version=1,
-            change_reason="   ",
-        )
+    customer_payload = CustomerUpdatePayload(
+        **_customer_payload(1, "EMPTY", "空原因"),
+        expected_version=1,
+        change_reason="   ",
+    )
+    assert customer_payload.change_reason is None
+    customer_payload_without_reason = CustomerUpdatePayload(
+        **_customer_payload(1, "EMPTY", "空原因"),
+        expected_version=1,
+    )
+    assert customer_payload_without_reason.change_reason is None
     product_payload = ProductUpdatePayload(
         **_product_payload(1, "EMPTY"),
         expected_version=1,
@@ -369,7 +374,6 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
             json={
                 **_customer_payload(102, "CN", "P4客户N"),
                 "expected_version": 1,
-                "change_reason": "重复保存但字段未变",
             },
         )
         changed = client.put(
@@ -377,7 +381,6 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
             json={
                 **_customer_payload(102, "CN", "P4客户N", remark="v2"),
                 "expected_version": 1,
-                "change_reason": "写入v2备注",
             },
         )
         stale = client.put(
@@ -385,7 +388,6 @@ def test_empty_reason_noop_and_stale_version_are_rejected_or_stable(
             json={
                 **_customer_payload(102, "CN", "P4客户N", remark="过期写入"),
                 "expected_version": 1,
-                "change_reason": "使用旧页面保存",
             },
         )
 
@@ -656,24 +658,33 @@ def test_product_noop_without_reason_keeps_version_audit_and_manual_flag_unchang
 def test_customer_identity_change_requires_bound_confirmation_token(
     writer_app: FastAPI,
 ) -> None:
+    from app.models.audit import OperationLog
+    from app.models.master_data_object_version import MasterDataObjectVersion
+
     with TestClient(writer_app) as client:
         customer = _create_customer(client, "CONF", 103)
         payload = {
             **_customer_payload(103, "CCONF", "P4客户确认后更名"),
             "expected_version": 1,
-            "change_reason": "客户正式更名",
         }
+        preview = client.post(
+            f"/api/master/customers/{customer['id']}/update-preview",
+            json=payload,
+        )
         first = client.put(
             f"/api/master/customers/{customer['id']}",
             json=payload,
         )
         unchanged = client.get(f"/api/master/customers/{customer['id']}")
-        token = first.json()["detail"]["confirmation_token"]
         confirmed = client.put(
             f"/api/master/customers/{customer['id']}",
-            json={**payload, "confirmation_token": token},
+            json={**payload, "confirmation_token": preview.json()["confirmation_token"]},
         )
 
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["can_update"] is True
+    assert preview.json()["confirmation_token"]
+    assert preview.json()["warnings"]
     assert first.status_code == 409
     assert first.json()["detail"]["code"] == "MASTER_CHANGE_CONFIRMATION_REQUIRED"
     assert unchanged.json()["version"] == 1
@@ -681,6 +692,60 @@ def test_customer_identity_change_requires_bound_confirmation_token(
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["version"] == 2
     assert confirmed.json()["name"] == "P4客户确认后更名"
+    with writer_app.state.session_factory() as session:
+        revision = session.scalar(
+            select(MasterDataObjectVersion)
+            .where(
+                MasterDataObjectVersion.object_type == "customer",
+                MasterDataObjectVersion.object_id == customer["id"],
+                MasterDataObjectVersion.version == 2,
+            )
+        )
+        audit = session.scalar(
+            select(OperationLog)
+            .where(
+                OperationLog.entity_type == "customer",
+                OperationLog.entity_id == customer["id"],
+                OperationLog.action == "MASTER_UPDATE",
+            )
+        )
+    assert revision is not None
+    assert revision.reason is None
+    assert revision.actor_username_snapshot == "p4-writer-admin"
+    assert revision.created_at is not None
+    assert '"name"' in revision.changed_fields_json
+    assert audit is not None
+    assert audit.username == "p4-writer-admin"
+    assert audit.created_at is not None
+
+
+def test_customer_status_and_soft_delete_accept_no_reason_but_keep_version_gate(
+    writer_app: FastAPI,
+) -> None:
+    with TestClient(writer_app) as client:
+        status_customer = _create_customer(client, "NOREASON-STATUS", 113)
+        disabled = client.put(
+            f"/api/master/customers/{status_customer['id']}/status",
+            json={"is_active": False, "expected_version": 1},
+        )
+        stale = client.put(
+            f"/api/master/customers/{status_customer['id']}/status",
+            json={"is_active": True, "expected_version": 1},
+        )
+
+        delete_customer = _create_customer(client, "NOREASON-DELETE", 114)
+        deleted = client.request(
+            "DELETE",
+            f"/api/master/customers/{delete_customer['id']}",
+            json={"expected_version": 1},
+        )
+
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["version"] == 2
+    assert disabled.json()["is_active"] is False
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "MASTER_VERSION_CONFLICT"
+    assert deleted.status_code == 204, deleted.text
 
 
 def test_status_sync_soft_delete_restore_and_physical_delete_protection(

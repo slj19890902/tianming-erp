@@ -1010,7 +1010,8 @@ class InventoryMovement(Base):
     __table_args__ = (
         CheckConstraint(
             "movement_type IN ('manual_in','adjust','freeze','unfreeze','damage','scrap',"
-            "'transfer_to_general','reserve','release_reserve','consume','reverse_consume')",
+            "'transfer_to_general','location_transfer','reserve','release_reserve',"
+            "'consume','reverse_consume')",
             name="ck_inventory_movements_type",
         ),
         CheckConstraint("quantity >= 0", name="ck_inventory_movements_quantity"),
@@ -1074,6 +1075,55 @@ class InventoryMovement(Base):
     )
 
     lot: Mapped["InventoryLot"] = relationship(back_populates="movements")
+
+
+class InventoryLotTransfer(Base):
+    __tablename__ = "inventory_lot_transfers"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_inventory_lot_transfers_quantity"),
+        CheckConstraint(
+            "available_quantity >= 0 AND reserved_quantity >= 0 "
+            "AND available_quantity + reserved_quantity = quantity",
+            name="ck_inventory_lot_transfers_balance",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64",
+            name="ck_inventory_lot_transfers_request_hash",
+        ),
+        UniqueConstraint(
+            "idempotency_key", name="uq_inventory_lot_transfers_idempotency"
+        ),
+        Index("ix_inventory_lot_transfers_source", "source_lot_id", "transferred_at"),
+        Index("ix_inventory_lot_transfers_target", "target_lot_id", "transferred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_version_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_version_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    transferred_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    transferred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
 
 
 class DeliveryInventoryAllocation(Base):

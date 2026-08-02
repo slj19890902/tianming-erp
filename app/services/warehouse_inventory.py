@@ -27,6 +27,7 @@ from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
     InventoryLot,
+    InventoryLotTransfer,
     InventoryMovement,
     InventoryPallet,
     InventoryReservation,
@@ -72,6 +73,14 @@ class FinishedReservationMutation:
     reservation: InventoryReservation
     movement: InventoryMovement
     allocation: DeliveryInventoryAllocation | None = None
+
+
+@dataclass(frozen=True)
+class FinishedLotLocationTransferResult:
+    transfer: InventoryLotTransfer
+    source_lot: InventoryLot
+    target_lot: InventoryLot
+    replayed: bool
 
 
 # Compatibility export for service modules outside N033's write scope.
@@ -269,6 +278,332 @@ def _movement(
     )
     db.add(row)
     return row
+
+
+def _transfer_key(*parts: object, max_length: int = 100) -> str:
+    raw = ":".join(str(part).strip() for part in parts)
+    if len(raw) <= max_length:
+        return raw
+    digest = sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{raw[: max_length - 25]}:{digest}"
+
+
+def _lot_location_transfer_hash(
+    *, lot_id: int, expected_version: int, quantity: int, location_id: int
+) -> str:
+    payload = {
+        "expected_version": expected_version,
+        "location_id": location_id,
+        "lot_id": lot_id,
+        "quantity": quantity,
+    }
+    return sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def transfer_staging_finished_lot(
+    db: Session,
+    *,
+    lot_id: int,
+    expected_version: int,
+    quantity: int,
+    location_id: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> FinishedLotLocationTransferResult:
+    """Move all or part of a floor-one staging lot without changing stock totals.
+
+    Available pieces move first.  When the selected quantity also includes
+    reserved pieces, their reservations are split onto the destination lot so
+    order and delivery coverage remains unchanged.
+    """
+
+    key = idempotency_key.strip()
+    if not key or len(key) > 120:
+        raise WarehouseInventoryError("请求标识长度必须为1到120个字符")
+    if quantity <= 0:
+        raise WarehouseInventoryError("转入数量必须大于0")
+    request_hash = _lot_location_transfer_hash(
+        lot_id=lot_id,
+        expected_version=expected_version,
+        quantity=quantity,
+        location_id=location_id,
+    )
+    repeated = db.scalar(
+        select(InventoryLotTransfer).where(
+            InventoryLotTransfer.idempotency_key == key
+        )
+    )
+    if repeated is not None:
+        if repeated.source_lot_id != lot_id or repeated.request_hash != request_hash:
+            raise WarehouseInventoryError("同一请求标识已用于其他库位转移", 409)
+        source = db.get(InventoryLot, repeated.source_lot_id)
+        target = db.get(InventoryLot, repeated.target_lot_id)
+        if source is None or target is None:
+            raise WarehouseInventoryError("已完成的库位转移记录不完整", 409)
+        return FinishedLotLocationTransferResult(repeated, source, target, True)
+
+    lot = db.get(InventoryLot, lot_id)
+    if lot is None or lot.finished_detail is None:
+        raise WarehouseInventoryError("一楼待送成品批次不存在", 404)
+    source_location = db.get(WarehouseLocation, lot.warehouse_location_id)
+    if (
+        lot.inventory_type != "finished"
+        or lot.status != "active"
+        or lot.source_type not in {"production_completion", "transfer"}
+        or lot.source_ref_type != "production_completion"
+        or lot.source_ref_id is None
+        or source_location is None
+        or source_location.location_code != "F1-DISPATCH-01"
+    ):
+        raise WarehouseInventoryError("只有一楼待送区的有效成品批次可以转入库位", 409)
+    if lot.pallet_item is not None:
+        raise WarehouseInventoryError("该待送批次已绑定物理栈板，请刷新后重试", 409)
+    if int(lot.version) != expected_version:
+        raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
+    live_quantity = int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
+    if quantity > live_quantity:
+        raise WarehouseInventoryError(f"待送区当前只有 {live_quantity} 个可转入", 409)
+    if any(
+        int(value or 0) > 0
+        for value in (
+            lot.quantity_consumed,
+            lot.quantity_damaged,
+            lot.quantity_scrapped,
+        )
+    ):
+        raise WarehouseInventoryError("该批次已有出库、报损或报废记录，不能从待送区转入", 409)
+
+    target_location = _location(db, location_id, "finished")
+    if target_location.location_code == "F1-DISPATCH-01":
+        raise WarehouseInventoryError("目标库位不能仍是一楼待送区", 409)
+
+    source_location_id = int(lot.warehouse_location_id)
+    available_take = min(quantity, int(lot.quantity_available or 0))
+    reserved_take = quantity - available_take
+    source_before = _balances(lot)
+    now = utc_now_naive()
+
+    if quantity == live_quantity:
+        updated = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version,
+                InventoryLot.warehouse_location_id == source_location_id,
+                InventoryLot.quantity_available == source_before["available"],
+                InventoryLot.quantity_reserved == source_before["reserved"],
+            )
+            .values(
+                warehouse_location_id=target_location.id,
+                version=InventoryLot.version + 1,
+                last_movement_at=now,
+            )
+        )
+        if updated.rowcount != 1:
+            raise WarehouseInventoryError("待送批次数量或版本已变化，请刷新后重试", 409)
+        db.flush()
+        db.expire(lot)
+        target_lot = db.get(InventoryLot, lot.id)
+        assert target_lot is not None
+    else:
+        updated = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_version,
+                InventoryLot.warehouse_location_id == source_location_id,
+                InventoryLot.quantity_available >= available_take,
+                InventoryLot.quantity_reserved >= reserved_take,
+            )
+            .values(
+                quantity_available=InventoryLot.quantity_available - available_take,
+                quantity_reserved=InventoryLot.quantity_reserved - reserved_take,
+                version=InventoryLot.version + 1,
+                last_movement_at=now,
+            )
+        )
+        if updated.rowcount != 1:
+            raise WarehouseInventoryError("待送批次数量或版本已变化，请刷新后重试", 409)
+        detail = lot.finished_detail
+        target_lot = InventoryLot(
+            lot_number=_number("FG"),
+            inventory_type="finished",
+            warehouse_location_id=target_location.id,
+            quantity_available=available_take,
+            quantity_reserved=reserved_take,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit=lot.unit,
+            status="active",
+            source_type="transfer",
+            source_ref_type=lot.source_ref_type,
+            source_ref_id=lot.source_ref_id,
+            stock_date=lot.stock_date,
+            stock_date_accuracy=lot.stock_date_accuracy,
+            stock_date_original_text=lot.stock_date_original_text,
+            last_movement_at=now,
+            created_by=operator_id,
+            remarks=f"由一楼待送批次 {lot.lot_number} 部分转入",
+            estimated_unit_cost_snapshot=lot.estimated_unit_cost_snapshot,
+            estimated_square_price_snapshot=lot.estimated_square_price_snapshot,
+            estimated_cost_area_m2_snapshot=lot.estimated_cost_area_m2_snapshot,
+            cost_snapshot_source=lot.cost_snapshot_source,
+            cost_snapshot_detail_json=lot.cost_snapshot_detail_json,
+            cost_snapshot_at=lot.cost_snapshot_at,
+        )
+        target_lot.finished_detail = FinishedGoodsInventoryDetail(
+            owner_customer_id=detail.owner_customer_id,
+            owner_customer_name_snapshot=detail.owner_customer_name_snapshot,
+            is_general=detail.is_general,
+            product_id=detail.product_id,
+            inventory_code_snapshot=detail.inventory_code_snapshot,
+            product_name_snapshot=detail.product_name_snapshot,
+            box_type_snapshot=detail.box_type_snapshot,
+            length_mm=detail.length_mm,
+            width_mm=detail.width_mm,
+            height_mm=detail.height_mm,
+            material_code_snapshot=detail.material_code_snapshot,
+            flute_type_snapshot=detail.flute_type_snapshot,
+        )
+        db.add(target_lot)
+        db.flush()
+
+        remaining_reserved = reserved_take
+        reservations = list(
+            db.scalars(
+                select(InventoryReservation)
+                .where(
+                    InventoryReservation.inventory_lot_id == lot.id,
+                    InventoryReservation.status.in_(("active", "partial")),
+                )
+                .order_by(InventoryReservation.id)
+            )
+        )
+        for reservation in reservations:
+            if remaining_reserved <= 0:
+                break
+            remaining = (
+                int(reservation.reserved_stock_quantity or 0)
+                - int(reservation.consumed_stock_quantity or 0)
+                - int(reservation.released_stock_quantity or 0)
+            )
+            take = min(remaining_reserved, remaining)
+            if take <= 0:
+                continue
+            reservation.released_stock_quantity += take
+            reservation.released_requirement_quantity += take
+            reservation.released_by = operator_id
+            reservation.released_at = now
+            reservation.release_reason = "库存批次移动拆分"
+            reservation.status = _finished_reservation_status(reservation)
+            group_key = _transfer_key(
+                reservation.reservation_group_key or f"reservation-{reservation.id}",
+                "location-transfer",
+                key,
+            )
+            db.add(
+                InventoryReservation(
+                    reservation_number=_number("RS"),
+                    inventory_lot_id=target_lot.id,
+                    reservation_type=reservation.reservation_type,
+                    order_id=reservation.order_id,
+                    order_item_id=reservation.order_item_id,
+                    sales_order_item_bom_component_id=(
+                        reservation.sales_order_item_bom_component_id
+                    ),
+                    requisition_item_id=reservation.requisition_item_id,
+                    semi_requirement_id=reservation.semi_requirement_id,
+                    match_rule_id=reservation.match_rule_id,
+                    reserved_stock_quantity=take,
+                    credited_requirement_quantity=take,
+                    yield_factor=reservation.yield_factor,
+                    status="active",
+                    warning_codes=reservation.warning_codes,
+                    warning_acknowledged_by=reservation.warning_acknowledged_by,
+                    reserved_by=operator_id,
+                    reserved_at=now,
+                    reservation_group_key=group_key,
+                    reservation_group_requested_quantity=take,
+                    idempotency_key=_transfer_key("location-transfer", key, reservation.id),
+                )
+            )
+            remaining_reserved -= take
+        if remaining_reserved:
+            raise WarehouseInventoryError("待送批次预占明细与库存余额不一致", 409)
+        db.flush()
+        db.expire(lot)
+        lot = db.get(InventoryLot, lot.id)
+        assert lot is not None
+
+    if target_location.source_version == "V11":
+        from app.services.floor3_locations import (
+            Floor3LocationError,
+            bind_finished_lot_to_floor3_pallet,
+        )
+
+        try:
+            bind_finished_lot_to_floor3_pallet(
+                db,
+                lot=target_lot,
+                operator_id=operator_id,
+                require_empty_pallet=True,
+            )
+        except Floor3LocationError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+
+    transfer = InventoryLotTransfer(
+        source_lot_id=lot_id,
+        target_lot_id=target_lot.id,
+        source_location_id=source_location_id,
+        target_location_id=target_location.id,
+        quantity=quantity,
+        available_quantity=available_take,
+        reserved_quantity=reserved_take,
+        source_version_before=expected_version,
+        source_version_after=expected_version + 1,
+        idempotency_key=key,
+        request_hash=request_hash,
+        transferred_by=operator_id,
+        transferred_at=now,
+    )
+    db.add(transfer)
+    db.flush()
+    _movement(
+        db,
+        lot=lot,
+        movement_type="location_transfer",
+        quantity=quantity,
+        before=source_before,
+        operator_id=operator_id,
+        reason="一楼待送区转入正式库位",
+        remarks=f"转入 {target_location.location_code}",
+        idempotency_key=_transfer_key("location-transfer", key, "source"),
+    )
+    if target_lot.id != lot.id:
+        _movement(
+            db,
+            lot=target_lot,
+            movement_type="location_transfer",
+            quantity=quantity,
+            before={
+                "available": 0,
+                "reserved": 0,
+                "consumed": 0,
+                "damaged": 0,
+                "scrapped": 0,
+            },
+            operator_id=operator_id,
+            reason="一楼待送区转入正式库位",
+            remarks=f"来自 {lot.lot_number}",
+            idempotency_key=_transfer_key("location-transfer", key, "target"),
+        )
+    db.flush()
+    return FinishedLotLocationTransferResult(transfer, lot, target_lot, False)
 
 
 def manual_finished_in(
@@ -1141,7 +1476,7 @@ def reserve_finished_surplus_for_delivery(
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
             InventoryLot.source_type.in_(
-                ("production_surplus", "production_completion")
+                ("production_surplus", "production_completion", "transfer")
             ),
             FinishedGoodsInventoryDetail.product_id == item.product_id,
             FinishedGoodsInventoryDetail.is_general.is_(False),

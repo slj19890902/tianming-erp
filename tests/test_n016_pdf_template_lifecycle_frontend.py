@@ -41,7 +41,7 @@ def test_n016_template_lifecycle_list_has_daily_filter_and_audit_columns() -> No
     assert '{"field_mapping":{"product_code":"sku","quantity":"qty","unit_price":6}}' in INDEX
 
 
-def test_n016_template_operation_matrix_and_reason_gates_are_present() -> None:
+def test_n016_template_operation_matrix_uses_one_confirmation_without_reason() -> None:
     assert "@click=\"openPdfTemplateEditor(row)\"" in INDEX
     assert "@click=\"clonePdfTemplate(row)\"" in INDEX
     assert "@click=\"runPdfTemplateDryRun(row)\"" in INDEX
@@ -51,8 +51,18 @@ def test_n016_template_operation_matrix_and_reason_gates_are_present() -> None:
     assert "row.status !== 'draft'" in INDEX
     assert "pdfTemplateFormReadonly" in INDEX
     assert "只有 draft 模板可以激活" in INDEX
-    assert "激活原因不能为空" in INDEX
-    assert "退役原因不能为空" in INDEX
+    activate = INDEX.split("async activatePdfTemplate(template)", 1)[1].split(
+        "async retirePdfTemplate(template)", 1
+    )[0]
+    retire = INDEX.split("async retirePdfTemplate(template)", 1)[1].split(
+        "async deletePdfTemplate(template)", 1
+    )[0]
+    assert activate.count("window.confirm(") == 1
+    assert retire.count("window.confirm(") == 1
+    assert "window.prompt(" not in activate
+    assert "window.prompt(" not in retire
+    assert "reason:" not in activate
+    assert "reason:" not in retire
     assert "确认激活模板" in INDEX
     assert "确认退役 active 模板" in INDEX
     assert "/clone-draft" in INDEX

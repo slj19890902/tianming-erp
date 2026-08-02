@@ -19024,15 +19024,9 @@
               return;
             }
             if (!window.confirm(`确认激活模板“${template.template_name}” v${template.version}？激活会使同客户旧 active 模板自动退役。`)) return;
-            const reason = window.prompt("请填写激活原因（必填）", "完成金样本 dry-run 验证");
-            if (reason === null) return;
-            if (!reason.trim()) {
-              this.showToast("激活原因不能为空", true);
-              return;
-            }
             this.pdfTemplateLoading = true;
             try {
-              await axios.post(`/api/pdf-training/templates/${template.id}/activate`, { reason: reason.trim() });
+              await axios.post(`/api/pdf-training/templates/${template.id}/activate`, {});
               await this.loadPdfTemplates();
               this.pdfTemplateDryRun = null;
               this.showToast("模板已激活，训练库列表已刷新");
@@ -19046,15 +19040,9 @@
             if (!this.canAdmin) return;
             if (template?.status !== "active") return;
             if (!window.confirm(`确认退役 active 模板“${template.template_name}” v${template.version}？退役后只能查看或 clone。`)) return;
-            const reason = window.prompt("请填写退役原因（必填）", "已由新版本模板替代");
-            if (reason === null) return;
-            if (!reason.trim()) {
-              this.showToast("退役原因不能为空", true);
-              return;
-            }
             this.pdfTemplateLoading = true;
             try {
-              await axios.post(`/api/pdf-training/templates/${template.id}/retire`, { reason: reason.trim() });
+              await axios.post(`/api/pdf-training/templates/${template.id}/retire`, {});
               await this.loadPdfTemplates();
               this.showToast("模板已退役，训练库列表已刷新");
             } catch (error) {

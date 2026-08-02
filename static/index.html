@@ -11515,8 +11515,6 @@
             const code = String(prompt(`输入余货库位编码：\n${locations.slice(0,20).map(item=>`${item.location_code}（${item.is_temporary?'临时':'固定'}）`).join("、")}`, locations[0].location_code) || "").trim();
             const location = locations.find(item => String(item.location_code).toUpperCase() === code.toUpperCase());
             if (!location) { this.showToast("未找到该空闲成品库位", true); return; }
-            const reason = String(prompt("补充生产确认原因（永久记录）", `实收材料多于原生产确认，补录 ${output} 个合格品`) || "").trim();
-            if (!reason) return;
             if (!confirm(`确认补录：投入 ${input}，合格 ${output}，损耗 ${theoretical-output}，全部进入 ${location.location_code}？`)) return;
             this.productionBusy = true;
             try {
@@ -11533,7 +11531,7 @@
                   location_id:Number(location.id),
                   pallet_id:location.pallet_id ? Number(location.pallet_id) : null,
                   pallet_code:location.pallet_code || null,
-                  remarks:reason,
+                  remarks:null,
                 }],
               });
               await Promise.all([this.loadProduction(),this.loadDeliveries(),this.loadKpi()]);

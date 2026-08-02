@@ -325,7 +325,7 @@ def append_component_demand_adjustment(
         event_type="component_demand_adjusted",
         delta_order_set_quantity=0,
         delta_required_piece_quantity=target - current,
-        reason="本订单组件需求调整",
+        reason="订单组件需求变更（系统记录）",
         actor_id=actor_id,
         idempotency_key=key,
     )

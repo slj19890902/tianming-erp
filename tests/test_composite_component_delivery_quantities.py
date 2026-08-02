@@ -185,7 +185,7 @@ def test_order_component_override_caps_multi_delivery_and_cancel(
                     event_type="component_demand_adjusted",
                     delta_order_set_quantity=0,
                     delta_required_piece_quantity=Decimal("-300"),
-                    reason="本订单组件需求调整",
+                    reason="订单组件需求变更（系统记录）",
                     idempotency_key="uat-component-2700",
                 )
             )

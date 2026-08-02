@@ -34,22 +34,21 @@ def test_existing_master_save_builds_readable_diff_and_versioned_payload() -> No
     assert 'attachMasterUpdateMetadata("product",payload,options)' in product_payload
 
 
-def test_confirmation_required_keeps_shared_modal_reason_and_requires_ack() -> None:
+def test_confirmation_required_keeps_shared_modal_token_without_extra_input() -> None:
     handler = _method_block(
         "handleMaster409(error, entity",
         "async putIndirectProductUpdate(",
     )
 
     assert 'detail.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED"' in handler
-    assert "current.reason" in handler or "...current" in handler
     assert "confirmation_token" in handler
     assert "changed_fields" in handler
     assert "warnings" in handler
     assert "requireAcknowledgement:true" in handler
     assert "confirm(" not in handler
     assert "确认主数据变更" in INDEX
-    assert "我已核对异常修改" in INDEX
-    assert 'v-model.trim="masterChangeConfirm.reason"' in INDEX
+    assert "我已核对异常修改" not in INDEX
+    assert 'v-model.trim="masterChangeConfirm.reason"' not in INDEX
 
 
 def test_version_conflict_preserves_editor_and_has_safe_resolution_actions() -> None:
@@ -337,8 +336,7 @@ def test_restore_preview_and_restore_are_admin_only_and_token_bound() -> None:
     restore = _method_block("async restoreMasterVersion()", "sum(items, key)")
     assert "reason:" not in restore
     assert "confirmation_token:state.confirmationToken" in INDEX
-    assert 'state.visible && state.mode === "restore"' in INDEX
-    assert 'v-if="!masterSingleConfirmNoReasonUpdate"' in INDEX
+    assert "恢复原因 *" not in INDEX
     assert "恢复反向差异" in INDEX
     assert "旧版本已恢复，并已生成新的主数据版本" in INDEX
 

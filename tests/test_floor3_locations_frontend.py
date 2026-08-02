@@ -685,9 +685,10 @@ def test_finished_in_is_one_step_and_refreshes_inventory_and_floor3_map() -> Non
     assert 'tab==="finished"?"入成品仓":"入半成品仓"' in WAREHOUSE_HTML
     assert "入成品仓（一步完成）" in WAREHOUSE_HTML
     assert "做完马上送货时无需办理入仓" in WAREHOUSE_HTML
-    assert "只选客户、产品、数量和三楼货位" in WAREHOUSE_HTML
+    assert "只选客户、产品、数量和实际库位" in WAREHOUSE_HTML
     assert "可选：修改日期、来源或备注" in WAREHOUSE_HTML
-    assert 'source_version==="V11"?`三楼 ${x.area_code||""}`:"其他库位"' in WAREHOUSE_HTML
+    assert "function inventoryFloorLabel(row)" in WAREHOUSE_HTML
+    assert "row.warehouse_floor" in WAREHOUSE_HTML
     save_block = WAREHOUSE_HTML.split("async function saveFinished(e){", 1)[1].split(
         "async function saveSemi", 1
     )[0]
@@ -763,7 +764,8 @@ def test_inventory_lot_actions_stay_on_one_compact_row() -> None:
     actions = WAREHOUSE_HTML.split("function actionButtons(row){", 1)[1].split(
         "async function openProductAssignments", 1
     )[0]
-    finished_return = actions.index("return edit+general;")
+    finished_return = actions.index("return staging+edit+general;")
+    assert '>转入库位</button>' in actions[:finished_return]
     assert 'onclick="openLotEditor(${row.id})">编辑</button>' in actions[:finished_return]
     assert actions.index(">转通用</button>") < finished_return
     assert actions.index(">冻结</button>") > finished_return
@@ -805,7 +807,7 @@ def test_finished_lot_editor_requires_explicit_edit_and_keeps_stock_age_derived(
     ):
         assert f'id="{element_id}"' in editor
     assert "修改后统一写入库存流水" in editor
-    assert "库龄由入库日期自动计算" in editor
+    assert "日期不明时不计算精确库龄" in editor
     assert "直接修改库龄" not in editor
     assert 'role="dialog"' in editor
     assert 'aria-modal="true"' in editor
@@ -819,7 +821,7 @@ def test_finished_lot_editor_requires_explicit_edit_and_keeps_stock_age_derived(
     assert 'state.user.role!=="admin"' in actions
     assert 'onclick="openLotEditor(${row.id})">编辑</button>' in actions
     assert '!row.detail.is_general' in actions
-    assert actions.index("return edit+general;") < actions.index(">调整</button>")
+    assert actions.index("return staging+edit+general;") < actions.index(">调整</button>")
 
 
 def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload() -> None:

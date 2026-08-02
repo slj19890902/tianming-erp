@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.40"
-    assert APP_VERSION_NAME == "一楼待送区整批流转"
+    assert APP_VERSION == "v0.22.41"
+    assert APP_VERSION_NAME == "一楼待送区分批转库"
     assert APP_BUILD_DATE == "2026-08-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "一楼待送区" in item and "另选库位" in item
+        "本次更新｜" in item and "一楼待送" in item and "转入库位" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "订单数量保持不变" in item and "真实库存" in item
+        "本次更新｜" in item and "订单预占关系" in item and "库存总量" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "超订单送货" in item and "不再要求二次勾选" in item
+        "本次更新｜" in item and "三级选择" in item and "不要求原因" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "订单数量 50" in item and "实际合格 56" in item
+        "如何验证｜" in item and "部分数量" in item and "待送区保留余数" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "没有超量送货权限" in item and "明确拒绝" in item
+        "如何验证｜" in item and "重复提交" in item and "不会重复转移" in item
         for item in current_release
     )
     assert any(

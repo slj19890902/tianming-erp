@@ -43,6 +43,7 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     InventoryLocationMovement,
     InventoryLot,
+    InventoryLotTransfer,
     InventoryMovement,
     InventoryPallet,
     InventoryPalletItem,
@@ -103,6 +104,7 @@ from app.services.warehouse_inventory import (
     reserve_finished_inventory_for_bom_component,
     replace_semi_finished_lot_allowed_products,
     semi_finished_lot_allowed_product_ids,
+    transfer_staging_finished_lot,
     void_semi_finished_lot,
 )
 from app.services.inventory_insights import build_inventory_insights
@@ -622,6 +624,21 @@ class FinishedLotEditPayload(BaseModel):
         if not self.is_general and self.customer_id is None:
             raise ValueError("客户专用库存必须选择客户")
         return self
+
+
+class FinishedLotLocationTransferPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    location_id: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_location_transfer_idempotency_key(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("请求标识不能为空")
+        return text
 
 
 class SemiFinishedManualInPayload(BaseModel):
@@ -5252,6 +5269,99 @@ def edit_finished_inventory_lot(
         )
         db.commit()
         return _lot_dict(row)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
+def _lot_location_transfer_dict(
+    row: InventoryLotTransfer,
+    *,
+    source_lot: InventoryLot,
+    target_lot: InventoryLot,
+    replayed: bool,
+) -> dict:
+    return {
+        "id": row.id,
+        "quantity": row.quantity,
+        "available_quantity": row.available_quantity,
+        "reserved_quantity": row.reserved_quantity,
+        "source_location_id": row.source_location_id,
+        "target_location_id": row.target_location_id,
+        "transferred_at": utc_naive_to_api(row.transferred_at),
+        "replayed": replayed,
+        "source_lot": _lot_dict(source_lot),
+        "target_lot": _lot_dict(target_lot),
+    }
+
+
+@router.post("/lots/{lot_id}/location-transfers")
+def transfer_finished_lot_from_staging(
+    lot_id: int,
+    payload: FinishedLotLocationTransferPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    lot = _require_lot_customer_access(db, lot_id, user)
+    before = _inventory_lot_audit_state(lot)
+    customer_id, customer_name = _inventory_lot_audit_customer(lot)
+    try:
+        result = transfer_staging_finished_lot(
+            db,
+            lot_id=lot_id,
+            expected_version=payload.expected_version,
+            quantity=payload.quantity,
+            location_id=payload.location_id,
+            operator_id=user.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        if not result.replayed:
+            target_location = db.get(WarehouseLocation, payload.location_id)
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code="warehouse.staging_lot.location_transfer",
+                legacy_action="TRANSFER_STAGING_LOT",
+                resource="InventoryLotTransfer",
+                entity_type="inventory_lot_transfer",
+                entity_id=result.transfer.id,
+                object_ref=f"inventory_lot_transfer:{result.transfer.id}",
+                customer_id=customer_id,
+                customer_name=customer_name,
+                description="一楼待送成品转入正式库位",
+                details={
+                    "source_lot_id": lot_id,
+                    "target_lot_id": result.target_lot.id,
+                    "quantity": payload.quantity,
+                    "available_quantity": result.transfer.available_quantity,
+                    "reserved_quantity": result.transfer.reserved_quantity,
+                    "source_location_id": result.transfer.source_location_id,
+                    "target_location_id": result.transfer.target_location_id,
+                    "target_location_code": (
+                        target_location.location_code if target_location else None
+                    ),
+                    "before": before,
+                    "source_after": _inventory_lot_audit_state(result.source_lot),
+                    "target_after": _inventory_lot_audit_state(result.target_lot),
+                    "idempotency_key": payload.idempotency_key,
+                },
+            )
+        db.commit()
+        return _lot_location_transfer_dict(
+            result.transfer,
+            source_lot=result.source_lot,
+            target_lot=result.target_lot,
+            replayed=result.replayed,
+        )
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)

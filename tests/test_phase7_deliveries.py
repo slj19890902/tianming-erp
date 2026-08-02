@@ -632,7 +632,7 @@ def test_dispatch_rolls_back_all_lines_when_one_line_becomes_invalid(
         assert session.get(Delivery, delivery_id).status == "pending"
 
 
-def test_force_close_requires_reason_hides_item_and_is_audited(
+def test_force_close_without_reason_hides_item_and_is_audited(
     delivery_api_app,
 ) -> None:
     from app.models.audit import OperationLog
@@ -641,18 +641,14 @@ def test_force_close_requires_reason_hides_item_and_is_audited(
     app, session_factory = delivery_api_app
     with TestClient(app) as client:
         _login(client, "admin")
-        invalid = client.put(
-            "/api/orders/items/1/force_close",
-            json={"reason": " "},
-        )
         closed = client.put(
             "/api/orders/items/1/force_close",
-            json={"reason": "客户确认尾数不再补做"},
+            json={},
         )
         pending = client.get("/api/deliveries/pending_items")
 
-    assert invalid.status_code == 422
     assert closed.status_code == 200
+    assert closed.json()["reason"] == "订单未送尾数强制结案（系统记录）"
     assert 1 not in [item["item_id"] for item in pending.json()["items"]]
     with session_factory() as session:
         assert session.get(OrderItem, 1).is_force_closed is True
@@ -662,7 +658,7 @@ def test_force_close_requires_reason_hides_item_and_is_audited(
                 OperationLog.entity_id == 1,
             )
         )
-    assert "客户确认尾数不再补做" in details
+    assert "订单未送尾数强制结案（系统记录）" in details
 
 
 def test_finance_is_read_only_for_delivery_operations(delivery_api_app) -> None:

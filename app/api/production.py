@@ -584,6 +584,8 @@ def revert_production_completion(
             description="管理员撤销生产确认并回到待生产确认",
             details={
                 "reason": payload.reason,
+                "before_completion_status": "posted",
+                "after_completion_status": result.completion.status,
                 "completion_id": completion_id,
                 "batch_id": result.completion.batch_id,
                 "stock_transfer_id": result.transfer.id if result.transfer else None,

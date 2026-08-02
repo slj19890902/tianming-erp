@@ -7,6 +7,9 @@ from pathlib import Path
 INDEX = (
     Path(__file__).resolve().parents[1] / "static" / "index.html"
 ).read_text(encoding="utf-8")
+INCOMING = (
+    Path(__file__).resolve().parents[1] / "static" / "incoming.html"
+).read_text(encoding="utf-8")
 
 
 def test_trace_entry_uses_exact_expanded_item() -> None:
@@ -55,6 +58,46 @@ def test_trace_return_restores_order_workbench_context() -> None:
     assert "window.scrollTo(0,context?.scrollY || 0)" in methods
 
 
+def test_admin_trace_rollback_is_sequential_and_uses_one_confirmation() -> None:
+    assert "管理员下一步" in INDEX
+    assert "traceNextRollbackEvent()" in INDEX
+    assert 'this.user?.role !== "admin"' not in INDEX[
+        INDEX.index("traceRollbackKind(event)") : INDEX.index(
+            "traceEventTime(event)", INDEX.index("traceRollbackKind(event)")
+        )
+    ]
+    start = INDEX.index("async rollbackTraceEvent(event)")
+    end = INDEX.index("traceEventTime(event)", start)
+    rollback_method = INDEX[start:end]
+    assert "confirm(" in rollback_method
+    assert "prompt(" not in rollback_method
+    assert "订单追溯逐级回退（管理员一次确认）" in rollback_method
+    assert "/api/production/completions/${event.source_id}/revert" in rollback_method
+    assert "/api/incoming/receipt-items/${event.source_id}/revert" in rollback_method
+    assert "/api/requisition/supplier-orders/${supplierOrderId}/void" in rollback_method
+    assert "/api/requisition/items/${this.orderTrace.item.id}/cancel" in rollback_method
+    assert "回退被阻止" in rollback_method
+
+
+def test_all_visible_rollback_entries_use_admin_and_fixed_audit_reason() -> None:
+    production_start = INDEX.index("async revertProductionCompletion(row)")
+    production_end = INDEX.index("async loadIncoming()", production_start)
+    production_method = INDEX[production_start:production_end]
+    assert "prompt(" not in production_method
+    assert "生产完工历史回退（管理员一次确认）" in production_method
+
+    incoming_start = INDEX.index("async revertIncoming(row)")
+    incoming_end = INDEX.index("async loadIncomingHistory()", incoming_start)
+    incoming_method = INDEX[incoming_start:incoming_end]
+    assert "prompt(" not in incoming_method
+    assert "来料实收历史回退（管理员一次确认）" in incoming_method
+    assert 'v-else-if="canAdmin" class="btn small danger"' in INDEX
+
+    assert 'state.user?.role === "admin"' in INCOMING
+    assert "revertReason" not in INCOMING
+    assert "来料实收历史回退（管理员一次确认）" in INCOMING
+
+
 def test_inline_javascript_remains_syntactically_valid(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node is not None
@@ -76,3 +119,22 @@ def test_inline_javascript_remains_syntactically_valid(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+    incoming_scripts = [
+        script
+        for script in re.findall(
+            r"<script(?:\s[^>]*)?>(.*?)</script>", INCOMING, re.DOTALL
+        )
+        if script.strip() and "src=" not in script[:100]
+    ]
+    assert len(incoming_scripts) == 1
+    incoming_target = tmp_path / "p1-25b-incoming.js"
+    incoming_target.write_text(incoming_scripts[0], encoding="utf-8")
+    incoming_result = subprocess.run(
+        [node, "--check", str(incoming_target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert incoming_result.returncode == 0, incoming_result.stderr

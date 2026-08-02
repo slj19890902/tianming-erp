@@ -1418,6 +1418,8 @@ def revert_receipt_item(
             "incoming_receipt_id": receipt.id,
             "incoming_receipt_item_id": receipt_item.id,
             "reason": clean_reason,
+            "before_status": "posted",
+            "after_status": receipt_item.status,
             "remaining_cumulative_received_quantity": remaining,
         },
         audit_context=audit_context,

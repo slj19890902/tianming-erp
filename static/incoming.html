@@ -69,11 +69,8 @@
 
   <div id="revertModal" hidden class="fixed inset-0 z-50 flex items-end bg-black/60 sm:items-center sm:justify-center">
     <form id="revertForm" class="w-full rounded-t-2xl bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-2xl">
-      <h2 class="text-xl font-bold text-red-700">撤回来料入库</h2>
-      <p class="mt-2 text-slate-600">请填写原因，操作将记录到审计日志。</p>
-      <textarea id="revertReason" rows="3" required maxlength="200"
-        class="mt-4 w-full rounded-xl border-2 border-slate-300 p-3 text-lg focus:border-red-600 focus:outline-none"
-        placeholder="例如：纸板规格核对错误"></textarea>
+      <h2 class="text-xl font-bold text-red-700">确认撤回来料入库</h2>
+      <p class="mt-2 text-slate-600">只撤回当前这一笔；系统会自动记录管理员、时间、关联记录和前后状态。</p>
       <div class="mt-4 grid grid-cols-2 gap-3">
         <button type="button" id="cancelRevert" class="min-h-14 rounded-xl bg-slate-200 text-lg font-bold">取消</button>
         <button type="submit" class="min-h-14 rounded-xl bg-red-700 text-lg font-bold text-white">确认撤回</button>
@@ -355,7 +352,7 @@
                 <div><p class="text-slate-500">订单号</p><p class="font-bold break-words">${escapeHtml(item.order_number)}</p></div>
                 <div class="col-span-2"><p class="text-slate-500">备注</p><p class="font-bold break-words">${escapeHtml(item.requisition_remark || "无")}</p></div>
               </div>
-              ${!isPending && canOperate() && item.can_revert_receipt !== false
+              ${!isPending && state.user?.role === "admin" && item.can_revert_receipt !== false
                 ? `<button data-revert="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-red-700 px-4 text-base font-bold text-white disabled:bg-slate-400">撤回</button>`
                 : ""}
             </div>` : "";
@@ -600,9 +597,7 @@
 
     function openRevert(itemId) {
       state.revertingItemId = itemId;
-      $("revertReason").value = "";
       $("revertModal").hidden = false;
-      window.setTimeout(() => $("revertReason").focus(), 50);
     }
 
     document.querySelectorAll(".tab-button").forEach((button) => {
@@ -682,11 +677,7 @@
 
     $("revertForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reason = $("revertReason").value.trim();
-      if (!reason) {
-        showToast("请填写撤回原因", true);
-        return;
-      }
+      const reason = "来料实收历史回退（管理员一次确认）";
       const itemId = state.revertingItemId;
       $("revertModal").hidden = true;
       state.busyItemId = itemId;

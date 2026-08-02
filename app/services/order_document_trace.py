@@ -301,6 +301,12 @@ def build_order_item_document_trace(
             .order_by(Requisition.created_at, RequisitionItem.id)
         ).all()
         for requisition_item, requisition in requisition_rows:
+            effective = str(requisition_item.status or "").strip().lower() not in {
+                "已取消",
+                "已作废",
+                "voided",
+                "cancelled",
+            }
             add_event(
                 stage="requisition",
                 source_type="material_requisition",
@@ -311,7 +317,11 @@ def build_order_item_document_trace(
                 business_date=requisition.requisition_date,
                 quantity=requisition_item.requisition_qty,
                 unit="张",
-                details={"supplier_name": requisition.supplier_name},
+                is_effective=effective,
+                details={
+                    "supplier_name": requisition.supplier_name,
+                    "order_item_id": item.id,
+                },
             )
 
         supplier_rows = db.execute(
@@ -339,7 +349,11 @@ def build_order_item_document_trace(
                 quantity=supplier_item.requisition_qty,
                 unit="张",
                 is_effective=effective,
-                details={"supplier_name": supplier_order.supplier_name},
+                details={
+                    "supplier_name": supplier_order.supplier_name,
+                    "supplier_order_id": supplier_order.id,
+                    "order_item_id": item.id,
+                },
             )
             if supplier_order.voided_at is not None:
                 add_event(

@@ -1394,6 +1394,22 @@ def test_revert_requires_reason_and_clears_receiving_fields(
     assert item.material_received_at is None
     assert item.material_received_by is None
     assert "纸板规格核对错误" in details
+    assert '"before_status": "received"' in details
+    assert '"after_status": "pending"' in details
+
+
+def test_workshop_execute_permission_cannot_revert_received_fact(
+    incoming_api_app,
+) -> None:
+    app, _ = incoming_api_app
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        response = client.put(
+            "/api/incoming/revert/3",
+            json={"reason": "不应由普通执行账号撤销"},
+        )
+
+    assert response.status_code == 403
 
 
 def test_revert_rejects_delivered_order(incoming_api_app) -> None:

@@ -2349,11 +2349,9 @@ def edit_semi_finished_lot_customer(
 
 def void_semi_finished_lot(
     db: Session, *, lot_id: int, expected_version: int,
-    reason: str, operator_id: int | None,
+    reason: str | None, operator_id: int | None,
 ) -> InventoryLot:
-    normalized_reason = reason.strip()
-    if not normalized_reason:
-        raise WarehouseInventoryError("删除误录批次必须填写原因")
+    normalized_reason = (reason or "").strip() or "删除误录半成品批次（系统记录）"
     lot = _editable_semi_finished_lot(db, lot_id, expected_version)
     if any((lot.quantity_reserved, lot.quantity_consumed, lot.quantity_damaged, lot.quantity_scrapped)):
         raise WarehouseInventoryError("批次已有预占、消耗、报损或报废，不能删除", 409)

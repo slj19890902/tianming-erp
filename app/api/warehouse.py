@@ -665,24 +665,17 @@ class SemiFinishedLotEditPayload(BaseModel):
 
 class SemiFinishedLotVoidPayload(BaseModel):
     expected_version: int = Field(gt=0)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class VersionPayload(BaseModel):
     expected_version: int = Field(gt=0)
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=500)
     idempotency_key: str | None = Field(default=None, max_length=100)
 
 
 class QuantityOperationPayload(VersionPayload):
     quantity: int = Field(gt=0)
-
-    @field_validator("reason")
-    @classmethod
-    def reason_required(cls, value: str | None) -> str:
-        if not value or not value.strip():
-            raise ValueError("必须填写原因")
-        return value.strip()
 
 
 class AdjustPayload(VersionPayload):
@@ -695,12 +688,6 @@ class AdjustPayload(VersionPayload):
             raise ValueError("调整数量不能为0")
         return value
 
-    @field_validator("reason")
-    @classmethod
-    def reason_required(cls, value: str | None) -> str:
-        if not value or not value.strip():
-            raise ValueError("必须填写调整原因")
-        return value.strip()
 
 
 class FinishedReservationPayload(BaseModel):
@@ -5429,6 +5416,14 @@ def _operate(
     quantity: int = 0,
     request: Request | None = None,
 ) -> dict:
+    reason = (payload.reason or "").strip() or {
+        "adjust": "库存数量调整（系统记录）",
+        "damage": "库存报损（系统记录）",
+        "scrap": "库存报废（系统记录）",
+        "transfer_to_general": "转为通用成品库存（系统记录）",
+        "freeze": "冻结库存（系统记录）",
+        "unfreeze": "解冻库存（系统记录）",
+    }.get(operation, "库存批次操作（系统记录）")
     _require_lot_customer_access(db, lot_id, user)
     try:
         lot_before = db.get(InventoryLot, lot_id)
@@ -5442,7 +5437,7 @@ def _operate(
             expected_version=payload.expected_version,
             operator_id=user.id,
             quantity=quantity,
-            reason=payload.reason,
+            reason=reason,
             idempotency_key=payload.idempotency_key,
         )
         if not replayed:
@@ -5453,7 +5448,7 @@ def _operate(
                 action_code=f"warehouse.lot.{operation}",
                 row=row,
                 before=before,
-                reason=payload.reason,
+                reason=reason,
                 idempotency_key=payload.idempotency_key,
                 customer_id=customer_id,
                 customer_name=customer_name,

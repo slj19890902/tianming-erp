@@ -38,9 +38,9 @@ def test_n034_product_editor_has_compact_internal_bom_cards() -> None:
 
 def test_n034_bom_uses_same_customer_products_and_versioned_get_put() -> None:
     assert 'axios.get(`/api/master/products/${productId}/bom`)' in INDEX
-    assert 'axios.put(`/api/master/products/${productId}/bom`, this.bomPayload())' in INDEX
-    assert "expected_version: fields.expected_version ?? 1" in INDEX
-    assert 'change_reason: "维护父产品内部 BOM"' in INDEX
+    assert 'axios.put(`/api/master/products/${productId}/bom`, this.bomPayload(expectedVersion))' in INDEX
+    assert "expected_version: expectedVersion ?? fields.expected_version ?? 1" in INDEX
+    assert 'change_reason: "维护父产品内部 BOM"' not in INDEX
     assert "components: fields.components" in INDEX
     assert 'customer_id: this.productForm.customer_id' in INDEX
     assert "String(row.id) !== String(this.productForm.id)" in INDEX
@@ -84,7 +84,7 @@ def test_n034_bom_save_does_not_change_sales_order_item_flow() -> None:
     save_start = INDEX.index('if (this.modal.type === "product") {')
     save_end = INDEX.index('if (this.modal.type === "material") {', save_start)
     save_block = INDEX[save_start:save_end]
-    assert "saveProductBom(saved.id)" in save_block
+    assert "saveProductBom(saved.id, saved.version ?? null)" in save_block
     assert "/api/orders" not in save_block
     assert "sales_order_items" not in save_block
 

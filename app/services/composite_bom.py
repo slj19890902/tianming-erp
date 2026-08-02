@@ -360,7 +360,7 @@ def replace_product_bom(
     components: Sequence[Mapping[str, Any]],
     expected_version: int,
     user: User,
-    change_reason: str,
+    change_reason: str | None = None,
 ) -> dict[str, Any]:
     """Atomically replace one parent BOM and advance the parent version."""
 
@@ -510,6 +510,31 @@ def replace_product_bom(
         )
 
     before = get_product_bom(db, parent.id)
+    comparison_fields = (
+        "component_product_id",
+        "quantity_per_set",
+        "display_order",
+        "internal_component_code",
+        "is_die_cut",
+        "die_cut_path",
+        "mold_tool_id",
+        "mold_max_yield_per_sheet",
+        "spare_sheet_quantity",
+        "display_mode",
+        "is_required",
+        "remark",
+    )
+
+    def comparison_value(row: Mapping[str, Any]) -> tuple[Any, ...]:
+        return tuple(row.get(field) for field in comparison_fields)
+
+    if (
+        bool(before["is_composite"]) == bool(normalized)
+        and [comparison_value(row) for row in before["components"]]
+        == [comparison_value(row) for row in normalized]
+    ):
+        return before
+
     existing_rows = _active_bom_rows(db, parent.id)
     existing_by_component_id = {
         int(_mapped_value(row, "component_product_id")): row
@@ -531,7 +556,7 @@ def replace_product_bom(
         updates=product_updates,
         expected_version=expected_version,
         user=user,
-        reason=change_reason.strip(),
+        reason=(change_reason or "").strip() or None,
         source="api.products.bom",
         action="bom_update",
         force_version=True,
@@ -616,7 +641,7 @@ def replace_product_bom(
                     "parent_product_id": parent.id,
                     "from_version": expected_version,
                     "to_version": parent.version,
-                    "reason": change_reason.strip(),
+                    "reason": (change_reason or "").strip() or None,
                     "before_components": before["components"],
                     "after_components": after["components"],
                 },

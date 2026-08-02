@@ -1360,12 +1360,8 @@ def _match_onboarding_line(
         "source_row_hash": line.source_row_hash,
     }
     if line.action_decision == "exclude":
-        if line.remarks:
-            line.match_status = "excluded"
-            line.error_codes_json = []
-        else:
-            line.match_status = "blocked"
-            line.error_codes_json = ["EXCLUDE_REASON_REQUIRED"]
+        line.match_status = "excluded"
+        line.error_codes_json = []
         line.warning_codes_json = []
         line.match_evidence_json = evidence
         line.existing_lot_id = None
@@ -1929,12 +1925,6 @@ def update_onboarding_line(
         else:
             raise InventoryOnboardingError(f"字段 {field} 不允许修改")
 
-    if line.action_decision == "exclude" and not line.remarks:
-        raise InventoryOnboardingError(
-            "排除明细必须填写备注说明原因",
-            422,
-            "INVENTORY_ONBOARDING_EXCLUDE_REASON_REQUIRED",
-        )
     line.version += 1
     line.updated_by = operator.id
     match_onboarding_line(db, batch=batch, line=line)
@@ -1946,7 +1936,11 @@ def update_onboarding_line(
             user=operator,
             batch=batch,
             action="LINE_UPDATE",
-            description="修正库存建账草稿明细",
+            description=(
+                "库存建账草稿明细标记为不计入本次盘点"
+                if line.action_decision == "exclude"
+                else "修正库存建账草稿明细"
+            ),
             details={
                 "batch_number": batch.batch_number,
                 "line_id": line.id,

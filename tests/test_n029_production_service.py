@@ -914,6 +914,8 @@ def test_admin_can_revert_stock_completion_and_complete_again(production_app) ->
             0,
         )
         assert audit is not None and "管理员误操作" in audit.details
+        assert '"before_completion_status": "posted"' in audit.details
+        assert '"after_completion_status": "reversed"' in audit.details
         assert [row.status for row in completions] == ["reversed", "posted"]
         assert task.status == "completed"
         assert order.status == "pending_delivery"

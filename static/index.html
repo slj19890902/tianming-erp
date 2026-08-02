@@ -2539,7 +2539,7 @@
                     <td style="min-width:210px"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，等待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">请选择短收处理</option><option value="await_supplier">继续等待供应商补货</option><option value="accept_short">按当前累计数量结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">请选择超收处理</option><option value="all_to_production">全部投入当前生产</option><option value="transfer_to_semi_inventory">超出部分转半成品库存</option></select><span v-else class="status green">本次后累计等于计划</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">请选择半成品库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
-                    <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
+                    <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -2570,7 +2570,7 @@
                       <td>{{ row.material_display || "-" }}</td>
                       <td><strong>{{ row.incoming_quantity }}</strong></td>
                       <td>
-                        <button v-if="hasPermission('incoming.execute')" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button>
+                        <button v-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button>
                         <span v-else class="muted">-</span>
                       </td>
                     </tr></tbody>
@@ -4716,6 +4716,10 @@
                 <div><strong>当前可定位阶段：{{ traceCurrentEvent().stage_label }} · {{ traceCurrentEvent().status_label }}</strong><div class="muted">{{ traceCurrentEvent().document_number }}</div></div>
                 <button class="btn small primary" type="button" @click="openTraceEventDetail(traceCurrentEvent())">查看当前阶段</button>
               </div>
+              <div v-if="traceNextRollbackEvent()" class="status orange" style="display:flex;align-items:center;justify-content:space-between;gap:10px;white-space:normal;margin:10px 0">
+                <div><strong>管理员下一步：{{ traceRollbackKind(traceNextRollbackEvent()).label }}</strong><div>必须逐级回退；如有发货、库存移动或其他后续事实，系统会明确阻止。</div></div>
+                <button class="btn small danger" type="button" :disabled="traceRollbackBusy" @click="openTraceEventDetail(traceNextRollbackEvent())">查看并回退</button>
+              </div>
               <div v-if="orderTraceEventDetail" id="orderTraceEventDetail" class="panel" style="margin:10px 0;border-color:var(--primary)">
                 <div class="toolbar-group" style="justify-content:space-between;margin-bottom:8px"><strong>阶段详情 · {{ orderTraceEventDetail.target.module_label }} → {{ orderTraceEventDetail.target.section_label }}</strong><button class="btn small" type="button" @click="orderTraceEventDetail=null">返回时间线</button></div>
                 <div v-if="!orderTraceEventDetail.event.is_effective" class="status orange" style="display:block;margin-bottom:8px">该记录已撤销或冲销，仅作为历史查看，不能当作当前有效事实。</div>
@@ -4727,6 +4731,10 @@
                   <div class="field"><label>数量</label><div>{{ traceQuantityText(orderTraceEventDetail.event) }}</div></div>
                   <div class="field"><label>位置</label><div>{{ traceLocationText(orderTraceEventDetail.event) }}</div></div>
                   <div class="field"><label>精确定位</label><div class="muted">订单 {{ orderTraceEventDetail.navigation.order_id }} · 明细 {{ orderTraceEventDetail.navigation.item_id }} · 记录 {{ orderTraceEventDetail.navigation.source_type }} #{{ orderTraceEventDetail.navigation.source_id }}</div></div>
+                </div>
+                <div v-if="traceRollbackAction(orderTraceEventDetail.event)" class="notice" style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+                  <div><strong>{{ traceRollbackAction(orderTraceEventDetail.event).label }}</strong><div class="muted">一次确认即可；原因、账号、时间和前后状态由系统自动记录。</div></div>
+                  <button class="btn small danger" type="button" :disabled="traceRollbackBusy" @click="rollbackTraceEvent(orderTraceEventDetail.event)">确认回退本阶段</button>
                 </div>
               </div>
               <div class="section-title">当前关联库存位置</div>
@@ -6211,7 +6219,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceReturnContext:null, drawingFile:null,
+            receiptForm: { items: [] }, orderItemForm: {}, orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             finishedInventoryCandidates: [], finishedInventoryCandidatesLoaded: false,
             finishedInventoryReservations: [],
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
@@ -11455,12 +11463,11 @@
           },
           async revertProductionCompletion(row) {
             if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return;
-            const reason = prompt("请输入撤销生产确认的原因（必填，将永久保留在审计记录中）：", "操作失误，退回待生产确认");
-            if (!String(reason || "").trim()) return;
             if (!confirm(`确认撤销 ${row.item_order_number || row.order_number || "该订单"} 的生产确认吗？\n\n系统会撤回本次生成的临时成品库存或直接完工效果，并把任务退回待生产确认。已经送货、占用或移动的库存不会允许撤销。`)) return;
+            const reason = "生产完工历史回退（管理员一次确认）";
             this.productionBusy = true;
             try {
-              await axios.post(`/api/production/completions/${row.id}/revert`, { reason:String(reason).trim() });
+              await axios.post(`/api/production/completions/${row.id}/revert`, { reason });
               delete this.productionTransferAttempts[row.id];
               await Promise.all([this.loadProduction(), this.loadOrders(), this.loadKpi(), this.loadDeliveries()]);
               if (this.hasPermission("dashboard.view")) await this.loadOverview();
@@ -11627,11 +11634,10 @@
           },
           async revertIncoming(row) {
             if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？撤销原因、人员和时间会永久保留。")) return;
-            const reason=prompt("请输入撤销收料原因（必填）：");
-            if (!reason?.trim()) return;
+            const reason="来料实收历史回退（管理员一次确认）";
             try {
               const url=row.receipt_item_id ? `/api/incoming/receipt-items/${row.receipt_item_id}/revert` : `/api/incoming/revert/${row.item_id}`;
-              await axios.put(url,{reason:reason.trim()});
+              await axios.put(url,{reason});
               if (this.incomingTab === 'history') {
                 await Promise.all([this.loadIncomingHistory(), this.loadKpi()]);
               } else if (this.incomingTab === 'received') {
@@ -14167,6 +14173,7 @@
             setTimeout(() => { w.print(); w.close(); }, 300);
           },
           async voidSupplierOrder(so) {
+            if (!this.canAdmin) return;
             if (!confirm(`确定作废报料单 ${so.order_number}？关联的订单明细将恢复为待报料。`)) return;
             this.loading = true;
             try {
@@ -16313,6 +16320,56 @@
             if (!this.orderTrace?.current_event_key) return null;
             return this.orderTrace.events.find(event => event.key === this.orderTrace.current_event_key) || null;
           },
+          traceRollbackKind(event) {
+            if (!event?.is_effective) return null;
+            if (event.source_type === "production_completion") return {kind:"production",label:"撤销生产完工，回到待生产"};
+            if (event.source_type === "incoming_receipt") return {kind:"incoming",label:"撤销来料实收，回到待收料"};
+            if (event.source_type === "supplier_requisition_order") return {kind:"supplier_requisition",label:"作废供应商报料单，回到待报料"};
+            if (event.source_type === "material_requisition") return {kind:"requisition",label:"撤销报料，回到待报料"};
+            return null;
+          },
+          traceNextRollbackEvent() {
+            if (!this.canAdmin || !this.orderTrace?.events?.length) return null;
+            return [...this.orderTrace.events].reverse().find(event => this.traceRollbackKind(event)) || null;
+          },
+          traceRollbackAction(event) {
+            const next=this.traceNextRollbackEvent();
+            if (!next || next.key !== event?.key) return null;
+            return this.traceRollbackKind(event);
+          },
+          async reloadOrderTrace() {
+            if (!this.orderTrace?.order?.id || !this.orderTrace?.item?.id) return;
+            const {data}=await axios.get(`/api/orders/${this.orderTrace.order.id}/items/${this.orderTrace.item.id}/documents`);
+            this.orderTrace=data;
+            this.orderTraceEventDetail=null;
+          },
+          async rollbackTraceEvent(event) {
+            const action=this.traceRollbackAction(event);
+            if (!action || this.traceRollbackBusy) return;
+            if (!confirm(`${action.label}？\n\n系统只执行当前一步；若存在后续有效事实会明确阻止，不会直接修改订单状态。`)) return;
+            this.traceRollbackBusy=true;
+            const reason="订单追溯逐级回退（管理员一次确认）";
+            try {
+              if (action.kind === "production") {
+                await axios.post(`/api/production/completions/${event.source_id}/revert`,{reason});
+              } else if (action.kind === "incoming") {
+                await axios.put(`/api/incoming/receipt-items/${event.source_id}/revert`,{reason});
+              } else if (action.kind === "supplier_requisition") {
+                const supplierOrderId=Number(event.details?.supplier_order_id);
+                if (!supplierOrderId) throw new Error("报料单缺少精确来源编号，请从已报料页面处理");
+                await axios.put(`/api/requisition/supplier-orders/${supplierOrderId}/void`);
+              } else if (action.kind === "requisition") {
+                await axios.put(`/api/requisition/items/${this.orderTrace.item.id}/cancel`,{reason});
+              }
+              await this.reloadOrderTrace();
+              await Promise.allSettled([this.loadOrders(),this.loadKpi()]);
+              this.showToast(`${action.label}成功，请按页面提示决定是否继续下一步`);
+            } catch(error) {
+              this.showToast(`回退被阻止：${this.errorMessage(error)}`,true);
+            } finally {
+              this.traceRollbackBusy=false;
+            }
+          },
           async openTraceEventDetail(event) {
             if (!this.orderTrace?.order?.id || !this.orderTrace?.item?.id || !event?.source_type || !event?.source_id) return;
             try {
@@ -16939,8 +16996,8 @@
             this.closeModal();
           },
           async cancelRequisition(row) {
-            const reason = prompt("请输入取消报料原因");
-            if (!reason?.trim()) return;
+            if (!this.canAdmin || !confirm("确认撤销该报料并回到待报料吗？系统会自动记录本次管理员操作。")) return;
+            const reason = "报料历史回退（管理员一次确认）";
             try { await axios.put(`/api/requisition/items/${row.item_id}/cancel`, {reason}); await this.loadRequisition(); this.showToast("已退回待报料池"); }
             catch (error) { this.showToast(this.errorMessage(error), true); }
           },

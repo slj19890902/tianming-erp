@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import (
     PermissionChecker,
+    RoleChecker,
     customer_scope_ids,
     get_db,
     has_unrestricted_customer_access,
@@ -73,6 +74,7 @@ from app.services.audit_log import append_audit_event
 router = APIRouter()
 can_read = PermissionChecker("incoming.view")
 can_operate = PermissionChecker("incoming.execute")
+admin_rollback = RoleChecker(["admin"])
 
 
 def _drawing_suffix(reference: str | None) -> str:
@@ -2155,7 +2157,7 @@ def revert_new_receipt_item(
     payload: RevertRequest,
     request: Request = None,
     db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    user: User = Depends(admin_rollback),
 ) -> dict:
     _preflight_receipt_item_customer_access(
         db,
@@ -2293,7 +2295,7 @@ def revert_item(
     payload: RevertRequest,
     request: Request = None,
     db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    user: User = Depends(admin_rollback),
 ) -> dict:
     if _is_component_key(item_id):
         return _revert_requisition_component(
@@ -2365,6 +2367,8 @@ def revert_item(
             item_id=item_id_int,
             details={
                 "reason": payload.reason,
+                "before_status": "received",
+                "after_status": item.material_status,
                 "previous_received_at": previous_received_at,
                 "previous_received_by": previous_received_by,
             },

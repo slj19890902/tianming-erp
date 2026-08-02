@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
     PermissionChecker,
+    RoleChecker,
     customer_scope_ids,
     get_db,
     has_permission,
@@ -165,6 +166,7 @@ router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
+admin_rollback = RoleChecker(["admin"])
 _FINISHED_STOCK_POLICY_WRITE_LOCK = Lock()
 
 
@@ -7222,23 +7224,18 @@ def cancel_requisition(
     item_id: int,
     payload: CancelPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    user: User = Depends(admin_rollback),
 ) -> dict:
     item = _item_or_404(db, item_id)
     _require_order_item_customer_access(db, item, user)
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
-        raise HTTPException(status_code=409, detail="订单明细已经报料")
+        raise HTTPException(status_code=409, detail="订单明细已经回到待报料，不能重复撤销")
     has_posted_receipt = db.scalar(
         select(IncomingReceiptItem.id)
-        .join(
-            RequisitionItem,
-            RequisitionItem.id
-            == IncomingReceiptItem.requisition_item_id,
-        )
         .where(
-            RequisitionItem.order_item_id == item.id,
+            IncomingReceiptItem.order_item_id == item.id,
             IncomingReceiptItem.status == "posted",
         )
         .limit(1)
@@ -7248,6 +7245,12 @@ def cancel_requisition(
             status_code=409,
             detail="该订单已有实际收货，必须先撤销来料实收",
         )
+    before_requisition = {
+        "requisition_status": item.requisition_status,
+        "requisition_qty": item.requisition_qty,
+        "inventory_deducted_qty": int(item.inventory_deducted_qty or 0),
+        "supplier_order_number": item.supplier_order_number,
+    }
     db.execute(
         update(RequisitionItem)
         .where(
@@ -7304,8 +7307,17 @@ def cancel_requisition(
         user=user,
         action="CANCEL_REQUISITION",
         entity_id=item.id,
-        details={"reason": payload.reason},
-        description="修改报料信息",
+        details={
+            "reason": payload.reason,
+            "before": before_requisition,
+            "after": {
+                "requisition_status": item.requisition_status,
+                "requisition_qty": item.requisition_qty,
+                "inventory_deducted_qty": int(item.inventory_deducted_qty or 0),
+                "supplier_order_number": item.supplier_order_number,
+            },
+        },
+        description="管理员撤销报料并回到待报料",
     )
     db.commit()
     return _item_response(item, db)
@@ -11353,7 +11365,7 @@ def get_supplier_order(
 def void_supplier_order(
     order_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    user: User = Depends(admin_rollback),
 ) -> dict:
     order = db.get(SupplierRequisitionOrder, order_id)
     if order is None:
@@ -11361,6 +11373,45 @@ def void_supplier_order(
     _require_supplier_order_customer_access(order, user, db)
     if order.status == "voided":
         raise HTTPException(status_code=400, detail="该报料单已作废")
+
+    order_item_ids = {
+        int(item.order_item_id)
+        for item in order.items
+        if item.order_item_id is not None
+    }
+    posted_receipt = db.scalar(
+        select(IncomingReceiptItem.id)
+        .where(
+            IncomingReceiptItem.status == "posted",
+            or_(
+                IncomingReceiptItem.supplier_order_id == order.id,
+                IncomingReceiptItem.order_item_id.in_(order_item_ids),
+            ),
+        )
+        .limit(1)
+    )
+    if posted_receipt is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该报料单已有来料实收记录 #{posted_receipt}，请先撤销来料实收",
+        )
+    posted_completion = (
+        db.scalar(
+            select(ProductionCompletion.id)
+            .where(
+                ProductionCompletion.order_item_id.in_(order_item_ids),
+                ProductionCompletion.status == "posted",
+            )
+            .limit(1)
+        )
+        if order_item_ids
+        else None
+    )
+    if posted_completion is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该报料单关联生产完工记录 #{posted_completion}，请先撤销生产完工",
+        )
 
     before_status = order.status
     affected_items: list[dict[str, object]] = []
@@ -11370,7 +11421,7 @@ def void_supplier_order(
     for item in order.items:
         if item.order_item_id:
             oi = db.get(OrderItem, item.order_item_id)
-            if oi and oi.requisition_status == "已报料":
+            if oi and oi.requisition_status != "未报料":
                 affected_items.append(
                     {
                         "order_item_id": oi.id,
@@ -11389,8 +11440,50 @@ def void_supplier_order(
                 oi.inventory_deducted_qty = 0
                 oi.requisition_qty = None
                 oi.special_process = DEFAULT_CUTTING_MODE
+                oi.requisition_spec = None
+                oi.cardboard_len = None
+                oi.cardboard_width = None
+                oi.requisition_date = None
+                oi.supplier_delivery_time = None
+                oi.supplier_order_number = None
+                oi.requisition_remark = None
 
     try:
+        if order_item_ids:
+            active_requisition_ids = select(RequisitionItem.id).where(
+                RequisitionItem.order_item_id.in_(order_item_ids),
+                RequisitionItem.status == "有效",
+            )
+            db.execute(
+                update(RequisitionItem)
+                .where(RequisitionItem.id.in_(active_requisition_ids))
+                .values(status="已取消")
+            )
+            db.execute(
+                update(RequisitionItemBomSource)
+                .where(
+                    RequisitionItemBomSource.requisition_item_id.in_(
+                        select(RequisitionItem.id).where(
+                            RequisitionItem.order_item_id.in_(order_item_ids)
+                        )
+                    )
+                )
+                .values(active_guard=None)
+            )
+            release_active_finished_reservations_for_items(
+                db,
+                order_item_ids=sorted(order_item_ids),
+                operator_id=user.id,
+                reason="作废供应商报料单，自动释放成品库存预占",
+                idempotency_prefix=f"void-supplier-order-{order.id}-finished",
+            )
+            release_active_semi_reservations_for_items(
+                db,
+                order_item_ids=sorted(order_item_ids),
+                operator_id=user.id,
+                reason="作废供应商报料单，自动释放半成品库存预占",
+                idempotency_prefix=f"void-supplier-order-{order.id}-semi",
+            )
         if isinstance(user, User):
             customer_ids, customer_names = _supplier_order_audit_customers(
                 db,
@@ -11427,6 +11520,12 @@ def void_supplier_order(
                 },
             )
         db.commit()
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=str(error),
+        ) from error
     except Exception:
         db.rollback()
         raise

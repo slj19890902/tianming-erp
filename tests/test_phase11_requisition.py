@@ -908,6 +908,8 @@ def test_supplier_order_create_and_void_audit_failures_roll_back_business(
             "append_audit_event",
             reject_audit,
         )
+        client.post("/api/auth/logout")
+        _login(client, "admin")
         with pytest.raises(
             RuntimeError,
             match="forced requisition audit failure",
@@ -984,6 +986,12 @@ def test_supplier_order_void_writes_structured_audit(
         supplier_order_id = created.json()["created_orders"][0][
             "supplier_order_id"
         ]
+        denied = client.put(
+            f"/api/requisition/supplier-orders/{supplier_order_id}/void"
+        )
+        assert denied.status_code == 403
+        client.post("/api/auth/logout")
+        _login(client, "admin")
         response = client.put(
             f"/api/requisition/supplier-orders/{supplier_order_id}/void"
         )
@@ -1003,6 +1011,58 @@ def test_supplier_order_void_writes_structured_audit(
         assert log.customer_id_snapshot == 1
         assert log.object_ref.startswith("SRO-")
         assert session.get(OrderItem, pending_id).requisition_status == "未报料"
+
+
+def test_supplier_order_void_requires_receipt_reversal_first(
+    requisition_app,
+) -> None:
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    app, session_factory = requisition_app
+    pending_id = _add_pending_candidate(
+        session_factory,
+        32,
+        product_code="Q1-ROLLBACK-BLOCK",
+        quantity=80,
+    )
+    with TestClient(app) as client:
+        _login(client, "sales")
+        draft = _preview_supplier_order_draft(
+            client,
+            [
+                {
+                    "type": "order_item",
+                    "order_item_id": pending_id,
+                    "supplier_name": "苏州纸板供应商",
+                    "report_length_mm": 1000,
+                    "report_width_mm": 800,
+                    "cutting_mode": "一开一",
+                }
+            ],
+        )
+        created = _save_supplier_order_draft(client, draft)
+        assert created.status_code == 201, created.text
+        supplier_order_id = created.json()["created_orders"][0][
+            "supplier_order_id"
+        ]
+        client.post("/api/auth/logout")
+        _login(client, "admin")
+        received = client.put(
+            f"/api/incoming/receive/{pending_id}",
+            json={"received_quantity": 80},
+        )
+        blocked = client.put(
+            f"/api/requisition/supplier-orders/{supplier_order_id}/void"
+        )
+
+    assert received.status_code == 200, received.text
+    assert blocked.status_code == 409
+    assert "先撤销来料实收" in blocked.text
+    with session_factory() as session:
+        assert (
+            session.get(SupplierRequisitionOrder, supplier_order_id).status
+            != "voided"
+        )
 
 
 def test_pending_selection_aggregates_supplier_draft_by_purchase_spec(
@@ -1850,7 +1910,9 @@ def test_pending_defaults_dimensions_and_batch_submission(requisition_app) -> No
 def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receive(
     requisition_app,
 ) -> None:
-    app, _ = requisition_app
+    from app.models.audit import OperationLog
+
+    app, session_factory = requisition_app
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/requisition/batches", json=_batch_payload())
@@ -1877,6 +1939,31 @@ def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receiv
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["requisition_status"] == "未报料"
+    with session_factory() as session:
+        audit = session.scalar(
+            select(OperationLog).where(
+                OperationLog.action == "CANCEL_REQUISITION",
+                OperationLog.entity_id == 1,
+            )
+        )
+    assert audit is not None
+    assert '"before"' in audit.details and '"after"' in audit.details
+    assert '"requisition_status": "供应商已排单"' in audit.details
+    assert '"requisition_status": "未报料"' in audit.details
+
+
+def test_sales_execute_permission_cannot_cancel_requisition(requisition_app) -> None:
+    app, _ = requisition_app
+    with TestClient(app) as client:
+        _login(client, "sales")
+        created = client.post("/api/requisition/batches", json=_batch_payload())
+        assert created.status_code == 201, created.text
+        response = client.put(
+            "/api/requisition/items/1/cancel",
+            json={"reason": "普通账号不得执行逐级回退"},
+        )
+
+    assert response.status_code == 403
 
 
 def test_submitted_requisition_items_can_be_listed(requisition_app) -> None:
@@ -2358,6 +2445,8 @@ def test_telescoping_lid_incoming_keeps_cover_and_base_as_separate_rows(
         received_today = client.get("/api/incoming/received")
         received_history = client.get("/api/incoming/history")
         received_rows = received_history.json()["items"]
+        client.post("/api/auth/logout")
+        _login(client, "admin")
         revert_cover = client.put(
             f"/api/incoming/revert/{cover_id}",
             json={"reason": "撤销盖入库"},

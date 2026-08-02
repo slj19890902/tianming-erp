@@ -168,15 +168,11 @@ def _lock_order_for_material_revert(db: Session, order_id: int) -> Order:
 
 
 class RevertRequest(BaseModel):
-    reason: str
+    reason: str | None = Field(default=None, max_length=500)
 
-    @field_validator("reason")
-    @classmethod
-    def validate_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("撤回原因不能为空")
-        return reason
+
+def _material_revert_reason(value: str | None) -> str:
+    return (value or "").strip() or "撤回来料实收（系统记录）"
 
 
 class ReceiveRequest(BaseModel):
@@ -2187,6 +2183,7 @@ def _revert_requisition_component(
     user: User,
     request: Request | None = None,
 ) -> dict:
+    reason = _material_revert_reason(payload.reason)
     row = db.execute(
         select(RequisitionItem, OrderItem, Order)
         .join(OrderItem, OrderItem.id == RequisitionItem.order_item_id)
@@ -2268,7 +2265,7 @@ def _revert_requisition_component(
             action="REVERT_MATERIAL",
             item_id=order_item.id,
             details={
-                "reason": payload.reason,
+                "reason": reason,
                 "requisition_item_id": requisition_item_id,
                 "component_type": _requisition_component_kind(
                     db,
@@ -2297,6 +2294,7 @@ def revert_item(
     db: Session = Depends(get_db),
     user: User = Depends(admin_rollback),
 ) -> dict:
+    reason = _material_revert_reason(payload.reason)
     if _is_component_key(item_id):
         return _revert_requisition_component(
             db,
@@ -2366,7 +2364,7 @@ def revert_item(
             action="REVERT_MATERIAL",
             item_id=item_id_int,
             details={
-                "reason": payload.reason,
+                "reason": reason,
                 "before_status": "received",
                 "after_status": item.material_status,
                 "previous_received_at": previous_received_at,

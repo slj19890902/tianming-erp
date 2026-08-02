@@ -11725,11 +11725,10 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async revertIncoming(row) {
-            if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？撤销原因、人员和时间会永久保留。")) return;
-            const reason="来料实收历史回退（管理员一次确认）";
+            if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？系统会自动记录操作人、时间和前后状态。")) return;
             try {
               const url=row.receipt_item_id ? `/api/incoming/receipt-items/${row.receipt_item_id}/revert` : `/api/incoming/revert/${row.item_id}`;
-              await axios.put(url,{reason});
+              await axios.put(url,{});
               if (this.incomingTab === 'history') {
                 await Promise.all([this.loadIncomingHistory(), this.loadKpi()]);
               } else if (this.incomingTab === 'received') {
@@ -16464,7 +16463,7 @@
               if (action.kind === "production") {
                 await axios.post(`/api/production/completions/${event.source_id}/revert`,{reason});
               } else if (action.kind === "incoming") {
-                await axios.put(`/api/incoming/receipt-items/${event.source_id}/revert`,{reason});
+                await axios.put(`/api/incoming/receipt-items/${event.source_id}/revert`,{});
               } else if (action.kind === "supplier_requisition") {
                 const supplierOrderId=Number(event.details?.supplier_order_id);
                 if (!supplierOrderId) throw new Error("报料单缺少精确来源编号，请从已报料页面处理");

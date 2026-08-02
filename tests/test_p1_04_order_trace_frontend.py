@@ -90,12 +90,14 @@ def test_all_visible_rollback_entries_use_admin_and_fixed_audit_reason() -> None
     incoming_end = INDEX.index("async loadIncomingHistory()", incoming_start)
     incoming_method = INDEX[incoming_start:incoming_end]
     assert "prompt(" not in incoming_method
-    assert "来料实收历史回退（管理员一次确认）" in incoming_method
+    assert "来料实收历史回退（管理员一次确认）" not in incoming_method
+    assert "await axios.put(url,{})" in incoming_method
     assert 'v-else-if="canAdmin" class="btn small danger"' in INDEX
 
     assert 'state.user?.role === "admin"' in INCOMING
     assert "revertReason" not in INCOMING
-    assert "来料实收历史回退（管理员一次确认）" in INCOMING
+    assert "来料实收历史回退（管理员一次确认）" not in INCOMING
+    assert "body: JSON.stringify({})" in INCOMING
 
 
 def test_inline_javascript_remains_syntactically_valid(tmp_path: Path) -> None:

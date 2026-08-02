@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -11,12 +12,20 @@ from app.api.deps import (
     PermissionChecker,
     customer_scope_ids,
     get_db,
+    has_permission,
     has_unrestricted_customer_access,
 )
-from app.core.time_contract import utc_naive_to_api
+from app.api.incoming import _received_rows
+from app.core.time_contract import (
+    beijing_date_bounds_utc_naive,
+    beijing_today,
+    utc_naive_to_api,
+)
 from app.models.customer import Customer
+from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
+from app.services.production_workflow import list_production_tasks
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
@@ -30,6 +39,7 @@ from app.models.warehouse_inventory import (
 
 router = APIRouter()
 can_read_inventory = PermissionChecker("warehouse.view")
+can_read_orders = PermissionChecker("orders.view")
 _BEIJING = ZoneInfo("Asia/Shanghai")
 
 
@@ -41,6 +51,66 @@ def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     if has_unrestricted_customer_access(user, db):
         return None
     return customer_scope_ids(user, db)
+
+
+def _production_period_bounds(
+    period: Literal["today", "3d", "7d", "custom"],
+    *,
+    date_from: date | None,
+    date_to: date | None,
+) -> tuple[date, date, datetime, datetime]:
+    today = beijing_today()
+    if period == "custom":
+        if date_from is None or date_to is None:
+            raise HTTPException(status_code=422, detail="自定义日期必须同时填写开始和结束日期")
+        if date_from > date_to:
+            raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+        start_date, end_date = date_from, date_to
+    else:
+        days = {"today": 1, "3d": 3, "7d": 7}[period]
+        start_date, end_date = today - timedelta(days=days - 1), today
+    start_utc, _ = beijing_date_bounds_utc_naive(start_date)
+    _, end_utc = beijing_date_bounds_utc_naive(end_date)
+    return start_date, end_date, start_utc, end_utc
+
+
+def _task_status_text(status: str) -> str:
+    return {
+        "waiting_material": "材料未齐",
+        "pending": "可以生产",
+        "completed": "已经完工",
+        "not_required": "无需生产",
+    }.get(status, status or "状态未知")
+
+
+def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
+    """Expose workshop facts only; supplier material codes and prices stay private."""
+
+    available_input = max(int(task.get("available_material_input_quantity") or 0), 0)
+    output_factor = max(int(task.get("output_factor") or 1), 1)
+    pieces_per_box = max(int(task.get("pieces_per_box") or 1), 1)
+    return {
+        "task_id": task["id"],
+        "status": task["status"],
+        "status_text": _task_status_text(task["status"]),
+        "order_number": task.get("order_number"),
+        "item_order_number": task.get("item_order_number"),
+        "product_code": task.get("product_code"),
+        "product_name": task.get("product_name"),
+        "carton_specification": task.get("specification"),
+        "flute_type": task.get("flute"),
+        "order_quantity": task.get("ordered_quantity"),
+        "received_material_quantity": task.get("material_received_quantity"),
+        "current_producible_quantity": available_input * output_factor // pieces_per_box,
+        "planned_output_quantity": task.get("planned_output_quantity"),
+        "cutting_mode": task.get("special_process"),
+        "production_process": task.get("production_process"),
+        "production_notes": task.get("production_notes"),
+        "mold_name": task.get("mold_name"),
+        "mold_location": task.get("mold_location"),
+        "drawing_path": drawing_path,
+        "is_component_task": task.get("is_component_task") is True,
+    }
 
 
 def _escaped_like(value: str) -> str:
@@ -225,6 +295,136 @@ def _inventory_group(
         ),
         "position_count": len(positions),
         "positions": positions,
+    }
+
+
+@router.get("/production/recent")
+def recent_production_materials(
+    response: Response,
+    period: Literal["today", "3d", "7d", "custom"] = Query(default="3d"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_orders),
+) -> dict:
+    """Return formally received material and linked production facts, read only."""
+
+    _no_store(response)
+    if not has_permission(user, "incoming.view"):
+        raise HTTPException(status_code=403, detail="当前账号没有查看来料资料的权限")
+    start_date, end_date, start_utc, end_utc = _production_period_bounds(
+        period,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    received_rows = [
+        row
+        for row in _received_rows(
+            db,
+            user=user,
+            received_since=start_utc,
+        )
+        if row.get("material_received_at") is not None
+        and row["material_received_at"] < end_utc
+        and row.get("receipt_status", "posted") == "posted"
+    ]
+    task_rows = list_production_tasks(
+        db,
+        allowed_customer_ids=_visible_customer_ids(user, db),
+    )
+    tasks_by_item: dict[int, list[dict]] = {}
+    for task in task_rows:
+        tasks_by_item.setdefault(int(task["order_item_id"]), []).append(task)
+    received_order_item_ids = {
+        int(row["order_item_id"])
+        for row in received_rows
+        if row.get("order_item_id") is not None
+    }
+    direction_notes = {
+        item_id: note
+        for item_id, note in db.execute(
+            select(OrderItem.id, OrderItem.snapshot_report_notes).where(
+                OrderItem.id.in_(received_order_item_ids)
+            )
+        ).all()
+        if (note or "").strip()
+    }
+
+    items: list[dict] = []
+    for row in received_rows:
+        order_item_id = row.get("order_item_id")
+        linked_tasks = tasks_by_item.get(int(order_item_id), []) if order_item_id else []
+        board_direction_note = row.get("requisition_remark")
+        if not board_direction_note and order_item_id:
+            board_direction_note = direction_notes.get(int(order_item_id))
+        received_product_code = (row.get("product_code") or "").strip()
+        exact_tasks = [
+            task
+            for task in linked_tasks
+            if (task.get("product_code") or "").strip() == received_product_code
+        ]
+        if exact_tasks:
+            linked_tasks = exact_tasks
+        remaining = max(int(row.get("remaining_quantity") or 0), 0)
+        material_state = "材料未齐" if remaining > 0 else "材料已齐"
+        items.append(
+            {
+                "receipt_item_id": row.get("receipt_item_id"),
+                "receipt_number": row.get("receipt_number"),
+                "received_at": utc_naive_to_api(row["material_received_at"]),
+                "received_by_name": row.get("received_by_name") or "未记录",
+                "supplier_document_number": row.get("supplier_order_number"),
+                "customer_name": row.get("customer_name"),
+                "order_number": row.get("display_order_number") or row.get("order_number"),
+                "customer_po": row.get("customer_po"),
+                "product_code": row.get("product_code"),
+                "product_name": row.get("product_name"),
+                "carton_specification": row.get("specification"),
+                "board_length_mm": _number_text(row.get("cardboard_len")),
+                "board_width_mm": _number_text(row.get("cardboard_width")),
+                "flute_type": row.get("flute_type"),
+                "crease_type": row.get("snapshot_crease_type"),
+                "crease_values_mm": [
+                    value
+                    for value in (
+                        row.get("snapshot_crease_left_mm"),
+                        row.get("snapshot_crease_middle_mm"),
+                        row.get("snapshot_crease_right_mm"),
+                    )
+                    if value is not None
+                ],
+                "received_quantity": int(row.get("received_quantity_this_time") or 0),
+                "cumulative_received_quantity": int(
+                    row.get("cumulative_received_quantity") or 0
+                ),
+                "remaining_quantity": remaining,
+                "difference_quantity": int(row.get("variance_quantity") or 0),
+                "material_state": material_state,
+                "board_direction_note": board_direction_note,
+                "delivery_date": (
+                    row["delivery_date"].isoformat()
+                    if row.get("delivery_date")
+                    else None
+                ),
+                "drawing_path": row.get("drawing_path"),
+                "drawing_is_pdf": row.get("drawing_is_pdf") is True,
+                "production_tasks": [
+                    _safe_production_task(
+                        task,
+                        drawing_path=row.get("drawing_path"),
+                    )
+                    for task in linked_tasks
+                ],
+            }
+        )
+    return {
+        "period": period,
+        "date_from": start_date.isoformat(),
+        "date_to": end_date.isoformat(),
+        "count": len(items),
+        "items": items,
+        "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+        "read_only": True,
     }
 
 

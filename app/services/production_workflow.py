@@ -2059,6 +2059,7 @@ def _item_product_snapshot(item: OrderItem, product: Product) -> dict:
         "material": item.snapshot_material,
         "flute": item.flute_type,
         "special_process": item.special_process,
+        "production_process": product.production_process,
         "production_notes": item.snapshot_production_notes,
         "mold_name": mold.mold_name if mold is not None else None,
         "mold_location": mold.rack_location if mold is not None else None,

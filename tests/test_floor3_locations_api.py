@@ -577,7 +577,6 @@ def test_floor3_pallet_supports_five_items_move_clear_and_history(floor3_app) ->
             f"/api/warehouse/pallets/{pallet_id}/clear",
             json={
                 "expected_version": moved.json()["pallet"]["version"],
-                "remarks": "现场已清空",
             },
         )
         assert cleared.status_code == 200, cleared.text
@@ -1293,7 +1292,6 @@ def test_floor3_operator_can_mark_and_clear_manual_relocation_flag(floor3_app) -
             json={
                 "expected_version": created.json()["pallet"]["version"],
                 "needs_relocation": True,
-                "remarks": "现场要求重新归位",
             },
         )
         assert marked.status_code == 200, marked.text
@@ -1303,7 +1301,6 @@ def test_floor3_operator_can_mark_and_clear_manual_relocation_flag(floor3_app) -
             json={
                 "expected_version": marked.json()["pallet"]["version"],
                 "needs_relocation": False,
-                "remarks": "已核对固定货位",
             },
         )
         assert cleared.status_code == 200, cleared.text

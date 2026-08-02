@@ -661,9 +661,12 @@ def test_floor3_e4_overview_moves_only_rack_half_a_cell_left() -> None:
     assert 'width_pct:63,height_pct:13.5' in WAREHOUSE_HTML
 
 
-def test_floor3_clear_requires_two_confirmations_and_move_filters_empty_active() -> None:
-    assert WAREHOUSE_HTML.count('confirm("确认清空当前栈板？') == 1
-    assert WAREHOUSE_HTML.count('confirm("请再次确认：清空后') == 1
+def test_floor3_clear_uses_one_impact_confirmation_and_move_filters_empty_active() -> None:
+    clear_block = WAREHOUSE_HTML.split("async function clearFloor3Pallet(palletId){", 1)[1].split(
+        "async function setFloor3Relocation", 1
+    )[0]
+    assert clear_block.count("confirm(") == 1
+    assert "操作人、时间和原货位会自动记录" in clear_block
     assert "floor3CanReceivePallet(row)" in WAREHOUSE_HTML
 
 
@@ -869,18 +872,14 @@ def test_finished_lot_editor_scopes_product_match_and_saves_transaction_payload(
     assert 'event.key==="Escape"' in WAREHOUSE_HTML
 
 
-def test_floor3_clear_cancel_and_blank_reason_do_not_send_request() -> None:
+def test_floor3_clear_uses_one_confirmation_without_reason_prompt() -> None:
     clear_block = WAREHOUSE_HTML.split("async function clearFloor3Pallet(palletId){", 1)[1].split(
         "async function setFloor3Relocation", 1
     )[0]
-    assert 'const response=prompt("请输入清空备注")' in clear_block
-    assert "if(response===null)return" in clear_block
-    assert "const remarks=response.trim()" in clear_block
-    assert "if(!remarks){toast(" in clear_block
-    assert "return}" in clear_block
-    assert '||"现场清空"' not in clear_block
-    assert clear_block.index("if(response===null)return") < clear_block.index("/clear`")
-    assert clear_block.index("if(!remarks){toast(") < clear_block.index("/clear`")
+    assert clear_block.count("confirm(") == 1
+    assert "prompt(" not in clear_block
+    assert "正式成品库存未清零时系统会拒绝" in clear_block
+    assert "JSON.stringify({expected_version:expectedVersion})" in clear_block
 
 
 def test_floor3_dynamic_bind_customers_are_redrawn_after_customer_load() -> None:

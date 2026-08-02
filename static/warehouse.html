@@ -2189,22 +2189,21 @@
       try{await performFloor3Move(palletId,expectedVersion,target,$("floor3MoveRemarks").value.trim()||"手工移动栈板");toast("栈板移动成功");await refreshFloor3AfterPalletMove(target)}catch(error){if(error.status===409){toast("目标货位状态已变化，已刷新数据",true);closeFloor3Detail();await refreshFloor3LocationData();return}toast(`栈板移动失败：${error.message}`,true)}
     }
     async function clearFloor3Pallet(palletId){
-      if(!canOperate())return;if(!confirm("确认清空当前栈板？产品记录会离开当前货位。"))return;if(!confirm("请再次确认：清空后需要通过历史追溯，是否继续？"))return;
-      const response=prompt("请输入清空备注");if(response===null)return;const remarks=response.trim();if(!remarks){toast("清空备注不能为空",true);return}
+      if(!canOperate())return;if(!confirm("确认清空当前栈板吗？产品记录会离开当前货位，正式成品库存未清零时系统会拒绝；操作人、时间和原货位会自动记录。"))return;
       const expectedVersion=floor3ExpectedVersion(palletId);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
-      try{await api(`/api/warehouse/pallets/${palletId}/clear`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,remarks})});toast("栈板已清空");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`清空栈板失败：${error.message}`,true)}
+      try{await api(`/api/warehouse/pallets/${palletId}/clear`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion})});toast("栈板已清空");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`清空栈板失败：${error.message}`,true)}
     }
     async function setFloor3Relocation(palletId,needsRelocation){
-      if(!canOperate())return;const remarks=prompt(needsRelocation?"请输入待归位原因":"请输入取消待归位原因")?.trim();if(!remarks)return;
+      if(!canOperate())return;if(!confirm(needsRelocation?"确认标记该栈板待归位吗？系统会自动记录操作人和时间。":"确认取消该栈板的待归位标记吗？临时货位或类型不符时系统会拒绝。"))return;
       const expectedVersion=floor3ExpectedVersion(palletId);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
-      try{await api(`/api/warehouse/pallets/${palletId}/relocation-flag`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,needs_relocation:Boolean(needsRelocation),remarks})});toast("待归位标记已更新");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`待归位标记失败：${error.message}`,true)}
+      try{await api(`/api/warehouse/pallets/${palletId}/relocation-flag`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,needs_relocation:Boolean(needsRelocation)})});toast("待归位标记已更新");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`待归位标记失败：${error.message}`,true)}
     }
     async function confirmFloor3Placement(palletId){
       if(!canOperate())return;const detail=state.floor3.detail,location=detail?.location||detail,code=location?.location_code||location?.code||state.floor3.selectedLocationId;
       if(floor3IsTemporary(location)){toast("过道临放货物必须先移动到固定货位",true);return}
       if(!confirm(`确认栈板已放在 ${code} 的正确位置？确认后该货位不再显示红色待归位。`))return;
       const expectedVersion=floor3ExpectedVersion(palletId);if(!expectedVersion){toast("栈板版本缺失，请刷新后重试",true);return}
-      try{await api(`/api/warehouse/pallets/${palletId}/relocation-flag`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,needs_relocation:false,placement_confirmed:true,remarks:`现场确认已归位：${code}`})});toast("已确认归位");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`确认归位失败：${error.message}`,true)}
+      try{await api(`/api/warehouse/pallets/${palletId}/relocation-flag`,{method:"POST",body:JSON.stringify({expected_version:expectedVersion,needs_relocation:false,placement_confirmed:true})});toast("已确认归位");await refreshFloor3LocationData();await openFloor3Location(state.floor3.selectedLocationId)}catch(error){toast(`确认归位失败：${error.message}`,true)}
     }
     const INVENTORY_ONBOARDING_API="/api/warehouse/inventory-onboarding";
     function inventoryOnboardingPick(row,keys,fallback=""){for(const key of keys){if(row&&row[key]!==undefined&&row[key]!==null&&row[key]!=="")return row[key]}return fallback}

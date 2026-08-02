@@ -9,7 +9,8 @@ INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
 def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> None:
-    assert "直接待送：选择后立即完成" in INDEX
+    assert "直接待送：选择后整批进入一楼待送区" in INDEX
+    assert 'direct_delivery_quantity: row.completion_mode === "direct" ? Number(row.actual_output_quantity) : 0' in INDEX
     assert '@change="ensureProductionMode(row)"' in INDEX
     ensure_mode = re.search(
         r"async ensureProductionMode\(row\) \{(.*?)\n\s+\},\n"

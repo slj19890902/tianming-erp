@@ -3108,20 +3108,6 @@ def _collect_delivery_lines(
                     status_code=403,
                     detail=f"第{index}条超订单送货需要超量送货权限",
                 )
-            if not line.over_delivery_confirmed:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"第{index}条超过订单待送数量 {over_delivery}，"
-                        "请二次确认超量送货"
-                    ),
-                )
-            reason = (line.over_delivery_reason or "").strip()
-            if not reason:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"第{index}条超量送货必须填写原因",
-                )
             warnings.append(
                 {
                     "code": "OVER_DELIVERY",
@@ -3130,7 +3116,7 @@ def _collect_delivery_lines(
                     "deliverable_quantity": remaining,
                     "delivered_quantity": line.delivered_quantity,
                     "excess_quantity": over_delivery,
-                    "message": f"已授权超过订单数量 {over_delivery}",
+                    "message": f"本次送货超过订单数量 {over_delivery}，已用黄色提醒",
                 }
             )
         built.append((order_item, line))
@@ -4477,18 +4463,7 @@ def dispatch_delivery(
                         detail="当前账号没有超量送货权限",
                     )
                 if line.over_delivery_confirmed_by is None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"订单明细{line.order_item_id}将超订单送货 "
-                            f"{over_delivery}，请编辑送货单并二次确认"
-                        ),
-                    )
-                if not (line.over_delivery_reason or "").strip():
-                    raise HTTPException(
-                        status_code=409,
-                        detail="超量送货缺少原因，不能发货",
-                    )
+                    line.over_delivery_confirmed_by = user.id
             line.ordered_quantity_snapshot = int(order_item.quantity or 0)
             line.order_remaining_snapshot = order_remaining_before
             line.over_delivery_quantity = over_delivery

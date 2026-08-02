@@ -512,13 +512,12 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 103,
-                        "over_delivery_confirmed": True,
-                        "over_delivery_reason": "客户同意接收本批全部合格品",
                     }
                 ],
             },
         )
         assert created.status_code == 201, created.text
+        assert created.json()["warnings"][0]["code"] == "OVER_DELIVERY"
         assert created.json()["items"][0]["over_delivery_quantity"] == 3
         dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
         assert dispatched.status_code == 200, dispatched.text

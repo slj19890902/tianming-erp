@@ -84,6 +84,7 @@ TEMPORARY_LOCATION_CODES = frozenset(
     [*(f"F12-P{number:02d}" for number in range(1, 9))]
     + [*(f"F34-P{number:02d}" for number in range(1, 4))]
 )
+DIRECT_DELIVERY_STAGING_LOCATION_CODE = "F1-DISPATCH-01"
 
 
 class ProductionWorkflowError(ValueError):
@@ -830,6 +831,27 @@ def _production_stock_location(
     return location
 
 
+def _production_direct_staging_location(db: Session) -> WarehouseLocation:
+    location = db.scalar(
+        select(WarehouseLocation).where(
+            WarehouseLocation.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE
+        )
+    )
+    if location is None:
+        raise ProductionWorkflowError(
+            "一楼待送区尚未建立，请先完成数据库升级后再确认直接待送",
+            409,
+        )
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types={"finished", "shared"},
+    )
+    if issue:
+        raise ProductionWorkflowError(f"一楼待送区不可用：{issue}", 409)
+    return location
+
+
 def list_temporary_locations(db: Session) -> list[dict]:
     locations = list_operational_locations(
         db,
@@ -1117,12 +1139,20 @@ def _stock_completion_lot(
     command: CompletionCommand | StockTransferCommand,
     operator_id: int | None,
     idempotency_prefix: str,
+    location_id_override: int | None = None,
+    source_type: str = "production_surplus",
+    movement_reason: str = "生产完工入库",
 ) -> InventoryLot:
-    location = _production_stock_location(
-        db,
-        command.location_id,
-        pallet_id=command.pallet_id,
-    )
+    if location_id_override is not None:
+        location = _production_direct_staging_location(db)
+        if location.id != location_id_override:
+            raise ProductionWorkflowError("一楼待送区库位已变化，请刷新后重试", 409)
+    else:
+        location = _production_stock_location(
+            db,
+            command.location_id,
+            pallet_id=command.pallet_id,
+        )
     snapshot = (
         db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
         if task.sales_order_item_bom_component_id is not None
@@ -1132,7 +1162,7 @@ def _stock_completion_lot(
     is_transfer = isinstance(command, StockTransferCommand)
     stock_quantity = (
         int(completion.quantity)
-        if is_transfer
+        if is_transfer or source_type == "production_completion"
         else int(completion.stock_quantity)
     )
     lot = manual_finished_in(
@@ -1142,21 +1172,29 @@ def _stock_completion_lot(
         location_id=location.id,
         quantity=stock_quantity,
         stock_date=beijing_today(),
-        source_type="production_surplus",
+        source_type=source_type,
         source_ref_type="production_completion",
         source_ref_id=completion.id,
         remarks=_normalized_text(command.remarks),
         operator_id=operator_id,
         idempotency_key=_stable_key(idempotency_prefix, "finished-in"),
-        pallet_id=command.pallet_id,
-        pallet_code=_normalized_text(command.pallet_code),
+        pallet_id=None if location_id_override is not None else command.pallet_id,
+        pallet_code=(
+            None
+            if location_id_override is not None
+            else _normalized_text(command.pallet_code)
+        ),
         require_empty_pallet=True,
-        movement_reason="生产完工入库",
+        movement_reason=movement_reason,
     )
     if snapshot is None:
         reserve_quantity = max(
             int(completion.order_reserved_quantity)
-            - (0 if is_transfer else int(completion.direct_delivery_quantity)),
+            - (
+                0
+                if is_transfer or source_type == "production_completion"
+                else int(completion.direct_delivery_quantity)
+            ),
             0,
         )
         if reserve_quantity > 0:
@@ -1475,25 +1513,19 @@ def complete_production_batch(
             direct_quantity = 0
             stock_quantity = actual_output
             stored_disposition = "stock"
-        else:
-            direct_quantity = int(
-                command.direct_delivery_quantity
-                if command.direct_delivery_quantity is not None
-                else order_coverage
-            )
-            if direct_quantity > order_coverage:
-                raise ProductionWorkflowError(
-                    f"直接待送数量最多只能覆盖订单需求 {order_coverage}",
-                    409,
-                )
-            stock_quantity = actual_output - direct_quantity
-            stored_disposition = "direct" if stock_quantity == 0 else "split"
-        if stock_quantity > 0:
-            _production_stock_location(
+            location = _production_stock_location(
                 db, command.location_id, pallet_id=command.pallet_id
             )
-        elif command.location_id is not None:
-            raise ProductionWorkflowError("本次没有入库成品，不能选择库存库位")
+        else:
+            if command.location_id is not None:
+                raise ProductionWorkflowError(
+                    "直接待送整批自动进入一楼待送区，请刷新页面后重试",
+                    409,
+                )
+            direct_quantity = actual_output
+            stock_quantity = 0
+            stored_disposition = "direct"
+            location = _production_direct_staging_location(db)
         prepared[task.id] = {
             "received": received_now,
             "allowed_input": allowed_input_now,
@@ -1507,6 +1539,7 @@ def complete_production_batch(
             "direct": direct_quantity,
             "stock": stock_quantity,
             "stored_disposition": stored_disposition,
+            "location_id": location.id,
             "expected_status": expected_task_status,
         }
 
@@ -1557,7 +1590,7 @@ def complete_production_batch(
             surplus_finished_quantity=actual_output - int(facts["order_coverage"]),
             initial_disposition=str(facts["stored_disposition"]),
             warehouse_location_id=(
-                command.location_id if int(facts["stock"]) > 0 else None
+                int(facts["location_id"])
             ),
             inventory_lot_id=None,
             remarks=_normalized_text(command.remarks),
@@ -1566,7 +1599,8 @@ def complete_production_batch(
         )
         db.add(completion)
         db.flush()
-        if int(facts["stock"]) > 0:
+        if str(facts["stored_disposition"]) in {"direct", "stock"}:
+            is_direct_staging = str(facts["stored_disposition"]) == "direct"
             lot = _stock_completion_lot(
                 db,
                 completion=completion,
@@ -1576,6 +1610,17 @@ def complete_production_batch(
                 command=command,
                 operator_id=operator_id,
                 idempotency_prefix=_stable_key("production-completion", completion.id),
+                location_id_override=(
+                    int(facts["location_id"]) if is_direct_staging else None
+                ),
+                source_type=(
+                    "production_completion" if is_direct_staging else "production_surplus"
+                ),
+                movement_reason=(
+                    "生产完工整批进入一楼待送区"
+                    if is_direct_staging
+                    else "生产完工入库"
+                ),
             )
             completion.inventory_lot_id = lot.id
         _consume_completion_semi_reservations(
@@ -1717,17 +1762,78 @@ def transfer_direct_completion_to_stock(
     )
     if existing_transfer is not None:
         raise ProductionWorkflowError("该完工记录已转入库存，不能重复操作", 409)
-    _production_stock_location(db, command.location_id, pallet_id=command.pallet_id)
-    lot = _stock_completion_lot(
-        db,
-        completion=completion,
-        task=task,
-        order=order,
-        item=item,
-        command=command,
-        operator_id=operator_id,
-        idempotency_prefix=_stable_key("production-transfer", completion.id, key),
+    target_location = _production_stock_location(
+        db, command.location_id, pallet_id=command.pallet_id
     )
+    if completion.inventory_lot_id is not None:
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        if (
+            lot is None
+            or lot.status != "active"
+            or lot.source_type != "production_completion"
+            or lot.source_ref_type != "production_completion"
+            or int(lot.source_ref_id or 0) != completion.id
+        ):
+            raise ProductionWorkflowError("一楼待送区成品批次已失效，不能转库存", 409)
+        if lot.pallet_item is not None:
+            raise ProductionWorkflowError("该待送批次已绑定物理栈板，不能重复转库存", 409)
+        if lot.warehouse_location_id == target_location.id:
+            raise ProductionWorkflowError("目标库位与当前库位相同", 409)
+        before = _balances(lot)
+        expected_lot_version = int(lot.version)
+        updated = db.execute(
+            update(InventoryLot)
+            .where(
+                InventoryLot.id == lot.id,
+                InventoryLot.version == expected_lot_version,
+            )
+            .values(
+                warehouse_location_id=target_location.id,
+                version=InventoryLot.version + 1,
+                last_movement_at=utc_now_naive(),
+            )
+        )
+        if updated.rowcount != 1:
+            raise ProductionWorkflowError("待送成品已被其他操作修改，请刷新后重试", 409)
+        db.expire(lot)
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None
+        if target_location.source_version == "V11":
+            from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
+
+            bind_finished_lot_to_floor3_pallet(
+                db,
+                lot=lot,
+                operator_id=operator_id,
+                pallet_id=command.pallet_id,
+                pallet_code=_normalized_text(command.pallet_code),
+                require_empty_pallet=True,
+            )
+        _movement(
+            db,
+            lot=lot,
+            movement_type="adjust",
+            quantity=0,
+            before=before,
+            operator_id=operator_id,
+            reason="一楼待送区整批转入正式库位",
+            remarks=_normalized_text(command.remarks),
+            idempotency_key=_stable_key("production-transfer", completion.id, key, "move"),
+            related_order_id=order.id,
+            related_order_item_id=item.id,
+        )
+        completion.warehouse_location_id = target_location.id
+    else:
+        lot = _stock_completion_lot(
+            db,
+            completion=completion,
+            task=task,
+            order=order,
+            item=item,
+            command=command,
+            operator_id=operator_id,
+            idempotency_prefix=_stable_key("production-transfer", completion.id, key),
+        )
     transfer = ProductionStockTransfer(
         completion_id=completion.id,
         warehouse_location_id=command.location_id,

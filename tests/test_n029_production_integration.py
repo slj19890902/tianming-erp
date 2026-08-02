@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -81,7 +81,13 @@ def n029_delivery_app(tmp_path: Path):
             is_temporary=True,
             source_version="V11",
         )
-        db.add_all([user, customer, location, temporary_location])
+        return_location = WarehouseLocation(
+            location_code="N029-RETURN-01",
+            location_name="N029客户退回区",
+            warehouse_type="finished",
+            is_active=True,
+        )
+        db.add_all([user, customer, location, temporary_location, return_location])
         db.flush()
 
         item_specs = (
@@ -277,6 +283,7 @@ def n029_delivery_app(tmp_path: Path):
             "customer": customer.id,
             "user": user.id,
             "temporary_location": temporary_location.id,
+            "return_location": return_location.id,
             "completion_task_completed": completion.id,
             **{key: item.id for key, item in items.items()},
             **{f"order_{key}": order.id for key, order in orders.items()},
@@ -842,6 +849,7 @@ def test_dispatched_then_zero_receipt_still_blocks_direct_completion_transfer(
                         "actual_received_quantity": 0,
                         "resolution_action": "continue_delivery",
                         "difference_reason": "整批短收继续待送",
+                        "return_location_id": ids["return_location"],
                     }
                 ],
             },
@@ -876,6 +884,354 @@ def test_dispatched_then_zero_receipt_still_blocks_direct_completion_transfer(
                 InventoryLot.source_ref_id == completion_id,
             )
         ) is None
+
+
+def test_ordered_inventory_short_receipt_returns_to_location_and_reopens_order(
+    n029_delivery_app,
+) -> None:
+    from app.models.finance import ReturnReceipt
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import (
+        DeliveryInventoryAllocation,
+        InventoryLot,
+        InventoryReservation,
+        OrderedFinishedReceiptReturn,
+    )
+
+    app, factory, ids = n029_delivery_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["legacy_finished"],
+                        "delivered_quantity": 40,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+        delivery_item_id = created.json()["items"][0]["id"]
+        assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
+
+        missing_location = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 34,
+                        "resolution_action": "continue_delivery",
+                    }
+                ],
+            },
+        )
+        assert missing_location.status_code == 400, missing_location.text
+        assert "实际存放库位" in missing_location.json()["detail"]
+
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 34,
+                        "resolution_action": "continue_delivery",
+                        "return_location_id": ids["return_location"],
+                    }
+                ],
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+        receipt_id = receipt.json()["id"]
+        line = receipt.json()["items"][0]
+        assert line["return_location_id"] == ids["return_location"]
+        assert line["requires_return_location"] is True
+        pending = client.get("/api/deliveries/pending_items")
+        assert pending.status_code == 200, pending.text
+        pending_line = next(
+            row
+            for row in pending.json()["items"]
+            if row["order_item_id"] == ids["legacy_finished"]
+        )
+        assert pending_line["remaining_quantity"] == 6
+
+        with factory() as db:
+            assert db.scalar(select(func.count()).select_from(ReturnReceipt)) == 1
+            fact = db.scalar(select(OrderedFinishedReceiptReturn))
+            assert fact is not None
+            assert fact.quantity == 6
+            assert fact.resolution_action == "continue_delivery"
+            lot = db.get(InventoryLot, fact.return_inventory_lot_id)
+            reservation = db.get(InventoryReservation, fact.reservation_id)
+            source_lot = db.get(InventoryLot, fact.source_inventory_lot_id)
+            source_allocation = db.get(
+                DeliveryInventoryAllocation,
+                fact.delivery_inventory_allocation_id,
+            )
+            source_reservation = db.get(
+                InventoryReservation,
+                source_allocation.reservation_id,
+            )
+            assert lot.warehouse_location_id == ids["return_location"]
+            assert (lot.quantity_available, lot.quantity_reserved) == (0, 6)
+            assert reservation.order_item_id == ids["legacy_finished"]
+            assert reservation.status == "active"
+            assert source_lot.quantity_consumed == 34
+            assert source_allocation.reversed_stock_quantity == 6
+            assert source_allocation.status == "partial"
+            assert source_reservation.consumed_stock_quantity == 34
+            assert source_reservation.released_stock_quantity == 6
+            assert db.get(OrderItem, ids["legacy_finished"]).delivered_quantity == 34
+
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+
+    with factory() as db:
+        fact = db.scalar(select(OrderedFinishedReceiptReturn))
+        lot = db.get(InventoryLot, fact.return_inventory_lot_id)
+        reservation = db.get(InventoryReservation, fact.reservation_id)
+        source_lot = db.get(InventoryLot, fact.source_inventory_lot_id)
+        source_allocation = db.get(
+            DeliveryInventoryAllocation,
+            fact.delivery_inventory_allocation_id,
+        )
+        source_reservation = db.get(
+            InventoryReservation,
+            source_allocation.reservation_id,
+        )
+        assert fact.status == "reconsumed"
+        assert lot.status == "closed"
+        assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed) == (
+            0,
+            0,
+            6,
+        )
+        assert reservation.status == "released"
+        assert source_lot.quantity_consumed == 40
+        assert source_allocation.reversed_stock_quantity == 0
+        assert source_allocation.status == "active"
+        assert source_reservation.consumed_stock_quantity == 40
+        assert source_reservation.released_stock_quantity == 0
+        assert db.get(OrderItem, ids["legacy_finished"]).delivered_quantity == 40
+
+
+def test_accept_short_returns_customer_stock_and_statement_uses_received_quantity(
+    n029_delivery_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        OrderedFinishedReceiptReturn,
+    )
+
+    app, factory, ids = n029_delivery_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["legacy_finished"],
+                        "delivered_quantity": 40,
+                    }
+                ],
+            },
+        )
+        delivery_id = created.json()["id"]
+        delivery_item_id = created.json()["items"][0]["id"]
+        assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 34,
+                        "resolution_action": "accept_short",
+                        "return_location_id": ids["return_location"],
+                    }
+                ],
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+        statement = client.post(
+            "/api/finance/statements",
+            json={
+                "customer_id": ids["customer"],
+                "statement_month": date.today().strftime("%Y-%m"),
+                "delivery_ids": [delivery_id],
+            },
+        )
+        assert statement.status_code == 201, statement.text
+        assert statement.json()["total_receivable"] == "34.00"
+
+    with factory() as db:
+        fact = db.scalar(select(OrderedFinishedReceiptReturn))
+        lot = db.get(InventoryLot, fact.return_inventory_lot_id)
+        item = db.get(OrderItem, ids["legacy_finished"])
+        assert fact.resolution_action == "accept_short"
+        assert fact.reservation_id is None
+        assert (lot.quantity_available, lot.quantity_reserved) == (6, 0)
+        assert lot.finished_detail.owner_customer_id == ids["customer"]
+        assert item.delivered_quantity == 34
+        assert item.is_force_closed is True
+
+
+def test_used_ordered_return_inventory_blocks_old_receipt_change(
+    n029_delivery_app,
+) -> None:
+    from app.models.finance import ReturnReceipt
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        OrderedFinishedReceiptReturn,
+    )
+
+    app, factory, ids = n029_delivery_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["legacy_finished"],
+                        "delivered_quantity": 40,
+                    }
+                ],
+            },
+        )
+        delivery_id = created.json()["id"]
+        delivery_item_id = created.json()["items"][0]["id"]
+        assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 34,
+                        "resolution_action": "accept_short",
+                        "return_location_id": ids["return_location"],
+                    }
+                ],
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+        receipt_id = receipt.json()["id"]
+        with factory() as db:
+            fact = db.scalar(select(OrderedFinishedReceiptReturn))
+            lot = db.get(InventoryLot, fact.return_inventory_lot_id)
+            lot.quantity_available = 5
+            lot.quantity_consumed = 1
+            lot.version = 2
+            db.commit()
+
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+
+    assert cancelled.status_code == 409, cancelled.text
+    assert "已被移动或使用" in cancelled.json()["detail"]
+    with factory() as db:
+        assert db.get(ReturnReceipt, receipt_id).status == "confirmed"
+        assert db.get(OrderItem, ids["legacy_finished"]).delivered_quantity == 34
+        fact = db.scalar(select(OrderedFinishedReceiptReturn))
+        assert fact.status == "active"
+
+
+def test_continue_delivery_consumes_the_returned_lot_on_next_dispatch(
+    n029_delivery_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        OrderedFinishedReceiptReturn,
+    )
+
+    app, factory, ids = n029_delivery_app
+    with TestClient(app) as client:
+        _login(client)
+        first = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["legacy_finished"],
+                        "delivered_quantity": 40,
+                    }
+                ],
+            },
+        )
+        first_delivery_id = first.json()["id"]
+        first_item_id = first.json()["items"][0]["id"]
+        assert client.put(f"/api/deliveries/{first_delivery_id}/dispatch").status_code == 200
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": first_delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": first_item_id,
+                        "actual_received_quantity": 34,
+                        "resolution_action": "continue_delivery",
+                        "return_location_id": ids["return_location"],
+                    }
+                ],
+            },
+        )
+        assert receipt.status_code == 201, receipt.text
+        second = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["legacy_finished"],
+                        "delivered_quantity": 6,
+                    }
+                ],
+            },
+        )
+        assert second.status_code == 201, second.text
+        second_item = second.json()["items"][0]
+        with factory() as db:
+            fact = db.scalar(select(OrderedFinishedReceiptReturn))
+            return_reservation_id = fact.reservation_id
+            return_lot_id = fact.return_inventory_lot_id
+        assert any(
+            int(source.get("reservation_id") or 0) == return_reservation_id
+            for source in second_item["inventory_sources"]
+        )
+        dispatched = client.put(f"/api/deliveries/{second.json()['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        blocked = client.post(
+            f"/api/finance/return_receipts/{receipt.json()['id']}/cancel"
+        )
+
+    assert blocked.status_code == 409, blocked.text
+    with factory() as db:
+        lot = db.get(InventoryLot, return_lot_id)
+        reservation = db.get(InventoryReservation, return_reservation_id)
+        assert (lot.quantity_reserved, lot.quantity_consumed) == (0, 6)
+        assert reservation.consumed_stock_quantity == 6
+        assert reservation.status == "consumed"
 
 
 def test_transfer_before_dispatch_consumes_new_finished_reservation_once(

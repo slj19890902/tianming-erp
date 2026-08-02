@@ -41,12 +41,21 @@ from app.models.finance import (
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
-from app.models.warehouse_inventory import UnorderedFinishedDeliveryReversal
+from app.models.warehouse_inventory import (
+    DeliveryInventoryAllocation,
+    InventoryReservation,
+    UnorderedFinishedDeliveryReversal,
+)
 from app.services.audit_log import append_audit_event
 from app.services.history_orders import build_display_registry, display_order_number
 from app.services.unordered_finished_delivery import (
     reconsume_unordered_finished_receipt_returns,
     restore_unordered_finished_receipt_shortage,
+)
+from app.services.ordered_finished_receipt_return import (
+    active_ordered_return_location_ids,
+    reconsume_ordered_finished_receipt_returns,
+    restore_ordered_finished_receipt_shortage,
 )
 from app.services.warehouse_inventory import WarehouseInventoryError
 
@@ -151,6 +160,7 @@ class ReturnReceiptLineCreate(BaseModel):
     actual_received_quantity: int
     resolution_action: str | None = None
     difference_reason: str | None = None
+    return_location_id: int | None = None
 
 
 class ReturnReceiptCreate(BaseModel):
@@ -1049,6 +1059,7 @@ def _receipt_response(db: Session, receipt_id: int) -> dict:
             ReturnReceiptItem.actual_received_quantity,
             ReturnReceiptItem.resolution_action,
             ReturnReceiptItem.difference_reason,
+            DeliveryItem.source_type,
         )
         .join(
             DeliveryItem,
@@ -1057,13 +1068,44 @@ def _receipt_response(db: Session, receipt_id: int) -> dict:
         .where(ReturnReceiptItem.return_receipt_id == receipt_id)
         .order_by(ReturnReceiptItem.id)
     ).all()
+    receipt_item_ids = [int(row.id) for row in rows]
+    return_locations = active_ordered_return_location_ids(
+        db,
+        return_receipt_item_ids=receipt_item_ids,
+    )
+    inventory_backed_delivery_item_ids = set(
+        db.scalars(
+            select(DeliveryInventoryAllocation.delivery_item_id)
+            .join(
+                InventoryReservation,
+                InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+            )
+            .where(
+                DeliveryInventoryAllocation.delivery_item_id.in_(
+                    [int(row.delivery_item_id) for row in rows]
+                ),
+                InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            )
+        ).all()
+    )
     return {
         "id": receipt.id,
         "delivery_id": receipt.delivery_id,
         "actual_received_date": receipt.actual_received_date,
         "signed_by": receipt.signed_by,
         "status": receipt.status,
-        "items": [dict(row._mapping) for row in rows],
+        "items": [
+            {
+                **dict(row._mapping),
+                "return_location_id": return_locations.get(int(row.id)),
+                "requires_return_location": (
+                    row.source_type != "unordered_finished"
+                    and int(row.delivery_item_id)
+                    in inventory_backed_delivery_item_ids
+                ),
+            }
+            for row in rows
+        ],
     }
 
 
@@ -1181,6 +1223,18 @@ def create_return_receipt(
                     operator_id=user.id,
                     reason=reason,
                 )
+            else:
+                restore_ordered_finished_receipt_shortage(
+                    db,
+                    delivery=delivery,
+                    delivery_item=item,
+                    return_receipt_item_id=receipt_item.id,
+                    actual_received_quantity=line.actual_received_quantity,
+                    resolution_action=action,
+                    return_location_id=line.return_location_id,
+                    stock_date=payload.actual_received_date,
+                    operator_id=user.id,
+                )
             order_id = _apply_receipt_order_effect(
                 db,
                 delivery_item=item,
@@ -1197,6 +1251,7 @@ def create_return_receipt(
                     "actual_received_quantity": line.actual_received_quantity,
                     "resolution_action": action,
                     "difference_reason": reason,
+                    "return_location_id": line.return_location_id,
                 }
             )
         _refresh_receipt_order_statuses(db, affected_order_ids)
@@ -1288,6 +1343,11 @@ def update_return_receipt(
                 return_receipt_item_ids=receipt_item_ids,
                 operator_id=user.id,
             )
+            reconsume_ordered_finished_receipt_returns(
+                db,
+                return_receipt_item_ids=receipt_item_ids,
+                operator_id=user.id,
+            )
         except WarehouseInventoryError as error:
             db.rollback()
             raise HTTPException(
@@ -1324,6 +1384,25 @@ def update_return_receipt(
                     actual_received_quantity=line.actual_received_quantity,
                     operator_id=user.id,
                     reason=reason,
+                )
+            except WarehouseInventoryError as error:
+                db.rollback()
+                raise HTTPException(
+                    status_code=error.status_code,
+                    detail=str(error),
+                ) from error
+        else:
+            try:
+                restore_ordered_finished_receipt_shortage(
+                    db,
+                    delivery=db.get(Delivery, delivery_item.delivery_id),
+                    delivery_item=delivery_item,
+                    return_receipt_item_id=target.id,
+                    actual_received_quantity=line.actual_received_quantity,
+                    resolution_action=action,
+                    return_location_id=line.return_location_id,
+                    stock_date=payload.actual_received_date,
+                    operator_id=user.id,
                 )
             except WarehouseInventoryError as error:
                 db.rollback()
@@ -3254,6 +3333,11 @@ def cancel_return_receipt(
     )
     try:
         reconsume_unordered_finished_receipt_returns(
+            db,
+            return_receipt_item_ids=receipt_item_ids,
+            operator_id=user.id,
+        )
+        reconsume_ordered_finished_receipt_returns(
             db,
             return_receipt_item_ids=receipt_item_ids,
             operator_id=user.id,

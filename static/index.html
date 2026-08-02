@@ -1456,6 +1456,12 @@
         display: grid; grid-template-columns: minmax(92px, .7fr) minmax(130px, 1.3fr);
         gap: 5px; width: 100%;
       }
+      .receipt-return-location-picker {
+        display:grid;
+        grid-template-columns:minmax(84px,.8fr) minmax(96px,.9fr) minmax(120px,1.2fr);
+        gap:4px;
+        min-width:310px;
+      }
       .production-table .production-location-picker {
         grid-template-columns:1fr; width:172px; max-width:100%;
       }
@@ -5166,7 +5172,7 @@
             </div>
             <div v-else-if="modal.type === 'receipt'">
               <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
-              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
+              <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>退回放哪里</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><div v-if="receiptLineNeedsReturnLocation(line)" class="receipt-return-location-picker"><select class="select" v-model.number="line.return_floor_number" @change="onReceiptReturnFloorChange(line)"><option :value="null">先选楼层</option><option v-for="floor in receiptLocationFloors(line)" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="line.return_area_code" :disabled="!line.return_floor_number" @change="onReceiptReturnAreaChange(line)"><option value="">再选区域</option><option v-for="area in receiptAreasForFloor(line,line.return_floor_number)" :key="area.code" :value="area.code">{{ area.code }}</option></select><select class="select" v-model.number="line.return_location_id" :disabled="!line.return_area_code"><option :value="null">再选库位</option><option v-for="location in receiptLocationsForArea(line,line.return_floor_number,line.return_area_code)" :key="location.id" :value="location.id">{{ location.location_code }}</option></select></div><span v-else-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity) && line.source_type==='unordered_finished'" class="muted">自动退回原批次</span><span v-else class="muted">无需退回</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
             </div>
             <div v-else-if="modal.type === 'deliveryRoute'">
               <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
@@ -17002,6 +17008,56 @@
             if (actual === delivered) line.resolution_action = "";
             else if (actual < delivered && line.resolution_action === "accept_over") line.resolution_action = "";
             else if (actual > delivered && ["continue_delivery", "accept_short"].includes(line.resolution_action)) line.resolution_action = "";
+            if (actual >= delivered) {
+              line.return_floor_number = null;
+              line.return_area_code = "";
+              line.return_location_id = null;
+            }
+          },
+          receiptLineNeedsReturnLocation(line) {
+            return !!line?.requires_return_location
+              && Number(line.actual_received_quantity) < Number(line.delivered_quantity);
+          },
+          receiptSelectableLocations(line) {
+            return (this.productionLocations || []).filter(location =>
+              location.is_empty || Number(location.id) === Number(line?.return_location_id)
+            );
+          },
+          receiptLocationFloors(line) {
+            const floors = new Map();
+            this.receiptSelectableLocations(line).forEach(location => {
+              const number = this.productionLocationFloorNumber(location);
+              if (!number) return;
+              floors.set(number, {
+                number,
+                label:location.floor_name || `${number} 楼`,
+              });
+            });
+            return [...floors.values()].sort((a,b) => a.number - b.number);
+          },
+          receiptAreasForFloor(line, floorNumber) {
+            const targetFloor = Number(floorNumber);
+            const codes = new Set();
+            this.receiptSelectableLocations(line).forEach(location => {
+              if (this.productionLocationFloorNumber(location) === targetFloor) {
+                const code = this.productionLocationAreaCode(location);
+                if (code) codes.add(code);
+              }
+            });
+            return [...codes].sort().map(code => ({code}));
+          },
+          receiptLocationsForArea(line, floorNumber, areaCode) {
+            return this.receiptSelectableLocations(line).filter(location =>
+              this.productionLocationFloorNumber(location) === Number(floorNumber)
+              && this.productionLocationAreaCode(location) === String(areaCode || "")
+            );
+          },
+          onReceiptReturnFloorChange(line) {
+            line.return_area_code = "";
+            line.return_location_id = null;
+          },
+          onReceiptReturnAreaChange(line) {
+            line.return_location_id = null;
           },
           validateReceiptForm() {
             for (let index = 0; index < (this.receiptForm.items || []).length; index += 1) {
@@ -17011,6 +17067,7 @@
               if (!Number.isInteger(actual) || actual < 0) return "第" + (index + 1) + "行实际签收数必须是非负整数";
               if (actual === delivered) continue;
               if (actual < delivered && !["continue_delivery", "accept_short"].includes(line.resolution_action)) return "第" + (index + 1) + "行请选择继续待送或按实收结单";
+              if (actual < delivered && line.requires_return_location && !Number(line.return_location_id)) return "第" + (index + 1) + "行请选择退回货物实际存放库位";
               if (actual > delivered && line.resolution_action !== "accept_over") return "第" + (index + 1) + "行请确认按实际超收数量入账";
             }
             return "";
@@ -17020,6 +17077,11 @@
             let receipt = null;
             if (row.return_receipt_id) receipt = (await axios.get(`/api/finance/return_receipts/${row.return_receipt_id}`)).data;
             const saved = new Map((receipt?.items || []).map(item => [item.delivery_item_id,item]));
+            if ((delivery.items || []).some(item => item.requires_return_location) || (receipt?.items || []).some(item => item.return_location_id)) {
+              await this.ensureProductionLocations({force:true});
+            }
+            const emptyFloors = [...new Set((this.productionLocations || []).filter(location => location.is_empty).map(location => this.productionLocationFloorNumber(location)).filter(Boolean))];
+            const defaultFloor = emptyFloors.length === 1 ? emptyFloors[0] : null;
             this.receiptForm = {
               id:receipt?.id || null, delivery_id:row.id,
               actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
@@ -17028,7 +17090,12 @@
                 delivered_quantity:item.delivered_quantity,
                 actual_received_quantity:saved.get(item.id)?.actual_received_quantity ?? item.delivered_quantity,
                 resolution_action:saved.get(item.id)?.resolution_action || "",
-                difference_reason:saved.get(item.id)?.difference_reason || ""
+                difference_reason:saved.get(item.id)?.difference_reason || "",
+                source_type:item.source_type || "order",
+                requires_return_location:saved.get(item.id)?.requires_return_location ?? !!item.requires_return_location,
+                return_location_id:saved.get(item.id)?.return_location_id || null,
+                return_floor_number:this.productionLocationFloorNumber(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || defaultFloor,
+                return_area_code:this.productionLocationAreaCode(this.productionLocations.find(location => Number(location.id) === Number(saved.get(item.id)?.return_location_id))) || ""
               }))
             };
             const isConfirmed = receipt?.status === "confirmed";
@@ -18141,8 +18208,9 @@
                 const payload = {
                   actual_received_date:this.receiptForm.actual_received_date,
                   signed_by:this.receiptForm.signed_by,
-                  items:this.receiptForm.items.map(({product_code,product_name,delivered_quantity,...line}) => ({
-                    ...line, difference_reason:line.difference_reason || null
+                  items:this.receiptForm.items.map(({product_code,product_name,delivered_quantity,source_type,requires_return_location,return_floor_number,return_area_code,...line}) => ({
+                    ...line, difference_reason:line.difference_reason || null,
+                    return_location_id:line.return_location_id || null
                   }))
                 };
                 if (this.receiptForm.id) await axios.put(`/api/finance/return_receipts/${this.receiptForm.id}`, payload);

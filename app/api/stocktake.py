@@ -110,15 +110,22 @@ class StocktakeApproveRequest(BaseModel):
 
 class StocktakeRejectRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: str | None = Field(default=None, max_length=1000)
 
-    @field_validator("idempotency_key", "reason")
+    @field_validator("idempotency_key")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
             raise ValueError("不能为空")
         return stripped
+
+    @field_validator("reason")
+    @classmethod
+    def strip_optional_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 def _raise_service_error(error: stocktake_service.StocktakeError) -> None:
@@ -281,24 +288,26 @@ def _review_response(
     reason: str | None,
 ) -> dict[str, object]:
     ip_address, user_agent = _request_metadata(request)
+    effective_reason = reason
+    if action == "reject":
+        effective_reason = (reason or "").strip() or "驳回库存盘点单（系统记录）"
     try:
         if action == "approve":
             order = stocktake_service.approve_stocktake(
                 db,
                 order_id=order_id,
                 idempotency_key=idempotency_key,
-                reason=reason,
+                reason=effective_reason,
                 reviewer=user,
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
         else:
-            assert reason is not None
             order = stocktake_service.reject_stocktake(
                 db,
                 order_id=order_id,
                 idempotency_key=idempotency_key,
-                reason=reason,
+                reason=effective_reason,
                 reviewer=user,
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -318,7 +327,7 @@ def _review_response(
                 order_id=order_id,
                 action=action,
                 idempotency_key=idempotency_key,
-                reason=reason,
+                reason=effective_reason,
             )
         except stocktake_service.StocktakeError as replay_error:
             _raise_service_error(replay_error)

@@ -717,13 +717,7 @@ def test_reject_is_idempotent_and_never_changes_inventory(stocktake_api) -> None
         )
         _logout(client)
         _login(client, "n035-admin")
-        blank = client.post(
-            f"/api/warehouse/stocktakes/{order['id']}/reject",
-            json={"idempotency_key": "n035-reject-blank", "reason": "   "},
-        )
-        assert blank.status_code == 422
-
-        request = {"idempotency_key": "n035-reject-review", "reason": "重新盘点"}
+        request = {"idempotency_key": "n035-reject-review"}
         first = client.post(
             f"/api/warehouse/stocktakes/{order['id']}/reject", json=request
         )
@@ -732,6 +726,7 @@ def test_reject_is_idempotent_and_never_changes_inventory(stocktake_api) -> None
         )
         assert first.status_code == second.status_code == 200
         assert first.json()["status"] == second.json()["status"] == "rejected"
+        assert first.json()["review_note"] == "驳回库存盘点单（系统记录）"
         reused_with_changed_reason = client.post(
             f"/api/warehouse/stocktakes/{order['id']}/reject",
             json={"idempotency_key": "n035-reject-review", "reason": "不同原因"},
@@ -757,6 +752,9 @@ def test_reject_is_idempotent_and_never_changes_inventory(stocktake_api) -> None
                 OperationLog.action == "STOCKTAKE_REJECT"
             )
         ) == 1
+        review = db.scalar(select(StocktakeReview))
+        assert review is not None
+        assert review.reason == "驳回库存盘点单（系统记录）"
 
 
 def test_submission_and_approval_are_safe_to_retry_with_same_idempotency_key(

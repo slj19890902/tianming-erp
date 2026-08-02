@@ -150,6 +150,17 @@ def _clean_supplier_material_code(value: str | None, layer_count: int | None) ->
     raw = str(value or "").strip().upper()
     if not raw:
         return ""
+    expected_length = {3: 3, 5: 5, 7: 7}.get(layer_count)
+    # 供应商材质代码可以包含 + 等实际符号。优先按完整可见代码读取，
+    # 避免旧的字母数字 token 提取把 A+A 错拆成单个 A。
+    if expected_length:
+        for candidate in re.split(r"\s*/\s*|\s*\|\s*", raw):
+            compact = re.sub(r"\s+", "", candidate)
+            if (
+                len(compact) == expected_length
+                and all(char.isprintable() and not char.isspace() for char in compact)
+            ):
+                return compact
     tokens = re.findall(r"[A-Z0-9]+", raw)
     candidates = [token for token in tokens if any(char.isalpha() for char in token)]
     if not candidates:
@@ -158,7 +169,6 @@ def _clean_supplier_material_code(value: str | None, layer_count: int | None) ->
     if len(candidates) > 1 and all(token in SUPPLIER_MATERIAL_FLUTES for token in candidates):
         return ""
     code = candidates[0]
-    expected_length = {3: 3, 5: 5, 7: 7}.get(layer_count)
     return code[:expected_length] if expected_length else code
 
 

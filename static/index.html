@@ -1235,7 +1235,7 @@
                   <div class="notice" style="margin:8px 0">嘉林亿规则：最小修边225mm；最小切宽270mm；最小切长500mm；100米以下接受随机配料并按牌价计价；分纸加价金额待确认，暂不参与自动报价。</div>
                   <div class="form-grid" style="margin:10px 0">
                     <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="paperCodeForm.supplier_name" /></div>
-                    <div class="field"><label>代码字符</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
+                    <div class="field"><label>代码字符（可用 + 等符号）</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
                     <div class="field"><label>纸种名称</label><input class="input" v-model.trim="paperCodeForm.paper_name" /></div>
                     <div class="field"><label>克重(g)</label><input class="input" type="number" min="1" step="1" v-model.number="paperCodeForm.gram_weight" /></div>
                     <div class="field"><label>等级/说明</label><input class="input" v-model.trim="paperCodeForm.paper_grade" /></div>
@@ -1253,7 +1253,7 @@
                     <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
                     <div class="field"><label>层数</label><select class="select" v-model.number="materialComposer.layer_count" @change="onMaterialComposerLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                     <div v-if="materialComposer.layer_count === 7" class="field"><label>使用楞型</label><select class="select" v-model="materialComposer.usage_flute_type" @change="invalidateMaterialComposer"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(materialComposer.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
-                    <div class="field"><label>材质代码</label><input class="input" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
+                    <div class="field"><label>材质代码（可含 + 等符号）</label><input class="input" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
                     <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
                     <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
                     <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerCanSave" @click="saveMaterialComposition">保存为可用材质</button></div></div>

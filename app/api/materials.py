@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 import re
+import unicodedata
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -135,9 +136,12 @@ class SupplierPaperCodePayload(BaseModel):
     @field_validator("code_char")
     @classmethod
     def normalize_code_char(cls, value: str) -> str:
-        code = value.strip().upper()
-        if not re.fullmatch(r"[A-Z0-9]", code):
-            raise ValueError("基础代码必须是单个字母或数字")
+        code = unicodedata.normalize("NFKC", value or "").strip()
+        if len(code) != 1 or not code.isprintable() or code.isspace():
+            raise ValueError("基础代码必须是单个可见字符")
+        code = code.upper()
+        if len(code) != 1:
+            raise ValueError("基础代码必须是单个可见字符")
         return code
 
 
@@ -156,11 +160,11 @@ class MaterialComposePreviewPayload(BaseModel):
     @field_validator("material_code")
     @classmethod
     def normalize_material_code(cls, value: str) -> str:
-        code = value.strip().upper()
+        code = unicodedata.normalize("NFKC", value or "").strip().upper()
         if len(code) not in {3, 5, 7}:
             raise ValueError("材质代码需为3位、5位或7位")
-        if not re.fullmatch(r"[A-Z0-9]+", code):
-            raise ValueError("材质代码只能包含字母和数字")
+        if any(not char.isprintable() or char.isspace() for char in code):
+            raise ValueError("材质代码只能包含可见字符，不能包含空格")
         return code
 
     @model_validator(mode="after")
@@ -759,7 +763,8 @@ def _paper_code_dict(row: SupplierPaperCode) -> dict:
 
 
 def _dictionary_material_code(value: str | None, layer_count: int) -> str:
-    compact = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    compact = unicodedata.normalize("NFKC", str(value or "")).strip().upper()
+    compact = re.sub(r"\s+", "", compact)
     return compact[:layer_count]
 
 

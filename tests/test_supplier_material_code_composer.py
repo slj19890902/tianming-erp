@@ -106,6 +106,50 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
         assert listed.status_code == 200
         assert listed.json()["total"] == 4
 
+        # 供应商实际纸种代码可以使用 + 等可见业务字符，不能再被旧的
+        # “只能是单个字母或数字”校验拦截；组合材质也应按普通字符参与解析。
+        plus_code = client.post(
+            "/api/master/materials/paper-codes",
+            json={
+                "supplier_name": "供应商A",
+                "code_char": "+",
+                "paper_name": "特殊符号纸种",
+                "gram_weight": 160,
+            },
+        )
+        assert plus_code.status_code == 201
+        assert plus_code.json()["code_char"] == "+"
+        plus_preview = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 3,
+                "material_code": "A+A",
+            },
+        )
+        assert plus_preview.status_code == 200
+        assert plus_preview.json()["valid"] is True
+        assert [row["code_char"] for row in plus_preview.json()["layers"]] == [
+            "A",
+            "+",
+            "A",
+        ]
+        plus_saved = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 3,
+                "material_code": "A+A",
+                "quote_price": 1.56,
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 3,
+                "parsed_material_code": "A+A",
+                "price_source": "manual",
+            },
+        )
+        assert plus_saved.status_code == 200
+        assert plus_saved.json()["material"]["code"] == "A+A"
+
         five_layer = client.post(
             "/api/master/materials/compose/preview",
             json={

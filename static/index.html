@@ -16470,7 +16470,7 @@
                 if (!supplierOrderId) throw new Error("报料单缺少精确来源编号，请从已报料页面处理");
                 await axios.put(`/api/requisition/supplier-orders/${supplierOrderId}/void`);
               } else if (action.kind === "requisition") {
-                await axios.put(`/api/requisition/items/${this.orderTrace.item.id}/cancel`,{reason});
+                await axios.put(`/api/requisition/items/${this.orderTrace.item.id}/cancel`,{});
               }
               await this.reloadOrderTrace();
               await Promise.allSettled([this.loadOrders(),this.loadKpi()]);
@@ -17142,8 +17142,7 @@
           },
           async cancelRequisition(row) {
             if (!this.canAdmin || !confirm("确认撤销该报料并回到待报料吗？系统会自动记录本次管理员操作。")) return;
-            const reason = "报料历史回退（管理员一次确认）";
-            try { await axios.put(`/api/requisition/items/${row.item_id}/cancel`, {reason}); await this.loadRequisition(); this.showToast("已退回待报料池"); }
+            try { await axios.put(`/api/requisition/items/${row.item_id}/cancel`, {}); await this.loadRequisition(); this.showToast("已退回待报料池"); }
             catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           normalizeReceiptResolution(line) {

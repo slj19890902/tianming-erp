@@ -450,15 +450,7 @@ class SupplierSchedulePayload(BaseModel):
 
 
 class CancelPayload(BaseModel):
-    reason: str
-
-    @field_validator("reason")
-    @classmethod
-    def validate_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("取消报料原因不能为空")
-        return reason
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class MergeGroupCreatePayload(BaseModel):
@@ -7683,6 +7675,7 @@ def cancel_requisition(
     db: Session = Depends(get_db),
     user: User = Depends(admin_rollback),
 ) -> dict:
+    reason = (payload.reason or "").strip() or "取消报料并退回待报料（系统记录）"
     item = _item_or_404(db, item_id)
     _require_order_item_customer_access(db, item, user)
     if item.material_status == "received":
@@ -7765,7 +7758,7 @@ def cancel_requisition(
         action="CANCEL_REQUISITION",
         entity_id=item.id,
         details={
-            "reason": payload.reason,
+            "reason": reason,
             "before": before_requisition,
             "after": {
                 "requisition_status": item.requisition_status,

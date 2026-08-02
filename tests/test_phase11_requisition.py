@@ -2098,7 +2098,7 @@ def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receiv
         incoming = client.get("/api/incoming/pending")
         cancelled = client.put(
             "/api/requisition/items/1/cancel",
-            json={"reason": "供应商规格确认错误"},
+            json={},
         )
 
     assert scheduled.status_code == 200
@@ -2119,6 +2119,7 @@ def test_supplier_schedule_drives_incoming_priority_and_can_cancel_before_receiv
         )
     assert audit is not None
     assert '"before"' in audit.details and '"after"' in audit.details
+    assert '"reason": "取消报料并退回待报料（系统记录）"' in audit.details
     assert '"requisition_status": "供应商已排单"' in audit.details
     assert '"requisition_status": "未报料"' in audit.details
 

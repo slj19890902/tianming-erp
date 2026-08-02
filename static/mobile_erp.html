@@ -85,11 +85,26 @@
     .tag.mapped { background: var(--green-soft); color: var(--green); }
     .tag.unplaced { background: var(--orange-soft); color: var(--orange); }
     .tag.ledger_only { background: #edf0ee; color: #54615b; }
+    .periods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+    .period-btn { min-height: 38px; padding: 5px 3px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-weight: 900; }
+    .period-btn.active { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+    .production-card { border-left: 5px solid var(--blue); }
+    .production-card.material-short { border-left-color: var(--orange); }
+    .production-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .production-head .tag { flex: 0 0 auto; margin-top: 0; }
+    .fact-line { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .task-card { margin-top: 9px; padding: 10px; border-radius: 10px; background: #f3f7f5; }
+    .task-card strong { display: block; overflow-wrap: anywhere; }
+    .task-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 7px; }
+    .task-fact { padding: 7px; border-radius: 8px; background: #fff; }
+    .task-fact strong { color: var(--green); font-size: 16px; }
+    .task-fact span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .drawing-btn { display: inline-flex; align-items: center; min-height: 34px; margin-top: 8px; padding: 5px 9px; border: 1px solid var(--blue); border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-weight: 900; }
     .bottom-nav {
       position: fixed; right: 0; bottom: 0; left: 0; z-index: 12;
       padding: 7px 10px calc(7px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(255, 255, 255, .98);
     }
-    .bottom-inner { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; width: min(100%, 480px); margin: auto; }
+    .bottom-inner { display: grid; grid-template-columns: repeat(var(--nav-count, 2), minmax(0, 1fr)); gap: 7px; width: min(100%, 480px); margin: auto; }
     .nav-btn { min-height: 50px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-weight: 900; }
     .nav-btn.active { background: var(--green-soft); color: var(--green); }
     .map-layer { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #fff; }
@@ -131,6 +146,24 @@
         <div id="candidateList" hidden></div>
         <div id="productResult" hidden></div>
       </section>
+
+      <section id="productionPage" hidden>
+        <h1 class="page-title">近期来料和生产资料</h1>
+        <p class="page-help">只显示已经正式收料的订单。这里用于车间查看图纸、尺寸和模具位置，不能收料或确认完工。</p>
+        <div class="periods" aria-label="来料日期范围">
+          <button class="period-btn" type="button" data-period="today">今天</button>
+          <button class="period-btn active" type="button" data-period="3d">近3天</button>
+          <button class="period-btn" type="button" data-period="7d">近7天</button>
+          <button class="period-btn" type="button" data-period="custom">自选</button>
+        </div>
+        <div id="customDates" class="card" hidden>
+          <label>开始日期 <input id="dateFrom" type="date"></label>
+          <label>结束日期 <input id="dateTo" type="date"></label>
+          <button id="loadCustom" class="small-btn" type="button">查看</button>
+        </div>
+        <div id="productionState" class="card status">正在读取近期来料…</div>
+        <div id="productionList" hidden></div>
+      </section>
     </main>
   </div>
 
@@ -138,6 +171,7 @@
     <div class="bottom-inner">
       <button class="nav-btn active" type="button" data-page="home">首页</button>
       <button class="nav-btn" type="button" data-page="search">查产品</button>
+      <button class="nav-btn" type="button" data-page="production">近期生产</button>
     </div>
   </nav>
 
@@ -147,6 +181,14 @@
       <strong id="mapTitle">仓库位置</strong>
     </div>
     <iframe id="mapFrame" title="只读仓库地图" src="about:blank"></iframe>
+  </section>
+
+  <section id="drawingLayer" class="map-layer" hidden aria-label="生产图纸">
+    <div class="map-layer-head">
+      <button id="closeDrawing" class="small-btn" type="button">返回生产资料</button>
+      <strong id="drawingTitle">生产图纸</strong>
+    </div>
+    <iframe id="drawingFrame" title="生产图纸" src="about:blank"></iframe>
   </section>
 
   <script>
@@ -165,6 +207,9 @@
         detailController: null,
         searchGeneration: 0,
         detailGeneration: 0,
+        productionItems: [],
+        productionPeriod: "3d",
+        productionController: null,
       };
       const byId = id => document.getElementById(id);
 
@@ -199,12 +244,15 @@
 
       function setPage(page) {
         const isHome = page === "home";
+        const isSearch = page === "search";
         byId("homePage").hidden = !isHome;
-        byId("searchPage").hidden = isHome;
+        byId("searchPage").hidden = !isSearch;
+        byId("productionPage").hidden = page !== "production";
         document.querySelectorAll(".nav-btn").forEach(button => {
           button.classList.toggle("active", button.dataset.page === page);
         });
-        if (!isHome) byId("searchInput").focus();
+        if (isSearch) byId("searchInput").focus();
+        if (page === "production" && !state.productionItems.length) loadProduction();
       }
 
       function showStatus(targetId, message, kind = "empty", retry = null) {
@@ -432,20 +480,148 @@
         // Search text, candidates and selected product remain in memory.
       }
 
+      function productionTaskCard(task) {
+        const card = node("div", "task-card");
+        const title = `${task.product_code || "无存货编码"}｜${task.product_name || "未填写产品名称"}`;
+        card.append(node("strong", "", title));
+        card.append(node("p", "fact-line", [
+          task.carton_specification,
+          task.flute_type ? `${task.flute_type}楞` : "",
+          task.cutting_mode,
+        ].filter(Boolean).join("｜") || "规格资料未填写"));
+        const metrics = node("div", "task-grid");
+        const facts = [
+          ["订单要做", task.order_quantity, "只"],
+          ["现在可生产", task.current_producible_quantity, "只"],
+          ["纸板已收", task.received_material_quantity, "张"],
+          ["任务状态", task.status_text, ""],
+        ];
+        facts.forEach(([label, value, unit]) => {
+          const fact = node("div", "task-fact");
+          fact.append(node("strong", "", `${value ?? 0}${unit}`), node("span", "", label));
+          metrics.append(fact);
+        });
+        card.append(metrics);
+        if (task.production_process || task.production_notes) {
+          card.append(node("p", "fact-line", `生产要求：${task.production_process || task.production_notes}`));
+        }
+        if (task.mold_name || task.mold_location) {
+          card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location || "未登记"}`));
+        }
+        if (task.drawing_path) {
+          const drawing = node("button", "drawing-btn", "查看图纸");
+          drawing.type = "button";
+          drawing.addEventListener("click", () => openDrawing(task));
+          card.append(drawing);
+        }
+        return card;
+      }
+
+      function productionReceiptCard(item) {
+        const card = node("section", `card production-card ${item.material_state === "材料未齐" ? "material-short" : ""}`);
+        const head = node("div", "production-head");
+        const title = node("div");
+        title.append(
+          node("h2", "", `${item.product_code || "无存货编码"}｜${item.product_name || "未填写产品名称"}`),
+          node("p", "fact-line", `${item.customer_name || "未填写客户"}｜订单 ${item.order_number || "-"}`)
+        );
+        head.append(title, node("span", `tag ${item.material_state === "材料未齐" ? "unplaced" : "mapped"}`, item.material_state));
+        card.append(head);
+        const boardSize = item.board_length_mm && item.board_width_mm
+          ? `${item.board_length_mm}×${item.board_width_mm}mm`
+          : "纸板尺寸未填写";
+        card.append(node("p", "fact-line", `${boardSize}｜本次收 ${item.received_quantity} 张｜累计 ${item.cumulative_received_quantity} 张｜还差 ${item.remaining_quantity} 张`));
+        card.append(node("p", "fact-line", `收料：${item.received_by_name}｜${item.received_at || "时间未记录"}${item.supplier_document_number ? `｜供应商单号 ${item.supplier_document_number}` : ""}`));
+        if (item.crease_type || (item.crease_values_mm || []).length) {
+          card.append(node("p", "fact-line", `压线：${item.crease_type || "未填写"}${item.crease_values_mm.length ? `｜${item.crease_values_mm.join(" / ")}mm` : ""}`));
+        }
+        if (item.board_direction_note) card.append(node("p", "fact-line", `纸板方向/报料提醒：${item.board_direction_note}`));
+        if (item.delivery_date) card.append(node("p", "fact-line", `交货日期：${item.delivery_date}`));
+        if (!item.production_tasks.length) {
+          card.append(node("p", "muted", "已经收料，当前没有可显示的生产任务。"));
+        } else {
+          item.production_tasks.forEach(task => card.append(productionTaskCard(task)));
+        }
+        return card;
+      }
+
+      function renderProduction() {
+        const container = byId("productionList");
+        container.replaceChildren();
+        if (!state.productionItems.length) {
+          container.hidden = true;
+          showStatus("productionState", "这个日期范围内没有正式收料记录。", "empty", loadProduction);
+          return;
+        }
+        state.productionItems.forEach(item => container.append(productionReceiptCard(item)));
+        byId("productionState").hidden = true;
+        container.hidden = false;
+      }
+
+      async function loadProduction() {
+        state.productionController?.abort();
+        state.productionController = new AbortController();
+        const params = new URLSearchParams({ period: state.productionPeriod });
+        if (state.productionPeriod === "custom") {
+          const dateFrom = byId("dateFrom").value;
+          const dateTo = byId("dateTo").value;
+          if (!dateFrom || !dateTo) {
+            showStatus("productionState", "请选择开始和结束日期。", "empty");
+            return;
+          }
+          params.set("date_from", dateFrom);
+          params.set("date_to", dateTo);
+        }
+        byId("productionList").hidden = true;
+        showStatus("productionState", "正在读取近期来料和生产资料…", "");
+        try {
+          const data = await apiGet(`/api/mobile/erp/production/recent?${params}`, {
+            signal: state.productionController.signal,
+          });
+          state.productionItems = Array.isArray(data.items) ? data.items : [];
+          renderProduction();
+        } catch (error) {
+          if (error.name === "AbortError") return;
+          showStatus("productionState", error.message || "生产资料读取失败", "error", loadProduction);
+        }
+      }
+
+      function openDrawing(task) {
+        byId("drawingTitle").textContent = `${task.product_code || "当前产品"}｜生产图纸`;
+        byId("drawingFrame").src = task.drawing_path;
+        byId("drawingLayer").hidden = false;
+      }
+
+      function closeDrawing() {
+        byId("drawingLayer").hidden = true;
+        byId("drawingFrame").src = "about:blank";
+        // Production cards and scroll position remain untouched behind the overlay.
+      }
+
       async function initialize() {
         try {
           state.auth = await apiGet("/api/auth/me");
           const user = state.auth.user || {};
           byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜只读`;
           const permissions = Array.isArray(state.auth.permissions) ? state.auth.permissions : [];
-          if (!permissions.includes("warehouse.view")) {
+          const canSearch = permissions.includes("warehouse.view");
+          const canProduction = permissions.includes("orders.view") && permissions.includes("incoming.view");
+          const canHome = permissions.includes("dashboard.view") && ["admin", "boss"].includes(user.role);
+          document.querySelector('[data-page="home"]').hidden = !canHome;
+          document.querySelector('[data-page="search"]').hidden = !canSearch;
+          document.querySelector('[data-page="production"]').hidden = !canProduction;
+          const visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
+          document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
+          if (!visibleNav.length) {
             document.querySelector("main").replaceChildren(
-              node("div", "card status error", "当前账号没有查看仓库库存的权限，请联系管理员。")
+              node("div", "card status error", "当前账号没有可用的手机只读入口，请联系管理员。")
             );
             document.querySelector(".bottom-nav").hidden = true;
             return;
           }
-          await loadHome();
+          const firstPage = canHome ? "home" : (canProduction ? "production" : "search");
+          setPage(firstPage);
+          if (canHome) await loadHome();
         } catch (error) {
           showStatus("homeState", error.message || "手机版初始化失败", "error", initialize);
         }
@@ -467,6 +643,17 @@
         runSearch();
       });
       byId("closeMap").addEventListener("click", closeMap);
+      byId("closeDrawing").addEventListener("click", closeDrawing);
+      document.querySelectorAll(".period-btn").forEach(button => {
+        button.addEventListener("click", () => {
+          state.productionPeriod = button.dataset.period;
+          state.productionItems = [];
+          document.querySelectorAll(".period-btn").forEach(item => item.classList.toggle("active", item === button));
+          byId("customDates").hidden = state.productionPeriod !== "custom";
+          if (state.productionPeriod !== "custom") loadProduction();
+        });
+      });
+      byId("loadCustom").addEventListener("click", loadProduction);
       initialize();
     })();
   </script>

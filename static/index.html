@@ -14949,26 +14949,12 @@
           toggleStatementDeliveryExpanded(row) {
             this.expandedStatementDeliveries[row.delivery_id] = !this.expandedStatementDeliveries[row.delivery_id];
           },
-          askMasterMutationReason(label, defaultReason = "") {
-            const value = window.prompt(`${label}\n请填写本次修改原因：`, defaultReason);
-            if (value === null) return null;
-            const reason = String(value).trim();
-            if (!reason) {
-              this.showToast("修改原因不能为空", true);
-              return null;
-            }
-            return reason;
-          },
-          async sendVersionedMasterMutation({method,url,row,body={},reasonLabel,defaultReason=""}) {
-            const askForReason = reasonLabel !== false;
-            const reason = askForReason ? this.askMasterMutationReason(reasonLabel, defaultReason) : null;
-            if (askForReason && !reason) return null;
+          async sendVersionedMasterMutation({method,url,row,body={}}) {
             const expectedVersion = Number(row.version);
             let confirmationToken = null;
             while (true) {
               try {
                 const mutationPayload = {...body,expected_version:expectedVersion,confirmation_token:confirmationToken};
-                if (reason) mutationPayload.change_reason = reason;
                 return await axios.request({
                   method, url,
                   data:mutationPayload
@@ -14991,20 +14977,18 @@
           },
           async syncProductFieldsVersioned(productId, fields, defaultReason, expectedVersion = null, askForReason = true) {
             const product = (await axios.get(`/api/master/products/${productId}`)).data;
-            const reason = askForReason
-              ? this.askMasterMutationReason("同步更新常用箱", defaultReason)
-              : String(defaultReason || "").trim();
-            if (!reason) return null;
+            const reason = String(defaultReason || "").trim() || null;
             const requestedVersion = Number(expectedVersion ?? product.version);
             let confirmationToken = null;
             while (true) {
               try {
-                return await axios.post(`/api/master/products/${productId}/sync-fields`, {
+                const payload = {
                   fields,
                   expected_version:requestedVersion,
-                  change_reason:reason,
                   confirmation_token:confirmationToken,
-                });
+                };
+                if (reason) payload.change_reason = reason;
+                return await axios.post(`/api/master/products/${productId}/sync-fields`, payload);
               } catch (error) {
                 const detail = this.masterErrorDetail(error);
                 if (Number(error?.response?.status) === 409 && detail?.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED" && !confirmationToken) {
@@ -15023,14 +15007,14 @@
           },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row,reasonLabel:false}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleCustomerStatus(row) {
             const action = row.is_active ? "停用" : "启用";
             if (!confirm(`确认${action}客户“${row.name}”吗？`)) return;
             try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active},reasonLabel:false});
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active}});
               if(!result)return;
               await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
               this.showToast(`客户已${action}`);
@@ -15038,7 +15022,7 @@
           },
           async deleteProduct(row) {
             if (!confirm(`确认将产品“${row.product_name}”移入垃圾站吗？30天内可恢复。`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row,reasonLabel:`将“${row.product_name}”移入垃圾站`,defaultReason:"常用箱移入垃圾站"}); if(!result)return; await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}`,row}); if(!result)return; await this.loadProducts(); this.showToast("产品已移入垃圾站"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleProductTrash() {
@@ -15052,7 +15036,7 @@
           async restoreProduct(row) {
             if (!confirm(`确认恢复“${row.product_name}”吗？`)) return;
             try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row,reasonLabel:`恢复“${row.product_name}”`,defaultReason:"从垃圾站恢复常用箱"});
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/restore`,row});
               if(!result)return;
               await Promise.all([this.loadProductTrash(), this.loadProducts()]);
               this.showToast("产品已恢复并重新启用");
@@ -15061,7 +15045,7 @@
           async purgeProduct(row) {
             if (!confirm(`确定彻底清理“${row.product_name}”吗？该操作不可撤销。`)) return;
             try {
-              const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row,reasonLabel:`彻底清理“${row.product_name}”`,defaultReason:"彻底清理无历史常用箱"});
+              const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/products/${row.id}/purge`,row});
               if(!result)return;
               await this.loadProductTrash();
               this.showToast("产品已清理");
@@ -15070,10 +15054,8 @@
           async emptyProductTrash() {
             if (!confirm("确定清空产品垃圾站吗？有历史业务引用的产品将永久归档。")) return;
             try {
-              const reason=this.askMasterMutationReason("清空产品垃圾站","清理无业务历史且无版本历史的常用箱");
-              if(!reason)return;
               const expected_versions=Object.fromEntries((this.productTrashItems||[]).map(row=>[row.id,Number(row.version)]));
-              const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions,change_reason:reason});
+              const { data } = await axios.post("/api/master/products/trash/empty",{expected_versions});
               await this.loadProductTrash();
               this.showToast(`已清理 ${data.deleted_count} 条，归档 ${data.archived_count} 条`);
             } catch(error) { this.showToast(this.errorMessage(error), true); }
@@ -15082,7 +15064,7 @@
             const action = row.is_active ? "停用" : "启用";
             if (!confirm(`确认${action}纸箱“${row.product_name}”吗？`)) return;
             try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active},reasonLabel:`${action}纸箱“${row.product_name}”`,defaultReason:`${action}常用箱`});
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/products/${row.id}/status`,row,body:{is_active:!row.is_active}});
               if(!result)return;
               await this.loadProducts();
               this.showToast(`纸箱已${action}`);
@@ -15090,7 +15072,7 @@
           },
           async deleteMaterial(row) {
             if (!confirm(`确认停用材质“${row.code}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row,reasonLabel:false}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
 	          async openOrder() {

@@ -404,16 +404,16 @@ class ProductBOMUpdatePayload(BaseModel):
 
 class ProductMutationPayload(BaseModel):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
 
 
 class ProductUpdatePayload(ProductPayload):
@@ -440,7 +440,7 @@ class ProductStatusPayload(ProductMutationPayload):
 
 class ProductTrashEmptyPayload(BaseModel):
     expected_versions: dict[int, int]
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_tokens: dict[int, str] = Field(default_factory=dict)
 
     @field_validator("expected_versions")
@@ -450,13 +450,13 @@ class ProductTrashEmptyPayload(BaseModel):
             raise ValueError("预期版本必须大于等于1")
         return value
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
 
 
 PRICE_FIELDS = {
@@ -1026,7 +1026,11 @@ def empty_product_trash(
                 action=action,
                 resource="Product",
                 resource_id=product.id,
-                details={**details, "reason": payload.change_reason},
+                details={
+                    **details,
+                    "reason": payload.change_reason
+                    or "系统记录：清空常用箱垃圾站",
+                },
             )
         db.commit()
     except Exception:
@@ -1397,7 +1401,8 @@ def update_product_status(
             updates=updates,
             expected_version=payload.expected_version,
             user=user,
-            reason=payload.change_reason,
+            reason=payload.change_reason
+            or ("系统记录：启用常用箱" if payload.is_active else "系统记录：停用常用箱"),
             source="api.products.status",
             action="status_change",
             confirmation_token=payload.confirmation_token,
@@ -1443,7 +1448,7 @@ def restore_product(
             updates=updates,
             expected_version=payload.expected_version,
             user=user,
-            reason=payload.change_reason,
+            reason=payload.change_reason or "系统记录：从垃圾站恢复常用箱",
             source="api.products.restore",
             action="restore",
             confirmation_token=payload.confirmation_token,
@@ -1503,7 +1508,7 @@ def purge_product(
             details={
                 **details,
                 "mode": "physical_delete",
-                "reason": payload.change_reason,
+                "reason": payload.change_reason or "系统记录：彻底清理常用箱",
             },
         )
         _cas_delete_product(
@@ -1522,16 +1527,16 @@ class SyncFieldsPayload(BaseModel):
     """从订单明细同步部分字段回常用箱（用户确认后调用）。"""
     fields: dict  # e.g. {"layer_count": 3, "flute_type": "A", "material_id": 5, ...}
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
 
 
 @router.post("/{product_id}/sync-fields")
@@ -1730,7 +1735,7 @@ def sync_product_fields(
             updates=changed,
             expected_version=payload.expected_version,
             user=user,
-            reason=payload.change_reason,
+            reason=payload.change_reason or "系统记录：订单字段同步到常用箱",
             source="api.products.sync_fields",
             action="sync_fields",
             confirmation_token=payload.confirmation_token,
@@ -1778,7 +1783,7 @@ def delete_product(
             updates=updates,
             expected_version=payload.expected_version,
             user=user,
-            reason=payload.change_reason,
+            reason=payload.change_reason or "系统记录：常用箱移入垃圾站",
             source="api.products.delete",
             action="soft_delete",
             confirmation_token=payload.confirmation_token,

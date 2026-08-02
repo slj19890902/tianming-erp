@@ -542,7 +542,6 @@ class OrderItemUpdate(BaseModel):
     production_process: str | None = None
     print_content: str | None = None
     product_remark: str | None = None
-    quantity_adjustment_reason: str | None = Field(default=None, max_length=500)
     quantity_adjustment_idempotency_key: str | None = Field(
         default=None,
         max_length=120,
@@ -6410,10 +6409,7 @@ def update_order_item(
                 db,
                 order_item_id=item.id,
                 delta_sets=quantity_delta,
-                reason=(
-                    (payload.quantity_adjustment_reason or "").strip()
-                    or "订单明细数量修改"
-                ),
+                reason="订单数量变更（系统记录）",
                 actor_id=user.id,
                 idempotency_key=adjustment_key,
             )

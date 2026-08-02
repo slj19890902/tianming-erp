@@ -884,7 +884,7 @@ def test_admin_can_revert_stock_completion_and_complete_again(production_app) ->
         completion_id = completed.json()["items"][0]["id"]
         reverted = client.post(
             f"/api/production/completions/{completion_id}/revert",
-            json={"reason": "管理员误操作，退回待生产确认"},
+            json={},
         )
         assert reverted.status_code == 200, reverted.text
         with factory() as db:
@@ -920,14 +920,14 @@ def test_admin_can_revert_stock_completion_and_complete_again(production_app) ->
             .order_by(ProductionCompletion.id)
         ).all()
         assert original.status == "reversed"
-        assert original.reversal_reason == "管理员误操作，退回待生产确认"
+        assert original.reversal_reason == "撤销生产确认（系统记录）"
         assert original.reversed_by is not None and original.reversed_at is not None
         assert (original_lot.status, original_lot.quantity_available, original_lot.quantity_reserved) == (
             "closed",
             0,
             0,
         )
-        assert audit is not None and "管理员误操作" in audit.details
+        assert audit is not None and "撤销生产确认（系统记录）" in audit.details
         assert '"before_completion_status": "posted"' in audit.details
         assert '"after_completion_status": "reversed"' in audit.details
         assert [row.status for row in completions] == ["reversed", "posted"]

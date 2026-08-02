@@ -84,7 +84,8 @@ def test_all_visible_rollback_entries_use_admin_and_fixed_audit_reason() -> None
     production_end = INDEX.index("async loadIncoming()", production_start)
     production_method = INDEX[production_start:production_end]
     assert "prompt(" not in production_method
-    assert "生产完工历史回退（管理员一次确认）" in production_method
+    assert "生产完工历史回退（管理员一次确认）" not in production_method
+    assert "await axios.post(`/api/production/completions/${row.id}/revert`, {})" in production_method
 
     incoming_start = INDEX.index("async revertIncoming(row)")
     incoming_end = INDEX.index("async loadIncomingHistory()", incoming_start)

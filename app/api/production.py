@@ -124,15 +124,7 @@ class StockTransferRequest(BaseModel):
 
 
 class CompletionReversalRequest(BaseModel):
-    reason: str = Field(min_length=1, max_length=500)
-
-    @field_validator("reason")
-    @classmethod
-    def trim_reason(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("撤销生产确认必须填写原因")
-        return normalized
+    reason: str | None = Field(default=None, max_length=500)
 
 
 def _allowed_customer_ids(user: User, db: Session) -> set[int] | None:
@@ -548,6 +540,7 @@ def revert_production_completion(
     user: User = Depends(admin_only),
     db: Session = Depends(get_db),
 ) -> dict:
+    reason = (payload.reason or "").strip() or "撤销生产确认（系统记录）"
     try:
         customer_id = completion_customer_id(db, completion_id)
         if customer_id is not None:
@@ -556,7 +549,7 @@ def revert_production_completion(
             db,
             completion_id=completion_id,
             operator_id=user.id,
-            reason=payload.reason,
+            reason=reason,
         )
         customer_snapshot = _completion_customer_snapshots(
             db,
@@ -583,7 +576,7 @@ def revert_production_completion(
             batch_id=str(result.completion.batch_id),
             description="管理员撤销生产确认并回到待生产确认",
             details={
-                "reason": payload.reason,
+                "reason": reason,
                 "before_completion_status": "posted",
                 "after_completion_status": result.completion.status,
                 "completion_id": completion_id,

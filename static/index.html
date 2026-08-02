@@ -5817,8 +5817,8 @@
                 </div>
               </div>
             </template>
-            <div v-if="!masterSingleConfirmProductUpdate" class="field" style="margin-top:12px"><label>{{ masterChangeConfirm.mode === 'restore' ? '恢复原因 *' : '修改原因 *' }}</label><textarea class="textarea" rows="3" v-model.trim="masterChangeConfirm.reason" placeholder="请填写可追溯的业务原因"></textarea></div>
-            <label v-if="masterChangeConfirm.requireAcknowledgement && !masterSingleConfirmProductUpdate" style="display:flex;align-items:flex-start;gap:8px;margin-top:12px"><input type="checkbox" v-model="masterChangeConfirm.acknowledged" /><span>{{ masterChangeConfirm.mode === 'restore' ? '我已核对恢复差异' : '我已核对异常修改' }}</span></label>
+            <div v-if="!masterSingleConfirmNoReasonUpdate" class="field" style="margin-top:12px"><label>{{ masterChangeConfirm.mode === 'restore' ? '恢复原因 *' : '修改原因 *' }}</label><textarea class="textarea" rows="3" v-model.trim="masterChangeConfirm.reason" placeholder="请填写可追溯的业务原因"></textarea></div>
+            <label v-if="masterChangeConfirm.requireAcknowledgement && !masterSingleConfirmNoReasonUpdate" style="display:flex;align-items:flex-start;gap:8px;margin-top:12px"><input type="checkbox" v-model="masterChangeConfirm.acknowledged" /><span>{{ masterChangeConfirm.mode === 'restore' ? '我已核对恢复差异' : '我已核对异常修改' }}</span></label>
             <div v-if="masterChangeConfirm.error" class="notice danger" style="margin-top:12px">{{ masterChangeConfirm.error }}</div>
           </div>
           <div class="modal-foot">
@@ -6768,12 +6768,17 @@
             const state = this.masterChangeConfirm;
             return state.visible && state.mode === "update" && state.entity === "product";
           },
+          masterSingleConfirmNoReasonUpdate() {
+            const state = this.masterChangeConfirm;
+            return this.masterSingleConfirmProductUpdate
+              || (state.visible && state.mode === "update" && state.entity === "customer");
+          },
           masterChangeCanSubmit() {
             const state = this.masterChangeConfirm;
-            const singleProductUpdate = this.masterSingleConfirmProductUpdate;
+            const singleNoReasonUpdate = this.masterSingleConfirmNoReasonUpdate;
             if (!state.visible || state.loading || state.conflict) return false;
-            if (!singleProductUpdate && !String(state.reason || "").trim()) return false;
-            if (state.requireAcknowledgement && !singleProductUpdate && !state.acknowledged) return false;
+            if (!singleNoReasonUpdate && !String(state.reason || "").trim()) return false;
+            if (state.requireAcknowledgement && !singleNoReasonUpdate && !state.acknowledged) return false;
             if ((state.mode === "restore" || state.requireAcknowledgement) && !state.confirmationToken) return false;
             return true;
           },
@@ -7335,6 +7340,53 @@
               changes:this.cloneMasterRecord(changes), reason:keepReason ? previous.reason : ""
             };
           },
+          buildCustomerWritePayload() {
+            const statementCycleStartDay = Number(this.customerForm.statement_cycle_start_day);
+            if (!Number.isInteger(statementCycleStartDay) || statementCycleStartDay < 1 || statementCycleStartDay > 28) {
+              throw new Error("对账结转日必须是1到28之间的整数");
+            }
+            const payload = { ...this.customerForm, statement_cycle_start_day:statementCycleStartDay };
+            delete payload.id;
+            delete payload.is_active;
+            return payload;
+          },
+          async prepareCustomerChangeConfirmation(changes) {
+            const customerId = Number(this.customerForm?.id);
+            const expectedVersion = this.masterCurrentVersion("customer");
+            if (!Number.isInteger(customerId) || customerId <= 0) return false;
+            this.loading = true;
+            try {
+              const payload = this.buildCustomerWritePayload();
+              this.attachMasterUpdateMetadata("customer",payload,{expected_version:expectedVersion});
+              const {data} = await axios.post(
+                `/api/master/customers/${encodeURIComponent(customerId)}/update-preview`,
+                payload
+              );
+              if (!data.can_update) {
+                this.closeModal();
+                this.showToast("未检测到可保存的变化");
+                return true;
+              }
+              this.masterVersionConflict = null;
+              this.masterChangeConfirm = {
+                ...blankMasterChangeConfirm(), visible:true, mode:"update", entity:"customer", entityId:customerId,
+                expectedVersion, currentVersion:data.current_version ?? expectedVersion,
+                changes:this.cloneMasterRecord(changes),
+                backendChanges:this.normalizeMasterChanges(data.changes || data.diff || data.changed_fields,"customer"),
+                warnings:Array.isArray(data.warnings) ? data.warnings : [],
+                confirmationToken:data.confirmation_token || null,
+                requireAcknowledgement:(Array.isArray(data.warnings) ? data.warnings.length : 0) > 0
+              };
+              return false;
+            } catch (error) {
+              if (!this.handleMaster409(error,"customer",{entityId:customerId,expectedVersion})) {
+                this.showToast(`保存预检失败：${this.errorMessage(error)}`,true);
+              }
+              return false;
+            } finally {
+              this.loading = false;
+            }
+          },
           buildProductWritePayload(options = null) {
             const productCreaseError = this.validateProductCreaseAndReport(this.productForm);
             if (productCreaseError) throw new Error(productCreaseError);
@@ -7545,7 +7597,7 @@
               expected_version:state.currentVersion ?? state.expectedVersion,
               confirmation_token:state.confirmationToken || undefined
             };
-            if (!this.masterSingleConfirmProductUpdate) options.change_reason = String(state.reason || "").trim();
+            if (!this.masterSingleConfirmNoReasonUpdate) options.change_reason = String(state.reason || "").trim();
             else options._previewed = true;
             this.masterChangeConfirm.loading = true;
             this.masterChangeConfirm.error = "";
@@ -14875,15 +14927,18 @@
             return reason;
           },
           async sendVersionedMasterMutation({method,url,row,body={},reasonLabel,defaultReason=""}) {
-            const reason = this.askMasterMutationReason(reasonLabel, defaultReason);
-            if (!reason) return null;
+            const askForReason = reasonLabel !== false;
+            const reason = askForReason ? this.askMasterMutationReason(reasonLabel, defaultReason) : null;
+            if (askForReason && !reason) return null;
             const expectedVersion = Number(row.version);
             let confirmationToken = null;
             while (true) {
               try {
+                const mutationPayload = {...body,expected_version:expectedVersion,confirmation_token:confirmationToken};
+                if (reason) mutationPayload.change_reason = reason;
                 return await axios.request({
                   method, url,
-                  data:{...body,expected_version:expectedVersion,change_reason:reason,confirmation_token:confirmationToken}
+                  data:mutationPayload
                 });
               } catch (error) {
                 const detail = this.masterErrorDetail(error);
@@ -14935,14 +14990,14 @@
           },
           async deleteCustomer(row) {
             if (!confirm(`确认停用客户“${row.name}”吗？`)) return;
-            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row,reasonLabel:`停用客户“${row.name}”`,defaultReason:"停用客户"}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
+            try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/customers/${row.id}`,row,reasonLabel:false}); if(!result)return; await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]); this.showToast("客户已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
           async toggleCustomerStatus(row) {
             const action = row.is_active ? "停用" : "启用";
             if (!confirm(`确认${action}客户“${row.name}”吗？`)) return;
             try {
-              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active},reasonLabel:`${action}客户“${row.name}”`,defaultReason:`${action}客户`});
+              const result=await this.sendVersionedMasterMutation({method:"put",url:`/api/master/customers/${row.id}/status`,row,body:{is_active:!row.is_active},reasonLabel:false});
               if(!result)return;
               await Promise.all([this.loadCustomers(),this.loadCustomerOptions()]);
               this.showToast(`客户已${action}`);
@@ -18010,6 +18065,7 @@
               const changes = this.masterLocalChanges(masterEntity);
               if (changes.length) {
                 if (masterEntity === "product") await this.prepareProductChangeConfirmation(changes);
+                else if (masterEntity === "customer") await this.prepareCustomerChangeConfirmation(changes);
                 else this.openMasterChangeConfirmation(masterEntity,changes);
                 return false;
               }
@@ -18027,11 +18083,7 @@
                 return true;
               }
               if (this.modal.type === "customer") {
-                const statementCycleStartDay = Number(this.customerForm.statement_cycle_start_day);
-                if (!Number.isInteger(statementCycleStartDay) || statementCycleStartDay < 1 || statementCycleStartDay > 28) throw new Error("对账结转日必须是1到28之间的整数");
-                const payload = { ...this.customerForm };
-                payload.statement_cycle_start_day = statementCycleStartDay;
-                delete payload.id; delete payload.is_active;
+                const payload = this.buildCustomerWritePayload();
                 this.attachMasterUpdateMetadata("customer",payload,masterOptions);
                 if (this.customerForm.id) await axios.put(`/api/master/customers/${this.customerForm.id}`, payload);
                 else await axios.post("/api/master/customers", payload);

@@ -26,6 +26,7 @@ from app.models.order import Order
 from app.models.user import User
 from app.services.master_data_versioning import (
     apply_versioned_update,
+    preview_versioned_update,
     record_versioned_create,
 )
 from app.services.customer_quote_pricing import (
@@ -74,30 +75,34 @@ class CustomerResponse(CustomerPayload):
 
 class CustomerMutationPayload(BaseModel):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
 
 
 class CustomerUpdatePayload(CustomerPayload):
     expected_version: int = Field(ge=1)
-    change_reason: str = Field(min_length=1)
+    change_reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str | None = None
 
-    @field_validator("change_reason")
+    @field_validator("change_reason", mode="before")
     @classmethod
-    def validate_change_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("修改原因不能为空")
-        return reason
+    def normalize_optional_change_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason or None
+
+
+class CustomerUpdatePreviewPayload(CustomerPayload):
+    expected_version: int = Field(ge=1)
 
 
 class CustomerStatusPayload(CustomerMutationPayload):
@@ -500,6 +505,26 @@ def create_customer(
         raise
     db.refresh(customer)
     return CustomerResponse.model_validate(customer)
+
+
+@router.post("/{customer_id}/update-preview")
+def preview_customer_update(
+    customer_id: int,
+    payload: CustomerUpdatePreviewPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    customer = _customer_or_404(db, customer_id)
+    updates = _customer_write_data(payload)
+    return preview_versioned_update(
+        db,
+        object_type="customer",
+        entity=customer,
+        updates=updates,
+        expected_version=payload.expected_version,
+        user=user,
+    )
 
 
 @router.put("/{customer_id}")

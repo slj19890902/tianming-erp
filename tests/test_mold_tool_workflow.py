@@ -168,6 +168,101 @@ def test_admin_creates_mold_and_common_box_binding_is_searchable(mold_app) -> No
         assert legacy_lookup.json()["items"][0]["template_location"] == "二楼模具架 B-12"
 
 
+def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) -> None:
+    app, factory = mold_app
+    from app.models.access_control import UserCustomerScope
+    from app.models.customer import Customer
+    from app.models.user import User
+
+    with factory() as db:
+        denied_customer = Customer(
+            customer_number=9902,
+            customer_code="MOLD-DENIED",
+            name="模具越权隔离客户",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        db.add(denied_customer)
+        db.flush()
+        denied_customer_id = denied_customer.id
+        sales = db.query(User).filter(User.username == "sales").one()
+        sales.customer_access_mode = "selected"
+        db.add(UserCustomerScope(user_id=sales.id, customer_id=1))
+        db.commit()
+
+    with TestClient(app) as admin_client:
+        _login(admin_client, "admin")
+
+        def create_mold(code: str) -> int:
+            response = admin_client.post(
+                "/api/warehouse/molds",
+                json={
+                    "mold_code": code,
+                    "mold_name": f"{code} 测试模具",
+                    "rack_location": f"测试货架 {code}",
+                },
+            )
+            assert response.status_code == 201, response.text
+            return response.json()["id"]
+
+        allowed_mold_id = create_mold("SCOPE-ALLOW")
+        denied_mold_id = create_mold("SCOPE-DENY")
+        shared_mold_id = create_mold("SCOPE-SHARED")
+        products = [
+            (1, "ALLOW-001", allowed_mold_id),
+            (denied_customer_id, "DENY-001", denied_mold_id),
+            (1, "SHARED-ALLOW", shared_mold_id),
+            (denied_customer_id, "SHARED-DENY", shared_mold_id),
+        ]
+        for customer_id, product_code, mold_id in products:
+            response = admin_client.post(
+                "/api/master/products",
+                json={
+                    "customer_id": customer_id,
+                    "product_code": product_code,
+                    "customer_material_code": product_code,
+                    "product_name": f"{product_code} 产品",
+                    "box_category": "normal",
+                    "production_process": "模切",
+                    "mold_tool_id": mold_id,
+                    "report_length_mm": 600,
+                    "report_width_mm": 400,
+                },
+            )
+            assert response.status_code == 201, response.text
+
+    with TestClient(app) as scoped_client:
+        _login(scoped_client, "sales")
+        listed = scoped_client.get(
+            "/api/warehouse/molds",
+            params={"include_inactive": True, "limit": 100},
+        )
+        assert listed.status_code == 200, listed.text
+        by_code = {row["mold_code"]: row for row in listed.json()["items"]}
+        assert "SCOPE-ALLOW" in by_code
+        assert "SCOPE-DENY" not in by_code
+        assert by_code["SCOPE-SHARED"]["product_count"] == 1
+        assert [
+            row["product_code"] for row in by_code["SCOPE-SHARED"]["products"]
+        ] == ["SHARED-ALLOW"]
+        denied_search = scoped_client.get(
+            "/api/warehouse/molds",
+            params={"q": "SHARED-DENY", "limit": 100},
+        )
+        assert denied_search.status_code == 200, denied_search.text
+        assert denied_search.json()["items"] == []
+
+        allowed_label = scoped_client.get(
+            f"/api/warehouse/molds/{allowed_mold_id}/label"
+        )
+        assert allowed_label.status_code == 200, allowed_label.text
+        denied_label = scoped_client.get(
+            f"/api/warehouse/molds/{denied_mold_id}/label"
+        )
+        assert denied_label.status_code == 403, denied_label.text
+        assert denied_label.json()["detail"] == "无客户访问权限"
+
+
 def test_workshop_can_query_but_cannot_modify_mold(mold_app) -> None:
     app, factory = mold_app
     from app.models.mold_tool import MoldTool

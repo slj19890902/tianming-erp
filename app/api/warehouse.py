@@ -508,30 +508,14 @@ class Floor3LayoutSlotStatePayload(BaseModel):
 
 class Floor3PalletClearPayload(BaseModel):
     expected_version: int = Field(gt=0)
-    remarks: str = Field(min_length=1, max_length=500)
-
-    @field_validator("remarks")
-    @classmethod
-    def strip_floor3_clear_remarks(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("清空货位必须填写原因")
-        return text
+    remarks: str | None = Field(default=None, max_length=500)
 
 
 class Floor3PalletRelocationPayload(BaseModel):
     expected_version: int = Field(gt=0)
     needs_relocation: bool
     placement_confirmed: bool = False
-    remarks: str = Field(min_length=1, max_length=500)
-
-    @field_validator("remarks")
-    @classmethod
-    def strip_floor3_relocation_remarks(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("修改待归位标记必须填写原因")
-        return text
+    remarks: str | None = Field(default=None, max_length=500)
 
 
 class MoldToolPayload(BaseModel):
@@ -3465,6 +3449,7 @@ def clear_floor3_pallet(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    remarks = (payload.remarks or "").strip() or "清空三楼货位栈板（系统记录）"
     current = _floor3_get_pallet(db, pallet_id)
     _require_floor3_pallet_customer_access(db, current, user)
     from_location_id = current.location_id
@@ -3473,7 +3458,7 @@ def clear_floor3_pallet(
             db,
             pallet_id=pallet_id,
             expected_version=payload.expected_version,
-            remarks=payload.remarks,
+            remarks=remarks,
             operator_id=user.id,
         )
         _floor3_log(
@@ -3485,7 +3470,7 @@ def clear_floor3_pallet(
             description="清空三楼货位的当前栈板",
             details={
                 "from_location_id": from_location_id,
-                "reason": payload.remarks,
+                "reason": remarks,
                 "expected_version": payload.expected_version,
             },
         )
@@ -3510,6 +3495,13 @@ def set_floor3_pallet_relocation_flag(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    remarks = (payload.remarks or "").strip() or (
+        "标记三楼栈板待归位（系统记录）"
+        if payload.needs_relocation
+        else "现场确认三楼栈板已归位（系统记录）"
+        if payload.placement_confirmed
+        else "取消三楼栈板待归位标记（系统记录）"
+    )
     current = _floor3_get_pallet(db, pallet_id)
     _require_floor3_pallet_customer_access(db, current, user)
     try:
@@ -3535,7 +3527,7 @@ def set_floor3_pallet_relocation_flag(
             details={
                 "needs_relocation": payload.needs_relocation,
                 "placement_confirmed": payload.placement_confirmed,
-                "reason": payload.remarks,
+                "reason": remarks,
                 "expected_version": payload.expected_version,
             },
         )

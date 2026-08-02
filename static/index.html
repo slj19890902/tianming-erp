@@ -6760,7 +6760,8 @@
           },
           masterSingleConfirmNoReasonUpdate() {
             const state = this.masterChangeConfirm;
-            return this.masterSingleConfirmProductUpdate
+            return (state.visible && state.mode === "restore")
+              || this.masterSingleConfirmProductUpdate
               || (state.visible && state.mode === "update" && ["customer","material"].includes(state.entity));
           },
           masterChangeCanSubmit() {
@@ -7807,7 +7808,6 @@
                 `${this.masterVersionBase(state.entity,state.entityId)}/versions/${encodeURIComponent(state.targetVersion)}/restore`,
                 {
                   expected_version:state.currentVersion ?? state.expectedVersion,
-                  reason:String(state.reason || "").trim(),
                   confirmation_token:state.confirmationToken
                 }
               );

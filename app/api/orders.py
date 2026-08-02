@@ -1382,7 +1382,7 @@ class CostPreviewRequest(BaseModel):
 
 class OrderStatusRequest(BaseModel):
     status: str
-    remark: str
+    remark: str | None = Field(default=None, max_length=500)
 
 
 class WorkflowRollbackRequest(BaseModel):
@@ -4041,7 +4041,7 @@ def update_order_status(
         raise HTTPException(status_code=404, detail="订单不存在")
     require_customer_access(order.customer_id, current_user=user, db=db)
     target = payload.status.strip()
-    remark = payload.remark.strip()
+    remark = (payload.remark or "").strip() or None
     if target not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="订单状态无效")
     if target not in _MANUAL_ORDER_STATUS_TARGETS:
@@ -4052,8 +4052,6 @@ def update_order_status(
                 "均由真实业务单据自动判断，不能手工修改。需要撤回流程时请使用受控撤回。"
             ),
         )
-    if not remark:
-        raise HTTPException(status_code=400, detail="标记死单、已结档、已归档或已作废时必须填写备注")
     if target in _MANUAL_ORDER_STATUS_TARGETS:
         _lock_orders_for_production_transition(db, [order.id])
         order = db.scalar(
@@ -4071,7 +4069,7 @@ def update_order_status(
         )
     before = order.status
     order.status = target
-    if remark:
+    if remark is not None:
         order.remark = remark
     if target in FINAL_ORDER_STATUSES:
         _release_order_reservations(

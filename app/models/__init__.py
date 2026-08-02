@@ -146,6 +146,7 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     InventoryPallet,
     InventoryPalletItem,
     InventoryReservation,
+    OrderedFinishedReceiptReturn,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,

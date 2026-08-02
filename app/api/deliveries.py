@@ -2038,6 +2038,21 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     internal_remarks = _tianhua_internal_remarks_by_delivery_item(
         db, [int(row["id"]) for row in item_rows]
     )
+    delivery_item_ids = [int(row["id"]) for row in item_rows]
+    inventory_backed_delivery_item_ids = set(
+        db.scalars(
+            select(DeliveryInventoryAllocation.delivery_item_id)
+            .join(
+                InventoryReservation,
+                InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
+            )
+            .where(
+                DeliveryInventoryAllocation.delivery_item_id.in_(delivery_item_ids),
+                InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            )
+            .distinct()
+        ).all()
+    ) if delivery_item_ids else set()
     return {
         "deliveries": deliveries,
         "customers": customers,
@@ -2049,6 +2064,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         "pick_tasks": pick_tasks,
         "pick_items_by_task": pick_items_by_task,
         "internal_remarks": internal_remarks,
+        "inventory_backed_delivery_item_ids": inventory_backed_delivery_item_ids,
         "registry": build_display_registry(db),
     }
 
@@ -2149,6 +2165,30 @@ def _delivery_response(
                 )
             ],
         )
+    )
+    delivery_item_ids = [int(row["id"]) for row in items]
+    inventory_backed_delivery_item_ids = (
+        set(list_context["inventory_backed_delivery_item_ids"])
+        if list_context is not None
+        else set(
+            db.scalars(
+                select(DeliveryInventoryAllocation.delivery_item_id)
+                .join(
+                    InventoryReservation,
+                    InventoryReservation.id
+                    == DeliveryInventoryAllocation.reservation_id,
+                )
+                .where(
+                    DeliveryInventoryAllocation.delivery_item_id.in_(
+                        delivery_item_ids
+                    ),
+                    InventoryReservation.sales_order_item_bom_component_id.is_(None),
+                )
+                .distinct()
+            ).all()
+        )
+        if delivery_item_ids
+        else set()
     )
     response_items: list[dict] = []
     total_actual_goods_quantity = 0
@@ -2260,6 +2300,12 @@ def _delivery_response(
                 **kit_metadata,
                 "actual_goods_lines": actual_goods_lines,
                 "actual_goods_quantity": actual_goods_quantity,
+                "requires_return_location": bool(
+                    not is_unordered
+                    and has_dispatch_history
+                    and int(mapping["id"])
+                    in inventory_backed_delivery_item_ids
+                ),
                 "allocations": (
                     _unordered_finished_allocation_response(db, mapping["id"])
                     if is_unordered

@@ -439,7 +439,7 @@ class InventoryLot(Base):
         ),
         CheckConstraint(
             "source_type IN ('manual','production_completion','production_surplus',"
-            "'purchase_surplus','stocktake','transfer','replenishment')",
+            "'purchase_surplus','stocktake','transfer','replenishment','delivery_return')",
             name="ck_inventory_lots_source_type",
         ),
         CheckConstraint(
@@ -1011,7 +1011,7 @@ class InventoryMovement(Base):
         CheckConstraint(
             "movement_type IN ('manual_in','adjust','freeze','unfreeze','damage','scrap',"
             "'transfer_to_general','location_transfer','reserve','release_reserve',"
-            "'consume','reverse_consume')",
+            "'consume','reverse_consume','return_in','return_reconsume')",
             name="ck_inventory_movements_type",
         ),
         CheckConstraint("quantity >= 0", name="ck_inventory_movements_quantity"),
@@ -1189,6 +1189,141 @@ class DeliveryInventoryAllocation(Base):
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
     reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class OrderedFinishedReceiptReturn(Base):
+    """Immutable receipt-short return fact for an order-backed delivery line."""
+
+    __tablename__ = "ordered_finished_receipt_returns"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_ordered_receipt_returns_quantity"),
+        CheckConstraint(
+            "resolution_action IN ('continue_delivery','accept_short')",
+            name="ck_ordered_receipt_returns_resolution",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND reconsume_movement_id IS NULL "
+            "AND source_reconsume_movement_id IS NULL "
+            "AND reconsumed_at IS NULL) OR "
+            "(status = 'reconsumed' AND reconsume_movement_id IS NOT NULL "
+            "AND source_reconsume_movement_id IS NOT NULL "
+            "AND reconsumed_at IS NOT NULL)",
+            name="ck_ordered_receipt_returns_status",
+        ),
+        UniqueConstraint(
+            "return_receipt_item_id",
+            "sequence_no",
+            name="uq_ordered_receipt_returns_item_sequence",
+        ),
+        UniqueConstraint(
+            "return_inventory_lot_id",
+            name="uq_ordered_receipt_returns_lot",
+        ),
+        UniqueConstraint(
+            "return_in_movement_id",
+            name="uq_ordered_receipt_returns_in_movement",
+        ),
+        UniqueConstraint(
+            "source_reverse_movement_id",
+            name="uq_ordered_receipt_returns_source_reverse_movement",
+        ),
+        UniqueConstraint(
+            "source_transfer_movement_id",
+            name="uq_ordered_receipt_returns_source_transfer_movement",
+        ),
+        UniqueConstraint(
+            "reconsume_movement_id",
+            name="uq_ordered_receipt_returns_reconsume_movement",
+        ),
+        UniqueConstraint(
+            "source_reconsume_movement_id",
+            name="uq_ordered_receipt_returns_source_reconsume_movement",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_ordered_receipt_returns_idempotency",
+        ),
+        Index(
+            "ix_ordered_receipt_returns_receipt_item",
+            "return_receipt_item_id",
+            "status",
+        ),
+        Index(
+            "ix_ordered_receipt_returns_location",
+            "return_location_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    return_receipt_item_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_return_receipt_items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivery_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_delivery_items.id", ondelete="RESTRICT"), nullable=False
+    )
+    delivery_inventory_allocation_id: Mapped[int] = mapped_column(
+        ForeignKey("delivery_inventory_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_inventory_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    return_inventory_lot_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=False
+    )
+    return_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    reservation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_reservations.id", ondelete="RESTRICT"), nullable=True
+    )
+    return_in_movement_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_reverse_movement_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_transfer_movement_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=False
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolution_action: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    reconsume_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_reconsume_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"), nullable=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    reconsumed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reconsumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    return_lot: Mapped["InventoryLot"] = relationship(
+        foreign_keys=[return_inventory_lot_id]
+    )
+    source_lot: Mapped["InventoryLot"] = relationship(
+        foreign_keys=[source_inventory_lot_id]
+    )
+    return_location: Mapped["WarehouseLocation"] = relationship(
+        foreign_keys=[return_location_id]
+    )
+    reservation: Mapped["InventoryReservation | None"] = relationship(
+        foreign_keys=[reservation_id]
+    )
 
 
 class UnorderedFinishedDeliveryAllocation(Base):

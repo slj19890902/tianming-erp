@@ -395,10 +395,10 @@ def test_delivery_variance_ui_separates_return_difference_and_authorized_over_de
     assert "短收结单必须填写原因" not in INDEX
     assert "短收结单必须填写原因" not in INCOMING
     assert "订单待送 / 可用成品 / 可超送" in INDEX
-    assert "二次确认超量送货" in INDEX
+    assert "二次确认超量送货" not in INDEX
     assert 'this.hasPermission("deliveries.over_delivery")' in INDEX
     assert "当前账号没有超量送货权限" in INDEX
-    assert "请填写超量送货原因" in INDEX
+    assert "超过订单" in INDEX and "可直接保存" in INDEX
 
 
 def test_system_version_panel_groups_major_releases_and_hides_legacy_tools() -> None:

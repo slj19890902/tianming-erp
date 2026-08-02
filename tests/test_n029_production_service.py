@@ -509,6 +509,18 @@ def production_app(tmp_path: Path):
             warehouse_type="semi_finished",
             is_active=True,
         )
+        staging_location = WarehouseLocation(
+            location_code="F1-DISPATCH-01",
+            location_name="一楼待送区",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=1,
+            area_code="DISPATCH",
+            storage_type="temporary_aisle",
+            placement_status="placed",
+            is_temporary=True,
+            source_version="P1-25C",
+        )
         db.add_all(
             [
                 product_a,
@@ -522,6 +534,7 @@ def production_app(tmp_path: Path):
                 unplaced3,
                 regular,
                 semi_location,
+                staging_location,
             ]
         )
         db.flush()
@@ -678,6 +691,7 @@ def production_app(tmp_path: Path):
             "fixed3": fixed3.id,
             "occupied3": occupied3.id,
             "unplaced3": unplaced3.id,
+            "staging": staging_location.id,
         }
 
     app = FastAPI()
@@ -1477,7 +1491,8 @@ def test_direct_transfer_preserves_completion_and_production_reservation_cannot_
             )
         )
         assert completion.initial_disposition == "direct"
-        assert completion.inventory_lot_id is None
+        assert completion.inventory_lot_id == transfer.inventory_lot_id
+        assert completion.warehouse_location_id == ids["temp2"]
         assert transfer is not None
         reservation = db.scalar(
             select(InventoryReservation).where(
@@ -1837,7 +1852,7 @@ def test_overreceipt_203_produces_203_and_keeps_three_customer_surplus(
         )
 
 
-def test_direct_order_coverage_requires_surplus_location_and_preserves_three(
+def test_direct_completion_stages_whole_output_and_preserves_order_quantity(
     production_app,
 ) -> None:
     _app, factory, ids = production_app
@@ -1863,30 +1878,9 @@ def test_direct_order_coverage_requires_surplus_location_and_preserves_three(
         refreshed = refresh_production_task(db, item.id)
         assert refreshed is not None
         db.commit()
-        command = CompletionCommand(
-            task_id=task.id,
-            expected_version=refreshed.version,
-            disposition="direct",
-            material_input_quantity=203,
-            actual_output_quantity=203,
-            defective_quantity=0,
-            direct_delivery_quantity=200,
-        )
-        with pytest.raises(
-            ProductionWorkflowError,
-            match="成品库位",
-        ):
-            complete_production_batch(
-                db,
-                idempotency_key="direct-over-203-no-location",
-                commands=[command],
-                operator_id=None,
-            )
-        db.rollback()
-
         result = complete_production_batch(
             db,
-            idempotency_key="direct-over-203-with-location",
+            idempotency_key="direct-over-203-staging",
             commands=[
                 CompletionCommand(
                     task_id=task.id,
@@ -1896,20 +1890,52 @@ def test_direct_order_coverage_requires_surplus_location_and_preserves_three(
                     actual_output_quantity=203,
                     defective_quantity=0,
                     direct_delivery_quantity=200,
-                    location_id=ids["fixed3"],
                 )
             ],
             operator_id=None,
         )
         completion = result.completions[0]
-        assert completion.initial_disposition == "split"
-        assert completion.direct_delivery_quantity == 200
-        assert completion.stock_quantity == 3
+        assert completion.initial_disposition == "direct"
+        assert completion.direct_delivery_quantity == 203
+        assert completion.stock_quantity == 0
         assert completion.surplus_finished_quantity == 3
+        assert completion.warehouse_location_id == ids["staging"]
         lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot.source_type == "production_completion"
         assert lot.quantity_available == 3
-        assert lot.quantity_reserved == 0
+        assert lot.quantity_reserved == 200
+        assert lot.warehouse_location_id == ids["staging"]
+        assert item.quantity == 200
+        assert production_ready_quantity(db, item) == 203
         assert lot.finished_detail.owner_customer_id == customer.id
+        delivery_item = _delivery_item(
+            db,
+            item_id=item.id,
+            customer_id=customer.id,
+            quantity=203,
+        )
+        consume_delivery_item_inventory(
+            db,
+            delivery_item_id=delivery_item.id,
+            delivered_quantity_after_dispatch=203,
+            operator_id=None,
+            operation_key="direct-over-203-delivery",
+        )
+        db.refresh(lot)
+        surplus_reservation = db.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id == item.id,
+                InventoryReservation.reservation_type
+                == "finished_surplus_delivery",
+            )
+        )
+        assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed) == (
+            0,
+            0,
+            203,
+        )
+        assert surplus_reservation is not None
+        assert surplus_reservation.consumed_stock_quantity == 3
 
 
 def test_one_cut_two_uses_output_factor_and_records_loss(production_app) -> None:

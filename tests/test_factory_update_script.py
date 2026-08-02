@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.39"
-    assert APP_VERSION_NAME == "管理员逐级受控回退"
+    assert APP_VERSION == "v0.22.40"
+    assert APP_VERSION_NAME == "一楼待送区整批流转"
     assert APP_BUILD_DATE == "2026-08-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,23 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "生产完工、来料实收、报料" in item and "当前一步" in item
+        "本次更新｜" in item and "一楼待送区" in item and "另选库位" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "一次确认" in item and "固定说明" in item
+        "本次更新｜" in item and "订单数量保持不变" in item and "真实库存" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "来料实收和生产完工检查" in item and "下游事实" in item
+        "本次更新｜" in item and "超订单送货" in item and "不再要求二次勾选" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "撤销生产完工" in item and "下一步" in item
+        "如何验证｜" in item and "订单数量 50" in item and "实际合格 56" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "普通执行账号" in item and "不能撤销" in item
+        "如何验证｜" in item and "没有超量送货权限" in item and "明确拒绝" in item
         for item in current_release
     )
     assert any(

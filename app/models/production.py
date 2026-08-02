@@ -155,8 +155,9 @@ class ProductionCompletion(Base):
             name="ck_production_completions_initial_disposition",
         ),
         CheckConstraint(
-            "((initial_disposition = 'direct' AND warehouse_location_id IS NULL "
-            "AND inventory_lot_id IS NULL AND stock_quantity = 0) "
+            "((initial_disposition = 'direct' AND stock_quantity = 0 "
+            "AND ((warehouse_location_id IS NULL AND inventory_lot_id IS NULL) "
+            "OR warehouse_location_id IS NOT NULL)) "
             "OR (initial_disposition = 'stock' AND warehouse_location_id IS NOT NULL "
             "AND direct_delivery_quantity = 0) "
             "OR (initial_disposition = 'split' AND warehouse_location_id IS NOT NULL "

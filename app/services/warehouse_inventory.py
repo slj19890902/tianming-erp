@@ -1008,7 +1008,7 @@ def reserve_completed_finished_inventory(
     if (
         lot.inventory_type != "finished"
         or lot.status != "active"
-        or lot.source_type != "production_surplus"
+        or lot.source_type not in {"production_surplus", "production_completion"}
         or lot.source_ref_type != "production_completion"
         or lot.source_ref_id is None
     ):
@@ -1019,7 +1019,11 @@ def reserve_completed_finished_inventory(
     if (
         completion is None
         or completion.order_item_id != item.id
-        or int(completion.stock_quantity or completion.quantity or 0)
+        or int(
+            completion.actual_output_quantity
+            if lot.source_type == "production_completion"
+            else (completion.stock_quantity or completion.quantity or 0)
+        )
         != int(lot.quantity_available or 0)
     ):
         raise WarehouseInventoryError("完工库存与生产完工事实不一致", 409)
@@ -1136,7 +1140,9 @@ def reserve_finished_surplus_for_delivery(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            InventoryLot.source_type == "production_surplus",
+            InventoryLot.source_type.in_(
+                ("production_surplus", "production_completion")
+            ),
             FinishedGoodsInventoryDetail.product_id == item.product_id,
             FinishedGoodsInventoryDetail.is_general.is_(False),
             FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,

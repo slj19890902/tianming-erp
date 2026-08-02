@@ -117,7 +117,19 @@ def composite_db(tmp_path: Path):
             storage_type="temporary_aisle",
             source_version="V11",
         )
-        db.add_all([parent, lid, base, optional, location])
+        staging_location = WarehouseLocation(
+            location_code="F1-DISPATCH-01",
+            location_name="一楼待送区",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=1,
+            area_code="DISPATCH",
+            storage_type="temporary_aisle",
+            placement_status="placed",
+            is_temporary=True,
+            source_version="P1-25C",
+        )
+        db.add_all([parent, lid, base, optional, location, staging_location])
         db.flush()
         order = Order(
             order_number="N039-PRODUCTION-001",
@@ -202,7 +214,7 @@ def test_composite_tasks_are_component_piece_tasks_and_optional_does_not_block(
         ],
         operator_id=None,
     )
-    assert direct.completions[0].inventory_lot_id is None
+    assert direct.completions[0].inventory_lot_id is not None
     assert complete_production_batch(
         db,
         idempotency_key="n039-direct-lid",
@@ -299,7 +311,7 @@ def test_component_completion_is_task_scoped_and_transfer_uses_component_product
         == products["lid"]
     )
 
-    with pytest.raises(ProductionWorkflowError, match="仅待完工|已存在完工"):
+    with pytest.raises(ProductionWorkflowError, match="仅允许待完工|已存在完工"):
         complete_production_batch(
             db,
             idempotency_key="n039-repeat-task",

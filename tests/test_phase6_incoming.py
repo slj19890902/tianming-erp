@@ -1029,7 +1029,7 @@ def test_new_receipt_revert_restores_pending_without_changing_plan(
         )
         reverted = client.put(
             f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/revert",
-            json={"reason": "规格录入错误"},
+            json={},
         )
         pending = client.get("/api/incoming/pending")
 
@@ -1047,7 +1047,7 @@ def test_new_receipt_revert_restores_pending_without_changing_plan(
         assert item.requisition_qty == 100
         assert order.status == "pending_production"
         assert fact.status == "reversed"
-        assert fact.reversal_reason == "规格录入错误"
+        assert fact.reversal_reason == "撤回来料实收（系统记录）"
 
 
 def test_reverting_final_partial_receipt_restores_previous_waiting_decision(
@@ -1362,7 +1362,7 @@ def test_read_only_roles_cannot_receive(incoming_api_app, role: str) -> None:
     assert response.status_code == 403
 
 
-def test_revert_requires_reason_and_clears_receiving_fields(
+def test_revert_without_reason_clears_receiving_fields_and_audits(
     incoming_api_app,
 ) -> None:
     from app.models.audit import OperationLog
@@ -1371,16 +1371,11 @@ def test_revert_requires_reason_and_clears_receiving_fields(
     app, session_factory = incoming_api_app
     with TestClient(app) as client:
         _login(client, "admin")
-        missing_reason = client.put(
-            "/api/incoming/revert/3",
-            json={"reason": "  "},
-        )
         reverted = client.put(
             "/api/incoming/revert/3",
-            json={"reason": "纸板规格核对错误"},
+            json={},
         )
 
-    assert missing_reason.status_code == 422
     assert reverted.status_code == 200
     with session_factory() as session:
         item = session.get(OrderItem, 3)
@@ -1393,7 +1388,7 @@ def test_revert_requires_reason_and_clears_receiving_fields(
     assert item.material_status == "pending"
     assert item.material_received_at is None
     assert item.material_received_by is None
-    assert "纸板规格核对错误" in details
+    assert "撤回来料实收（系统记录）" in details
     assert '"before_status": "received"' in details
     assert '"after_status": "pending"' in details
 

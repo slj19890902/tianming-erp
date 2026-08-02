@@ -677,7 +677,6 @@
 
     $("revertForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reason = "来料实收历史回退（管理员一次确认）";
       const itemId = state.revertingItemId;
       $("revertModal").hidden = true;
       state.busyItemId = itemId;
@@ -689,7 +688,7 @@
           : `/api/incoming/revert/${item?.item_id ?? itemId}`;
         await api(url, {
           method: "PUT",
-          body: JSON.stringify({ reason }),
+          body: JSON.stringify({}),
         });
         showToast("已撤回，任务返回待收料");
         await loadData();

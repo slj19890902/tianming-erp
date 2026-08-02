@@ -1276,7 +1276,7 @@ def _reverse_surplus_lot(
     *,
     receipt_item: IncomingReceiptItem,
     user: User,
-    reason: str,
+    reason: str | None,
 ) -> None:
     if not receipt_item.surplus_inventory_lot_id:
         return
@@ -1322,9 +1322,7 @@ def revert_receipt_item(
     reason: str,
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
-    clean_reason = reason.strip()
-    if not clean_reason:
-        raise IncomingReceiptError("撤回原因不能为空")
+    clean_reason = (reason or "").strip() or "撤回来料实收（系统记录）"
     receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
     if receipt_item is None:
         raise IncomingReceiptError("来料实收记录不存在", 404)

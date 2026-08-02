@@ -66,16 +66,16 @@ class RestorePreviewPayload(BaseModel):
 
 
 class RestorePayload(RestorePreviewPayload):
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
     confirmation_token: str = Field(min_length=1)
 
-    @field_validator("reason")
+    @field_validator("reason", mode="before")
     @classmethod
-    def strip_reason(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("恢复原因不能为空")
-        return stripped
+    def normalize_optional_reason(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        stripped = str(value).strip()
+        return stripped or None
 
 
 def _entity_or_404(
@@ -370,7 +370,7 @@ def restore_version(
             updates=updates,
             expected_version=payload.expected_version,
             user=user,
-            reason=payload.reason,
+            reason=payload.reason or "系统记录：恢复主数据历史版本",
             source="api.master_data.restore",
             action="restore",
             confirmation_token=payload.confirmation_token,

@@ -745,7 +745,6 @@ def test_restore_api_commits_confirmed_restore_as_next_version(db: Session) -> N
             f"/api/master-data/customer/{customer.id}/versions/{target.version}/restore",
             json={
                 "expected_version": 2,
-                "reason": "恢复初始客户资料",
                 "confirmation_token": token,
             },
         )
@@ -754,6 +753,14 @@ def test_restore_api_commits_confirmed_restore_as_next_version(db: Session) -> N
     assert restored.json()["restored_from_version"] == 1
     assert customer.remark is None
     assert customer.version == 3
+    restored_revision = get_object_version(
+        db,
+        object_type="customer",
+        object_id=customer.id,
+        version=3,
+    )
+    assert restored_revision is not None
+    assert restored_revision.reason == "系统记录：恢复主数据历史版本"
 
 
 def test_product_history_redaction_matches_current_product_api(db: Session) -> None:

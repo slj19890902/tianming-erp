@@ -334,8 +334,11 @@ def test_restore_preview_and_restore_are_admin_only_and_token_bound() -> None:
     assert "/restore-preview`" in INDEX
     assert "/restore`" in INDEX
     assert "{expected_version:expectedVersion}" in INDEX
-    assert "reason:String(state.reason || \"\").trim()" in INDEX
+    restore = _method_block("async restoreMasterVersion()", "sum(items, key)")
+    assert "reason:" not in restore
     assert "confirmation_token:state.confirmationToken" in INDEX
+    assert 'state.visible && state.mode === "restore"' in INDEX
+    assert 'v-if="!masterSingleConfirmNoReasonUpdate"' in INDEX
     assert "恢复反向差异" in INDEX
     assert "旧版本已恢复，并已生成新的主数据版本" in INDEX
 

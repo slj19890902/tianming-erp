@@ -382,6 +382,15 @@
       .statement-delivery-table th,
       .statement-delivery-table td { vertical-align: middle; }
       .statement-delivery-detail-row td { padding: 0; background: #f7f7fa; }
+      .delivery-list-detail-row > td { padding: 0; background: #f7f9fc; }
+      .delivery-list-detail { padding: 10px 12px; }
+      .delivery-list-detail table { margin: 0; table-layout: fixed; background: #fff; }
+      .delivery-list-detail th,
+      .delivery-list-detail td { padding: 8px 10px; white-space: normal; overflow-wrap: anywhere; vertical-align: middle; }
+      .delivery-list-detail .delivery-detail-code { width: 22%; }
+      .delivery-list-detail .delivery-detail-name { width: 38%; }
+      .delivery-list-detail .delivery-detail-spec { width: 25%; }
+      .delivery-list-detail .delivery-detail-quantity { width: 15%; text-align: right; }
       .finance-current-table { table-layout: fixed; white-space: normal; }
       .finance-current-table th,
       .finance-current-table td { padding: 8px 6px; line-height: 1.35; vertical-align: middle; overflow-wrap: anywhere; }
@@ -1578,7 +1587,9 @@
             <section v-if="currentNavigationGroup" class="workbench-nav" :aria-label="`${currentNavigationGroup.label}工作台`">
               <div class="workbench-nav-title"><strong>{{ currentNavigationGroup.label }}</strong><span>{{ currentNavigationGroup.description }}</span></div>
               <div class="workbench-tabs">
-                <button v-for="page in currentNavigationGroup.pages" v-if="pageAllowed(page.key)" :key="page.key" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
+                <template v-for="page in (currentNavigationGroup ? currentNavigationGroup.pages : [])" :key="page.key">
+                  <button v-if="pageAllowed(page.key)" type="button" :class="['workbench-tab',{active:activePage===page.key}]" @click="go(page.key)">{{ page.label }}</button>
+                </template>
               </div>
             </section>
 
@@ -1965,7 +1976,7 @@
                   <div class="notice" style="margin:8px 0">嘉林亿规则：最小修边225mm；最小切宽270mm；最小切长500mm；100米以下接受随机配料并按牌价计价；分纸加价金额待确认，暂不参与自动报价。</div>
                   <div class="form-grid" style="margin:10px 0">
                     <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="paperCodeForm.supplier_name" /></div>
-                    <div class="field"><label>代码字符</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
+                    <div class="field"><label>代码字符（可用 + 等符号）</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
                     <div class="field"><label>纸种名称</label><input class="input" v-model.trim="paperCodeForm.paper_name" /></div>
                     <div class="field"><label>克重(g)</label><input class="input" type="number" min="1" step="1" v-model.number="paperCodeForm.gram_weight" /></div>
                     <div class="field"><label>等级/说明</label><input class="input" v-model.trim="paperCodeForm.paper_grade" /></div>
@@ -1983,7 +1994,7 @@
                     <div class="field"><label>供应商</label><input class="input" list="material-composer-suppliers" v-model.trim="materialComposer.supplier_name" @input="invalidateMaterialComposer" /></div>
                     <div class="field"><label>层数</label><select class="select" v-model.number="materialComposer.layer_count" @change="onMaterialComposerLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                     <div v-if="materialComposer.layer_count === 7" class="field"><label>使用楞型</label><select class="select" v-model="materialComposer.usage_flute_type" @change="invalidateMaterialComposer"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(materialComposer.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
-                    <div class="field"><label>材质代码</label><input class="input" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
+                    <div class="field"><label>材质代码（可含 + 等符号）</label><input class="input" :maxlength="materialComposer.layer_count" :placeholder="`输入${materialComposer.layer_count}位材质代码`" v-model.trim="materialComposer.material_code" @input="onMaterialComposerCodeInput" /></div>
                     <div class="field sensitive-price"><label>最终保存平方价</label><input class="input" type="number" min="0" step="0.0001" v-model="materialComposer.quote_price" placeholder="规则无法推算时手工填写" @input="materialComposerPriceSource='manual'" /></div>
                     <div class="field wide"><label>备注</label><input class="input" v-model.trim="materialComposer.remarks" /></div>
                     <div class="field"><label>操作</label><div class="toolbar-group"><button class="btn" @click="previewMaterialComposition">解析</button><button class="btn success" :disabled="loading || !materialComposerCanSave" @click="saveMaterialComposition">保存为可用材质</button></div></div>
@@ -2427,7 +2438,16 @@
             </template>
 
             <template v-else-if="activePage === 'requisition'">
-              <page-head title="智能报料工作台" desc="订单报料、库存抵扣和库存补库统一先生成可核对草稿；实际到料后再确认入账。"></page-head>
+              <div class="page-head requisition-page-head">
+                <div>
+                  <h2>智能报料工作台</h2>
+                  <p>订单报料、库存抵扣和库存补库统一先生成可核对草稿；实际到料后再确认入账。</p>
+                </div>
+                <div class="toolbar-group">
+                  <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
+                  <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                </div>
+              </div>
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:requisitionTab==='pending'}]" @click="selectRequisitionTab('pending')">待报料 {{ requisitionPending.length }}</button>
@@ -2435,7 +2455,6 @@
                   <button :class="['btn',{primary:requisitionTab==='submitted'}]" @click="selectRequisitionTab('submitted')">已报料/已入库<span v-if="requisitionReportedLoaded"> {{ requisitionReportedTotal }}</span></button>
                   <button v-if="canRequisition && requisitionTab==='pending'" class="btn warning" :disabled="!selectedPendingKeys.length" @click="openRequisitionHold()">暂不报料</button>
                   <button v-if="canRequisition && requisitionTab==='pending'" class="btn success" @click="openSupplierRequisitionDraft()">合并报料</button>
-                  <button v-if="canRequisition && requisitionTab==='pending'" class="btn" @click="openMergeSuggestions" :class="{primary: mergeSuggestions.length > 0}">合并建议{{ mergeSuggestions.length ? ` (${mergeSuggestions.length})` : '' }}</button>
                   <button v-if="canRequisition" class="btn primary" @click="openStockReplenishment">手动库存补库<span v-if="stockPolicyWarnings.length">（预警 {{ stockPolicyWarnings.length }}）</span></button>
                 </div>
                 <button class="btn" @click="refreshRequisitionTab">刷新</button>
@@ -2673,7 +2692,8 @@
                 <div v-if="deliveryListState.loaded && !deliveries.length" class="empty">当前没有符合条件的送货单</div>
                 <div v-else class="table-wrap"><table class="delivery-list-table"><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
                 <tbody>
-                  <tr v-for="row in deliveries" :key="row.id">
+                  <template v-for="row in deliveries" :key="row.id">
+                  <tr>
                     <td>{{ row.delivery_number }}</td>
                     <td>{{ row.customer_name }}</td>
                     <td>{{ row.delivery_date }}</td>
@@ -2681,16 +2701,7 @@
                     <td>{{ deliveryActualGoodsQuantity(row) }}</td>
                     <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
-                    <td>
-                      <div v-for="item in row.items" :key="item.id" style="margin-bottom:4px">
-                        <div><strong>{{ item.product_code || "存货编码未登记" }}</strong> {{ item.product_name || "产品名称未登记" }} × {{ item.delivered_quantity }}</div>
-                        <div class="muted" style="font-size:11px">{{ item.specification || "规格未登记" }}</div>
-                        <div v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code" class="muted" style="font-size:11px">
-                          套内子件：{{ component.component_code || component.product_code || "-" }} {{ component.component_name || component.product_name || "未命名组件" }} × {{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}（不单独计价）
-                        </div>
-                        <div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div>
-                      </div>
-                    </td>
+                    <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
                       <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" @click="createDeliveryPickTask(row)">拿货</button>
                       <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
@@ -2708,6 +2719,33 @@
                       <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger" @click="cancelDelivery(row)">取消发货</button>
                     </td>
                   </tr>
+                  <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
+                    <td colspan="9">
+                      <div class="delivery-list-detail">
+                        <table>
+                          <thead><tr><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th class="delivery-detail-spec">产品尺寸</th><th class="delivery-detail-quantity">数量</th></tr></thead>
+                          <tbody>
+                            <template v-for="item in row.items || []" :key="item.id">
+                              <tr>
+                                <td><strong>{{ item.product_code || "未登记" }}</strong></td>
+                                <td>{{ item.product_name || "未登记" }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td>
+                                <td>{{ item.specification || "未登记" }}</td>
+                                <td class="delivery-detail-quantity"><strong>{{ item.delivered_quantity }}</strong></td>
+                              </tr>
+                              <tr v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code">
+                                <td>{{ component.component_code || component.product_code || "-" }}</td>
+                                <td><span class="status blue">套内子件</span> {{ component.component_name || component.product_name || "未命名组件" }}</td>
+                                <td>{{ component.specification || "-" }}</td>
+                                <td class="delivery-detail-quantity">{{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}</td>
+                              </tr>
+                            </template>
+                            <tr v-if="!(row.items || []).length"><td colspan="4" class="empty">暂无送货明细</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                  </template>
                 </tbody>
                 </table></div>
               </div>
@@ -4296,12 +4334,14 @@
                     </tr>
                      <tr v-if="item._show_inventory_details && item.matched_product_id && item._inventory && inventoryComponents(item).some(component => generalSemiFinishedCandidates(item._inventory.semi[component]).length)">
                         <td :colspan="pdfDraftColumnCount(draft)" style="padding:3px 6px 6px;background:#fffbeb;border:1px solid #f59e0b;color:#92400e;font-size:12px">
-                         <div v-for="component in inventoryComponents(item)" :key="`pdf-general-confirm-${component}`" v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" class="toolbar-group">
+                         <template v-for="component in inventoryComponents(item)" :key="`pdf-general-confirm-${component}`">
+                           <div v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" class="toolbar-group">
                            <strong class="status orange">通用半成品，可跨客户，需人工确认</strong>
                            <span>{{ generalSemiFinishedCandidates(item._inventory.semi[component]).map(candidate => candidate.lot_number).join('、') }}</span>
                            <label><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" /> 我已明确确认可跨客户抵扣</label>
                            <button class="btn small success" type="button" :disabled="!item._inventory.semi[component].general_confirmation" @click="confirmOrderLineInventory(item,component,generalSemiFinishedCandidates(item._inventory.semi[component])[0],true)">明确确认并抵扣</button>
-                         </div>
+                           </div>
+                         </template>
                        </td>
                      </tr>
                      <tr v-if="item._show_inventory_details && item.matched_product_id && item._inventory">
@@ -4530,9 +4570,11 @@
                       <div style="border:1px solid #bfdbfe;border-radius:6px;padding:7px;background:#f8fbff;font-size:12px">
                         <div class="toolbar-group"><strong>库存安排</strong><span v-if="item._inventory.loading" class="muted">正在查询…</span><span v-else-if="item._inventory.stale" class="status orange">信息已变化</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">重新查询</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div>
                          <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
-                         <div v-for="component in inventoryComponents(item)" :key="`general-confirm-${component}`" v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" style="margin-top:5px;padding:5px;background:#fffbeb;border:1px solid #f59e0b;border-radius:5px;color:#92400e">
+                         <template v-for="component in inventoryComponents(item)" :key="`general-confirm-${component}`">
+                           <div v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" style="margin-top:5px;padding:5px;background:#fffbeb;border:1px solid #f59e0b;border-radius:5px;color:#92400e">
                            <div class="toolbar-group"><strong>通用半成品，可跨客户，需人工确认</strong><span>{{ generalSemiFinishedCandidates(item._inventory.semi[component]).map(candidate => candidate.lot_number).join('、') }}</span><label><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" /> 我已明确确认可跨客户抵扣</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].general_confirmation" @click="confirmOrderLineInventory(item,component,generalSemiFinishedCandidates(item._inventory.semi[component])[0],true)">明确确认并抵扣</button></div>
-                         </div>
+                           </div>
+                         </template>
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，{{ inventoryLocation(allocation.candidate) }}</div></div>
                         <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}库存：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无可用库存</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div>
                       </div>
@@ -6138,7 +6180,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], deliveryPickers: [], deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null},
@@ -14932,6 +14974,9 @@
           },
           toggleStatementDeliveryExpanded(row) {
             this.expandedStatementDeliveries[row.delivery_id] = !this.expandedStatementDeliveries[row.delivery_id];
+          },
+          toggleDeliveryListDetail(row) {
+            this.expandedDeliveryRows[row.id] = !this.expandedDeliveryRows[row.id];
           },
           async sendVersionedMasterMutation({method,url,row,body={}}) {
             const expectedVersion = Number(row.version);

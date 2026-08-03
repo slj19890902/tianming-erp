@@ -158,16 +158,19 @@ def seven_layer_code_error(
 
     Legacy material descriptions may contain separators and prose, so this
     guard deliberately applies only to a clean seven-character dictionary
-    code. Seven-layer entries themselves must use exactly seven alphanumeric
-    paper-layer characters.
+    code. Seven-layer entries themselves must use exactly seven visible
+    paper-layer characters; supplier symbols such as ``+`` are valid.
     """
     code = unicodedata.normalize("NFKC", str(material_code or "")).strip().upper()
     code = re.sub(r"\s+", "", code)
-    is_seven_code = re.fullmatch(r"[A-Z0-9]{7}", code) is not None
+    is_seven_code = (
+        len(code) == 7
+        and all(char.isprintable() and not char.isspace() for char in code)
+    )
     if is_seven_code and layer_count != 7:
         return "7位材质代码必须按七层保存，不能声明为三层、五层或空层数"
     if layer_count == 7 and not is_seven_code:
-        return "七层材质代码必须是7个字母或数字"
+        return "七层材质代码必须是7个可见字符"
     return None
 
 

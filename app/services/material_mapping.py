@@ -97,7 +97,10 @@ def classify_confidence(
         normalized_new_code = str(new_code or "").strip().upper()
         if (
             len(normalized_new_code) != 7
-            or re.fullmatch(r"[A-Z0-9]{7}", normalized_new_code) is None
+            or any(
+                not char.isprintable() or char.isspace()
+                for char in normalized_new_code
+            )
         ):
             return "低可信"
 
@@ -527,7 +530,7 @@ def _validated_material_code_and_layer(
     code = str(new_code or "").strip().upper()
     if (
         len(code) not in _MATERIAL_DICTIONARY_LAYER_COUNTS
-        or re.fullmatch(r"[A-Z0-9]+", code) is None
+        or any(not char.isprintable() or char.isspace() for char in code)
     ):
         return None
 

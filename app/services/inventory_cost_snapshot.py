@@ -44,11 +44,18 @@ def _positive_decimal(value: object) -> Decimal | None:
 
 def _material_key(value: str | None, layer_count: int | None = None) -> str:
     normalized = unicodedata.normalize("NFKC", value or "").upper()
+    compact = re.sub(r"\s+", "", normalized)
+    expected = 5 if layer_count == 5 else 3 if layer_count == 3 else 7 if layer_count == 7 else None
+    if (
+        expected is not None
+        and len(compact) == expected
+        and all(char.isprintable() and not char.isspace() for char in compact)
+    ):
+        return compact
     tokens = re.findall(r"[A-Z0-9]+", normalized)
     candidates = [token for token in tokens if any(char.isalpha() for char in token)]
     if not candidates:
         return ""
-    expected = 5 if layer_count == 5 else 3 if layer_count == 3 else None
     if expected:
         exact = next((token for token in candidates if len(token) == expected), None)
         if exact:

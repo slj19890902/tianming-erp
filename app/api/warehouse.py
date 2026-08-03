@@ -66,6 +66,7 @@ from app.services.floor3_locations import (
     set_layout_slot_active,
     update_layout_area,
 )
+from app.services.factory_maps import FactoryMapNotFoundError, load_factory_map
 from app.services.semi_finished_inventory import (
     SemiFinishedCandidate,
     SemiFinishedLotVersion,
@@ -3674,6 +3675,17 @@ def _require_registered_area(
             detail="该楼层区域尚未建立台账，请先新增楼层和区域。",
         )
     return area
+
+
+@router.get("/factory-maps/floors/{floor_code}")
+def get_factory_floor_map(
+    floor_code: str,
+    _user: User = Depends(can_read),
+) -> dict:
+    try:
+        return load_factory_map(floor_code)
+    except FactoryMapNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.get("/space/floors")

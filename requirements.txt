@@ -12,6 +12,8 @@ bcrypt==5.0.0
 PyJWT==2.13.0
 pyodbc==5.3.0
 psycopg2-binary==2.9.12
+# 工厂数字地图离线 DXF 解析
+ezdxf==1.4.4
 # Phase 19: PDF OCR 支持
 # pymupdf  — PDF 页面渲染为图片（pip install pymupdf）
 # easyocr  — 本地中文 OCR，纯 Python，无需系统二进制（pip install easyocr）

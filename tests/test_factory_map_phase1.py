@@ -58,12 +58,12 @@ def test_confirmed_v4_asset_preserves_real_dxf_evidence() -> None:
     assert payload["floor_code"] == "1F"
     assert payload["map_version"] == "V4"
     assert payload["source"]["sha256"] == (
-        "638436d1440f5492d8e51d3842b7d1c4761a05f01842822a0761d4a6451c14df"
+        "addb330ed2887751f0486b6a3ed00fda6f2c6f67de3becfb9f01a31467a76963"
     )
-    assert payload["source"]["file_name"] == "TM_FACTORY_1F_ERP_V4_CONFIRMED.dxf"
+    assert payload["source"]["file_name"] == "TM_FACTORY_1F_ERP_V4_CONFIRMED_OUTDOOR.dxf"
     assert payload["source"]["standard_load_compatible"] is False
-    assert len(payload["primitives"]) == 74
-    assert sum(item["kind"] == "zone" for item in payload["primitives"]) == 14
+    assert len(payload["primitives"]) == 77
+    assert sum(item["kind"] == "zone" for item in payload["primitives"]) == 17
     assert sum(
         item["kind"] == "zone" and "zone_code" not in item
         for item in payload["primitives"]
@@ -74,6 +74,12 @@ def test_confirmed_v4_asset_preserves_real_dxf_evidence() -> None:
     assert sum(
         item.get("zone_code") == "ZONE-1F-D" for item in payload["primitives"]
     ) == 2
+    assert sum(
+        item.get("zone_code") == "ZONE-1F-OUT-E" for item in payload["primitives"]
+    ) == 2
+    assert sum(
+        item.get("zone_code") == "ZONE-1F-OUT-S" for item in payload["primitives"]
+    ) == 1
     assert {item["zone_code"] for item in payload["business_zones"]} == {
         "ZONE-1F-A",
         "ZONE-1F-B",
@@ -88,7 +94,7 @@ def test_confirmed_v4_asset_preserves_real_dxf_evidence() -> None:
         item for item in payload["business_zones"] if item["zone_code"].startswith("ZONE-1F-OUT-")
     ]
     assert {item["short_code"] for item in outdoor_zones} == {"外东", "外南"}
-    assert all(item["boundary_status"] == "missing" for item in outdoor_zones)
+    assert all(item["boundary_status"] == "drawn" for item in outdoor_zones)
     assert all(item["temporary_only"] is True for item in outdoor_zones)
     assert all(item["weather_exposed"] is True for item in outdoor_zones)
     assert all(

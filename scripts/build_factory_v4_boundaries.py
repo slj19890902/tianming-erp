@@ -54,6 +54,30 @@ PROPOSALS = [
         "points": [(-16.488, 5.288), (-16.488, 9.220), (-15.376, 9.220), (-15.376, 5.288)],
         "add_label_to_full_dxf": False,
     },
+    {
+        "code": "ZONE-1F-OUT-E-01",
+        "source_label": "1F-OUT-E-001",
+        "name": "东侧室外临时装卸区（北段）",
+        "kind": "OUT-E",
+        "points": [(13.704, -1.903), (17.704, -1.903), (17.704, 9.089), (13.704, 9.089)],
+        "add_label_to_full_dxf": True,
+    },
+    {
+        "code": "ZONE-1F-OUT-E-02",
+        "source_label": "1F-OUT-E-002",
+        "name": "东侧室外临时装卸区（南段）",
+        "kind": "OUT-E",
+        "points": [(13.704, -7.878), (17.704, -7.878), (17.704, -4.390), (13.704, -4.390)],
+        "add_label_to_full_dxf": True,
+    },
+    {
+        "code": "ZONE-1F-OUT-S-01",
+        "source_label": "1F-OUT-S-001",
+        "name": "南侧室外临时装卸区",
+        "kind": "OUT-S",
+        "points": [(-10.800, -7.878), (13.704, -7.878), (13.704, -5.478), (-10.800, -5.478)],
+        "add_label_to_full_dxf": True,
+    },
 ]
 
 
@@ -86,25 +110,38 @@ def _proposal_bounds(points: list[tuple[float, float]]) -> tuple[float, float, f
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _proposal_dxf_color(kind: str) -> int:
+    return 30 if kind == "P" else 6 if kind == "D" else 4
+
+
+def _proposal_image_colors(kind: str) -> tuple[str, str]:
+    if kind == "P":
+        return "#f97316", "#f9731628"
+    if kind == "D":
+        return "#db2777", "#db277728"
+    return "#0891b2", "#0891b228"
+
+
 def create_overlay_dxf(output_path: Path) -> None:
     doc = ezdxf.new("R2013")
     doc.header["$INSUNITS"] = 6
     doc.layers.add(BOUNDARY_LAYER, color=30)
     modelspace = doc.modelspace()
     for proposal in PROPOSALS:
+        color = _proposal_dxf_color(proposal["kind"])
         modelspace.add_lwpolyline(
             proposal["points"],
             close=True,
-            dxfattribs={"layer": BOUNDARY_LAYER, "color": 30 if proposal["kind"] == "P" else 6},
+            dxfattribs={"layer": BOUNDARY_LAYER, "color": color},
         )
         min_x, min_y, max_x, max_y = _proposal_bounds(proposal["points"])
         modelspace.add_text(
             proposal["source_label"],
             height=0.22,
-            dxfattribs={"layer": "0", "color": 30 if proposal["kind"] == "P" else 6},
+            dxfattribs={"layer": "0", "color": color},
         ).set_placement(((min_x + max_x) / 2, (min_y + max_y) / 2))
     modelspace.add_text(
-        "P/D BOUNDARIES CONFIRMED 2026-08-03",
+        "1F BOUNDARIES CONFIRMED 2026-08-03",
         height=0.25,
         dxfattribs={"layer": "0", "color": 1},
     ).set_placement((-7.0, 17.4))
@@ -113,7 +150,7 @@ def create_overlay_dxf(output_path: Path) -> None:
 
 
 def _entity_lines(proposal: dict, handle: int) -> list[str]:
-    color = 30 if proposal["kind"] == "P" else 6
+    color = _proposal_dxf_color(proposal["kind"])
     lines = [
         "  0", "LWPOLYLINE", "  5", f"{handle:X}", "100", "AcDbEntity",
         "  8", BOUNDARY_LAYER, " 62", str(color), "100", "AcDbPolyline",
@@ -194,8 +231,8 @@ def create_reference_png(source_path: Path, output_path: Path) -> None:
     small_font = ImageFont.truetype(font_path, 16)
     legend_font = ImageFont.truetype(font_path, 19)
 
-    draw.text((60, 28), "天明 ERP 1F V4：P / D 区确认边界参考图", fill="#0f172a", font=title_font)
-    draw.text((60, 68), "橙色为同一 P 设备区的三个组成边界；粉色为 D 货架边界", fill="#334155", font=small_font)
+    draw.text((60, 28), "天明 ERP 1F V4：设备、货架与室外临时区确认图", fill="#0f172a", font=title_font)
+    draw.text((60, 68), "橙色为 P 设备区，粉色为 D 货架，青色为东/南室外临时装卸区", fill="#334155", font=small_font)
 
     layer_priority = ["05_ZONE_区域", "06_PATH_通道", "walls", "01_COLUMN_柱子", "02_FIRE_消防", "03_MACHINE_设备", "04_RACK_货架"]
     for layer in layer_priority:
@@ -216,8 +253,7 @@ def create_reference_png(source_path: Path, output_path: Path) -> None:
 
     for proposal in PROPOSALS:
         poly = [canvas(point) for point in proposal["points"]]
-        color = "#f97316" if proposal["kind"] == "P" else "#db2777"
-        fill = "#f9731628" if proposal["kind"] == "P" else "#db277728"
+        color, fill = _proposal_image_colors(proposal["kind"])
         draw.polygon(poly, fill=fill)
         draw.line(poly + [poly[0]], fill=color, width=6)
         min_x_p, min_y_p, max_x_p, max_y_p = _proposal_bounds(proposal["points"])
@@ -239,6 +275,8 @@ def create_reference_png(source_path: Path, output_path: Path) -> None:
         ("#f97316", "P-003 分纸机"),
         ("#db2777", "D-001 旧机印刷版货架"),
         ("#db2777", "D-002 双层挂板货架"),
+        ("#0891b2", "OUT-E 东侧两段（外扩4m）"),
+        ("#0891b2", "OUT-S 南侧一段（外扩2.4m）"),
         ("#3b82f6", "已有 05_ZONE 区域"),
         ("#475569", "已有设备实体"),
         ("#7c3aed", "已有货架实体"),
@@ -256,6 +294,7 @@ def create_reference_png(source_path: Path, output_path: Path) -> None:
         "3. P-001/P-002 间通道保留",
         "4. D 边界按货架实际外沿",
         "5. D-002 双层，高度 2m",
+        "6. 室外区只临放，不长期存储",
     ]
     for index, note in enumerate(notes):
         draw.text((legend_x, y), note, fill="#991b1b" if index == 0 else "#475569", font=legend_font)

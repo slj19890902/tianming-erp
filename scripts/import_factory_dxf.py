@@ -97,7 +97,7 @@ BUSINESS_ZONES = [
     },
 ]
 
-ZONE_LABEL = re.compile(r"^1F-([A-Z])-\d{3}$", re.IGNORECASE)
+ZONE_LABEL = re.compile(r"^1F-([A-Z]+(?:-[A-Z]+)*)-\d{3}$", re.IGNORECASE)
 
 
 def _kind_for_layer(layer: str) -> str | None:

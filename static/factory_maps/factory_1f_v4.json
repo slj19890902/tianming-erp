@@ -4,8 +4,8 @@
   "floor_name": "一楼",
   "map_version": "V4",
   "source": {
-    "file_name": "TM_FACTORY_1F_ERP_V4_CONFIRMED.dxf",
-    "sha256": "638436d1440f5492d8e51d3842b7d1c4761a05f01842822a0761d4a6451c14df",
+    "file_name": "TM_FACTORY_1F_ERP_V4_CONFIRMED_OUTDOOR.dxf",
+    "sha256": "addb330ed2887751f0486b6a3ed00fda6f2c6f67de3becfb9f01a31467a76963",
     "input_units": "m",
     "output_units": "mm",
     "parser": "ezdxf.iterdxf",
@@ -13,22 +13,22 @@
   },
   "bounds_mm": {
     "min_x": -17051.0,
-    "min_y": -5478.0,
-    "max_x": 13704.0,
+    "min_y": -7878.0,
+    "max_x": 17704.0,
     "max_y": 17111.0
   },
   "entity_counts": {
     "INSERT": 11,
-    "LWPOLYLINE": 63,
-    "TEXT": 26
+    "LWPOLYLINE": 66,
+    "TEXT": 29
   },
   "layer_counts": {
-    "0": 20,
+    "0": 23,
     "01_COLUMN_柱子": 12,
     "02_FIRE_消防": 4,
     "03_MACHINE_设备": 12,
     "04_RACK_货架": 6,
-    "05_ZONE_区域": 14,
+    "05_ZONE_区域": 17,
     "06_PATH_通道": 10,
     "07_TEXT_编号": 2,
     "doors": 6,
@@ -113,7 +113,7 @@
       "description": "东侧墙外临时放置待收货和待装车栈板；三楼成品可下楼短暂停放等待货车。区域受天气影响，不作为长期库存区。",
       "temporary_only": true,
       "weather_exposed": true,
-      "boundary_status": "missing"
+      "boundary_status": "drawn"
     },
     {
       "zone_code": "ZONE-1F-OUT-S",
@@ -126,7 +126,7 @@
       "description": "南侧墙外临时放置待收货和待装车栈板；三楼成品可下楼短暂停放等待货车。区域受天气影响，不作为长期库存区。",
       "temporary_only": true,
       "weather_exposed": true,
-      "boundary_status": "missing"
+      "boundary_status": "drawn"
     }
   ],
   "primitives": [
@@ -2194,6 +2194,84 @@
       ],
       "source_label": "1F-D-002",
       "zone_code": "ZONE-1F-D"
+    },
+    {
+      "id": "F1000A",
+      "kind": "zone",
+      "layer": "05_ZONE_区域",
+      "closed": true,
+      "points": [
+        [
+          13704.0,
+          -1903.0
+        ],
+        [
+          17704.0,
+          -1903.0
+        ],
+        [
+          17704.0,
+          9089.0
+        ],
+        [
+          13704.0,
+          9089.0
+        ]
+      ],
+      "source_label": "1F-OUT-E-001",
+      "zone_code": "ZONE-1F-OUT-E"
+    },
+    {
+      "id": "F1000C",
+      "kind": "zone",
+      "layer": "05_ZONE_区域",
+      "closed": true,
+      "points": [
+        [
+          13704.0,
+          -7878.0
+        ],
+        [
+          17704.0,
+          -7878.0
+        ],
+        [
+          17704.0,
+          -4390.0
+        ],
+        [
+          13704.0,
+          -4390.0
+        ]
+      ],
+      "source_label": "1F-OUT-E-002",
+      "zone_code": "ZONE-1F-OUT-E"
+    },
+    {
+      "id": "F1000E",
+      "kind": "zone",
+      "layer": "05_ZONE_区域",
+      "closed": true,
+      "points": [
+        [
+          -10800.0,
+          -7878.0
+        ],
+        [
+          13704.0,
+          -7878.0
+        ],
+        [
+          13704.0,
+          -5478.0
+        ],
+        [
+          -10800.0,
+          -5478.0
+        ]
+      ],
+      "source_label": "1F-OUT-S-001",
+      "zone_code": "ZONE-1F-OUT-S"
     }
   ],
   "labels": [
@@ -2352,12 +2430,29 @@
       "x_mm": 2540.0,
       "y_mm": 15479.0,
       "layer": "0"
+    },
+    {
+      "text": "1F-OUT-E-001",
+      "x_mm": 15704.0,
+      "y_mm": 3593.0,
+      "layer": "0"
+    },
+    {
+      "text": "1F-OUT-E-002",
+      "x_mm": 15704.0,
+      "y_mm": -6134.0,
+      "layer": "0"
+    },
+    {
+      "text": "1F-OUT-S-001",
+      "x_mm": 1452.0,
+      "y_mm": -6678.0,
+      "layer": "0"
     }
   ],
   "warnings": [
     "源 DXF 存在重复 handle，标准文档加载失败；本资产使用只读流式实体解析生成。",
     "05_ZONE_区域 中有 1 个闭合区域没有区域编号。",
-    "东侧、南侧室外临时装卸区的业务用途已确认，但 DXF 没有厂区外边界和外扩尺寸；当前只登记区域，不生成推测轮廓或库位。",
     "图纸中未找到设备编号 EQ-1F-SLITTER-01。",
     "图纸保留原始设备文字 E-1F-PINT-OLD，疑似 PRINT 拼写待现场确认。"
   ]

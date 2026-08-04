@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import stat
@@ -81,6 +82,33 @@ def test_export_contains_verified_manifest_and_consistent_copy(
     assert verified["snapshot"]["core_counts"]["products"] == 1
     assert verified["snapshot"]["sha256"] == manifest["database"]["sha256"]
     assert verified["database"].resolve() != source.resolve()
+
+
+def test_verify_accepts_readable_windows_nas_path_when_resolve_returns_1005(
+    exported_package: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir, _ = exported_package
+    package_absolute = package_dir.absolute()
+    original_resolve = Path.resolve
+
+    def resolve_with_nas_driver_failure(
+        self: Path, strict: bool = False
+    ) -> Path:
+        absolute = Path(os.path.abspath(self))
+        if absolute == package_absolute or package_absolute in absolute.parents:
+            error = OSError("模拟 Windows NAS 映射盘 Path.resolve 失败")
+            error.winerror = 1005
+            raise error
+        return original_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve_with_nas_driver_failure)
+
+    verified = weekly.verify_package(package_dir)
+
+    assert verified["database"] == package_absolute / weekly.DATABASE_FILENAME
+    assert verified["snapshot"]["integrity_check"] == "ok"
+    assert verified["snapshot"]["foreign_key_violations"] == 0
 
 
 def test_verify_rejects_manifest_or_database_tampering(

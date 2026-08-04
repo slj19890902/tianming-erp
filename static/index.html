@@ -3072,6 +3072,19 @@
 
             <template v-else-if="activePage === 'system'">
               <page-head title="系统设置" desc="管理员可管理账号临时密码及 NAS 数据备份。"></page-head>
+              <div class="toolbar" style="margin-bottom:12px;justify-content:flex-start">
+                <button :class="['btn',systemSection==='basic'?'primary':'']" @click="selectSystemSection('basic')">账号与公司</button>
+                <button :class="['btn',systemSection==='print'?'primary':'']" @click="selectSystemSection('print')">打印设置</button>
+                <button :class="['btn',systemSection==='backup'?'primary':'']" @click="selectSystemSection('backup')">数据备份</button>
+                <button :class="['btn',systemSection==='pdf'?'primary':'']" @click="selectSystemSection('pdf')">PDF 识别管理</button>
+              </div>
+              <div v-if="systemSectionLoading[systemSection]" class="empty">正在读取{{ systemSectionLabel(systemSection) }}…</div>
+              <div v-else-if="systemSectionErrors[systemSection]" class="notice danger">
+                {{ systemSectionErrors[systemSection] }}
+                <button class="btn small" @click="retrySystemSection">重新加载</button>
+              </div>
+
+              <template v-if="systemSection === 'basic' && (systemSectionLoaded.basic || (!systemSectionLoading.basic && !systemSectionErrors.basic))">
               <div class="panel" style="margin-bottom:10px">
                 <div class="section-title">用户与密码</div>
                 <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
@@ -3139,11 +3152,13 @@
                     </ol>
                   </div>
                 </div>
-                <div v-if="versionMajorGroups.length" style="margin-top:12px">
-                  <button class="btn small" @click="showVersionHistory=!showVersionHistory">
-                    {{ showVersionHistory ? '收起历史版本' : '查看历史版本' }}
+                <div v-if="versionInfo.version" style="margin-top:12px">
+                  <button class="btn small" :disabled="versionHistoryLoading" @click="toggleSystemVersionHistory">
+                    {{ versionHistoryLoading ? '正在读取…' : (showVersionHistory ? '收起历史版本' : '查看历史版本') }}
                   </button>
+                  <span v-if="versionHistoryError" class="danger-text" style="margin-left:8px">{{ versionHistoryError }}</span>
                   <div v-if="showVersionHistory" style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+                    <div v-if="!versionMajorGroups.length" class="empty">暂无历史版本记录</div>
                     <div v-for="group in versionMajorGroups" :key="group.key" style="border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fff">
                       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                         <div style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline">
@@ -3165,7 +3180,9 @@
                   </div>
                 </div>
               </div>
-              <div class="section-title">数据备份</div>
+              </template>
+
+              <template v-if="systemSection === 'print' && (systemSectionLoaded.print || (!systemSectionLoading.print && !systemSectionErrors.print))">
               <div class="section-title" style="margin-top:16px">送货单打印纸张</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:end">
@@ -3185,6 +3202,10 @@
                 </div>
                 <div class="muted" style="font-size:12px;margin-top:8px">该打印档案保存在 ERP 服务器，所有电脑自动读取同一型号和尺寸。默认 EPSON SK820、241 × 139.5mm；宽是两侧针孔之间的横向纸宽，高是相邻横向撕纸线之间的走纸高度，不要交换宽高。为避免新 ERP 再旋转 90°，纸张物理方向沿用实际打印电脑已安装的打印机驱动，与旧 ERP 的正常打印方式一致。</div>
               </div>
+              </template>
+
+              <template v-if="systemSection === 'backup' && (systemSectionLoaded.backup || (!systemSectionLoading.backup && !systemSectionErrors.backup))">
+              <div class="section-title">数据备份</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
                   <span><strong>备份位置：</strong>{{ backupStats.location_type === 'nas' ? 'NAS 网络存储' : '本地磁盘' }}</span>
@@ -3233,6 +3254,7 @@
                   </div>
                 </div>
               </div>
+              </template>
 
               <template v-if="false">
               <!-- ── 材质映射审批 ── -->
@@ -3339,6 +3361,7 @@
               </div>
               </template>
 
+              <template v-if="systemSection === 'pdf' && (systemSectionLoaded.pdf || (!systemSectionLoading.pdf && !systemSectionErrors.pdf))">
               <!-- ── PDF 识别训练库 (Phase 18) ── -->
               <div class="section-title" style="margin-top:24px">PDF 订单识别训练库</div>
               <div class="panel" style="margin-bottom:10px;padding:14px 18px">
@@ -3436,7 +3459,7 @@
                 </div>
 
                 <!-- PDF 客户模板生命周期：保留旧能力，但默认折叠给普通操作员 -->
-                <details class="pdf-admin-advanced" style="margin-top:20px">
+                <details class="pdf-admin-advanced" style="margin-top:20px" @toggle="onPdfAdvancedToggle">
                   <summary class="section-title" style="cursor:pointer;list-style-position:inside">管理员高级设置（一般操作无需使用）</summary>
                   <div class="section-title" style="margin-top:12px">客户 PDF 模板生命周期</div>
                   <div class="panel" style="padding:14px 18px">
@@ -3512,6 +3535,7 @@
                   </div>
                 </details>
               </div>
+              </template>
             </template>
           </main>
         </div>
@@ -6200,7 +6224,11 @@
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
-            systemUsers: [], expandedOrders: {}, orderGroupDetails:{}, orderGroupDetailLoading:{}, orderGroupDetailErrors:{}, orderListGeneration:0,
+            systemUsers: [], systemSection:"basic",
+            systemSectionLoaded:{basic:false,print:false,backup:false,pdf:false},
+            systemSectionLoading:{basic:false,print:false,backup:false,pdf:false},
+            systemSectionErrors:{basic:"",print:"",backup:"",pdf:""},
+            expandedOrders: {}, orderGroupDetails:{}, orderGroupDetailLoading:{}, orderGroupDetailErrors:{}, orderListGeneration:0,
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
             permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
             auditLogState: {
@@ -6230,6 +6258,7 @@
             versionInfo: {},
             versionExpandedGroups: {},
             showVersionHistory: false,
+            versionHistoryLoaded: false, versionHistoryLoading: false, versionHistoryError: "",
             // Phase 18/19: PDF 训练库
             pdfTrainingStats: null, pdfTrainingSamples: [], pdfSamplePage: 1,
             pdfTrainingBatches: [],
@@ -6240,7 +6269,7 @@
             pdfOcrStatus: null,
             pdfTrainingTemplates: [], pdfTemplateStatusFilter: "active_draft", pdfTemplateDryRun: null,
             pdfTemplateForm: { id:null, customer_id:null, template_name:"", order_no_pattern:"", date_pattern:"", item_row_pattern:"", customer_name_pattern:"", column_map_json:"", notes:"", status:"draft", version:null },
-            pdfTemplateLoading: false,
+            pdfTemplateLoading: false, pdfTemplatesLoaded: false,
             requisitionTab: "pending", requisitionPending: [], requisitionItems: [], requisitionReportedLoaded: false, requisitionSelected: {}, selectedPendingKeys: [], selectedBomSnapshotIds: [],
             requisitionHolds: [], requisitionHoldsLoaded: false, requisitionHoldsTotal: 0, requisitionHoldSummary: { total:0, due_count:0, anomaly_count:0 },
             requisitionHoldFilters: { customer_id:"", product_code:"", product_name:"", status:"", date_from:"", date_to:"" },
@@ -9781,7 +9810,7 @@
               if (page === "warehouse") this.ensureWarehouseFrame();
               if (page === "finance") await Promise.all([this.loadCustomerOptions(force), this.loadFinance()]);
               if (page === "audit") await this.loadAuditLogs();
-              if (page === "system") await this.loadSystem();
+              if (page === "system") await this.loadSystem({ force });
               if (page === "permissions") await this.loadPermissionUsers();
               this.markPageCache(page);
             } catch (error) { this.showToast(this.errorMessage(error), true); }
@@ -12479,21 +12508,84 @@
               this.showToast("用户已创建");
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
-          async loadSystem() {
-            const [backups, users, version, changelog, company, deliveryPrintSettings] = await Promise.all([
-              axios.get("/api/system/backups"),
-              axios.get("/api/auth/users"),
-              axios.get("/api/system/version"),
-              axios.get("/api/system/version/changelog"),
-              axios.get("/api/system/company"),
-              axios.get("/api/system/delivery-print-settings"),
-            ]);
-            this.backups = backups.data.items;
-            this.systemUsers = users.data.items;
-            this.versionInfo = { ...version.data, changelog: changelog.data.changelog };
-            this.companyConfig = company.data;
-            this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...deliveryPrintSettings.data };
-            await this.loadMaterialMapping(1);
+          async loadSystem({force=false}={}) {
+            if (!["basic","print","backup","pdf"].includes(this.systemSection)) this.systemSection = "basic";
+            await this.loadSystemSection(this.systemSection, { force });
+          },
+          async selectSystemSection(section) {
+            if (!["basic","print","backup","pdf"].includes(section)) return;
+            this.systemSection = section;
+            await this.loadSystemSection(section);
+          },
+          systemSectionLabel(section) {
+            return { basic:"账号与公司", print:"打印设置", backup:"数据备份", pdf:"PDF 识别管理" }[section] || "系统设置";
+          },
+          async retrySystemSection() {
+            await this.loadSystemSection(this.systemSection, { force:true });
+          },
+          async loadSystemSection(section, {force=false}={}) {
+            if (!force && this.systemSectionLoaded[section]) return;
+            if (this.systemSectionLoading[section]) return;
+            this.systemSectionLoading = {...this.systemSectionLoading,[section]:true};
+            this.systemSectionErrors = {...this.systemSectionErrors,[section]:""};
+            try {
+              if (section === "basic") {
+                const [users, version, company] = await Promise.all([
+                  axios.get("/api/auth/users"),
+                  axios.get("/api/system/version"),
+                  axios.get("/api/system/company"),
+                ]);
+                const previousVersion = String(this.versionInfo?.version || "");
+                const nextVersion = String(version.data?.version || "");
+                if (previousVersion && nextVersion && previousVersion !== nextVersion) {
+                  this.versionHistoryLoaded = false;
+                  this.showVersionHistory = false;
+                  this.versionExpandedGroups = {};
+                }
+                this.systemUsers = users.data.items || [];
+                this.versionInfo = { ...version.data, changelog:this.versionInfo.changelog || [] };
+                this.companyConfig = company.data || {};
+              } else if (section === "print") {
+                const {data} = await axios.get("/api/system/delivery-print-settings");
+                this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...data };
+              } else if (section === "backup") {
+                await this.loadBackups();
+              } else if (section === "pdf") {
+                // PDF 样本统计和高级模板均由各自按钮/展开动作读取。
+              }
+              this.systemSectionLoaded = {...this.systemSectionLoaded,[section]:true};
+            } catch (error) {
+              const message = `${this.systemSectionLabel(section)}读取失败：${this.errorMessage(error)}`;
+              this.systemSectionErrors = {...this.systemSectionErrors,[section]:message};
+            } finally {
+              this.systemSectionLoading = {...this.systemSectionLoading,[section]:false};
+            }
+          },
+          async loadSystemVersionHistory({force=false}={}) {
+            if (!force && this.versionHistoryLoaded) return true;
+            if (this.versionHistoryLoading) return false;
+            this.versionHistoryLoading = true;
+            this.versionHistoryError = "";
+            try {
+              const {data} = await axios.get("/api/system/version/changelog");
+              this.versionInfo = {...this.versionInfo,changelog:data.changelog || []};
+              this.versionHistoryLoaded = true;
+              return true;
+            } catch (error) {
+              this.versionHistoryError = `历史版本读取失败：${this.errorMessage(error)}`;
+              return false;
+            } finally {
+              this.versionHistoryLoading = false;
+            }
+          },
+          async toggleSystemVersionHistory() {
+            if (this.showVersionHistory) { this.showVersionHistory = false; return; }
+            const loaded = await this.loadSystemVersionHistory();
+            if (loaded) this.showVersionHistory = true;
+          },
+          async onPdfAdvancedToggle(event) {
+            const details = event?.currentTarget;
+            if (!details?.open || this.pdfTemplatesLoaded) return;
             await this.loadPdfTemplates();
           },
           openCompanyModal() {
@@ -19184,9 +19276,12 @@
             try {
               const { data } = await axios.get("/api/pdf-training/templates");
               this.pdfTrainingTemplates = Array.isArray(data) ? data : (data.items || []);
+              this.pdfTemplatesLoaded = true;
+              return true;
             } catch (error) {
-              this.pdfTrainingTemplates = [];
+              if (!this.pdfTemplatesLoaded) this.pdfTrainingTemplates = [];
               this.showToast(`PDF 模板加载失败：${this.errorMessage(error)}`, true);
+              return false;
             } finally {
               this.pdfTemplateLoading = false;
             }

@@ -17,6 +17,7 @@ PDF_TRAINING_ROUTE_PERMISSIONS = {
     ("GET", "/api/pdf-training/samples"): "view",
     ("GET", "/api/pdf-training/samples/list"): "view",
     ("POST", "/api/pdf-training/samples/upload"): "manage",
+    ("POST", "/api/pdf-training/samples/submit-correction"): "manage",
     ("GET", "/api/pdf-training/samples/detail/{sample_id}"): "view",
     ("GET", "/api/pdf-training/samples/{sample_id}"): "view",
     ("PUT", "/api/pdf-training/samples/{sample_id}/ground-truth"): "manage",

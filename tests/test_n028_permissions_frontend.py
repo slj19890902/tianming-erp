@@ -47,7 +47,8 @@ def test_n028_auth_payload_and_visibility_rules_are_wired() -> None:
     assert "role-no-costs" in INDEX
     assert 'canViewCosts() { return this.hasPermission("cost.view"); }' in INDEX
     assert 'canRequisition() { return this.hasPermission("requisition.execute"); }' in INDEX
-    assert 'if (this.canManagePermissions) items.push({ key: "permissions"' in INDEX
+    assert '{key:"permissions",label:"用户权限"}' in INDEX
+    assert "this.pageAllowed(page.key)" in INDEX
     assert 'roleMenus' in INDEX and 'boss: ["dashboard"' in INDEX
     assert 'system: "system.backup"' in INDEX or 'system:"system.backup"' in INDEX
     assert 'permissions: "users.manage"' in INDEX or 'permissions:"users.manage"' in INDEX

@@ -7522,10 +7522,10 @@
             payload.print_content = payload.print_content || "无印刷";
             return this.attachMasterUpdateMetadata("product",payload,options);
           },
-          async prepareProductChangeConfirmation(changes) {
+          async prepareProductOneClickSave() {
             const productId = Number(this.productForm?.id);
             const expectedVersion = this.masterCurrentVersion("product");
-            if (!Number.isInteger(productId) || productId <= 0) return false;
+            if (!Number.isInteger(productId) || productId <= 0) return null;
             this.loading = true;
             try {
               const payload = this.buildProductWritePayload({expected_version:expectedVersion});
@@ -7533,29 +7533,27 @@
                 `/api/master/products/${encodeURIComponent(productId)}/update-preview`,
                 payload
               );
-              const warnings = Array.isArray(data.warnings) ? data.warnings : (data.warnings ? [data.warnings] : []);
               const hasRelatedWrite = !!this.drawingFile || this._productBomDirty();
               if (!data.can_update && !hasRelatedWrite) {
                 this.closeModal();
                 this.showToast("未检测到可保存的变化");
-                return true;
+                return {completed:true,options:null};
               }
               this.masterVersionConflict = null;
-              this.masterChangeConfirm = {
-                ...blankMasterChangeConfirm(), visible:true, mode:"update", entity:"product", entityId:productId,
-                expectedVersion, currentVersion:data.current_version ?? expectedVersion,
-                changes:this.cloneMasterRecord(changes),
-                backendChanges:this.normalizeMasterChanges(data.changes || data.diff || data.changed_fields,"product"),
-                warnings:Array.isArray(data.warnings) ? data.warnings : warnings,
-                confirmationToken:data.confirmation_token || null,
-                requireAcknowledgement:warnings.length > 0
+              return {
+                completed:false,
+                options:{
+                  expected_version:data.current_version ?? expectedVersion,
+                  confirmation_token:data.confirmation_token || undefined,
+                  _previewed:true,
+                  _one_click:true
+                }
               };
-              return false;
             } catch (error) {
-              if (!this.handleMaster409(error,"product",{entityId:productId,expectedVersion})) {
+              if (!this.handleMaster409(error,"product",{entityId:productId,expectedVersion,oneClick:true})) {
                 this.showToast(`保存预检失败：${this.errorMessage(error)}`,true);
               }
-              return false;
+              return null;
             } finally {
               this.loading = false;
             }
@@ -7620,6 +7618,11 @@
             const form = this.masterCurrentForm(entity);
             const entityId = context.entityId ?? form?.id ?? this.masterChangeConfirm.entityId;
             if (detail.code === "MASTER_CHANGE_CONFIRMATION_REQUIRED") {
+              if (entity === "product" && context.oneClick) {
+                this.masterVersionConflict = null;
+                this.showToast("常用箱内容在保存校验期间发生变化，本次未写入，请重新打开后再保存。",true);
+                return true;
+              }
               const current = this.masterChangeConfirm.entity === entity
                 ? this.masterChangeConfirm
                 : {...blankMasterChangeConfirm(), entity, entityId};
@@ -7651,6 +7654,10 @@
                 currentVersion:detail.current_version
               };
               this.masterVersionConflict = conflict;
+              if (entity === "product" && context.oneClick) {
+                this.showToast(`常用箱已被其他人修改（打开版本 ${conflict.expectedVersion ?? "-"}，当前版本 ${conflict.currentVersion ?? "-"}），本次未写入，请重新打开后再保存。`,true);
+                return true;
+              }
               if (this.masterChangeConfirm.entity === entity && Number(this.masterChangeConfirm.entityId) === Number(entityId)) {
                 this.masterChangeConfirm = {...this.masterChangeConfirm,visible:true,loading:false,conflict,error:""};
               }
@@ -13273,17 +13280,6 @@
               components: fields.components,
             };
           },
-          confirmProductBomSave() {
-            const current = this._productBomSaveFields();
-            let previous = null;
-            try { previous = JSON.parse(this.productBomSnapshot || "null"); } catch (_error) { previous = null; }
-            const beforeCount = Array.isArray(previous?.components) ? previous.components.length : 0;
-            const afterCount = current.enabled ? current.components.length : 0;
-            const action = current.enabled ? "保存组合 BOM" : "取消组合产品";
-            return confirm(
-              `确认${action}吗？\n组件：${beforeCount} 项 → ${afterCount} 项。\n只影响以后新建订单，不修改旧订单和旧报料。`
-            );
-          },
           async saveProductBom(productId, expectedVersion=null) {
             if (!this._productBomDirty()) return;
             const bomError = this.validateProductBom();
@@ -18307,32 +18303,43 @@
             this.masterPendingSaveOptions = null;
           },
           async saveModal() {
-            const masterOptions = this.masterPendingSaveOptions;
+            let masterOptions = this.masterPendingSaveOptions;
             this.masterPendingSaveOptions = null;
             const masterEntity = ["customer","product","material"].includes(this.modal?.type) ? this.modal.type : null;
             const masterForm = masterEntity ? this.masterCurrentForm(masterEntity) : null;
             if (masterEntity && masterForm?.id && !masterOptions) {
               const changes = this.masterLocalChanges(masterEntity);
               if (changes.length) {
-                if (masterEntity === "product") await this.prepareProductChangeConfirmation(changes);
-                else if (masterEntity === "customer") await this.prepareCustomerChangeConfirmation(changes);
+                if (masterEntity === "product") {
+                  const preflight = await this.prepareProductOneClickSave();
+                  if (!preflight) return false;
+                  if (preflight.completed) return true;
+                  masterOptions = preflight.options;
+                }
+                else if (masterEntity === "customer") {
+                  await this.prepareCustomerChangeConfirmation(changes);
+                  return false;
+                }
                 else if (masterEntity === "material") await this.prepareMaterialChangeConfirmation(changes);
                 else this.openMasterChangeConfirmation(masterEntity,changes);
-                return false;
+                if (masterEntity !== "product") return false;
               }
-              if (!(masterEntity === "product" && this._productBomDirty())) {
-                this.closeModal();
-                this.showToast("未检测到可保存的变化");
-                return true;
+              if (!changes.length) {
+                if (!(masterEntity === "product" && this._productBomDirty())) {
+                  this.closeModal();
+                  this.showToast("未检测到可保存的变化");
+                  return true;
+                }
+                const bomError = this.validateProductBom();
+                if (bomError) {
+                  this.showToast(bomError, true);
+                  return false;
+                }
+                masterOptions = {
+                  expected_version:this.masterCurrentVersion("product"),
+                  _one_click:true
+                };
               }
-              const bomError = this.validateProductBom();
-              if (bomError) {
-                this.showToast(bomError, true);
-                return false;
-              }
-              if (!this.confirmProductBomSave()) return false;
-              this.masterPendingSaveOptions = {_bom_confirmed:true};
-              return this.saveModal();
             }
             this.loading = true;
             let successMessage = "保存成功";
@@ -18696,7 +18703,8 @@
               if (masterEntity && masterForm?.id && this.handleMaster409(error,masterEntity,{
                 entityId:masterForm.id,
                 expectedVersion:masterOptions?.expected_version ?? this.masterCurrentVersion(masterEntity),
-                previewed:!!(masterOptions?._previewed)
+                previewed:!!(masterOptions?._previewed),
+                oneClick:!!(masterOptions?._one_click)
               })) return false;
               const message = this.modal?.type === "order"
                 ? this.normalizeOrderSaveError(error)

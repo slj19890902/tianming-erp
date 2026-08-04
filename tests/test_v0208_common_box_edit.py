@@ -386,7 +386,7 @@ def test_common_box_form_save_keeps_splice_and_serializes_processes() -> None:
     ]
     payload_start = source.index("buildProductWritePayload(options = null)")
     payload_block = source[
-        payload_start:source.index("async prepareProductChangeConfirmation(", payload_start)
+        payload_start:source.index("async prepareProductOneClickSave(", payload_start)
     ]
 
     assert "payload.production_process = this.serializeProductionProcesses(" in source

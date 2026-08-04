@@ -29,9 +29,23 @@ def test_existing_master_save_builds_readable_diff_and_versioned_payload() -> No
     assert "buildProductWritePayload(masterOptions)" in save
     product_payload = _method_block(
         "buildProductWritePayload(options = null)",
-        "async prepareProductChangeConfirmation(",
+        "async prepareProductOneClickSave(",
     )
     assert 'attachMasterUpdateMetadata("product",payload,options)' in product_payload
+
+
+def test_existing_product_save_previews_and_submits_without_shared_confirmation_modal() -> None:
+    preflight = _method_block(
+        "async prepareProductOneClickSave()",
+        "attachMasterUpdateMetadata(entity, payload",
+    )
+    save = _method_block("async saveModal()", "async dispatchDelivery(row)")
+
+    assert "update-preview" in preflight
+    assert "masterChangeConfirm" not in preflight
+    assert "confirm(" not in preflight
+    assert "masterOptions = preflight.options" in save
+    assert "_one_click:true" in preflight
 
 
 def test_confirmation_required_keeps_shared_modal_token_without_extra_input() -> None:

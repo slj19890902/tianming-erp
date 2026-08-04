@@ -8,26 +8,32 @@ INDEX = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_tex
 )
 
 
-def test_common_box_update_uses_read_only_preview_before_single_confirmation() -> None:
+def test_common_box_update_uses_read_only_preview_inside_one_click_save() -> None:
     assert "/api/master/products/${encodeURIComponent(productId)}/update-preview" in INDEX
-    assert "prepareProductChangeConfirmation" in INDEX
-    assert "confirmationToken:data.confirmation_token || null" in INDEX
-    assert "warnings:Array.isArray(data.warnings)" in INDEX
-    assert "await this.prepareProductChangeConfirmation(changes)" in INDEX
+    assert "prepareProductOneClickSave" in INDEX
+    assert "confirmation_token:data.confirmation_token || undefined" in INDEX
+    assert "const preflight = await this.prepareProductOneClickSave()" in INDEX
+    assert "masterOptions = preflight.options" in INDEX
+    assert "prepareProductChangeConfirmation" not in INDEX
 
 
-def test_common_box_confirmation_has_no_reason_or_acknowledgement_gate() -> None:
+def test_common_box_save_has_no_reason_acknowledgement_or_confirmation_dialog() -> None:
+    preflight = INDEX.split("async prepareProductOneClickSave()", 1)[1].split(
+        "attachMasterUpdateMetadata", 1
+    )[0]
+    assert "masterChangeConfirm" not in preflight
+    assert "confirm(" not in preflight
     assert 'v-model.trim="masterChangeConfirm.reason"' not in INDEX
     assert "masterChangeConfirm.acknowledged" not in INDEX
     assert "修改原因 *" not in INDEX
     assert "我已核对异常修改" not in INDEX
 
 
-def test_common_box_confirm_submits_token_without_fabricated_reason() -> None:
-    confirm = INDEX.split("async confirmMasterChange()", 1)[1].split(
-        "async openMasterVersionHistory", 1
+def test_common_box_one_click_save_submits_token_without_fabricated_reason() -> None:
+    preflight = INDEX.split("async prepareProductOneClickSave()", 1)[1].split(
+        "attachMasterUpdateMetadata", 1
     )[0]
-    assert "change_reason" not in confirm
+    assert "change_reason" not in preflight
     assert (
         "if (options?.change_reason !== undefined) "
         "payload.change_reason = options.change_reason;"

@@ -10,14 +10,15 @@
     .title{text-align:center}.title h1{margin:0;font-size:21px}.title div{margin-top:3px;font-size:21px;letter-spacing:8px}
     .head{display:flex;justify-content:space-between;align-items:flex-end;margin:8px 0 10px}.meta{text-align:right;line-height:1.7}
     table{width:100%;border-collapse:collapse}th,td{border:1px solid #111;padding:6px;text-align:center}th{background:#f3f4f6}
-    .left{text-align:left}.footer{margin-top:12px;text-align:right;font-size:12px;line-height:1.7}.actions{text-align:center;margin:15px}
-    button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700}
-    @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions{display:none}@page{size:A4 landscape;margin:10mm}}
+    .left{text-align:left}.footer{margin-top:12px;text-align:right;font-size:12px;line-height:1.7}.actions{display:flex;justify-content:center;gap:8px;margin:15px}
+    button,.return-link{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700;text-decoration:none;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}.secondary{background:#64748b}.return-link{background:#475569}.hidden{display:none!important}.load-state{width:900px;margin:0 auto 10px;padding:10px 14px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#1e3a8a}.load-state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}
+    @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions,.load-state{display:none}@page{size:A4 landscape;margin:10mm}}
   </style>
 </head>
 <body>
-  <div class="actions"><button onclick="window.print()">打印 / 保存为 PDF</button></div>
-  <main class="sheet">
+  <div class="actions"><button id="printButton" disabled>打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button">重新读取</button><a class="return-link" href="/?page=requisition">返回 ERP</a></div>
+  <div id="loadState" class="load-state" role="status">正在读取报料单，请稍候…</div>
+  <main id="sheet" class="sheet">
     <div class="title"><h1 id="company-name">苏州工业园区天明纸品包装厂</h1><div>采购单</div></div>
     <div class="head"><div id="supplier"></div><div class="meta"><div id="number"></div><div id="date"></div></div></div>
     <table><thead><tr><th>序号</th><th>纸板长宽（mm）</th><th>压线(mm）</th><th>材质/楞型</th><th>数量</th><th>报料备注</th></tr></thead><tbody id="rows"></tbody></table>
@@ -35,19 +36,83 @@
       }
     };
 
-    (async () => {
-      const id = new URLSearchParams(location.search).get("id");
-      const response = await fetch(`/api/requisition/batches/${encodeURIComponent(id)}/print`, { credentials: "include" });
-      if (!response.ok) {
-        document.body.innerHTML = "<p>无法读取报料单，请确认登录状态。</p>";
-        return;
+    const printButton = document.getElementById("printButton");
+    const retryButton = document.getElementById("retryButton");
+    const loadState = document.getElementById("loadState");
+    const numberNode = document.getElementById("number");
+    const dateNode = document.getElementById("date");
+    const supplierNode = document.getElementById("supplier");
+    const rowsNode = document.getElementById("rows");
+    let loadGeneration = 0;
+    let loadController = null;
+
+    function parseErrorDetail(detail) {
+      if (typeof detail === "string" && detail.trim()) return detail;
+      if (Array.isArray(detail)) {
+        const messages = detail.map(item => item?.msg || item?.message).filter(Boolean);
+        if (messages.length) return messages.join("；");
       }
-      const data = await response.json();
+      if (detail && typeof detail === "object") {
+        const message = detail.message || detail.msg || detail.detail;
+        if (typeof message === "string" && message.trim()) return detail.code ? `${message}（${detail.code}）` : message;
+      }
+      return "";
+    }
+
+    function isAbortError(error) {
+      return error?.name === "AbortError" || error?.code === "ABORT_ERR";
+    }
+
+    async function requestPrintData(batchId, signal) {
+      let response;
+      try {
+        response = await fetch(`/api/requisition/batches/${encodeURIComponent(batchId)}/print`, { credentials: "include", signal });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        const networkError = new Error("无法连接 ERP 服务，请检查网络后重试");
+        networkError.code = "NETWORK_ERROR";
+        throw networkError;
+      }
+      let raw = "";
+      let body = {};
+      try {
+        raw = typeof response.text === "function" ? await response.text() : "";
+        body = raw ? JSON.parse(raw) : (typeof response.json === "function" ? await response.json() : {});
+      } catch (_) {
+        body = {};
+      }
+      if (!response.ok) {
+        const detail = parseErrorDetail(body?.detail) || parseErrorDetail(body) || (response.status >= 500 ? "服务器内部错误" : "无法读取报料单");
+        const error = new Error(`${detail}（HTTP ${response.status}）`);
+        error.status = response.status;
+        throw error;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("服务器返回的报料单数据无效，请重试");
+      return body;
+    }
+
+    function setLoading() {
+      printButton.disabled = true;
+      retryButton.classList.add("hidden");
+      loadState.classList.remove("hidden", "error");
+      loadState.textContent = "正在读取报料单，请稍候…";
+    }
+
+    function renderError(error, allowRetry = true) {
+      printButton.disabled = true;
+      loadState.classList.remove("hidden");
+      loadState.classList.add("error");
+      loadState.textContent = error?.status === 401 ? "登录已失效，请返回 ERP 登录后重新打印。" : (error?.message || "无法读取报料单，请重试");
+      retryButton.classList.toggle("hidden", !allowRetry);
+    }
+
+    function renderRequisition(data) {
       document.getElementById("company-name").textContent = data.sender?.company_name || "苏州工业园区天明纸品包装厂";
-      number.textContent = `NO：${data.requisition_number}`;
-      date.textContent = `日期：${shortDate(data.requisition_date)}`;
-      supplier.textContent = `TO：${data.supplier_name || "未指定供应商"}`;
-      rows.innerHTML = data.items.map((row, index) => `
+      numberNode.textContent = `NO：${data.requisition_number || "-"}`;
+      dateNode.textContent = `日期：${shortDate(data.requisition_date)}`;
+      supplierNode.textContent = `TO：${data.supplier_name || "未指定供应商"}`;
+      const items = Array.isArray(data.items) ? data.items : [];
+      rowsNode.innerHTML = items.length ? items.map((row, index) => `
         <tr>
           <td>${index + 1}</td>
           <td>${escapeHtml(row.specification)}</td>
@@ -56,12 +121,43 @@
           <td>${escapeHtml(row.quantity)}</td>
           <td class="left">${escapeHtml(row.report_remark || "")}</td>
         </tr>
-      `).join("");
+      `).join("") : '<tr><td colspan="6">该报料单暂无明细</td></tr>';
       const footerLines = [];
       if (data.sender?.address) footerLines.push(`地址：${escapeHtml(data.sender.address)}`);
       if (data.sender?.phone) footerLines.push(`电话：${escapeHtml(data.sender.phone)}`);
       document.getElementById("company-footer").innerHTML = footerLines.join("<br>");
-    })();
+      loadState.classList.add("hidden");
+      loadState.classList.remove("error");
+      retryButton.classList.add("hidden");
+      printButton.disabled = false;
+    }
+
+    async function loadRequisition() {
+      const batchId = Number(new URLSearchParams(location.search).get("id"));
+      if (!Number.isInteger(batchId) || batchId <= 0) {
+        renderError(new Error("报料单链接无效，请从 ERP 的已报料列表重新打开。"), false);
+        return;
+      }
+      const generation = ++loadGeneration;
+      loadController?.abort();
+      const controller = new AbortController();
+      loadController = controller;
+      setLoading();
+      try {
+        const data = await requestPrintData(batchId, controller.signal);
+        if (generation !== loadGeneration) return;
+        renderRequisition(data);
+      } catch (error) {
+        if (isAbortError(error) || generation !== loadGeneration) return;
+        renderError(error);
+      } finally {
+        if (generation === loadGeneration) loadController = null;
+      }
+    }
+
+    printButton.addEventListener("click", () => { if (!printButton.disabled) window.print(); });
+    retryButton.addEventListener("click", loadRequisition);
+    loadRequisition();
   </script>
 </body>
 </html>

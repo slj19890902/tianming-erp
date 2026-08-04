@@ -3,6 +3,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 .test-tmp/
+.codex-tmp/
+node_modules/
+dist/
+*.tsbuildinfo
 
 # Generated locally; never commit application secrets.
 data/session_secret.key

@@ -2312,7 +2312,7 @@
                         </td>
                         <td class="cell-actions">
                           <div class="toolbar-group">
-                            <button class="btn small" @click="toggleOrderGroup(group.key)">{{ expandedOrders[group.key] ? "收起" : "展开" }}</button>
+                            <button class="btn small" :disabled="orderGroupDetailLoading[group.key]" @click="toggleOrderGroup(group)">{{ orderGroupDetailLoading[group.key] ? "加载中" : (expandedOrders[group.key] ? "收起" : "展开") }}</button>
                             <button class="btn small" @click="openOrderGroupDetail(group)">详情</button>
                             <button v-if="canEditOrders" class="btn small primary" @click="openOrderEditor(group)">编辑</button>
                           </div>
@@ -2321,7 +2321,9 @@
                       <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
                         <td :colspan="isWorkshop ? 8 : 9">
                           <div class="order-group-detail-card">
-                            <table>
+                            <div v-if="orderGroupDetailLoading[group.key]" class="empty">正在加载订单明细…</div>
+                            <div v-else-if="orderGroupDetailErrors[group.key]" class="empty error-text">{{ orderGroupDetailErrors[group.key] }} <button class="btn small" @click="retryOrderGroupDetail(group)">重新加载</button></div>
+                            <table v-else>
                               <thead>
                                 <tr>
                                   <th class="col-order-item-sequence">序号</th>
@@ -2339,7 +2341,7 @@
                                 </tr>
                               </thead>
                               <tbody>
-                                <template v-for="row in group.orders" :key="row.id">
+                                <template v-for="row in orderGroupExpandedOrders(group)" :key="row.id">
                                   <tr v-for="(item,itemIndex) in row.items" :key="item.id">
                                     <td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td>
                                     <td><span v-for="(part,index) in orderSearchHighlightParts(plainProductText(item.snapshot_product_code))" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></td>
@@ -6198,7 +6200,7 @@
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
             customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
-            systemUsers: [], expandedOrders: {},
+            systemUsers: [], expandedOrders: {}, orderGroupDetails:{}, orderGroupDetailLoading:{}, orderGroupDetailErrors:{}, orderListGeneration:0,
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
             permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
             auditLogState: {
@@ -7021,12 +7023,13 @@
                 });
               }
               const group = groups.get(normalizedKey);
+              const rowItems = row.items || [];
               group.orders.push(row);
-              group.child_count += row.items.length || 1;
-              group.total_quantity += this.sum(row.items, "quantity");
-              group.total_delivered_quantity += this.sum(row.items, "delivered_quantity");
+              group.child_count += Number(row.item_count ?? rowItems.length) || 1;
+              group.total_quantity += Number(row.total_quantity ?? this.sum(rowItems, "quantity"));
+              group.total_delivered_quantity += Number(row.business_delivery_progress?.delivered_quantity ?? this.sum(rowItems, "delivered_quantity"));
               group.total_amount += Number(row.total_amount || 0);
-              group.all_received = group.all_received && row.items.every((item) => item.material_status === "received");
+              group.all_received = group.all_received && Boolean(row.all_material_received ?? rowItems.every((item) => item.material_status === "received"));
               group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
               if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
                 group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
@@ -8325,9 +8328,11 @@
               0,
             );
             const remaining = (rows || []).reduce(
-              (total,row) => total + (row?.items || []).reduce(
-                (subtotal,item) => subtotal + Number(item?.business_remaining_quantity || 0),
-                0,
+              (total,row) => total + Number(
+                row?.business_remaining_quantity ?? (row?.items || []).reduce(
+                  (subtotal,item) => subtotal + Number(item?.business_remaining_quantity || 0),
+                  0,
+                ),
               ),
               0,
             );
@@ -10476,6 +10481,7 @@
           },
           async loadOrders() {
             const params = { page: this.pages.orders, page_size: this.pageSize };
+            if (this.activePage === "orders") params.detail_level = "summary";
             if (this.filters.orderCustomer) params.customer_id = this.filters.orderCustomer;
             if (this.filters.orderNumber) params.order_number = this.filters.orderNumber;
             if (this.filters.orderCustomerPo) params.customer_po = this.filters.orderCustomerPo;
@@ -10501,6 +10507,11 @@
             try {
               const { data } = await axios.get("/api/orders", { params, signal:controller.signal });
               this.orders = data.items; this.ordersTotal = data.total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+              this.orderListGeneration += 1;
+              this.expandedOrders = {};
+              this.orderGroupDetails = {};
+              this.orderGroupDetailLoading = {};
+              this.orderGroupDetailErrors = {};
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
             } finally {
@@ -15986,11 +15997,12 @@
               }
             } finally { this.loading=false; }
           },
-          openOrderEditor(group) {
-            const first = group?.orders?.[0];
+          async openOrderEditor(group) {
+            const detail = await this.ensureOrderGroupDetail(group);
+            const first = detail?.orders?.[0];
             if (!first) return;
             this.orderEditForm = {
-              order_ids: group.orders.map(row => row.id),
+              order_ids: detail.orders.map(row => row.id),
               customer_name: group.customer_name || "",
               customer_po: group.customer_po || "",
               order_number: first.order_number || "",
@@ -15998,7 +16010,7 @@
               delivery_date: first.delivery_date || "",
               remark: first.remark || "",
             };
-            this.orderEditGroup = group;
+            this.orderEditGroup = {...group,orders:detail.orders};
             this.showOrderEditDanger = false;
             this.modal = { type:"orderEdit", title:`编辑客户订单组 ${group.customer_po || first.order_number}` };
           },
@@ -16592,33 +16604,58 @@
             const {data}=await axios.post("/api/orders/cost-preview", body);
             Object.assign(item,data);
           },
-          toggleOrderGroup(key) { this.expandedOrders[key] = !this.expandedOrders[key]; },
-          toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
-          async openOrderGroupDetail(group) {
-            const anchor = group?.orders?.[0];
-            if (!anchor?.id || !group?.customer_id) {
+          orderGroupExpandedOrders(group) {
+            return this.orderGroupDetails[group?.key]?.orders || [];
+          },
+          async ensureOrderGroupDetail(group, {force=false}={}) {
+            const anchor = group?.orders?.[0], key = group?.key;
+            if (!anchor?.id || !group?.customer_id || !key) {
               this.showToast("订单汇总信息不完整，请刷新后重试", true);
-              return;
+              return null;
             }
+            if (!force && this.orderGroupDetails[key]) return this.orderGroupDetails[key];
+            if (this.orderGroupDetailLoading[key]) return null;
+            const generation = this.orderListGeneration;
+            this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:true};
+            this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:""};
             const params = {
               customer_id: group.customer_id,
               anchor_order_id: group.orders[0].id,
               scope: this.filters.orderScope || "active",
             };
-            if (String(group.customer_po || "").trim()) {
-              params.customer_po = String(group.customer_po).trim();
-            }
+            if (String(group.customer_po || "").trim()) params.customer_po = String(group.customer_po).trim();
             try {
               const { data } = await axios.get("/api/orders/group-detail", { params });
-              this.orderGroupDetail = data;
-              this.modal = {
-                type:"orderGroupDetail",
-                title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
-              };
+              if (generation !== this.orderListGeneration) return null;
+              this.orderGroupDetails = {...this.orderGroupDetails,[key]:data};
+              return data;
             } catch (error) {
-              this.orderGroupDetail = null;
-              this.showToast(`订单整组详情加载失败：${this.errorMessage(error)}`, true);
+              if (generation !== this.orderListGeneration) return null;
+              const message = `订单明细加载失败（订单整组详情加载失败）：${this.errorMessage(error)}`;
+              this.orderGroupDetailErrors = {...this.orderGroupDetailErrors,[key]:message};
+              this.showToast(message, true);
+              return null;
+            } finally {
+              if (generation === this.orderListGeneration) this.orderGroupDetailLoading = {...this.orderGroupDetailLoading,[key]:false};
             }
+          },
+          async toggleOrderGroup(group) {
+            const key = typeof group === "string" ? group : group?.key;if (!key) return;
+            if (this.expandedOrders[key]) { this.expandedOrders = {...this.expandedOrders,[key]:false}; return; }
+            this.expandedOrders = {...this.expandedOrders,[key]:true};
+            if (typeof group === "string") return;
+            await this.ensureOrderGroupDetail(group);
+          },
+          async retryOrderGroupDetail(group) { await this.ensureOrderGroupDetail(group,{force:true}); },
+          toggleOrder(row) { this.expandedOrders[row.id] = !this.expandedOrders[row.id]; },
+          async openOrderGroupDetail(group) {
+            const data = await this.ensureOrderGroupDetail(group);
+            if (!data) return;
+            this.orderGroupDetail = data;
+            this.modal = {
+              type:"orderGroupDetail",
+              title:`订单详情 · ${data.customer_name} · ${data.customer_po || "未填写客户单号"}`,
+            };
           },
           async openOrderDetail(row) {
             const { data } = await axios.get(`/api/orders/${row.id}`);

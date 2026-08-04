@@ -1929,6 +1929,60 @@ def _order_response(
     return data
 
 
+def _order_list_summary_response(
+    order: Order,
+    user: User,
+    *,
+    customer_name: str | None = None,
+    display_registry=None,
+    business_projection: dict | None = None,
+) -> dict:
+    """Serialize only fields rendered before an order group is expanded."""
+
+    business_projection = business_projection or {}
+    item_projections = business_projection.get("items", {})
+    total_quantity = sum(int(item.quantity or 0) for item in order.items)
+    business_remaining_quantity = sum(
+        int(
+            item_projections.get(int(item.id), {}).get(
+                "business_remaining_quantity",
+                max(
+                    int(item.quantity or 0) - int(item.delivered_quantity or 0),
+                    0,
+                ),
+            )
+            or 0
+        )
+        for item in order.items
+    )
+    data = {
+        "id": order.id,
+        **serialize_order_number_fields(order, display_registry),
+        "group_key": _order_group_key(order),
+        "customer_id": order.customer_id,
+        "customer_name": customer_name,
+        "customer_po": order.customer_po,
+        "order_date": order.order_date,
+        "delivery_date": order.delivery_date,
+        "status": order.status,
+        "business_status": business_projection.get("business_status", order.status),
+        "business_status_label": business_projection.get("business_status_label"),
+        "business_delivery_progress": business_projection.get(
+            "business_delivery_progress"
+        ),
+        "total_amount": order.total_amount,
+        "item_count": len(order.items),
+        "total_quantity": total_quantity,
+        "all_material_received": all(
+            item.material_status == "received" for item in order.items
+        ),
+        "business_remaining_quantity": business_remaining_quantity,
+    }
+    if user.role == "workshop":
+        data.pop("total_amount", None)
+    return data
+
+
 def _refresh_total(db: Session, order: Order) -> None:
     total = db.scalar(
         select(func.coalesce(func.sum(OrderItem.subtotal), 0)).where(
@@ -1964,6 +2018,7 @@ def list_orders(
     stage: list[str] | None = Query(default=None),
     sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
     sort_direction: Literal["asc", "desc"] = "desc",
+    detail_level: Literal["full", "summary"] = "full",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -2217,16 +2272,19 @@ def list_orders(
 
     orders: list[Order] = []
     if page_ids:
+        load_options = [selectinload(Order.items)]
+        if detail_level == "full":
+            load_options = [
+                selectinload(Order.items)
+                .selectinload(OrderItem.product)
+                .selectinload(Product.drawings),  # type: ignore[attr-defined]
+                selectinload(Order.items)
+                .selectinload(OrderItem.product)
+                .selectinload(Product.mold_tool),  # type: ignore[attr-defined]
+            ]
         loaded = db.scalars(
             select(Order)
-            .options(
-                selectinload(Order.items).selectinload(OrderItem.product).selectinload(
-                    Product.drawings  # type: ignore[attr-defined]
-                ),
-                selectinload(Order.items).selectinload(OrderItem.product).selectinload(
-                    Product.mold_tool  # type: ignore[attr-defined]
-                ),
-            )
+            .options(*load_options)
             .where(Order.id.in_(page_ids))
         ).all()
         order_map = {order.id: order for order in loaded}
@@ -2243,13 +2301,21 @@ def list_orders(
         if customer_ids
         else {}
     )
-    completion_dates = _completion_dates_by_item(
-        db,
-        [item.id for order in orders for item in order.items],
+    completion_dates = (
+        _completion_dates_by_item(
+            db,
+            [item.id for order in orders for item in order.items],
+        )
+        if detail_level == "full"
+        else {}
     )
-    bom_components_by_item_id = get_order_item_bom_components_by_item_ids(
-        db,
-        [item.id for order in orders for item in order.items],
+    bom_components_by_item_id = (
+        get_order_item_bom_components_by_item_ids(
+            db,
+            [item.id for order in orders for item in order.items],
+        )
+        if detail_level == "full"
+        else {}
     )
     page_item_ids = [item.id for order in orders for item in order.items]
     active_holds_by_item_id = (
@@ -2263,7 +2329,7 @@ def list_orders(
             ).all()
             if hold.order_item_id is not None
         }
-        if page_item_ids
+        if page_item_ids and detail_level == "full"
         else {}
     )
     business_projections = (
@@ -2341,16 +2407,26 @@ def list_orders(
         "page": page,
         "page_size": page_size,
         "items": [
-            _order_response(
-                order,
-                user,
-                db=db,
-                customer_name=customer_names.get(order.customer_id),
-                display_registry=display_registry,
-                completion_dates=completion_dates,
-                bom_components_by_item_id=bom_components_by_item_id,
-                business_projection=business_projections.get(int(order.id)),
-                active_holds_by_item_id=active_holds_by_item_id,
+            (
+                _order_list_summary_response(
+                    order,
+                    user,
+                    customer_name=customer_names.get(order.customer_id),
+                    display_registry=display_registry,
+                    business_projection=business_projections.get(int(order.id)),
+                )
+                if detail_level == "summary"
+                else _order_response(
+                    order,
+                    user,
+                    db=db,
+                    customer_name=customer_names.get(order.customer_id),
+                    display_registry=display_registry,
+                    completion_dates=completion_dates,
+                    bom_components_by_item_id=bom_components_by_item_id,
+                    business_projection=business_projections.get(int(order.id)),
+                    active_holds_by_item_id=active_holds_by_item_id,
+                )
             )
             for order in orders
         ],

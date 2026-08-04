@@ -130,7 +130,7 @@
     <main>
       <section id="homePage">
         <h1 class="page-title">今天先做什么</h1>
-        <p class="page-help">管理员只读查看当前待办；所有数字仍来自正式 ERP 接口。</p>
+        <p class="page-help">按当前账号权限只读显示待办；所有数字仍来自正式 ERP 接口。</p>
         <div id="homeState" class="card status">正在读取首页…</div>
         <div id="homeCards" class="metric-grid" hidden></div>
       </section>
@@ -301,11 +301,6 @@
       }
 
       async function loadHome() {
-        const role = state.auth && state.auth.user && state.auth.user.role;
-        if (!(["admin", "boss"].includes(role))) {
-          showStatus("homeState", "当前账号可使用产品查询；管理员总览仅对管理员和老板账号显示。", "empty");
-          return;
-        }
         state.homeController?.abort();
         const controller = new AbortController();
         state.homeController = controller;
@@ -314,7 +309,7 @@
         try {
           state.dashboard = await apiGet("/api/dashboard/overview", { signal: controller.signal });
           if (generation !== state.homeGeneration) return;
-          const cards = Array.isArray(state.dashboard.cards) ? state.dashboard.cards.slice(0, 6) : [];
+          const cards = Array.isArray(state.dashboard.cards) ? state.dashboard.cards : [];
           const container = byId("homeCards");
           container.replaceChildren();
           cards.forEach(item => {
@@ -647,7 +642,7 @@
           const permissions = Array.isArray(state.auth.permissions) ? state.auth.permissions : [];
           const canSearch = permissions.includes("warehouse.view");
           const canProduction = permissions.includes("orders.view") && permissions.includes("incoming.view");
-          const canHome = permissions.includes("dashboard.view") && ["admin", "boss"].includes(user.role);
+          const canHome = permissions.includes("dashboard.view");
           document.querySelector('[data-page="home"]').hidden = !canHome;
           document.querySelector('[data-page="search"]').hidden = !canSearch;
           document.querySelector('[data-page="production"]').hidden = !canProduction;

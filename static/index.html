@@ -13852,7 +13852,7 @@
             try {
               const payload = this.paperCodePayload(this.paperCodeForm);
               if (!payload.supplier_name) throw new Error("请填写供应商");
-              if (!/^[A-Z0-9]$/.test(payload.code_char)) throw new Error("基础代码必须是单个字母或数字");
+              if (Array.from(payload.code_char).length !== 1) throw new Error("基础代码必须是单个可见字符（支持 + 等符号）");
               if (!payload.paper_name) throw new Error("请填写纸种名称");
               if (!(payload.gram_weight > 0)) throw new Error("克重必须大于0");
               if (this.paperCodeForm.id) await axios.put(`/api/master/materials/paper-codes/${this.paperCodeForm.id}`,payload);

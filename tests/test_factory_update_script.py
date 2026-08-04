@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.47"
-    assert APP_VERSION_NAME == "常用箱普通编辑一键保存"
+    assert APP_VERSION == "v0.22.48"
+    assert APP_VERSION_NAME == "森林阳光材质代码加号修正"
     assert APP_BUILD_DATE == "2026-08-04"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,15 +50,15 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "常用箱" in item and "一次保存" in item
+        "本次更新｜" in item and "森林阳光" in item and "0" in item and "+" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "版本冲突" in item and "自动审计" in item
+        "本次更新｜" in item and "8 条" in item and "D+1+D" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "组合常用箱" in item and "第二次确认" in item
+        "如何验证｜" in item and "D+1+D" in item and "D+1RC" in item
         for item in current_release
     )
     assert any(

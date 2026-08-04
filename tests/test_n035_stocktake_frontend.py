@@ -353,6 +353,22 @@ def test_mobile_location_list_requires_area_or_search_before_rendering() -> None
     assert '<option value="">请选择区域</option>' in MOBILE
 
 
+def test_mobile_location_loading_empty_error_and_retry_are_explicit() -> None:
+    assert 'id="locationLoadState"' in MOBILE
+    assert 'id="retryLocations"' in MOBILE
+    assert "正在读取楼层、区域和库位" in MOBILE
+    assert "当前没有可盘点库位" in MOBILE
+    assert "重新读取" in MOBILE
+    assert "重新加载当前库位" in MOBILE
+    assert "lot_count" in MOBILE
+    assert "current_on_hand" in MOBILE
+    load_locations = _function_line(MOBILE, "loadLocations")
+    assert "setLocationLoading(true" in load_locations
+    assert "setLocationLoading(false" in load_locations
+    assert "state.locations=[]" in load_locations
+    assert "renderLocationLoadError" in _function_line(MOBILE, "openLocation")
+
+
 def test_mobile_location_filter_and_temporary_detection_behavior(tmp_path: Path) -> None:
     functions = "\n".join(
         _function_line(MOBILE, name)
@@ -367,6 +383,7 @@ const nodes={{
 const $=id=>nodes[id];
 const h=value=>String(value??"");
 const pick=(row,keys,fallback=null)=>{{for(const key of keys){{if(row&&row[key]!==undefined&&row[key]!==null)return row[key]}}return fallback}};
+const numberValue=(row,keys)=>{{const value=Number(pick(row,keys,0));return Number.isFinite(value)?value:0}};
 const state={{locations:[
   {{id:1,area_code:"F12",location_code:"F12-P01",location_name:"临放一号"}},
   {{id:2,area_code:"A1",location_code:"A1-P01",location_name:"正常库位"}},

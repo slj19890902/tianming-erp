@@ -291,12 +291,22 @@ def test_pending_delivery_search_scales_by_limit_without_writes_or_scope_leak(de
             "/api/deliveries/pending-items/search",
             params={"customer_id": ids["customer_id"], "list_all": "true", "limit": 20},
         )
+        all_items, all_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": ids["customer_id"], "list_all": "true"},
+        )
 
     assert len(small.json()["items"]) == 5
     assert len(large.json()["items"]) == 20
+    assert len(all_items.json()["items"]) == all_items.json()["total"]
+    assert all_items.json()["total"] > 20
+    assert all_items.json()["total_pages"] == 1
     first = large.json()["items"][0]
     assert {"order_item_id", "order_id", "customer_id", "product_code", "product_name", "specification", "remaining_quantity", "deliverable_quantity", "inventory_sources"} <= set(first)
     assert _select_count(large_sql) <= _select_count(small_sql) + 24
+    assert _select_count(all_sql) <= _select_count(small_sql) + 24
 
     with TestClient(app) as client:
         _login(client, "p109b-scoped")

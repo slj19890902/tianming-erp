@@ -925,13 +925,14 @@ def test_pending_delivery_search_scopes_customer_and_empty_keyword(
     assert len(limited.json()["items"]) == 2
 
 
-def test_delivery_frontend_uses_five_blank_rows_and_search_flow() -> None:
+def test_delivery_frontend_uses_explicit_all_pending_selection_without_blank_rows() -> None:
     index = (
         Path(__file__).resolve().parents[1] / "static" / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert "resetDeliveryLines(count = 5)" in index
-    assert "新增一行" in index
+    assert "resetDeliveryLines(count = 0)" in index
+    assert "新增5行" not in index
+    assert "选择待送货物" in index
     assert "/api/deliveries/pending-items/search" in index
     assert "未找到该客户下可送货的存货编码、客户单号或产品名称" in index
     assert "请选择具体订单明细" in index

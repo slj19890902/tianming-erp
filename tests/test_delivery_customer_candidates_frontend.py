@@ -25,17 +25,18 @@ def test_new_delivery_customer_selector_uses_real_candidate_union() -> None:
     modal_end = INDEX.index("modal.type === 'tianhuaPreimport'", modal_start)
     modal = INDEX[modal_start:modal_end]
 
-    assert 'v-for="c in deliveryCustomerOptions"' in modal
+    assert ':options="deliveryCustomerOptions"' in modal
+    assert 'placeholder="输入客户名称或拼音首字母"' in modal
     assert 'v-for="c in activeCustomerOptions"' not in modal
     assert "当前没有待送货客户" in modal
 
 
 def test_candidate_loader_and_default_selection_use_filtered_customers() -> None:
-    loader = _method_body("loadDeliveryPendingItems")
+    loader = _method_body("loadDeliveryCustomerOptions")
     opener = _method_body("openDelivery")
 
-    assert 'axios.get("/api/deliveries/pending_items")' in loader
-    assert "this.deliveryCustomerCandidates = data.customer_candidates || []" in loader
+    assert 'axios.get("/api/deliveries/pending-customer-options")' in loader
+    assert "this.deliveryCustomerCandidates = data.items || []" in loader
     assert "const availableCustomers = this.deliveryCustomerOptions || []" in opener
     assert "availableCustomers[0]?.id || null" in opener
     assert "activeCustomerOptions" not in opener
@@ -53,3 +54,5 @@ def test_batch_picker_requests_all_pending_items_without_a_keyword() -> None:
 
     assert 'axios.get("/api/deliveries/pending-items/search"' in loader
     assert "list_all: true" in loader
+    assert "page_size:" not in loader
+    assert "正在载入该客户全部待送明细" in loader

@@ -128,7 +128,8 @@ class DeliveryItem(Base):
             "(source_type = 'unordered_finished' AND order_item_id IS NULL "
             "AND product_id IS NOT NULL AND product_code_snapshot IS NOT NULL "
             "AND product_name_snapshot IS NOT NULL AND unit_snapshot IS NOT NULL "
-            "AND unit_price_snapshot > 0 AND price_source IS NOT NULL)",
+            "AND (unit_price_snapshot IS NULL OR unit_price_snapshot > 0) "
+            "AND price_source IS NOT NULL)",
             name="ck_sales_delivery_items_source_reference",
         ),
         UniqueConstraint(
@@ -271,8 +272,8 @@ class DeliveryPickTaskItem(Base):
     delivery_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("sales_delivery_items.id", ondelete="SET NULL"), nullable=True
     )
-    order_item_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=False
+    order_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=True
     )
     original_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     picked_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

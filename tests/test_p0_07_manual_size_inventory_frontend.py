@@ -58,7 +58,7 @@ state.stale = true;
 const manual = {{
   manual_size_entry:true, product_id:null, matched_product_id:null,
   product_name:"匿名纸箱", box_type:"A1", length_mm:520, width_mm:350, height_mm:300,
-  material_id:1, flute_type:"AB", quantity:200, unit_price:"3.68",
+  material_id:1, flute_type:"AB", quantity:200, unit_price:"3.68", _quote_preference_id:11,
   _inventory:state, bom_component_demands:[],
 }};
 const formal = {{
@@ -75,6 +75,7 @@ const context = {{
   componentLabel:methods.componentLabel,
   isGeneralSemiFinishedCandidate:() => false,
   newOrderInventoryState:methods.newOrderInventoryState,
+  manualSizePreferenceOptions:[{{id:11,material_id:1}}],
 }};
 const manualGate = methods.inventoryDecisionRequired.call(context, manual);
 const manualValidation = methods.validateOrderForm.call(context);
@@ -139,7 +140,8 @@ reused._inventory.stale = true;
 const addContext = {{
   orderForm:{{items:[reused]}},
   orderLineIsBlank:() => true,
-  manualSizePreferenceOptions:[],
+  manualSizeBoxTypeOptions:["A1"],
+  showToast() {{}},
   refreshOrderNumberPreview() {{}},
 }};
 methods.addManualSizeOrderItem.call(addContext);

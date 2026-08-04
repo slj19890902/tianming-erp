@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_today
 from app.models.customer import Customer
+from app.models.customer_quote_preference import CustomerQuotePreference
 from app.models.material import Material
 from app.models.product import Product
 from app.models.user import User
 from app.services.flute_mapping import normalize_flute_type, validate_flute_for_write
 from app.services.master_data_versioning import record_versioned_create
+from app.services.supplier_master import SupplierLookupError, resolve_supplier
 
 
 MANUAL_SIZE_PRODUCT_REMARK_PREFIX = "手工尺寸订单创建常用箱"
@@ -43,6 +45,7 @@ def _marker(client_line_id: str) -> str:
 
 def _validate_input(
     db: Session,
+    customer: Customer,
     data: ManualSizeProductInput,
 ) -> tuple[Material, str]:
     if not data.client_line_id.strip():
@@ -58,6 +61,12 @@ def _validate_input(
     material = db.get(Material, data.material_id)
     if material is None:
         raise ManualSizeProductError("手工尺寸订单所选材质不存在")
+    if not material.is_active:
+        raise ManualSizeProductError("手工尺寸订单所选材质已停用，请重新选择")
+    try:
+        resolve_supplier(db, material.supplier_name, require_active=True)
+    except SupplierLookupError as error:
+        raise ManualSizeProductError(error.message) from error
     if data.layer_count is None or int(data.layer_count) != int(material.layer_count):
         raise ManualSizeProductError("手工尺寸订单层数必须与所选材质真实层数一致")
     flute_type = normalize_flute_type(data.flute_type)
@@ -66,9 +75,21 @@ def _validate_input(
     error = validate_flute_for_write(flute_type, material.layer_count)
     if error:
         raise ManualSizeProductError(error)
-    material_flute = normalize_flute_type(material.flute_type)
-    if material_flute and material_flute != flute_type:
-        raise ManualSizeProductError("手工尺寸订单楞型必须与所选材质真实楞型一致")
+    saved_preference = db.scalar(
+        select(CustomerQuotePreference.id)
+        .where(
+            CustomerQuotePreference.customer_id == customer.id,
+            CustomerQuotePreference.box_type == "A1",
+            CustomerQuotePreference.material_id == material.id,
+            CustomerQuotePreference.flute_type == flute_type,
+            CustomerQuotePreference.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    if saved_preference is None:
+        raise ManualSizeProductError(
+            "手工尺寸订单只能选择该客户报价偏好中已保存并启用的箱型、层数、楞型、供应商和材质代码"
+        )
     return material, flute_type
 
 
@@ -108,7 +129,7 @@ def resolve_or_create_manual_size_product(
     silently generating a second code.  The surrounding order transaction owns
     commit/rollback, so a failed order cannot leave this product behind.
     """
-    material, flute_type = _validate_input(db, data)
+    material, flute_type = _validate_input(db, customer, data)
     marker = _marker(data.client_line_id.strip())
     existing = db.scalar(
         select(Product)

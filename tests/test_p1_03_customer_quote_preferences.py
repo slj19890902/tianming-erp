@@ -27,8 +27,10 @@ def _app_with_customer_quote_preferences(tmp_path):
     from app.models.access_control import UserCustomerScope
     from app.models.customer import Customer
     from app.models.material import Material
+    from app.models.supplier import Supplier
     from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "customer-quote-preferences.sqlite3")
     Base.metadata.create_all(engine)
@@ -58,6 +60,13 @@ def _app_with_customer_quote_preferences(tmp_path):
             quote_price=Decimal("2.0000"),
             is_active=True,
         )
+        comparison_material = Material(
+            code="QP-B",
+            supplier_name="对比供应商",
+            layer_count=3,
+            quote_price=Decimal("1.9000"),
+            is_active=True,
+        )
         db.add_all(
             [
                 admin,
@@ -65,6 +74,21 @@ def _app_with_customer_quote_preferences(tmp_path):
                 customer,
                 other,
                 material,
+                comparison_material,
+                Supplier(
+                    standard_name="测试供应商",
+                    normalized_name=normalize_supplier_identity("测试供应商"),
+                    display_name="测试供应商",
+                    sort_order=10,
+                    is_active=True,
+                ),
+                Supplier(
+                    standard_name="对比供应商",
+                    normalized_name=normalize_supplier_identity("对比供应商"),
+                    display_name="对比供应商",
+                    sort_order=20,
+                    is_active=True,
+                ),
                 SupplierFlutePriceRule(
                     supplier_name="测试供应商",
                     layer_count=3,
@@ -77,7 +101,12 @@ def _app_with_customer_quote_preferences(tmp_path):
         db.flush()
         db.add(UserCustomerScope(user_id=scoped.id, customer_id=customer.id))
         db.commit()
-        ids = {"customer": customer.id, "other": other.id, "material": material.id}
+        ids = {
+            "customer": customer.id,
+            "other": other.id,
+            "material": material.id,
+            "comparison_material": comparison_material.id,
+        }
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -115,6 +144,29 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
             assert row["tax_included_square_price"] == "3.2500"
             assert row["layer_count"] == 3
             assert row["material_display"] == "QP-A / 测试供应商"
+            assert row["material_is_active"] is True
+
+            comparison = client.post(
+                f"/api/customers/{ids['customer']}/quote-preferences",
+                json={
+                    "box_type": "A1",
+                    "material_id": ids["comparison_material"],
+                    "flute_type": "A",
+                    "tax_included_square_price": "3.3000",
+                },
+            )
+            assert comparison.status_code == 201, comparison.text
+            listed = client.get(
+                f"/api/customers/{ids['customer']}/quote-preferences"
+            )
+            assert listed.status_code == 200, listed.text
+            assert {
+                (item["box_type"], item["supplier_name"], item["material_code"])
+                for item in listed.json()["items"]
+            } == {
+                ("A1", "测试供应商", "QP-A"),
+                ("A1", "对比供应商", "QP-B"),
+            }
 
             preference_estimate = client.post(
                 f"/api/customers/{ids['customer']}/quote-preferences/estimate",
@@ -204,7 +256,7 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
                     OperationLog.resource == "CustomerQuotePreference"
                 )
             ).all()
-            assert [change.action for change in changes] == ["CREATE", "UPDATE"]
+            assert [change.action for change in changes] == ["CREATE", "CREATE", "UPDATE"]
             assert "修改客户尺寸报价偏好" in changes[-1].details
     finally:
         engine.dispose()
@@ -250,6 +302,35 @@ def test_default_uses_effective_material_price_and_scope_is_enforced(tmp_path) -
                 },
             )
             assert unsupported.status_code == 400
+    finally:
+        engine.dispose()
+
+
+def test_quote_preference_rejects_material_from_inactive_supplier(tmp_path) -> None:
+    from app.models.supplier import Supplier
+
+    app, ids, factory, engine = _app_with_customer_quote_preferences(tmp_path)
+    try:
+        with factory() as db:
+            supplier = db.scalar(
+                select(Supplier).where(Supplier.standard_name == "对比供应商")
+            )
+            assert supplier is not None
+            supplier.is_active = False
+            db.commit()
+        with TestClient(app) as client:
+            _login(client, "quote-admin", "QuotePass123!")
+            response = client.post(
+                f"/api/customers/{ids['customer']}/quote-preferences",
+                json={
+                    "box_type": "A1",
+                    "material_id": ids["comparison_material"],
+                    "flute_type": "A",
+                    "tax_included_square_price": "3.3000",
+                },
+            )
+        assert response.status_code == 400, response.text
+        assert "已停用" in response.json()["detail"]
     finally:
         engine.dispose()
 

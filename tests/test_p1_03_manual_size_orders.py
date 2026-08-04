@@ -50,12 +50,35 @@ def _manual_payload(*, client_line_id: str = "manual-size-line-001") -> dict:
 
 def _make_fixture_material_valid_for_manual_a1(session_factory) -> None:
     """The generic order fixture keeps a legacy BC value on a five-layer row."""
+    from app.models.customer_quote_preference import CustomerQuotePreference
     from app.models.material import Material
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
 
     with session_factory() as session:
         material = session.get(Material, 1)
         assert material is not None
         material.flute_type = "AB"
+        material.supplier_name = "测试纸板供应商"
+        session.add(
+            Supplier(
+                standard_name="测试纸板供应商",
+                normalized_name=normalize_supplier_identity("测试纸板供应商"),
+                display_name="测试纸板供应商",
+                sort_order=10,
+                is_active=True,
+            )
+        )
+        session.add(
+            CustomerQuotePreference(
+                customer_id=1,
+                box_type="A1",
+                material_id=material.id,
+                flute_type="AB",
+                tax_included_square_price=Decimal("3.2500"),
+                is_active=True,
+            )
+        )
         session.commit()
 
 
@@ -117,7 +140,7 @@ def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute
         ({"length_mm": None}, "必须填写正数的长、宽、高"),
         ({"material_id": None}, "必须明确选择材质"),
         ({"layer_count": 3}, "层数必须与所选材质真实层数一致"),
-        ({"flute_type": "BE"}, "楞型必须与所选材质真实楞型一致"),
+        ({"flute_type": "BE"}, "已保存并启用"),
     ]
     with TestClient(app) as client:
         _login(client)
@@ -135,6 +158,53 @@ def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 0
         assert session.scalar(select(func.count()).select_from(Product)) == 2
+
+
+def test_manual_size_rejects_material_not_saved_in_customer_quote_preferences(
+    order_api_app,
+) -> None:
+    from app.models.material import Material
+
+    app, session_factory = order_api_app
+    _make_fixture_material_valid_for_manual_a1(session_factory)
+    with session_factory() as session:
+        unsaved = Material(
+            code="UNSAVED-5",
+            supplier_name="测试纸板供应商",
+            layer_count=5,
+            flute_type="AB",
+            is_active=True,
+        )
+        session.add(unsaved)
+        session.commit()
+        unsaved_id = unsaved.id
+    payload = _manual_payload(client_line_id="manual-unsaved-material")
+    payload["customer_po"] = "P1-03-UNSAVED-MATERIAL"
+    payload["items"][0]["material_id"] = unsaved_id
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+    assert response.status_code == 400, response.text
+    assert "已保存并启用" in response.json()["detail"]
+
+
+def test_manual_size_rejects_disabled_customer_quote_preference(order_api_app) -> None:
+    from app.models.customer_quote_preference import CustomerQuotePreference
+
+    app, session_factory = order_api_app
+    _make_fixture_material_valid_for_manual_a1(session_factory)
+    with session_factory() as session:
+        preference = session.scalar(select(CustomerQuotePreference))
+        assert preference is not None
+        preference.is_active = False
+        session.commit()
+    payload = _manual_payload(client_line_id="manual-disabled-preference")
+    payload["customer_po"] = "P1-03-DISABLED-PREFERENCE"
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+    assert response.status_code == 400, response.text
+    assert "已保存并启用" in response.json()["detail"]
 
 
 def test_manual_size_retry_reuses_common_box_and_duplicate_order_guard(

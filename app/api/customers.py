@@ -36,6 +36,7 @@ from app.services.customer_quote_pricing import (
     resolve_customer_square_price,
 )
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
+from app.services.supplier_master import SupplierLookupError, resolve_supplier
 
 
 router = APIRouter()
@@ -198,6 +199,13 @@ def _validated_preference_flute(material: Material, flute_type: str) -> str:
     return flute
 
 
+def _require_active_material_supplier(db: Session, material: Material) -> None:
+    try:
+        resolve_supplier(db, material.supplier_name, require_active=True)
+    except SupplierLookupError as error:
+        raise HTTPException(status_code=400, detail=error.message) from error
+
+
 def _normalized_quote_box_type(box_type: str) -> str:
     return canonical_quote_box_type(box_type)
 
@@ -218,6 +226,7 @@ def _quote_preference_response(preference: CustomerQuotePreference) -> dict:
         "material_code": preference.material.code if preference.material else None,
         "supplier_name": preference.material.supplier_name if preference.material else None,
         "layer_count": preference.material.layer_count if preference.material else None,
+        "material_is_active": bool(preference.material and preference.material.is_active),
         "material_display": (
             " / ".join(
                 part
@@ -322,6 +331,7 @@ def create_customer_quote_preference(
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=400, detail="所选材质不存在或已停用")
+    _require_active_material_supplier(db, material)
     flute = _validated_preference_flute(material, payload.flute_type)
     preference = CustomerQuotePreference(
         customer_id=customer_id,
@@ -413,6 +423,7 @@ def estimate_customer_quote_preference(
     material = db.get(Material, payload.material_id)
     if material is None or not material.is_active:
         raise HTTPException(status_code=400, detail="所选材质不存在或已停用")
+    _require_active_material_supplier(db, material)
     flute = _validated_preference_flute(material, payload.flute_type)
     box_type = _require_a1_quote_box_type(payload.box_type)
     preference = db.scalar(

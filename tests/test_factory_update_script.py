@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.43"
-    assert APP_VERSION_NAME == "统一验收功能正式整合"
+    assert APP_VERSION == "v0.22.45"
+    assert APP_VERSION_NAME == "客户报价偏好级联与手工尺寸候选收口"
     assert APP_BUILD_DATE == "2026-08-04"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,15 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "首页" in item and "财务" in item
+        "本次更新｜" in item and "箱型、层数、楞型、供应商" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "报料" in item and "加号" in item
+        "本次更新｜" in item and "手工尺寸订单" in item and "共同拦截" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "两人" in item and "原因输入" in item
-        for item in current_release
-    )
-    assert any(
-        "如何验证｜" in item and "一张送货单一行" in item and "短收回库" in item
-        for item in current_release
-    )
-    assert any(
-        "如何验证｜" in item and "手机只读" in item and "一楼中文地图" in item
+        "如何验证｜" in item and "材质代码片段" in item and "对应层数" in item
         for item in current_release
     )
     assert any(

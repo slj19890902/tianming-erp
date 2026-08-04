@@ -49,8 +49,9 @@ def test_p1_03_quote_preview_preserves_manual_unit_price_and_uses_customer_endpo
     assert "markManualSizeUnitPrice(item)" in INDEX
     assert "客户平方价" in INDEX
     assert "manualSizeQuoteText(item)" in INDEX
-    assert "直接选择材质" in INDEX
-    assert "selectManualSizeMaterial(item)" in INDEX
+    assert "输入材质代码筛选已保存偏好" in INDEX
+    assert "直接选择材质" not in _order_template()
+    assert "selectManualSizeMaterial(item)" not in INDEX
     assert 'min="0.0001"' in INDEX
 
 
@@ -64,6 +65,44 @@ def test_p1_03_customer_quote_preference_compact_maintenance_uses_versioned_api(
     preference_block = INDEX[INDEX.index("customer-pricing-preferences"):INDEX.index("customer-pricing-preferences") + 7000]
     assert "修改原因" not in preference_block
     assert "is_default" not in preference_block
+
+
+def test_quote_preference_uses_required_cascade_and_searchable_saved_material() -> None:
+    start = INDEX.index('<section class="customer-pricing-preferences">')
+    preference_block = INDEX[start:start + 12000]
+    fields = [
+        "customerQuotePreferenceDraft.box_type",
+        "customerQuotePreferenceDraft.layer_count",
+        "customerQuotePreferenceDraft.flute_type",
+        "customerQuotePreferenceDraft.supplier_name",
+        "customerQuotePreferenceDraft.material_id",
+        "customerQuotePreferenceDraft.tax_included_square_price",
+    ]
+    positions = [preference_block.index(field) for field in fields]
+    assert positions == sorted(positions)
+    assert 'placeholder="输入材质代码筛选已有码"' in preference_block
+    assert 'v-model.trim="customerQuotePreferenceDraft.flute_type"' not in preference_block
+    assert "quotePreferenceSupplierOptions(customerQuotePreferenceDraft)" in preference_block
+    assert "quotePreferenceMaterialOptions(customerQuotePreferenceDraft)" in preference_block
+    assert "同一箱型可以新增多个供应商、多个材质代码作对比" in preference_block
+    assert "除含税平方价外均从已建档数据下拉选择" in preference_block
+
+
+def test_manual_size_only_uses_active_saved_customer_quote_preferences() -> None:
+    block = _order_template()
+    assert "manualSizeLayerOptions(item)" in block
+    assert "manualSizeFluteOptions(item)" in block
+    assert "manualSizeSupplierOptions(item)" in block
+    assert "manualSizePreferenceSelectOptions(item)" in block
+    assert "该客户没有已保存并启用的 A1 报价偏好" in INDEX
+    assert "必须从该客户已保存并启用的报价偏好中选择" in INDEX
+    assert ':options="materialSelectOptions(\'\',null,null)"' not in block
+
+
+def test_customer_editor_loads_material_options_on_demand_and_filters_inactive() -> None:
+    assert "ensureCustomerQuotePreferenceOptions()" in INDEX
+    assert "if (!m || m.is_active === false) return false;" in INDEX
+    assert "正在读取供应商材质代码" in INDEX
 
 
 def test_p1_03_new_quotation_uses_customer_pricing_preview_without_repricing_history() -> None:

@@ -48,6 +48,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\import_start_weekly_h
 
 日常使用可以直接双击 `scripts\windows\import_start_weekly_home_uat.bat`，随后在弹出的窗口中选择完整数据包目录，不需要手工输入命令。
 
+家庭电脑可以直接选择受控 NAS 的 Windows 映射盘目录（例如 `Z:\...`）。即使 NAS
+驱动不支持 Python 查询最终文件系统路径，工具也只对该只读输入使用绝对路径兼容模式；
+manifest、数据库 SHA-256、revision、完整性和外键门禁不会因此放宽。收到件与可写
+工作副本仍只建立在家庭本地 `UatRoot` 下。
+
 脚本会自动：
 
 1. 校验 manifest 和数据库；

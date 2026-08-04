@@ -53,6 +53,8 @@ customer_file_summary.json
 !static/assets/
 !static/assets/logo.png
 !static/assets/logo.ico
+!static/factory_maps/assets/
+!static/factory_maps/assets/*.webp
 qa-screenshots/
 qa_screenshots/
 migration-reports/

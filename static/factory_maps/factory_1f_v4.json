@@ -4,8 +4,8 @@
   "floor_name": "一楼",
   "map_version": "V4",
   "source": {
-    "file_name": "TM_FACTORY_1F_ERP_V4_CONFIRMED_OUTDOOR.dxf",
-    "sha256": "addb330ed2887751f0486b6a3ed00fda6f2c6f67de3becfb9f01a31467a76963",
+    "file_name": "#TM_FACTORY_1F_ERP_V4_CONFIRMED_OUTDOOR.dxf",
+    "sha256": "226e97de6a9ce51cc8d41486d08d385853623f1f73e726ca903b6a4a80e39836",
     "input_units": "m",
     "output_units": "mm",
     "parser": "ezdxf.iterdxf",
@@ -19,16 +19,16 @@
   },
   "entity_counts": {
     "INSERT": 11,
-    "LWPOLYLINE": 66,
+    "LWPOLYLINE": 73,
     "TEXT": 29
   },
   "layer_counts": {
-    "0": 23,
+    "0": 2,
     "01_COLUMN_柱子": 12,
     "02_FIRE_消防": 4,
-    "03_MACHINE_设备": 12,
-    "04_RACK_货架": 6,
-    "05_ZONE_区域": 17,
+    "03_MACHINE_设备": 15,
+    "04_RACK_货架": 30,
+    "05_ZONE_区域": 18,
     "06_PATH_通道": 10,
     "07_TEXT_编号": 2,
     "doors": 6,
@@ -1279,7 +1279,13 @@
           -2074.965,
           15836.515
         ]
-      ]
+      ],
+      "display_name": "旧印刷机",
+      "machine_asset": "machine-printer-old-lineart-25d.webp",
+      "asset_rotation": 90,
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B50",
@@ -1303,7 +1309,12 @@
           4221.481,
           16146.567
         ]
-      ]
+      ],
+      "display_name": "分纸机",
+      "machine_asset": "machine-slitter-lineart-25d.webp",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B51",
@@ -1351,7 +1362,12 @@
           1111.824,
           7403.118
         ]
-      ]
+      ],
+      "display_name": "新水性印刷机",
+      "machine_asset": "machine-printer-new-lineart-25d.webp",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B53",
@@ -1375,7 +1391,12 @@
           -2576.176,
           1355.882
         ]
-      ]
+      ],
+      "display_name": "半自动粘箱机",
+      "machine_asset": "machine-gluer-semi-lineart-25d.webp",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B54",
@@ -1399,7 +1420,13 @@
           -786.412,
           1789.765
         ]
-      ]
+      ],
+      "display_name": "半自动钉箱机",
+      "machine_asset": "machine-stitcher-semi-lineart-25d.webp",
+      "asset_rotation": 90,
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B55",
@@ -1423,7 +1450,13 @@
           3281.235,
           -2793.118
         ]
-      ]
+      ],
+      "display_name": "钉箱机",
+      "machine_asset": "machine-stitcher-arm-lineart-25d.webp",
+      "asset_scale": 1.35,
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B56",
@@ -1447,7 +1480,12 @@
           -2603.294,
           -3335.471
         ]
-      ]
+      ],
+      "display_name": "小模切机",
+      "machine_asset": "machine-diecutter-lineart-25d.webp",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B57",
@@ -1471,7 +1509,12 @@
           -6399.765,
           -2820.235
         ]
-      ]
+      ],
+      "display_name": "中模切机",
+      "machine_asset": "machine-diecutter-lineart-25d.webp",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B58",
@@ -1495,7 +1538,13 @@
           -12447.0,
           759.294
         ]
-      ]
+      ],
+      "display_name": "大模切机",
+      "machine_asset": "machine-diecutter-lineart-25d.webp",
+      "asset_rotation": 90,
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B59",
@@ -1519,7 +1568,17 @@
           -15375.706,
           9220.0
         ]
-      ]
+      ],
+      "display_name": "挂板双层货架",
+      "map_label": "挂板架（双层）",
+      "display_subtitle": "目前主要使用下层 · 层高2米",
+      "staff_category": "plate_rack",
+      "rack_levels": 2,
+      "display_bays": 4,
+      "bay_status": "visual_estimate",
+      "label_x_mm": -15932,
+      "label_y_mm": 7254,
+      "label_rotation": -90
     },
     {
       "id": "B5A",
@@ -1543,7 +1602,15 @@
           -13721.529,
           4772.706
         ]
-      ]
+      ],
+      "display_name": "旧印刷机印刷版架",
+      "map_label": "印刷版架",
+      "display_subtitle": "印刷版专用",
+      "staff_category": "plate_rack",
+      "display_bays": 3,
+      "bay_status": "visual_estimate",
+      "label_x_mm": -15118,
+      "label_y_mm": 3037
     },
     {
       "id": "B5B",
@@ -1567,7 +1634,16 @@
           -7376.0,
           -2820.235
         ]
-      ]
+      ],
+      "display_name": "中模切机左侧模具架",
+      "map_label": "左侧模具架",
+      "display_subtitle": "中模切机 · 三层",
+      "staff_category": "mold_rack",
+      "rack_levels": 3,
+      "display_bays": 3,
+      "bay_status": "visual_estimate",
+      "label_x_mm": -8962,
+      "label_y_mm": -3918
     },
     {
       "id": "B5C",
@@ -1591,7 +1667,17 @@
           -2901.588,
           -2847.353
         ]
-      ]
+      ],
+      "display_name": "中模切机上方模具架",
+      "map_label": "上方模具架",
+      "display_subtitle": "中模切机 · 现一层（预留二层）",
+      "staff_category": "mold_rack",
+      "rack_levels": 1,
+      "planned_rack_levels": 2,
+      "display_bays": 4,
+      "bay_status": "visual_estimate",
+      "label_x_mm": -4705,
+      "label_y_mm": -2970
     },
     {
       "id": "B5D",
@@ -1615,7 +1701,16 @@
           -488.118,
           -2738.882
         ]
-      ]
+      ],
+      "display_name": "小模切机上方模具架",
+      "map_label": "上方模具架",
+      "display_subtitle": "小模切机 · 二层",
+      "staff_category": "mold_rack",
+      "rack_levels": 2,
+      "display_bays": 2,
+      "bay_status": "visual_estimate",
+      "label_x_mm": -1668,
+      "label_y_mm": -2860
     },
     {
       "id": "B5E",
@@ -1871,7 +1966,12 @@
           -1084.706,
           1138.941
         ]
-      ]
+      ],
+      "display_name": "打包机",
+      "machine_asset": "machine-packer-lineart-25d.webp",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
     },
     {
       "id": "B68",
@@ -2066,7 +2166,7 @@
       ]
     },
     {
-      "id": "F10000",
+      "id": "B87",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2092,7 +2192,7 @@
       "zone_code": "ZONE-1F-P"
     },
     {
-      "id": "F10002",
+      "id": "B89",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2118,7 +2218,7 @@
       "zone_code": "ZONE-1F-P"
     },
     {
-      "id": "F10004",
+      "id": "B8B",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2144,7 +2244,7 @@
       "zone_code": "ZONE-1F-P"
     },
     {
-      "id": "F10006",
+      "id": "B8D",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2170,7 +2270,7 @@
       "zone_code": "ZONE-1F-D"
     },
     {
-      "id": "F10008",
+      "id": "B8E",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2196,7 +2296,7 @@
       "zone_code": "ZONE-1F-D"
     },
     {
-      "id": "F1000A",
+      "id": "B8F",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2222,7 +2322,7 @@
       "zone_code": "ZONE-1F-OUT-E"
     },
     {
-      "id": "F1000C",
+      "id": "B91",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2248,7 +2348,7 @@
       "zone_code": "ZONE-1F-OUT-E"
     },
     {
-      "id": "F1000E",
+      "id": "B93",
       "kind": "zone",
       "layer": "05_ZONE_区域",
       "closed": true,
@@ -2272,6 +2372,166 @@
       ],
       "source_label": "1F-OUT-S-001",
       "zone_code": "ZONE-1F-OUT-S"
+    },
+    {
+      "id": "B97",
+      "kind": "machine",
+      "layer": "03_MACHINE_设备",
+      "closed": true,
+      "points": [
+        [
+          6502.525,
+          1480.052
+        ],
+        [
+          6502.525,
+          -266.895
+        ],
+        [
+          11282.367,
+          -266.895
+        ],
+        [
+          11282.367,
+          1480.052
+        ]
+      ],
+      "display_name": "开槽老虎机",
+      "map_label": "开槽老虎机",
+      "label_x_mm": 8890,
+      "label_y_mm": 1680,
+      "machine_asset": "machine-slotter-lineart-25d.webp",
+      "machine_asset_opacity": 0.46,
+      "display_subtitle": "货架优先显示 · 设备仅作定位参考",
+      "interactive": false,
+      "storage_rule": "NO_PALLET_ON_MACHINE",
+      "position_status": "dxf_fixed_equipment"
+    },
+    {
+      "id": "B98",
+      "kind": "rack",
+      "layer": "04_RACK_货架",
+      "closed": true,
+      "points": [
+        [
+          11427.946,
+          -509.526
+        ],
+        [
+          11427.946,
+          1407.263
+        ],
+        [
+          6332.683,
+          1407.263
+        ],
+        [
+          6332.683,
+          -509.526
+        ]
+      ],
+      "display_name": "货梯旁一层货架",
+      "map_label": "一层货架",
+      "display_subtitle": "货架优先显示 · 下方机器仅作定位参考",
+      "staff_category": "general_rack",
+      "rack_levels": 1,
+      "display_bays": 4,
+      "bay_status": "visual_estimate",
+      "position_status": "owner_confirmed_dxf",
+      "label_x_mm": 8880,
+      "label_y_mm": 449
+    },
+    {
+      "id": "B99",
+      "kind": "pallet_spot",
+      "layer": "05_ZONE_区域",
+      "closed": true,
+      "points": [
+        [
+          6381.21,
+          -606.579
+        ],
+        [
+          6381.21,
+          -1819.737
+        ],
+        [
+          11500.735,
+          -1819.737
+        ],
+        [
+          11500.735,
+          -606.579
+        ]
+      ],
+      "display_name": "开槽老虎机下方临时栈板区",
+      "map_label": "临时栈板区（2托）",
+      "display_subtitle": "临时放置 · 不建立正式库位",
+      "capacity_pallets": 2,
+      "temporary_only": true,
+      "position_status": "owner_confirmed_dxf",
+      "label_x_mm": 8941,
+      "label_y_mm": -1213
+    },
+    {
+      "id": "B9A",
+      "kind": "freight_elevator",
+      "layer": "03_MACHINE_设备",
+      "closed": true,
+      "points": [
+        [
+          13779.235,
+          1586.86
+        ],
+        [
+          13779.235,
+          -1771.994
+        ],
+        [
+          11478.288,
+          -1771.994
+        ],
+        [
+          11478.288,
+          1586.86
+        ]
+      ],
+      "display_name": "上方货运电梯（停用）",
+      "map_label": "货梯（停用）",
+      "operational": false,
+      "position_status": "owner_confirmed_dxf",
+      "label_x_mm": 12629,
+      "label_y_mm": -93
+    },
+    {
+      "id": "B9B",
+      "kind": "freight_elevator",
+      "layer": "03_MACHINE_设备",
+      "closed": true,
+      "points": [
+        [
+          11504.736,
+          -1798.441
+        ],
+        [
+          11504.736,
+          -5051.505
+        ],
+        [
+          13699.892,
+          -5051.505
+        ],
+        [
+          13699.892,
+          -1798.441
+        ]
+      ],
+      "display_name": "下方货运电梯（使用中）",
+      "map_label": "货运电梯",
+      "operational": true,
+      "position_status": "owner_confirmed_dxf",
+      "label_x_mm": 12602,
+      "label_y_mm": -3425
     }
   ],
   "labels": [
@@ -2279,175 +2539,206 @@
       "text": "COL-1F-001",
       "x_mm": -776.709,
       "y_mm": 2165.076,
-      "layer": "07_TEXT_编号"
+      "layer": "07_TEXT_编号",
+      "display_text": "厂房立柱"
     },
     {
       "text": "FIRE-1F-001",
       "x_mm": -616.586,
       "y_mm": 10368.382,
-      "layer": "07_TEXT_编号"
+      "layer": "07_TEXT_编号",
+      "display_text": "消防栓"
     },
     {
       "text": "EQ-1F-PRINT-NEW",
       "x_mm": -8378.588,
       "y_mm": 5749.324,
-      "layer": "03_MACHINE_设备"
+      "layer": "03_MACHINE_设备",
+      "display_text": "新水性印刷机"
     },
     {
       "text": "PACK-1F-001",
       "x_mm": -2140.387,
       "y_mm": -2974.011,
-      "layer": "04_RACK_货架"
+      "layer": "04_RACK_货架",
+      "display_text": "包装辅助区"
     },
     {
       "text": "PATH-1F-001",
       "x_mm": 7465.104,
       "y_mm": 6391.846,
-      "layer": "06_PATH_通道"
+      "layer": "06_PATH_通道",
+      "display_text": "货运通道（禁堆）",
+      "label_x_mm": 4750,
+      "label_y_mm": 6100
     },
     {
       "text": "1F-A-001",
       "x_mm": 8479.01,
       "y_mm": 3915.761,
-      "layer": "03_MACHINE_设备"
+      "layer": "03_MACHINE_设备",
+      "display_text": "入口缓冲区①"
     },
     {
       "text": "1F-A-002",
       "x_mm": 7666.532,
       "y_mm": 8088.543,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "入口缓冲区②"
     },
     {
       "text": "1F-A-003",
       "x_mm": 1706.05,
       "y_mm": 12155.604,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "入口缓冲区③"
     },
     {
       "text": "1F-B-001",
       "x_mm": -679.907,
       "y_mm": 14840.719,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "待生产准备区①"
     },
     {
       "text": "1F-B-002",
       "x_mm": -13695.562,
       "y_mm": 7014.8,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "待生产准备区②"
     },
     {
       "text": "1F-E-001",
       "x_mm": -10464.701,
       "y_mm": 8278.97,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "弹性周转区"
     },
     {
       "text": "1F-C-001",
       "x_mm": -11114.234,
       "y_mm": -92.79,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "半成品待加工区①"
     },
     {
       "text": "1F-C-002",
       "x_mm": 4866.343,
       "y_mm": 1000.075,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "半成品待加工区②"
     },
     {
       "text": "1F-D-001",
       "x_mm": -15477.121,
       "y_mm": 3212.972,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": ""
     },
     {
       "text": "1F-D-002",
       "x_mm": -16277.318,
       "y_mm": 7385.005,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": ""
     },
     {
       "text": "E-1F-PINT-OLD",
       "x_mm": -4340.531,
       "y_mm": 12310.199,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "旧印刷机"
     },
     {
       "text": "大模切机",
       "x_mm": -15352.283,
       "y_mm": -1544.884,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "大模切机"
     },
     {
       "text": "中模切机",
       "x_mm": -5519.584,
       "y_mm": -3583.697,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "中模切机"
     },
     {
       "text": "小模切机",
       "x_mm": -2005.026,
       "y_mm": -3987.007,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "小模切机"
     },
     {
       "text": "粘箱机",
       "x_mm": -6153.357,
       "y_mm": 403.31,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "半自动粘箱机"
     },
     {
       "text": "打包机",
       "x_mm": -1970.457,
       "y_mm": 426.356,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "打包机"
     },
     {
       "text": "半自动钉箱机",
       "x_mm": -184.37,
       "y_mm": 645.296,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "半自动钉箱机"
     },
     {
       "text": "钉箱机",
       "x_mm": 3039.515,
       "y_mm": -3975.436,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "钉箱机"
     },
     {
       "text": "1F-P-001",
       "x_mm": -5640.5,
       "y_mm": 4745.5,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": ""
     },
     {
       "text": "1F-P-002",
       "x_mm": -3816.0,
       "y_mm": 12486.0,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": ""
     },
     {
       "text": "1F-P-003",
       "x_mm": 2540.0,
       "y_mm": 15479.0,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "分纸机"
     },
     {
       "text": "1F-OUT-E-001",
       "x_mm": 15704.0,
       "y_mm": 3593.0,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "东侧临时装卸区①"
     },
     {
       "text": "1F-OUT-E-002",
       "x_mm": 15704.0,
       "y_mm": -6134.0,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "东侧临时装卸区②"
     },
     {
       "text": "1F-OUT-S-001",
       "x_mm": 1452.0,
       "y_mm": -6678.0,
-      "layer": "0"
+      "layer": "04_RACK_货架",
+      "display_text": "南侧临时装卸区"
     }
   ],
   "warnings": [
@@ -2455,5 +2746,72 @@
     "05_ZONE_区域 中有 1 个闭合区域没有区域编号。",
     "图纸中未找到设备编号 EQ-1F-SLITTER-01。",
     "图纸保留原始设备文字 E-1F-PINT-OLD，疑似 PRINT 拼写待现场确认。"
+  ],
+  "presentation": {
+    "mode": "employee_floor_plan",
+    "language": "zh-CN",
+    "wall_snap_ratio": 0.12,
+    "door_symbol": "plan_swing",
+    "window_symbol": "double_line"
+  },
+  "staff_overlays": [
+    {
+      "id": "MOLD-OVERSIZE-WEST",
+      "kind": "mold_storage",
+      "closed": true,
+      "points": [
+        [
+          -17000,
+          -4400
+        ],
+        [
+          -16350,
+          -4400
+        ],
+        [
+          -16350,
+          700
+        ],
+        [
+          -17000,
+          700
+        ]
+      ],
+      "display_name": "超大模具靠墙区",
+      "map_label": "超大模具",
+      "display_subtitle": "大模切机左侧靠墙",
+      "label_x_mm": -16675,
+      "label_y_mm": -1850,
+      "label_rotation": -90
+    },
+    {
+      "id": "MOLD-OVERSIZE-SOUTH",
+      "kind": "mold_storage",
+      "closed": true,
+      "points": [
+        [
+          -16250,
+          -5050
+        ],
+        [
+          -12500,
+          -5050
+        ],
+        [
+          -12500,
+          -4550
+        ],
+        [
+          -16250,
+          -4550
+        ]
+      ],
+      "display_name": "超大模具靠墙区",
+      "map_label": "超大模具",
+      "display_subtitle": "大模切机下方靠墙",
+      "label_x_mm": -14375,
+      "label_y_mm": -4800,
+      "label_rotation": 0
+    }
   ]
 }

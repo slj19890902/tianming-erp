@@ -422,8 +422,8 @@ def _validate_delivery_source_contract(
         if line.product_id in seen_products:
             raise ValueError("同一产品在一张无订单送货单中只能出现一行")
         seen_products.add(line.product_id)
-        if line.unit_price is None or line.unit_price <= 0:
-            raise ValueError(f"第 {index} 条无订单库存明细必须填写大于零的单价")
+        if line.unit_price is not None and line.unit_price <= 0:
+            raise ValueError(f"第 {index} 条无订单库存明细单价填写后必须大于零")
         if not line.allocations:
             raise ValueError(f"第 {index} 条无订单库存明细必须选择库存批次")
         allocated = 0
@@ -475,6 +475,7 @@ def _pick_item_component_lines(
     )
     if (
         delivery_item is None
+        or item.order_item_id is None
         or delivery_item.order_item_id != item.order_item_id
     ):
         return []
@@ -492,6 +493,71 @@ def _pick_item_component_lines(
         )
         if int(component.get("planned_delivery_quantity") or 0) > 0
     ]
+
+
+def _pick_unordered_location_plan(
+    db: Session,
+    *,
+    item: DeliveryPickTaskItem,
+    delivery_item: DeliveryItem,
+) -> tuple[list[dict], bool]:
+    allocations = db.scalars(
+        select(UnorderedFinishedDeliveryAllocation)
+        .where(
+            UnorderedFinishedDeliveryAllocation.delivery_item_id
+            == delivery_item.id,
+            UnorderedFinishedDeliveryAllocation.status == "planned",
+        )
+        .order_by(UnorderedFinishedDeliveryAllocation.id)
+    ).all()
+    lines: list[dict] = []
+    for allocation in allocations:
+        quantity = int(allocation.planned_quantity or 0)
+        if quantity <= 0:
+            continue
+        location = _pick_source_location(
+            db,
+            source={"lot_id": allocation.inventory_lot_id},
+        )
+        lines.append(
+            {
+                "pick_item_id": item.id,
+                "order_item_id": None,
+                "source_type": "finished_inventory",
+                "reservation_id": None,
+                "lot_id": allocation.inventory_lot_id,
+                "lot_number": allocation.lot_number_snapshot,
+                "component_snapshot_id": None,
+                "product_code": item.product_code_snapshot,
+                "product_name": item.product_name_snapshot,
+                "specification": item.specification_snapshot,
+                "pick_quantity": quantity,
+                "requirement_quantity": quantity,
+                "unit": "个",
+                "location_id": location["location_id"],
+                "location_code": allocation.warehouse_location_code_snapshot
+                or location["location_code"],
+                "location_name": location["location_name"],
+                "warehouse_floor": location["warehouse_floor"],
+                "area_code": location["area_code"],
+                "location_sort_order": location["location_sort_order"],
+                "placement_status": location["placement_status"],
+                "pallet_id": location["pallet_id"],
+                "pallet_code": allocation.pallet_code_snapshot
+                or location["pallet_code"],
+                "location_operational": location["location_operational"],
+                "needs_relocation": location["needs_relocation"],
+                "requires_attention": bool(
+                    location["location_id"] is not None
+                    and not location["location_operational"]
+                ),
+            }
+        )
+    complete_quantity = sum(int(line["pick_quantity"]) for line in lines)
+    complete = complete_quantity == int(item.original_quantity or 0) and not any(
+        line["requires_attention"] for line in lines
+    )
+    return lines, complete
 
 
 def _pick_source_location(
@@ -601,6 +667,17 @@ def _pick_item_location_plan(
 ) -> tuple[list[dict], bool]:
     """Build a read-only loading plan from current inventory and production facts."""
 
+    delivery_item = (
+        db.get(DeliveryItem, item.delivery_item_id)
+        if item.delivery_item_id is not None
+        else None
+    )
+    if delivery_item is not None and delivery_item.source_type == "unordered_finished":
+        return _pick_unordered_location_plan(
+            db,
+            item=item,
+            delivery_item=delivery_item,
+        )
     order_item = db.get(OrderItem, item.order_item_id)
     if order_item is None:
         return [], False
@@ -2560,11 +2637,6 @@ def _build_pick_task(
 ) -> DeliveryPickTask:
     if delivery.status != "pending":
         raise HTTPException(status_code=409, detail="已发货送货单不能创建拿货任务")
-    if delivery.source_mode == "unordered_finished":
-        raise HTTPException(
-            status_code=409,
-            detail="无订单成品库存已指定原批次，本版本不创建移动拿货任务",
-        )
     previous = _delivery_pick_task(db, delivery.id)
     if previous is not None:
         # The normal button is idempotent.  Editing the delivery explicitly
@@ -2581,7 +2653,6 @@ def _build_pick_task(
         select(DeliveryItem)
         .where(
             DeliveryItem.delivery_id == delivery.id,
-            DeliveryItem.source_type == "order",
         )
         .order_by(DeliveryItem.id)
     ).all()
@@ -2600,7 +2671,11 @@ def _build_pick_task(
     db.add(task)
     db.flush()
     for line in lines:
-        order_item = db.get(OrderItem, line.order_item_id)
+        order_item = (
+            db.get(OrderItem, line.order_item_id)
+            if line.order_item_id is not None
+            else None
+        )
         product = db.get(Product, order_item.product_id) if order_item else None
         db.add(
             DeliveryPickTaskItem(
@@ -2610,11 +2685,19 @@ def _build_pick_task(
                 original_quantity=int(line.delivered_quantity),
                 picked_quantity=0,
                 status="pending",
-                product_code_snapshot=product.product_code if product else None,
-                product_name_snapshot=(
-                    order_item.snapshot_product_name if order_item else None
+                product_code_snapshot=(
+                    product.product_code if product else line.product_code_snapshot
                 ),
-                specification_snapshot=(order_item.snapshot_spec if order_item else None),
+                product_name_snapshot=(
+                    order_item.snapshot_product_name
+                    if order_item
+                    else line.product_name_snapshot
+                ),
+                specification_snapshot=(
+                    order_item.snapshot_spec
+                    if order_item
+                    else line.specification_snapshot
+                ),
             )
         )
     db.flush()
@@ -2993,6 +3076,35 @@ def apply_delivery_pick_task(
             if int(item.picked_quantity) <= 0:
                 db.delete(delivery_item)
             else:
+                if delivery_item.source_type == "unordered_finished":
+                    allocations = db.scalars(
+                        select(UnorderedFinishedDeliveryAllocation)
+                        .where(
+                            UnorderedFinishedDeliveryAllocation.delivery_item_id
+                            == delivery_item.id,
+                            UnorderedFinishedDeliveryAllocation.status == "planned",
+                        )
+                        .order_by(UnorderedFinishedDeliveryAllocation.id)
+                    ).all()
+                    planned_total = sum(
+                        int(allocation.planned_quantity or 0)
+                        for allocation in allocations
+                    )
+                    picked_quantity = int(item.picked_quantity)
+                    if picked_quantity > planned_total:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="无订单成品库存拿货数量不能超过草稿已选批次数量",
+                        )
+                    remaining = picked_quantity
+                    for allocation in allocations:
+                        planned = int(allocation.planned_quantity or 0)
+                        if remaining <= 0:
+                            db.delete(allocation)
+                            continue
+                        kept = min(planned, remaining)
+                        allocation.planned_quantity = kept
+                        remaining -= kept
                 delivery_item.delivered_quantity = int(item.picked_quantity)
         db.flush()
         delivery.total_quantity = int(
@@ -3202,13 +3314,15 @@ def _collect_unordered_finished_lines(
                 status_code=409,
                 detail=f"第 {index} 条产品不属于当前客户",
             )
-        unit_price = Decimal(str(line.unit_price or 0)).quantize(
-            Decimal("0.0001")
+        unit_price = (
+            Decimal(str(line.unit_price)).quantize(Decimal("0.0001"))
+            if line.unit_price is not None
+            else None
         )
-        if unit_price <= 0:
+        if unit_price is not None and unit_price <= 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {index} 条无订单库存明细必须填写大于零的单价",
+                detail=f"第 {index} 条无订单库存明细单价填写后必须大于零",
             )
         allocation_rows: list[dict] = []
         for planned in line.allocations:
@@ -3267,13 +3381,17 @@ def _collect_unordered_finished_lines(
                 "line": line,
                 "unit_price": unit_price,
                 "price_source": (
-                    "product_default"
-                    if product.sale_unit_price is not None
-                    and Decimal(str(product.sale_unit_price)).quantize(
-                        Decimal("0.0001")
+                    "pending"
+                    if unit_price is None
+                    else (
+                        "product_default"
+                        if product.sale_unit_price is not None
+                        and Decimal(str(product.sale_unit_price)).quantize(
+                            Decimal("0.0001")
+                        )
+                        == unit_price
+                        else "manual"
                     )
-                    == unit_price
-                    else "manual"
                 ),
                 "allocations": allocation_rows,
             }
@@ -3551,6 +3669,55 @@ def _delivery_customer_candidates_from_pending_items(
             for customer_id, candidate in grouped.items()
             if customer_id in active_customer_ids
         }
+
+    return sorted(
+        grouped.values(),
+        key=lambda row: (row["customer_name"], row["customer_id"]),
+    )
+
+
+def _delivery_customer_candidates_from_summaries(
+    db: Session,
+    *,
+    user: User,
+    pending_summaries: list[dict],
+) -> list[dict]:
+    """Build the delivery customer selector without expanding every order item."""
+
+    grouped: dict[int, dict] = {}
+    for summary in pending_summaries:
+        customer_id = int(summary["customer_id"])
+        grouped[customer_id] = {
+            "customer_id": customer_id,
+            "customer_name": summary["customer_name"],
+            "has_pending_orders": True,
+            "pending_item_count": int(summary.get("item_count") or 0),
+            "pending_quantity": int(summary.get("pending_quantity") or 0),
+            "has_unordered_finished": False,
+            "unordered_lot_count": 0,
+            "unordered_available_quantity": 0,
+        }
+
+    for summary in _unordered_finished_customer_summaries(db, user=user):
+        customer_id = int(summary["customer_id"])
+        candidate = grouped.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": summary["customer_name"],
+                "has_pending_orders": False,
+                "pending_item_count": 0,
+                "pending_quantity": 0,
+                "has_unordered_finished": False,
+                "unordered_lot_count": 0,
+                "unordered_available_quantity": 0,
+            },
+        )
+        candidate["has_unordered_finished"] = True
+        candidate["unordered_lot_count"] = int(summary["lot_count"])
+        candidate["unordered_available_quantity"] = int(
+            summary["available_quantity"]
+        )
 
     return sorted(
         grouped.values(),
@@ -4240,6 +4407,23 @@ def pending_delivery_customer_summaries(
     )
 
 
+@router.get("/pending-customer-options")
+def pending_delivery_customer_options(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return only customers that currently have a real selectable source."""
+
+    summaries = pending_delivery_customer_summaries(db, user=user)
+    return {
+        "items": _delivery_customer_candidates_from_summaries(
+            db,
+            user=user,
+            pending_summaries=summaries,
+        )
+    }
+
+
 @router.get("/pending-items/search")
 def search_pending_delivery_items(
     customer_id: int = Query(gt=0),
@@ -4290,8 +4474,8 @@ def search_pending_delivery_items(
         return {"items": [], "total": 0, "page": page, "page_size": page_size or 20, "total_pages": 1}
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
+    load_all = list_all and page_size is None and limit is None
     effective_limit = page_size or limit or (100 if list_all else 20)
-    query_limit = min(effective_limit * 3, 200)
     registry = build_display_registry(db)
     base_query = _pending_query(
         customer_id=customer_id,
@@ -4301,12 +4485,14 @@ def search_pending_delivery_items(
         general_keyword=general_keyword,
     )
     total = db.scalar(select(func.count()).select_from(base_query.subquery())) or 0
-    offset = 0 if list_all and page_size is None else (page - 1) * effective_limit
-    rows = list(
-        db.execute(
-            base_query.offset(offset).limit(query_limit)
-        )
-    )
+    if load_all:
+        rows = list(db.execute(base_query))
+        effective_limit = max(int(total), 1)
+        page = 1
+    else:
+        query_limit = min(effective_limit * 3, 200)
+        offset = 0 if list_all and page_size is None else (page - 1) * effective_limit
+        rows = list(db.execute(base_query.offset(offset).limit(query_limit)))
     context = _PendingDeliveryReadContext(db, rows)
     items = []
     for row in rows:
@@ -4326,7 +4512,11 @@ def search_pending_delivery_items(
         "total": int(total),
         "page": page,
         "page_size": effective_limit,
-        "total_pages": max((int(total) + effective_limit - 1) // effective_limit, 1),
+        "total_pages": (
+            1
+            if load_all
+            else max((int(total) + effective_limit - 1) // effective_limit, 1)
+        ),
     }
 
 

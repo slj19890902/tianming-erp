@@ -243,11 +243,18 @@ def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(g
     import_item=db.get(TianhuaPreDeliveryImportItem,item.import_item_id)
     if import_item is None:
         raise HTTPException(status_code=409,detail="拿货明细关联数据不存在")
-    suggested=int(import_item.suggested_qty or item.delivery_qty or 0)
+    target=int(item.delivery_qty or 0)
     qty=0 if payload.mobile_pick_status=="no_stock" else payload.mobile_picked_qty
     if qty is None:
-        qty=int(item.delivery_qty)
-    actual_status="no_stock" if payload.mobile_pick_status=="no_stock" else ("partial" if qty<suggested else "picked")
+        qty=target
+    if payload.mobile_pick_status!="no_stock":
+        if target<=0:
+            raise HTTPException(status_code=409,detail="当前送货草稿数量无效，请回电脑端重新确认")
+        if qty<=0:
+            raise HTTPException(status_code=400,detail="拿货数量必须大于 0；没有货请选择“没货”")
+        if qty>target:
+            raise HTTPException(status_code=409,detail=f"拿货数量不能超过当前送货草稿数量 {target}")
+    actual_status="no_stock" if payload.mobile_pick_status=="no_stock" else ("partial" if qty<target else "picked")
     item.mobile_pick_status=actual_status
     item.mobile_picked_qty=qty
     item.mobile_pick_note=(payload.mobile_pick_note or "").strip() or None

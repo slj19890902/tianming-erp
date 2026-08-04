@@ -7,8 +7,8 @@
   <style>
     *{box-sizing:border-box}
     html,body{margin:0;background:#e5e7eb;color:#111;font-family:"SimSun","宋体",serif}
-    .actions{position:sticky;top:0;z-index:10;padding:10px;text-align:center;background:#fffffff2;border-bottom:1px solid #d1d5db}
-    button{padding:9px 22px;border:0;border-radius:6px;background:#1769aa;color:#fff;font-weight:700;cursor:pointer}
+    .actions{position:sticky;top:0;z-index:10;padding:10px;text-align:center;background:#fffffff2;border-bottom:1px solid #d1d5db}.actions a{display:inline-block;margin-left:9px;color:#1769aa;text-decoration:none}
+    button{padding:9px 22px;border:0;border-radius:6px;background:#1769aa;color:#fff;font-weight:700;cursor:pointer}button.secondary{background:#475569}button:disabled{cursor:not-allowed;opacity:.45}
     .pages{padding:12px 0 28px}
     .contract-page{position:relative;width:210mm;min-height:297mm;margin:0 auto 12px;padding:11mm 14mm 13mm;background:#fff;box-shadow:0 4px 18px #0002;page-break-after:always;break-after:page}
     .contract-page:last-child{page-break-after:auto;break-after:auto}
@@ -29,19 +29,22 @@
     .signatures{display:grid;grid-template-columns:1fr 1fr;gap:14mm;margin-top:5mm;font-size:9.5pt;line-height:1.8}
     .signature{border-top:1px solid #333;padding-top:2mm;min-height:24mm}
     .page-number{position:absolute;left:0;right:0;bottom:5mm;text-align:center;font:9pt/1 "Microsoft YaHei",sans-serif;color:#374151}
-    .error{width:210mm;margin:20px auto;padding:30px;background:#fff;text-align:center;color:#b91c1c}
+    .load-state,.error-box{width:210mm;margin:20px auto;padding:30px;background:#fff;text-align:center;box-shadow:0 4px 18px #0002}.load-state{color:#475569}.error-box{color:#b91c1c}.hidden,[hidden]{display:none!important}
     @media print{
       @page{size:A4 portrait;margin:0}
       html,body{background:#fff}
-      .actions{display:none}
+      .actions,.load-state,.error-box{display:none!important}
       .pages{padding:0}
       .contract-page{margin:0;box-shadow:none}
     }
   </style>
 </head>
 <body>
-  <div class="actions"><button type="button" onclick="window.print()">打印 / 保存为 PDF</button></div>
-  <main id="app" class="pages"><div class="error">合同加载中…</div></main>
+  <div class="actions"><button id="printButton" disabled type="button">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button" hidden>重新读取</button><a href="/contracts">返回 ERP</a></div>
+  <div id="loadState" class="load-state">正在读取合同，请稍候…</div>
+  <div id="errorBox" class="error-box" role="alert" hidden></div>
+  <main id="app" class="pages" hidden></main>
+  <script src="/static/assets/print-recovery.js"></script>
   <script>
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[char]));
     const text = value => escapeHtml(value === null || value === undefined || value === "" ? "-" : value);
@@ -108,27 +111,32 @@
       return `<div class="article-title">第一条　货物名称、规格、数量及价款</div><table><thead><tr><th class="col-index">序号</th><th class="col-name">商品名称</th><th class="col-spec">规格</th><th class="col-material">材质 / 楞型</th><th class="col-qty">数量</th><th class="col-price">单价</th><th class="col-amount">金额</th><th class="col-remark">备注</th></tr></thead><tbody>${rows}</tbody></table>`;
     };
     const signaturesHtml = (data, contract) => `<div class="signatures"><div class="signature"><strong>甲方（供方）：${text(data.sender?.company_name || "苏州天明包装有限公司")}</strong><br>授权代表：　　　　　　　盖章：<br>签署日期：</div><div class="signature"><strong>乙方（需方）：${text(contract.customer_name)}</strong><br>授权代表：　　　　　　　盖章：<br>签署日期：</div></div>`;
-    (async () => {
-      const id = new URLSearchParams(location.search).get("id");
-      if (!id) { document.getElementById("app").innerHTML = '<div class="error">缺少合同编号。</div>'; return; }
-      try {
-        const response = await fetch(`/api/contracts/${encodeURIComponent(id)}/print`, {credentials:"include"});
-        if (!response.ok) throw new Error("合同读取失败");
-        const data = await response.json();
-        const contract = data.contract || data;
-        const items = Array.isArray(contract.items) ? contract.items : [];
-        const pages = buildContractPages(items);
-        document.getElementById("app").innerHTML = pages.map((page,pageIndex) => {
-          const showItems = page.kind !== "terms";
-          const showTerms = page.kind !== "items";
-          return `<section class="contract-page page-${page.kind}">${headerHtml(data,contract)}${showItems ? tableHtml(page.items,page.offset) : ""}
-            ${showTerms ? `<div class="total">合同总金额：￥${money(contract.total_amount)}</div>${contract.remarks ? `<div class="contract-remarks"><strong>合同备注：</strong>${text(contract.remarks)}</div>` : ""}<div class="terms">${termsHtml(contract)}</div>` : ""}
-            ${signaturesHtml(data,contract)}<div class="page-number">第 ${pageIndex + 1} / ${pages.length} 页</div></section>`;
-        }).join("");
-      } catch (error) {
-        document.getElementById("app").innerHTML = `<div class="error">${escapeHtml(error.message || "无法读取合同，请确认登录状态")}</div>`;
-      }
-    })();
+    const appNode=document.getElementById("app");
+    const printButtonNode=document.getElementById("printButton");
+    const retryButtonNode=document.getElementById("retryButton");
+    const loadStateNode=document.getElementById("loadState");
+    const errorBoxNode=document.getElementById("errorBox");
+    function renderContract(data){
+      const contract=data.contract||data;
+      const items=Array.isArray(contract.items)?contract.items:[];
+      const pages=buildContractPages(items);
+      appNode.innerHTML=pages.map((page,pageIndex)=>{
+        const showItems = page.kind !== "terms";
+        const showTerms = page.kind !== "items";
+        return `<section class="contract-page page-${page.kind}">${headerHtml(data,contract)}${showItems?tableHtml(page.items,page.offset):""}
+          ${showTerms?`<div class="total">合同总金额：￥${money(contract.total_amount)}</div>${contract.remarks?`<div class="contract-remarks"><strong>合同备注：</strong>${text(contract.remarks)}</div>`:""}<div class="terms">${termsHtml(contract)}</div>`:""}
+          ${signaturesHtml(data,contract)}<div class="page-number">第 ${pageIndex + 1} / ${pages.length} 页</div></section>`;
+      }).join("");
+    }
+    const contractPrintPage=TmPrintRecovery.createPrintPage({
+      id:new URLSearchParams(location.search).get("id"),
+      url:id=>`/api/contracts/${encodeURIComponent(id)}/print`,
+      printButton:printButtonNode,retryButton:retryButtonNode,loadState:loadStateNode,errorBox:errorBoxNode,content:appNode,
+      loadingMessage:"正在读取合同，请稍候…",invalidMessage:"合同链接无效，请返回 ERP 重新打开。",authMessage:"登录已失效，请返回 ERP 登录后重新打印。",failureMessage:"合同读取失败",
+      render:renderContract,print:()=>window.print(),
+    });
+    async function loadContract(){return contractPrintPage.load()}
+    loadContract();
   </script>
 </body>
 </html>

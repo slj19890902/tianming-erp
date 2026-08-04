@@ -11,13 +11,17 @@
     .meta{display:flex;justify-content:space-between;align-items:flex-end;margin:14px 0 10px;line-height:1.8}
     .meta-right{text-align:right}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:7px 6px;text-align:center}th{background:#f3f4f6}.left{text-align:left}
     .remarks{margin-top:12px;white-space:pre-wrap}.footer{text-align:right;margin-top:20px;font-size:12px;line-height:1.8;color:#444}
-    .actions{text-align:center;margin:15px}button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700}
-    @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions{display:none}@page{size:A4 landscape;margin:10mm}}
+    .actions{text-align:center;margin:15px}.actions a{display:inline-block;margin-left:8px;color:#1769aa;text-decoration:none}
+    button{padding:9px 20px;border:0;border-radius:4px;background:#1769aa;color:#fff;font-weight:700;cursor:pointer}button.secondary{background:#475569}button:disabled{cursor:not-allowed;opacity:.45}
+    .load-state,.error-box{width:960px;margin:18px auto;padding:24px 28px;background:#fff;box-shadow:0 4px 18px #0002;text-align:center}.load-state{color:#475569}.error-box{color:#b91c1c}.hidden,[hidden]{display:none!important}
+    @media print{body{background:#fff}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.actions,.load-state,.error-box{display:none!important}@page{size:A4 landscape;margin:10mm}}
   </style>
 </head>
 <body>
-  <div class="actions"><button onclick="window.print()">打印 / 保存为 PDF</button></div>
-  <main class="sheet">
+  <div class="actions"><button id="printButton" disabled type="button">打印 / 保存为 PDF</button><button id="retryButton" class="secondary hidden" type="button" hidden>重新读取</button><a href="/?page=quotations">返回 ERP</a></div>
+  <div id="loadState" class="load-state">正在读取报价单，请稍候…</div>
+  <div id="errorBox" class="error-box" role="alert" hidden></div>
+  <main id="sheet" class="sheet" hidden>
     <div class="title"><h1 id="company"></h1><h2>报价单</h2></div>
     <div class="meta"><div><strong id="customer"></strong></div><div class="meta-right"><div id="number"></div><div id="date"></div></div></div>
     <table>
@@ -27,26 +31,44 @@
     <div id="remarks" class="remarks"></div>
     <div id="footer" class="footer"></div>
   </main>
+  <script src="/static/assets/print-recovery.js"></script>
   <script>
     const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
     const money=value=>value===null||value===undefined||value===""?"-":Number(value).toFixed(2);
-    (async()=>{
-      const id=new URLSearchParams(location.search).get("id");
-      const response=await fetch(`/api/quotations/${encodeURIComponent(id)}/print`,{credentials:"include"});
-      if(!response.ok){document.body.innerHTML="<p>无法读取报价单，请确认登录状态。</p>";return}
-      const data=await response.json();
-      company.textContent=data.sender?.company_name||"苏州工业园区天明纸品包装厂";
-      customer.textContent=`客户：${data.customer_name}`;
-      number.textContent=`报价单号：${data.quotation_no}`;
-      date.textContent=`报价日期：${data.quotation_date}`;
-      rows.innerHTML=data.items.map(row=>`<tr><td>${row.sequence}</td><td>${escapeHtml(row.temporary_code||"")}</td><td class="left">${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.quantity??"-")}</td><td>${money(row.unit_price)}</td><td class="left">${escapeHtml(row.remarks||"")}</td></tr>`).join("");
-      remarks.textContent=data.remarks?`备注：${data.remarks}`:"";
+    const companyNode=document.getElementById("company");
+    const customerNode=document.getElementById("customer");
+    const numberNode=document.getElementById("number");
+    const dateNode=document.getElementById("date");
+    const rowsNode=document.getElementById("rows");
+    const remarksNode=document.getElementById("remarks");
+    const footerNode=document.getElementById("footer");
+    const printButtonNode=document.getElementById("printButton");
+    const retryButtonNode=document.getElementById("retryButton");
+    const loadStateNode=document.getElementById("loadState");
+    const errorBoxNode=document.getElementById("errorBox");
+    const sheetNode=document.getElementById("sheet");
+    function renderQuotation(data){
+      companyNode.textContent=data.sender?.company_name||"苏州工业园区天明纸品包装厂";
+      customerNode.textContent=`客户：${data.customer_name||"-"}`;
+      numberNode.textContent=`报价单号：${data.quotation_no||"-"}`;
+      dateNode.textContent=`报价日期：${data.quotation_date||"-"}`;
+      rowsNode.innerHTML=(Array.isArray(data.items)?data.items:[]).map(row=>`<tr><td>${escapeHtml(row.sequence)}</td><td>${escapeHtml(row.temporary_code||"")}</td><td class="left">${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.specification)}</td><td>${escapeHtml(row.material)}</td><td>${escapeHtml(row.quantity??"-")}</td><td>${money(row.unit_price)}</td><td class="left">${escapeHtml(row.remarks||"")}</td></tr>`).join("");
+      remarksNode.textContent=data.remarks?`备注：${data.remarks}`:"";
       const parts=[];
       if(data.sender?.address)parts.push(`地址：${escapeHtml(data.sender.address)}`);
       if(data.sender?.phone)parts.push(`电话：${escapeHtml(data.sender.phone)}`);
       if(data.sender?.contact_person)parts.push(`联系人：${escapeHtml(data.sender.contact_person)}`);
-      footer.innerHTML=parts.join("<br>");
-    })();
+      footerNode.innerHTML=parts.join("<br>");
+    }
+    const quotationPrintPage=TmPrintRecovery.createPrintPage({
+      id:new URLSearchParams(location.search).get("id"),
+      url:id=>`/api/quotations/${encodeURIComponent(id)}/print`,
+      printButton:printButtonNode,retryButton:retryButtonNode,loadState:loadStateNode,errorBox:errorBoxNode,content:sheetNode,
+      loadingMessage:"正在读取报价单，请稍候…",invalidMessage:"报价单链接无效，请返回 ERP 重新打开。",authMessage:"登录已失效，请返回 ERP 登录后重新打印。",failureMessage:"报价单读取失败",
+      render:renderQuotation,print:()=>window.print(),
+    });
+    async function loadQuotation(){return quotationPrintPage.load()}
+    loadQuotation();
   </script>
 </body>
 </html>

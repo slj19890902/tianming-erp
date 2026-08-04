@@ -53,10 +53,34 @@ class WeeklyUatError(RuntimeError):
     """A weekly UAT package or isolation gate failed closed."""
 
 
+def _resolve_readonly_input(path: Path) -> Path:
+    """Resolve a readable input while tolerating Windows NAS drive quirks.
+
+    Some NAS mapping drivers allow normal file reads but make Python's
+    ``Path.resolve()`` fail with WinError 1005 when it asks Windows for the
+    final filesystem path.  Falling back to a lexical absolute path is safe
+    here because package inputs are read-only and their manifest, database
+    hash, revision, integrity and foreign keys are verified before use.
+    Local writable destinations and all UAT-root containment checks continue
+    to require the normal canonical ``resolve()`` path.
+    """
+
+    candidate = path.expanduser()
+    try:
+        return candidate.resolve()
+    except OSError as error:
+        if os.name != "nt" or getattr(error, "winerror", None) != 1005:
+            raise
+        absolute = candidate.absolute()
+        if not absolute.exists():
+            raise WeeklyUatError(f"只读输入路径不存在：{absolute}") from error
+        return absolute
+
+
 def inspect_database(path: Path) -> dict[str, Any]:
     """Inspect a SQLite file and always release Windows file handles."""
 
-    resolved = path.resolve()
+    resolved = _resolve_readonly_input(path)
     if not resolved.is_file():
         raise WeeklyUatError(f"数据库文件不存在：{resolved}")
     with closing(
@@ -312,7 +336,7 @@ def _load_manifest(package_dir: Path) -> dict[str, Any]:
 
 
 def verify_package(package_dir: Path) -> dict[str, Any]:
-    package_dir = package_dir.resolve()
+    package_dir = _resolve_readonly_input(package_dir)
     manifest = _load_manifest(package_dir)
     database_meta = manifest.get("database")
     if not isinstance(database_meta, dict):
@@ -386,7 +410,7 @@ def import_package(
     hostname: str | None = None,
 ) -> dict[str, Any]:
     home_hostname = _assert_home_computer(hostname)
-    package_dir = package_dir.resolve()
+    package_dir = _resolve_readonly_input(package_dir)
     uat_root = uat_root.resolve()
     project_root = project_root.resolve()
     verified = verify_package(package_dir)

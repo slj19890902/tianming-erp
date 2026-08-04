@@ -185,6 +185,81 @@ def test_import_keeps_received_copy_immutable_and_reset_discards_only_uat_change
     assert weekly.sha256_file(received) == original_sha
 
 
+def test_prepare_candidate_run_requires_descendant_and_never_overwrites(
+    exported_package: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir, _ = exported_package
+    uat_root = tmp_path / "home"
+    imported = weekly.import_package(
+        package_dir=package_dir,
+        uat_root=uat_root,
+        project_root=PROJECT_ROOT,
+        hostname="HOME-UAT",
+    )
+    received = Path(imported["received_database"])
+    received_sha = weekly.sha256_file(received)
+    source_git_sha = imported["git_sha"]
+    candidate_git_sha = "f" * 40
+
+    monkeypatch.setattr(weekly, "git_sha", lambda _root: candidate_git_sha)
+    monkeypatch.setattr(weekly, "code_revision", lambda _root: "candidate-head")
+    monkeypatch.setattr(weekly, "_git_is_ancestor", lambda *_args: True)
+
+    prepared = weekly.prepare_candidate_run(
+        source_runtime_file=Path(imported["runtime_file"]),
+        uat_root=uat_root,
+        project_root=PROJECT_ROOT,
+        hostname="HOME-UAT",
+    )
+    working = Path(prepared["working_database"])
+    runtime = json.loads(Path(prepared["runtime_file"]).read_text(encoding="utf-8"))
+
+    assert prepared["source_git_sha"] == source_git_sha
+    assert prepared["git_sha"] == candidate_git_sha
+    assert prepared["target_revision"] == "candidate-head"
+    assert prepared["migration_required"] is True
+    assert weekly.sha256_file(working) == received_sha
+    assert weekly.sha256_file(received) == received_sha
+    assert working.stat().st_mode & stat.S_IWRITE
+    assert not (received.stat().st_mode & stat.S_IWRITE)
+    assert runtime["candidate"] is True
+    assert runtime["working_database"] == str(working)
+    with pytest.raises(weekly.WeeklyUatError, match="拒绝覆盖既有候选"):
+        weekly.prepare_candidate_run(
+            source_runtime_file=Path(imported["runtime_file"]),
+            uat_root=uat_root,
+            project_root=PROJECT_ROOT,
+            hostname="HOME-UAT",
+        )
+
+
+def test_prepare_candidate_run_rejects_non_descendant(
+    exported_package: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir, _ = exported_package
+    uat_root = tmp_path / "home"
+    imported = weekly.import_package(
+        package_dir=package_dir,
+        uat_root=uat_root,
+        project_root=PROJECT_ROOT,
+        hostname="HOME-UAT",
+    )
+    monkeypatch.setattr(weekly, "git_sha", lambda _root: "e" * 40)
+    monkeypatch.setattr(weekly, "_git_is_ancestor", lambda *_args: False)
+
+    with pytest.raises(weekly.WeeklyUatError, match="不是工厂数据包代码的 Git 后代"):
+        weekly.prepare_candidate_run(
+            source_runtime_file=Path(imported["runtime_file"]),
+            uat_root=uat_root,
+            project_root=PROJECT_ROOT,
+            hostname="HOME-UAT",
+        )
+
+
 def test_import_and_start_gates_reject_wrong_host_sha_revision_path_and_port(
     exported_package: tuple[Path, Path],
     tmp_path: Path,

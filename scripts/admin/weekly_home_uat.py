@@ -217,6 +217,25 @@ def _git_branch(project_root: Path) -> str:
     return result.stdout.strip() or "detached"
 
 
+def _git_is_ancestor(project_root: Path, ancestor: str, descendant: str) -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise WeeklyUatError(
+        "无法核对候选代码祖先关系："
+        f"{result.stderr.strip() or result.stdout.strip()}"
+    )
+
+
 def _manifest_database(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "filename": DATABASE_FILENAME,
@@ -519,6 +538,107 @@ def _load_runtime(runtime_file: Path, uat_root: Path) -> dict[str, Any]:
     return runtime
 
 
+def prepare_candidate_run(
+    *,
+    source_runtime_file: Path,
+    uat_root: Path,
+    project_root: Path,
+    hostname: str | None = None,
+) -> dict[str, Any]:
+    """Create a disposable run for a descendant candidate without migrating it."""
+
+    home_hostname = _assert_home_computer(hostname)
+    uat_root = uat_root.resolve()
+    project_root = project_root.resolve()
+    source_runtime = _load_runtime(source_runtime_file, uat_root)
+    if source_runtime.get("home_hostname") != home_hostname:
+        raise WeeklyUatError("源 UAT runtime 不属于当前电脑")
+
+    package_id = _safe_package_id(str(source_runtime.get("package_id") or ""))
+    received_database = _assert_under(
+        Path(str(source_runtime.get("received_database") or "")),
+        uat_root / "received",
+        label="候选只读收到件",
+    )
+    if not received_database.is_file():
+        raise WeeklyUatError("候选准备所需的只读收到件不存在")
+    received_sha256 = sha256_file(received_database)
+    if received_sha256 != source_runtime.get("received_database_sha256"):
+        raise WeeklyUatError("只读收到件 SHA-256 已变化，拒绝准备候选")
+    source_snapshot = inspect_database(received_database)
+    assert_healthy(source_snapshot, label="候选来源收到件")
+    assert_revision(
+        source_snapshot,
+        str(source_runtime.get("revision") or ""),
+        label="候选来源收到件",
+    )
+
+    source_git_sha = str(source_runtime.get("git_sha") or "")
+    candidate_git_sha = git_sha(project_root)
+    if candidate_git_sha == source_git_sha:
+        raise WeeklyUatError("当前代码与工厂数据包相同，无需准备候选运行副本")
+    if not _git_is_ancestor(project_root, source_git_sha, candidate_git_sha):
+        raise WeeklyUatError("候选代码不是工厂数据包代码的 Git 后代，拒绝准备")
+    target_revision = code_revision(project_root)
+
+    candidate_run_id = _safe_package_id(
+        f"{package_id}-candidate-{candidate_git_sha[:8]}"
+    )
+    run_dir = _assert_under(
+        uat_root / "runs" / candidate_run_id,
+        uat_root / "runs",
+        label="候选运行目录",
+    )
+    if run_dir.exists():
+        raise WeeklyUatError(f"拒绝覆盖既有候选运行副本：{run_dir}")
+    run_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary_dir = run_dir.parent / f".{candidate_run_id}.{uuid.uuid4().hex}.tmp"
+    temporary_dir.mkdir(parents=False, exist_ok=False)
+    try:
+        temporary_database = temporary_dir / WORKING_DATABASE_FILENAME
+        _copy_exact(received_database, temporary_database)
+        # copy2 preserves the Windows read-only attribute from the immutable
+        # received package.  Only the disposable candidate database may be
+        # made writable so Alembic and UAT business operations can use it.
+        temporary_database.chmod(stat.S_IREAD | stat.S_IWRITE)
+        working_snapshot = inspect_database(temporary_database)
+        assert_healthy(working_snapshot, label="候选初始工作副本")
+        assert_revision(
+            working_snapshot,
+            source_snapshot["revision"],
+            label="候选初始工作副本",
+        )
+        runtime = {
+            "schema_version": 1,
+            "package_id": package_id,
+            "candidate_run_id": candidate_run_id,
+            "candidate": True,
+            "home_hostname": home_hostname,
+            "imported_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "project_root": str(project_root),
+            "source_git_sha": source_git_sha,
+            "git_sha": candidate_git_sha,
+            "revision": str(source_snapshot["revision"]),
+            "target_revision": target_revision,
+            "received_dir": str(received_database.parent),
+            "received_database": str(received_database),
+            "received_database_sha256": received_sha256,
+            "working_database": str(run_dir / WORKING_DATABASE_FILENAME),
+        }
+        _write_json(temporary_dir / RUNTIME_FILENAME, runtime)
+        shutil.move(str(temporary_dir), str(run_dir))
+    except Exception:
+        shutil.rmtree(temporary_dir, ignore_errors=True)
+        raise
+    return {
+        **runtime,
+        "runtime_file": str(run_dir / RUNTIME_FILENAME),
+        "migration_required": source_snapshot["revision"] != target_revision,
+        "integrity_check": working_snapshot["integrity_check"],
+        "foreign_key_violations": working_snapshot["foreign_key_violations"],
+    }
+
+
 def reset_working_copy(
     *,
     runtime_file: Path,
@@ -658,6 +778,14 @@ def build_parser() -> argparse.ArgumentParser:
     receive.add_argument("--uat-root", type=Path, required=True)
     receive.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
 
+    candidate = subparsers.add_parser(
+        "prepare-candidate",
+        help="从已验签收到件为后继候选建立独立工作副本",
+    )
+    candidate.add_argument("--source-runtime", type=Path, required=True)
+    candidate.add_argument("--uat-root", type=Path, required=True)
+    candidate.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
+
     reset = subparsers.add_parser("reset", help="从只读收到件重置工作副本")
     reset.add_argument("--runtime-file", type=Path, required=True)
     reset.add_argument("--uat-root", type=Path, required=True)
@@ -695,6 +823,12 @@ def main() -> int:
         elif args.command == "import":
             result = import_package(
                 package_dir=args.package_dir,
+                uat_root=args.uat_root,
+                project_root=args.project_root,
+            )
+        elif args.command == "prepare-candidate":
+            result = prepare_candidate_run(
+                source_runtime_file=args.source_runtime,
                 uat_root=args.uat_root,
                 project_root=args.project_root,
             )

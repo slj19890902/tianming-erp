@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.45"
-    assert APP_VERSION_NAME == "客户报价偏好级联与手工尺寸候选收口"
+    assert APP_VERSION == "v0.22.46"
+    assert APP_VERSION_NAME == "送货客户与待送订单候选修复"
     assert APP_BUILD_DATE == "2026-08-04"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,15 +50,15 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "箱型、层数、楞型、供应商" in item
+        "本次更新｜" in item and "批量选择待送货" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "手工尺寸订单" in item and "共同拦截" in item
+        "本次更新｜" in item and "客户权限" in item and "超送门禁" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "材质代码片段" in item and "对应层数" in item
+        "如何验证｜" in item and "瑞炅" in item and "三条待送明细" in item
         for item in current_release
     )
     assert any(

@@ -509,6 +509,92 @@ def test_candidates_exclude_cross_customer_general_reserved_and_frozen(
     assert _stock_snapshot(factory, seed) == before
 
 
+def test_delivery_customer_candidates_are_exact_union_of_real_sources(
+    unordered_finished_delivery_app,
+) -> None:
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with factory() as db:
+        order_customer = Customer(
+            customer_number=15103,
+            customer_code="P115B-C",
+            name="P1-15B 仅订单待送客户",
+            payment_term_days=0,
+            credit_limit=0,
+        )
+        empty_customer = Customer(
+            customer_number=15104,
+            customer_code="P115B-D",
+            name="P1-15B 无待送客户",
+            payment_term_days=0,
+            credit_limit=0,
+        )
+        db.add_all([order_customer, empty_customer])
+        db.flush()
+        product = Product(
+            customer_id=order_customer.id,
+            product_code="P115B-ORDER-ONLY",
+            customer_material_code="P115B-ORDER-ONLY-M",
+            product_name="P1-15B 仅订单待送纸箱",
+            box_category="normal",
+            box_style="普通箱",
+            sale_unit_price=Decimal("2.0000"),
+        )
+        db.add(product)
+        db.flush()
+        order = Order(
+            order_number="P115B-ORDER-ONLY-001",
+            customer_id=order_customer.id,
+            customer_po="P115B-ORDER-ONLY",
+            order_date=date(2026, 8, 4),
+            delivery_date=date(2026, 8, 5),
+            status="pending_delivery",
+            payment_status="unpaid",
+            total_amount=Decimal("20.00"),
+        )
+        db.add(order)
+        db.flush()
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                quantity=10,
+                delivered_quantity=0,
+                unit_price=Decimal("2.0000"),
+                subtotal=Decimal("20.00"),
+                material_status="received",
+                requisition_status="已入库",
+                snapshot_product_name=product.product_name,
+                snapshot_product_code=product.product_code,
+            )
+        )
+        inactive_stock_customer = db.get(Customer, seed.customer_b_id)
+        assert inactive_stock_customer is not None
+        inactive_stock_customer.is_active = False
+        order_customer_id = int(order_customer.id)
+        empty_customer_id = int(empty_customer.id)
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.get("/api/deliveries/pending_items")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    rows = {
+        int(row["customer_id"]): row
+        for row in body["customer_candidates"]
+    }
+    assert set(rows) == {seed.customer_a_id, order_customer_id}
+    assert empty_customer_id not in rows
+    assert seed.customer_b_id not in rows
+    assert rows[seed.customer_a_id]["has_unordered_finished"] is True
+    assert rows[seed.customer_a_id]["unordered_lot_count"] == 2
+    assert rows[order_customer_id]["has_pending_orders"] is True
+    assert rows[order_customer_id]["pending_item_count"] == 1
+    assert len(body["customer_candidates"]) == 2
+
+
 def test_draft_is_unordered_only_and_freezes_price_without_order_side_effects(
     unordered_finished_delivery_app,
 ) -> None:

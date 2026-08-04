@@ -27,7 +27,9 @@ def composite_requisition_app(tmp_path: Path):
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "n039-requisition.sqlite3")
     Base.metadata.create_all(engine)
@@ -75,7 +77,17 @@ def composite_requisition_app(tmp_path: Path):
             is_internal_component=True,
             unit="片",
         )
-        session.add_all([admin, customer, parent, component_a, component_b])
+        supplier = Supplier(
+            standard_name="N039 供应商",
+            normalized_name=normalize_supplier_identity("N039 供应商"),
+            display_name="N039 供应商",
+            sort_order=10,
+            is_active=True,
+            version=1,
+        )
+        session.add_all(
+            [admin, customer, parent, component_a, component_b, supplier]
+        )
         session.flush()
         for display_order, component, per_set in (
             (1, component_a, 2),

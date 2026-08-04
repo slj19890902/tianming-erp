@@ -3017,22 +3017,27 @@
               <div class="panel" style="padding:16px 18px">
                 <div class="toolbar-group" style="margin-bottom:14px">
                   <label style="font-weight:700">用户</label>
-                  <select class="select" style="width:280px" v-model.number="selectedPermissionUserId" @change="loadPermissionProfile(selectedPermissionUserId)">
+                  <select class="select" style="width:280px" v-model.number="selectedPermissionUserId" :disabled="permissionUsersLoading || permissionProfileLoading || permissionSaving" @change="loadPermissionProfile(selectedPermissionUserId)">
                     <option :value="null">请选择用户</option>
                     <option v-for="row in permissionUsers" :key="row.id" :value="row.id">{{ row.real_name || row.username }}（{{ row.username }} / {{ roleLabel(row.role) }}）</option>
                   </select>
-                  <button class="btn" @click="loadPermissionUsers">刷新用户</button>
-                  <button class="btn primary" @click="openCreateUserModal">新增用户</button>
+                  <button class="btn" @click="loadPermissionUsers" :disabled="permissionUsersLoading || permissionProfileLoading || permissionSaving">刷新用户</button>
+                  <button class="btn primary" @click="openCreateUserModal" :disabled="permissionUsersLoading || permissionProfileLoading || permissionSaving">新增用户</button>
                 </div>
-                <div v-if="permissionLoading" class="empty">正在加载权限配置…</div>
+                <div v-if="permissionUsersLoading || permissionProfileLoading" class="empty">正在加载权限配置…</div>
+                <div v-else-if="permissionError" class="empty">
+                  <div class="status red" style="display:inline-block;margin-bottom:10px">{{ permissionError }}</div>
+                  <div><button class="btn" @click="loadPermissionProfile(selectedPermissionUserId)" :disabled="!selectedPermissionUserId || permissionSaving">重新读取</button></div>
+                </div>
                 <div v-else-if="!permissionProfile" class="empty">请选择用户后配置权限。</div>
                 <template v-else>
+                  <div v-if="permissionSaveError" class="status red" style="display:block;margin-bottom:12px">{{ permissionSaveError }}</div>
                   <div class="section-title">功能权限</div>
                   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:12px 0 18px">
                     <div v-for="group in permissionGroups" :key="group.key" class="panel" style="padding:10px;margin:0">
                       <strong>{{ group.label }}</strong>
                       <label v-for="item in group.items" :key="item.code" style="display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-top:1px solid var(--line);font-size:14px">
-                        <input type="checkbox" :checked="!!permissionDraft.permissions[item.code]" :disabled="item.locked" @change="permissionDraft.permissions[item.code] = $event.target.checked" />
+                        <input type="checkbox" :checked="!!permissionDraft.permissions[item.code]" :disabled="item.locked || permissionSaving" @change="permissionDraft.permissions[item.code] = $event.target.checked" />
                         <span><strong>{{ item.name }}</strong><span class="muted" style="display:block;font-size:12px">{{ item.code }} · 默认{{ permissionDefaultAllowed(item) ? '允许' : '禁止' }}</span></span>
                       </label>
                     </div>
@@ -3040,18 +3045,18 @@
                   <div class="section-title">客户范围</div>
                   <div v-if="permissionProfile.customer_scope_locked" class="status blue" style="display:block;margin:12px 0">管理员与老板角色固定可访问全部客户。</div>
                   <div v-if="!permissionProfile.customer_scope_locked" class="toolbar-group" style="padding:12px 0">
-                    <label><input type="radio" value="all" v-model="permissionDraft.customer_access_mode" /> 全部客户</label>
-                    <label><input type="radio" value="selected" v-model="permissionDraft.customer_access_mode" /> 指定客户</label>
+                    <label><input type="radio" value="all" v-model="permissionDraft.customer_access_mode" :disabled="permissionSaving" /> 全部客户</label>
+                    <label><input type="radio" value="selected" v-model="permissionDraft.customer_access_mode" :disabled="permissionSaving" /> 指定客户</label>
                   </div>
                   <div v-if="!permissionProfile.customer_scope_locked && permissionDraft.customer_access_mode === 'selected' && !permissionDraft.customer_ids.length" class="status orange" style="display:block;margin:0 0 10px">当前未选择客户；保存后该账号将看不到任何客户业务数据。</div>
                   <div v-if="!permissionProfile.customer_scope_locked && permissionDraft.customer_access_mode === 'selected'" class="toolbar-group" style="align-items:flex-start;max-height:280px;overflow:auto;padding:10px 0">
                     <label v-for="customer in activeCustomerOptions" :key="customer.id" style="display:flex;align-items:center;gap:7px;min-width:240px;padding:6px 10px;border:1px solid var(--line);border-radius:8px">
-                      <input type="checkbox" :checked="permissionDraft.customer_ids.includes(customer.id)" @change="togglePermissionCustomer(customer.id, $event.target.checked)" />
+                      <input type="checkbox" :checked="permissionDraft.customer_ids.includes(customer.id)" :disabled="permissionSaving" @change="togglePermissionCustomer(customer.id, $event.target.checked)" />
                       <span>{{ customer.customer_number || customer.id }} · {{ customer.name }}</span>
                     </label>
                   </div>
                   <div class="toolbar-group" style="justify-content:flex-end;margin-top:18px">
-                    <button class="btn primary" @click="savePermissionAccess" :disabled="permissionLoading">保存权限与客户范围</button>
+                    <button class="btn primary" @click="savePermissionAccess" :disabled="permissionProfileLoading || permissionSaving || !permissionProfile || Number(permissionProfile.user_id) !== Number(selectedPermissionUserId)">{{ permissionSaving ? '正在保存…' : '保存权限与客户范围' }}</button>
                   </div>
                 </template>
               </div>
@@ -6221,7 +6226,7 @@
             systemSectionErrors:{basic:"",print:"",backup:"",pdf:""},
             expandedOrders: {}, orderGroupDetails:{}, orderGroupDetailLoading:{}, orderGroupDetailErrors:{}, orderListGeneration:0,
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
-            permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
+            permissionCatalog: [], permissionUsersLoading: false, permissionProfileLoading: false, permissionSaving: false, permissionError: "", permissionSaveError: "", selectedPermissionUserId: null,
             auditLogState: {
               category:"business", items:[], total:0, page:1, page_size:25, pages:0,
               loading:false, error:"", detail:null, detailLoading:false, detailError:"",
@@ -12450,26 +12455,63 @@
             return (defaults[role] || []).includes(item.code);
           },
           async loadPermissionUsers() {
-            this.permissionLoading = true;
+            const requestKey = "permissions:users";
+            const controller = this.beginLatestRequest(requestKey);
+            this.permissionUsersLoading = true;
+            this.permissionError = "";
+            this.permissionSaveError = "";
             try {
-              const { data } = await axios.get("/api/auth/users");
+              const { data } = await axios.get("/api/auth/users", { signal:controller.signal });
+              if (latestRequestControllers.get(requestKey) !== controller) return;
               this.permissionUsers = data.items || [];
               this.permissionCatalog = this.permissionCatalogSeed();
               if (this.selectedPermissionUserId && this.permissionUsers.some(row => row.id === this.selectedPermissionUserId)) {
                 await this.loadPermissionProfile(this.selectedPermissionUserId);
+              } else {
+                this.selectedPermissionUserId = null;
+                this.permissionProfile = null;
+                this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
               }
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.permissionLoading = false; }
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.permissionProfile = null;
+                this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+                this.permissionError = `用户列表读取失败：${this.errorMessage(error)}`;
+                this.showToast(this.permissionError, true);
+              }
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.permissionUsersLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           async loadPermissionProfile(userId) {
-            if (!userId) { this.permissionProfile = null; return; }
-            this.permissionLoading = true;
+            const requestKey = "permissions:profile";
+            if (!userId) {
+              latestRequestControllers.get(requestKey)?.abort();
+              latestRequestControllers.delete(requestKey);
+              this.permissionProfile = null;
+              this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+              this.permissionProfileLoading = false;
+              this.permissionError = "";
+              this.permissionSaveError = "";
+              return;
+            }
+            const requestedUserId = Number(userId);
+            const controller = this.beginLatestRequest(requestKey);
+            this.permissionProfileLoading = true;
+            this.permissionError = "";
+            this.permissionSaveError = "";
+            this.permissionProfile = null;
+            this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
             try {
               const [overridesResponse, scopeResponse] = await Promise.all([
-                axios.get(`/api/auth/users/${encodeURIComponent(userId)}/permission-overrides`),
-                axios.get(`/api/auth/users/${encodeURIComponent(userId)}/customer-scopes`),
+                axios.get(`/api/auth/users/${encodeURIComponent(requestedUserId)}/permission-overrides`, { signal: controller.signal }),
+                axios.get(`/api/auth/users/${encodeURIComponent(requestedUserId)}/customer-scopes`, { signal: controller.signal }),
               ]);
-              const selected = this.permissionUsers.find(row => row.id === Number(userId)) || {};
+              if (latestRequestControllers.get(requestKey) !== controller || Number(this.selectedPermissionUserId) !== requestedUserId) return;
+              const selected = this.permissionUsers.find(row => row.id === requestedUserId) || {};
               const raw = overridesResponse.data || {};
               const overrides = Object.fromEntries((raw.overrides || []).map(item => [item.permission_code || item.code, item.is_allowed ?? item.allowed]));
               const catalog = (raw.permissions || this.permissionCatalog || this.permissionCatalogSeed()).map(item => ({
@@ -12483,10 +12525,21 @@
               const customerIds = scopeResponse.data?.customer_scope || [];
               const customerScopeLocked = selected.role === "admin" || selected.role === "boss";
               const customerAccessMode = customerScopeLocked ? "all" : (scopeResponse.data?.customer_access_mode || "all");
-              this.permissionProfile = { user_id:Number(userId), username:selected.username, real_name:selected.real_name, role:selected.role, permissions:catalog, customer_ids:customerIds, customer_scope_locked:customerScopeLocked, unrestricted_customer_access:customerAccessMode === "all" };
+              this.permissionProfile = { user_id:requestedUserId, username:selected.username, real_name:selected.real_name, role:selected.role, permissions:catalog, customer_ids:customerIds, customer_scope_locked:customerScopeLocked, unrestricted_customer_access:customerAccessMode === "all" };
               this.permissionDraft = { permissions:Object.fromEntries(catalog.map(item => [item.code, !!item.allowed])), customer_access_mode:customerAccessMode, customer_ids:[...(scopeResponse.data?.customer_scope || [])].map(Number) };
-            } catch (error) { this.permissionProfile = null; this.showToast(this.errorMessage(error), true); }
-            finally { this.permissionLoading = false; }
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller && Number(this.selectedPermissionUserId) === requestedUserId) {
+                this.permissionProfile = null;
+                this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+                this.permissionError = `权限配置读取失败：${this.errorMessage(error)}`;
+                this.showToast(this.permissionError, true);
+              }
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.permissionProfileLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
           },
           permissionOverridePayload() {
             const overrides = {};
@@ -12499,19 +12552,34 @@
             this.permissionDraft.customer_ids = [...ids].sort((a,b) => a - b);
           },
           async savePermissionAccess() {
-            if (!this.permissionProfile) return;
-            this.permissionLoading = true;
+            if (this.permissionSaving || !this.permissionProfile) return;
+            const userId = Number(this.permissionProfile.user_id);
+            if (Number(this.selectedPermissionUserId) !== userId) {
+              this.permissionProfile = null;
+              this.permissionDraft = { permissions:{}, customer_access_mode:"all", customer_ids:[] };
+              this.permissionError = "当前账号与权限资料不一致，请重新读取后再保存";
+              return;
+            }
+            const payload = {
+              overrides:this.permissionOverridePayload(),
+              mode:this.permissionDraft.customer_access_mode,
+              customer_ids:[...this.permissionDraft.customer_ids],
+            };
+            this.permissionSaving = true;
+            this.permissionError = "";
+            this.permissionSaveError = "";
             try {
-              const userId = this.permissionProfile.user_id;
-              await axios.put(`/api/auth/users/${encodeURIComponent(userId)}/access`, {
-                overrides:this.permissionOverridePayload(),
-                mode:this.permissionDraft.customer_access_mode,
-                customer_ids:this.permissionDraft.customer_ids,
-              });
-              await this.loadPermissionProfile(userId);
-              this.showToast("权限与客户范围已保存");
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
-            finally { this.permissionLoading = false; }
+              await axios.put(`/api/auth/users/${encodeURIComponent(userId)}/access`, payload);
+              if (Number(this.selectedPermissionUserId) === userId) {
+                await this.loadPermissionProfile(userId);
+                if (Number(this.permissionProfile?.user_id) === userId && !this.permissionError) this.showToast("权限与客户范围已保存");
+              }
+            } catch (error) {
+              if (Number(this.selectedPermissionUserId) === userId) {
+                this.permissionSaveError = `权限保存失败：${this.errorMessage(error)}`;
+                this.showToast(this.permissionSaveError, true);
+              }
+            } finally { this.permissionSaving = false; }
           },
           openCreateUserModal() {
             this.createUserForm = { username:"", real_name:"", display_name:"", role:"sales", password:"" };

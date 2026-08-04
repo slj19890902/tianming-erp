@@ -15,12 +15,12 @@ WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 def test_n028_permission_management_uses_atomic_backend_contract() -> None:
     assert 'axios.get("/api/auth/users")' in INDEX
     assert 'axios.post("/api/auth/users"' in INDEX
-    assert "/api/auth/users/${encodeURIComponent(userId)}/permission-overrides" in INDEX
-    assert "/api/auth/users/${encodeURIComponent(userId)}/customer-scopes" in INDEX
+    assert "/api/auth/users/${encodeURIComponent(requestedUserId)}/permission-overrides" in INDEX
+    assert "/api/auth/users/${encodeURIComponent(requestedUserId)}/customer-scopes" in INDEX
     assert "/api/auth/users/${encodeURIComponent(userId)}/access" in INDEX
     assert "overrides:this.permissionOverridePayload()" in INDEX
     assert "mode:this.permissionDraft.customer_access_mode" in INDEX
-    assert "customer_ids:this.permissionDraft.customer_ids" in INDEX
+    assert "customer_ids:[...this.permissionDraft.customer_ids]" in INDEX
 
 
 def test_n028_permission_ui_supports_user_selection_checks_and_customer_scope() -> None:

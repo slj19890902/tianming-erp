@@ -9754,7 +9754,7 @@
             if (!force && this.pageCacheFresh(page)) return;
             this.loading = true;
             try {
-              if (page === "dashboard") await Promise.all([this.loadOverview(), this.loadKpi()]);
+              if (page === "dashboard") await this.loadOverview();
               if (page === "customers") await this.loadCustomers();
               if (page === "quotations") {
                 await this.loadCustomerOptions(force);
@@ -9800,9 +9800,13 @@
             this.overviewError = "";
             this.overview = { cards: [], todos: [], summary: {} };
             try {
-              this.overview = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
+              const data = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
+              this.overview = data;
+              if (data.kpi) this.kpi = data.kpi;
+              else await this.loadKpi();
             } catch (error) {
               this.overview = { cards: [], todos: [], summary: {} };
+              this.kpi = {};
               this.overviewError = this.errorMessage(error);
             } finally {
               this.overviewLoading = false;

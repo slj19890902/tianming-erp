@@ -461,53 +461,56 @@ def _common_box_low_stock_warnings(
     )
 
 
-@router.get("/kpi")
-def dashboard_kpi(
-    db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+def _dashboard_kpi_payload(
+    raw_db: Session,
+    *,
+    user: User,
+    visible_customer_ids: set[int] | None,
+    today: date,
+    workflow_rows: list[dict] | None = None,
 ) -> dict:
-    raw_db = db
-    today = beijing_today()
+    """Return KPI values, optionally reusing the overview workflow projection."""
+
     month = today.strftime("%Y-%m")
-    visible_customer_ids = (
-        None
-        if has_unrestricted_customer_access(user, db)
-        else customer_scope_ids(user, db)
-    )
     can_view_incoming = has_permission(user, "incoming.view")
     can_view_orders = has_permission(user, "orders.view")
     can_view_deliveries = has_permission(user, "deliveries.view")
     can_view_finance = has_permission(user, "finance.view")
-    db = _CustomerScopedSession(db, visible_customer_ids)
+    db = _CustomerScopedSession(raw_db, visible_customer_ids)
     can_view_cost = can_view_finance and has_permission(user, "cost.view")
     result = {"month": month}
-    workflow_rows = (
-        _workflow_projection_rows(
-            raw_db,
-            visible_customer_ids=visible_customer_ids,
-            due_on=today,
-            include_delivery=can_view_deliveries or can_view_finance,
-            include_finance=can_view_finance,
+    if workflow_rows is None:
+        current_workflow_rows = (
+            _workflow_projection_rows(
+                raw_db,
+                visible_customer_ids=visible_customer_ids,
+                due_on=today,
+                include_delivery=can_view_deliveries or can_view_finance,
+                include_finance=can_view_finance,
+            )
+            if can_view_deliveries or can_view_orders or can_view_incoming
+            else []
         )
-        if can_view_deliveries or can_view_orders or can_view_incoming
-        else []
-    )
+    else:
+        current_workflow_rows = [
+            row for row in workflow_rows if row.get("delivery_date") == today
+        ]
     if can_view_deliveries:
         result["today_pending_delivery_tasks"] = sum(
             1
-            for row in workflow_rows
+            for row in current_workflow_rows
             if row["business_status"] in {"pending_delivery", "partially_delivered"}
         )
     if can_view_orders:
         result["today_pending_production_tasks"] = sum(
             1
-            for row in workflow_rows
+            for row in current_workflow_rows
             if row["business_status"] == "pending_production"
         )
     if can_view_incoming:
         result["today_pending_incoming_tasks"] = sum(
             1
-            for row in workflow_rows
+            for row in current_workflow_rows
             if row["business_status"] == "pending_incoming"
         )
     if can_view_finance:
@@ -576,6 +579,25 @@ def dashboard_kpi(
         )
         result["monthly_gross_profit"] = _money(monthly_profit)
     return result
+
+
+@router.get("/kpi")
+def dashboard_kpi(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    today = beijing_today()
+    visible_customer_ids = (
+        None
+        if has_unrestricted_customer_access(user, db)
+        else customer_scope_ids(user, db)
+    )
+    return _dashboard_kpi_payload(
+        db,
+        user=user,
+        visible_customer_ids=visible_customer_ids,
+        today=today,
+    )
 
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
@@ -1005,6 +1027,14 @@ def dashboard_overview(
         )
         else []
     )
+    embedded_kpi = _dashboard_kpi_payload(
+        raw_db,
+        user=user,
+        visible_customer_ids=visible_customer_ids,
+        today=today,
+        workflow_rows=workflow_rows,
+    )
+
     def is_due(row: dict) -> bool:
         return row["delivery_date"] is None or row["delivery_date"] <= today
 
@@ -1715,6 +1745,7 @@ def dashboard_overview(
         "statement_month": month,
         "as_of": as_of,
         "timezone": "Asia/Shanghai",
+        "kpi": embedded_kpi,
     }
     if can_view_requisition and can_view_warehouse:
         low_stock_warnings = _common_box_low_stock_warnings(

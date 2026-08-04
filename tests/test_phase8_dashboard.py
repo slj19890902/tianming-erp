@@ -185,9 +185,12 @@ def test_dashboard_kpi_uses_real_database_aggregates(tmp_path: Path) -> None:
             json={"username": "admin", "password": "RolePass123!"},
         ).status_code == 200
         response = client.get("/api/dashboard/kpi")
+        overview_response = client.get("/api/dashboard/overview")
 
     assert response.status_code == 200
+    assert overview_response.status_code == 200
     body = response.json()
+    assert overview_response.json()["kpi"] == body
     assert Decimal(str(body["monthly_revenue"])) == Decimal("280.80")
     assert Decimal(str(body["monthly_gross_profit"])) == Decimal("70.20")
     assert Decimal(str(body["outstanding_receivables"])) == Decimal("280.80")

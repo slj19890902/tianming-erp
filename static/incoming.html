@@ -73,7 +73,7 @@
       <p class="mt-2 text-slate-600">只撤回当前这一笔；系统会自动记录管理员、时间、关联记录和前后状态。</p>
       <div class="mt-4 grid grid-cols-2 gap-3">
         <button type="button" id="cancelRevert" class="min-h-14 rounded-xl bg-slate-200 text-lg font-bold">取消</button>
-        <button type="submit" class="min-h-14 rounded-xl bg-red-700 text-lg font-bold text-white">确认撤回</button>
+        <button type="submit" id="confirmRevert" class="min-h-14 rounded-xl bg-red-700 text-lg font-bold text-white disabled:bg-slate-400">确认撤回</button>
       </div>
     </form>
   </div>
@@ -109,7 +109,9 @@
       user: null,
       permissions: [],
       revertingItemId: null,
-      busyItemId: null,
+      busyItemIds: new Set(),
+      receiveIdempotencyKeys: new Map(),
+      revertSubmitting: false,
       expandedIds: new Set(),
     };
 
@@ -127,6 +129,10 @@
 
     function finishLatestRequest(key, controller) {
       if (requestControllers.get(key) === controller) requestControllers.delete(key);
+    }
+
+    function isLatestRequest(key, controller) {
+      return requestControllers.get(key) === controller && !controller.signal.aborted;
     }
 
     function createIdempotencyKey() {
@@ -169,6 +175,20 @@
       return raw;
     }
 
+    function formatApiDetail(detail) {
+      if (typeof detail === "string") return detail.trim();
+      if (Array.isArray(detail)) {
+        return detail.map(item => formatApiDetail(item)).filter(Boolean).join("；");
+      }
+      if (detail && typeof detail === "object") {
+        const message = String(detail.message || detail.msg || "").trim();
+        const code = String(detail.code || "").trim();
+        if (message) return code ? `${message}（${code}）` : message;
+        if (code) return `操作失败（${code}）`;
+      }
+      return "";
+    }
+
     async function api(url, options = {}) {
       // v0.23.0 P0-2：来料相关接口一律禁止缓存，避免手机浏览器复用上一次的旧数据。
       const bustUrl = url.includes("?") ? `${url}&_=${Date.now()}` : `${url}?_=${Date.now()}`;
@@ -184,18 +204,29 @@
         if (networkError?.name === "AbortError") throw networkError;
         throw new Error("网络连接失败，请检查网络后重试");
       }
-      const data = await response.json().catch(() => ({}));
+      const responseText = await response.text().catch(() => "");
+      let data = {};
+      if (responseText) {
+        try {
+          data = JSON.parse(responseText);
+        } catch (_error) {
+          data = {};
+        }
+      }
       if (response.status === 401) {
+        state.user = null;
+        state.permissions = [];
         $("authNotice").hidden = false;
         const authError = new Error("登录已失效，请重新登录");
         authError.status = 401;
         throw authError;
       }
       if (!response.ok) {
-        const detail = Array.isArray(data.detail)
-          ? data.detail.map((item) => item.msg).join("；")
-          : data.detail;
-        const apiError = new Error(detail || "操作失败，请重试");
+        const detail = formatApiDetail(data.detail);
+        const fallback = response.status >= 500
+          ? `服务器内部错误（HTTP ${response.status}），请稍后重试`
+          : `请求失败（HTTP ${response.status}）`;
+        const apiError = new Error(detail || fallback);
         apiError.status = response.status;
         throw apiError;
       }
@@ -306,7 +337,7 @@
     function renderCard(item) {
       const isPending = state.activeTab === "pending";
       const key = String(item.history_key || item.item_id);
-      const disabled = state.busyItemId === key;
+      const disabled = state.busyItemIds.has(key);
       const expanded = state.expandedIds.has(key);
       const drawingAvailable = hasDrawing(item);
       const isStockReplenishment = item.source_type === "stock_replenishment";
@@ -315,7 +346,7 @@
         : `<button disabled class="min-h-12 w-full rounded-lg bg-slate-300 px-2 text-sm font-bold text-slate-500">无图纸</button>`;
 
       const quantityBlock = isPending && canOperate()
-        ? `<input data-quantity="${key}" class="mt-1 w-full rounded-lg border-2 border-slate-300 bg-white p-2 text-xl font-black" type="number" min="1" step="1" value="${escapeHtml(item.incoming_quantity)}">`
+        ? `<input data-quantity="${key}" ${disabled ? "disabled" : ""} class="mt-1 w-full rounded-lg border-2 border-slate-300 bg-white p-2 text-xl font-black disabled:bg-slate-200" type="number" min="1" step="1" value="${escapeHtml(item.incoming_quantity)}">`
         : `<p class="mt-1 text-xl font-black">${escapeHtml(item.incoming_quantity)}</p>`;
 
       const planned = Number(item.planned_quantity ?? item.requisition_qty ?? item.quantity ?? 0);
@@ -326,17 +357,17 @@
         .map(row => `<option value="${row.id}" ${Number(item.surplus_location_id) === Number(row.id) ? "selected" : ""}>${escapeHtml(row.location_code)}｜${escapeHtml(row.location_name)}</option>`)
         .join("");
       const decisionBlock = !isPending ? "" : projected < 0
-        ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后仍短收 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() ? "" : "disabled"}><option value="">请选择短收处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等待供应商补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按当前累计数量结单</option>`}</select></div>`
+        ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后仍短收 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">请选择短收处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等待供应商补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按当前累计数量结单</option>`}</select></div>`
         : projected > 0
           ? isStockReplenishment
             ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm font-bold text-red-800">补库来料不能超过原报料数量，请核对后另建补库单处理超收</div>`
-            : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后超收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() ? "" : "disabled"}><option value="">请选择超收处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部投入当前生产</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>超出部分转半成品库存</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() ? "" : "disabled"}><option value="">请选择半成品库位</option>${locations}</select>` : ""}</div>`
+            : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">本次后超收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">请选择超收处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部投入当前生产</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>超出部分转半成品库存</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">请选择半成品库位</option>${locations}</select>` : ""}</div>`
           : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">本次后累计等于计划</div>`;
 
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
         : isPending
-          ? `<button data-receive="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white">不再补货，短收结单</button>` : ""}`
+          ? `<button data-receive="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
           : "";
 
       const expandedSection = expanded ? `
@@ -419,11 +450,13 @@
       $("emptyState").hidden = true;
       try {
         const pending = await api("/api/incoming/pending", {signal: controller.signal});
+        if (!isLatestRequest("incoming:pending", controller)) return false;
         state.pending = pending.items.map(item => ({...item,incoming_quantity:Number(item.remaining_quantity ?? item.incoming_quantity ?? item.requisition_qty ?? item.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
         state.expandedIds = new Set();
         render();
+        return true;
       } catch (error) {
-        if (error?.name === "AbortError") return;
+        if (error?.name === "AbortError" || !isLatestRequest("incoming:pending", controller)) return false;
         if (error?.status === 401) {
           $("errorState").hidden = true;
           $("authNotice").hidden = false;
@@ -431,29 +464,33 @@
           $("errorMessage").textContent = toChineseMessage(error);
           $("errorState").hidden = false;
         }
+        return false;
       } finally {
-        $("loadingState").hidden = true;
+        if (isLatestRequest("incoming:pending", controller)) $("loadingState").hidden = true;
         finishLatestRequest("incoming:pending", controller);
       }
     }
 
     async function loadReceived({force = false} = {}) {
-      if (!force && state.receivedLoaded) return;
+      if (!force && state.receivedLoaded) return true;
       const controller = beginLatestRequest("incoming:received");
       state.receivedLoading = true;
       state.receivedError = "";
       render();
       try {
         const received = await api("/api/incoming/received", {signal: controller.signal});
+        if (!isLatestRequest("incoming:received", controller)) return false;
         state.received = received.items || [];
         state.receivedLoaded = true;
         render();
+        return true;
       } catch (error) {
-        if (error?.name !== "AbortError") {
+        if (error?.name !== "AbortError" && isLatestRequest("incoming:received", controller)) {
           state.receivedError = `读取今日实收失败：${toChineseMessage(error)}`;
           render();
           showToast(state.receivedError, true);
         }
+        return false;
       } finally {
         if (requestControllers.get("incoming:received") === controller) {
           state.receivedLoading = false;
@@ -487,7 +524,8 @@
     async function refreshAfterIncomingWrite() {
       const tasks = [loadPending()];
       if (state.receivedLoaded) tasks.push(loadReceived({force: true}));
-      await Promise.all(tasks);
+      const results = await Promise.all(tasks);
+      return results[0] === true;
     }
 
     function findItem(itemId) {
@@ -525,6 +563,8 @@
     }
 
     async function receive(itemId) {
+      const key = String(itemId);
+      if (state.busyItemIds.has(key)) return;
       const item = findItem(itemId);
       const quantity = Number(item?.incoming_quantity);
       if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -551,7 +591,9 @@
         return;
       }
       if (!window.confirm(`确认该批 ${quantity} 张纸板已经到厂并完成入库吗？`)) return;
-      state.busyItemId = String(itemId);
+      const operationKey = state.receiveIdempotencyKeys.get(key) || createIdempotencyKey();
+      state.receiveIdempotencyKeys.set(key, operationKey);
+      state.busyItemIds.add(key);
       render();
       try {
         const result = await api(`/api/incoming/receive/${item.item_id}`, {
@@ -561,24 +603,32 @@
             resolution_action: action,
             resolution_reason: String(item.resolution_reason || "").trim() || null,
             surplus_location_id: Number(item.surplus_location_id) || null,
-            idempotency_key: createIdempotencyKey(),
+            idempotency_key: operationKey,
           }),
         });
-        showToast(result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功");
-        await refreshAfterIncomingWrite();
+        const refreshed = await refreshAfterIncomingWrite();
+        if (refreshed) {
+          state.receiveIdempotencyKeys.delete(key);
+          showToast(result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功");
+        } else {
+          showToast("入库已提交，但列表刷新失败；请点击刷新，勿重复录入", true);
+        }
       } catch (error) {
+        if (error?.status && error.status < 500) state.receiveIdempotencyKeys.delete(key);
         showToast(toChineseMessage(error), true);
       } finally {
-        state.busyItemId = null;
+        state.busyItemIds.delete(key);
         render();
       }
     }
 
     async function acceptShortNow(itemId) {
+      const key = String(itemId);
+      if (state.busyItemIds.has(key)) return;
       const item = findItem(itemId);
       if (!item?.pending_receipt_item_id) return;
       if (!window.confirm("确认供应商不再补货，并按当前累计数量完成收货？")) return;
-      state.busyItemId = String(itemId);
+      state.busyItemIds.add(key);
       render();
       try {
         await api(`/api/incoming/receipt-items/${item.pending_receipt_item_id}/accept-short`, {
@@ -590,7 +640,7 @@
       } catch (error) {
         showToast(toChineseMessage(error), true);
       } finally {
-        state.busyItemId = null;
+        state.busyItemIds.delete(key);
         render();
       }
     }
@@ -678,8 +728,12 @@
     $("revertForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const itemId = state.revertingItemId;
+      const key = String(itemId || "");
+      if (!itemId || state.revertSubmitting || state.busyItemIds.has(key)) return;
+      state.revertSubmitting = true;
+      $("confirmRevert").disabled = true;
       $("revertModal").hidden = true;
-      state.busyItemId = itemId;
+      state.busyItemIds.add(key);
       render();
       try {
         const item = findItem(itemId);
@@ -695,14 +749,21 @@
       } catch (error) {
         showToast(toChineseMessage(error), true);
       } finally {
-        state.busyItemId = null;
+        state.busyItemIds.delete(key);
+        state.revertSubmitting = false;
+        $("confirmRevert").disabled = false;
         state.revertingItemId = null;
         render();
       }
     });
 
-    $("refreshButton").addEventListener("click", loadData);
-    $("errorRetryButton").addEventListener("click", loadData);
+    async function retryCurrentView() {
+      if (!state.user && !(await checkAuth())) return;
+      await loadData();
+    }
+
+    $("refreshButton").addEventListener("click", retryCurrentView);
+    $("errorRetryButton").addEventListener("click", retryCurrentView);
     $("cancelRevert").addEventListener("click", () => {
       $("revertModal").hidden = true;
       state.revertingItemId = null;

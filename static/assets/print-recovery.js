@@ -21,6 +21,13 @@
     return String(headerValue || body?.request_id || body?.requestId || "").trim();
   }
 
+  function httpError(parts, status, requestId) {
+    const error = new Error(parts.filter(Boolean).join("；"));
+    error.status = Number(status || 0);
+    error.requestId = String(requestId || "");
+    return error;
+  }
+
   async function requestPrintData(url, signal, messages = {}) {
     const response = await fetch(url, {
       credentials: "include",
@@ -33,29 +40,29 @@
     }
     const requestId = requestIdOf(response, body);
     if (response.status === 401) {
-      throw new Error([
+      throw httpError([
         messages.auth || "登录已失效，请返回 ERP 登录后重试。",
         "HTTP 401",
         requestId ? `请求编号 ${requestId}` : "",
-      ].filter(Boolean).join("；"));
+      ], response.status, requestId);
     }
     if (!response.ok) {
       const detail = parseErrorDetail(body?.detail ?? body);
       const fallback = response.status >= 500
         ? "服务器内部错误，打印内容未能读取。"
         : (messages.failure || "打印内容读取失败。");
-      throw new Error([
+      throw httpError([
         detail || fallback,
         `HTTP ${response.status}`,
         requestId ? `请求编号 ${requestId}` : "",
-      ].filter(Boolean).join("；"));
+      ], response.status, requestId);
     }
     if (!body || typeof body !== "object") {
-      throw new Error([
+      throw httpError([
         "服务器返回了空白或无法识别的打印内容",
         `HTTP ${response.status}`,
         requestId ? `请求编号 ${requestId}` : "",
-      ].filter(Boolean).join("；"));
+      ], response.status, requestId);
     }
     return body;
   }
@@ -119,11 +126,20 @@
           { auth: options.authMessage, failure: options.failureMessage },
         );
         if (generation !== loadGeneration || controller.signal.aborted) return false;
-        render(data);
+        try {
+          render(data);
+        } catch (error) {
+          throw new Error(`打印内容无法显示：${error?.message || "页面渲染失败"}`);
+        }
         showReady();
         return true;
       } catch (error) {
         if (generation !== loadGeneration || controller.signal.aborted || error?.name === "AbortError") {
+          return false;
+        }
+        if (Number(error?.status) === 401 && typeof options.onUnauthorized === "function") {
+          loadState.textContent = "登录已失效，正在返回 ERP…";
+          options.onUnauthorized(error);
           return false;
         }
         const message = error instanceof TypeError

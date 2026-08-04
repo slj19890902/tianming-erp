@@ -47,7 +47,8 @@ def test_p1_24a_uses_board_size_and_honest_overflow_states() -> None:
 
 
 def test_p1_24a_keeps_authentication_and_role_based_return_links() -> None:
-    assert 'await api("/api/auth/me")' in LABEL
+    assert 'prototypeMode?"/api/auth/me"' in LABEL
+    assert "onUnauthorized:loginNext" in LABEL
     assert "/api/warehouse/molds/${id}/label" in LABEL
     assert "正式标签二维码仍进入登录后的模具查询" in LABEL
     assert 'permissions.includes("warehouse.view")' in MOBILE

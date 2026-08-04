@@ -100,7 +100,34 @@ try {
         --package-dir $package `
         --uat-root $UatRoot `
         --project-root $worktree
-    if ($LASTEXITCODE -ne 0) { throw "家庭 UAT 包导入失败：$importText" }
+    $importExitCode = $LASTEXITCODE
+    $importDetails = ($importText | Out-String).Trim()
+    if ($importExitCode -ne 0 -and
+        $importDetails -match "WinError 1005|此卷不包含可识别的文件系统") {
+        Write-Host "检测到 NAS 映射盘路径兼容问题，正在复制到家庭本地临时目录后重新验签。"
+        $stagingRoot = Join-Path `
+            ([System.IO.Path]::GetFullPath($UatRoot)) `
+            (".nas-package-" + $packageId + "-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+            Copy-Item -LiteralPath $package -Destination $stagingRoot -Recurse
+            $localPackage = Join-Path $stagingRoot $packageId
+            Assert-ManifestChecksum -Directory $localPackage | Out-Null
+            $importText = & $python -X utf8 $helper import `
+                --package-dir $localPackage `
+                --uat-root $UatRoot `
+                --project-root $worktree
+            if ($LASTEXITCODE -ne 0) {
+                throw "家庭 UAT 包本地暂存后仍导入失败：$importText"
+            }
+        } finally {
+            if (Test-Path -LiteralPath $stagingRoot) {
+                Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+            }
+        }
+    } elseif ($importExitCode -ne 0) {
+        throw "家庭 UAT 包导入失败：$importText"
+    }
     $importResult = $importText | ConvertFrom-Json
 
     & $launcher `

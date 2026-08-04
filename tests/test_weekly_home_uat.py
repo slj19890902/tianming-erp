@@ -311,6 +311,10 @@ def test_powershell_entries_keep_factory_and_home_boundaries() -> None:
         "worktree add --detach",
         "weekly_home_uat.py",
         "start_erp_uat.ps1",
+        "WinError 1005",
+        ".nas-package-",
+        "Copy-Item -LiteralPath $package",
+        "Remove-Item -LiteralPath $stagingRoot",
     ):
         assert marker in import_source
     for marker in (

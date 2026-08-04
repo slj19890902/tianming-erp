@@ -51,7 +51,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\import_start_weekly_h
 家庭电脑可以直接选择受控 NAS 的 Windows 映射盘目录（例如 `Z:\...`）。即使 NAS
 驱动不支持 Python 查询最终文件系统路径，工具也只对该只读输入使用绝对路径兼容模式；
 manifest、数据库 SHA-256、revision、完整性和外键门禁不会因此放宽。收到件与可写
-工作副本仍只建立在家庭本地 `UatRoot` 下。
+工作副本仍只建立在家庭本地 `UatRoot` 下。对于由旧版导入助手生成、直接读取映射盘会
+触发 `WinError 1005` 的数据包，启动脚本会自动复制到家庭本地临时目录重新验签，导入
+完成后删除临时目录；NAS 原件不会被修改。
 
 脚本会自动：
 

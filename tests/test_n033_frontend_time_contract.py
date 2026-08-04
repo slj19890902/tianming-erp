@@ -97,10 +97,28 @@ def test_backup_timestamps_are_labeled_and_rendered_as_beijing_time() -> None:
 
 def test_static_time_utility_has_a_strict_contract() -> None:
     utility = (STATIC / "assets/time-utils.js").read_text(encoding="utf-8")
-    for name in ("formatBeijingDateTime", "formatBeijingDate", "beijingToday", "addCalendarDays", "formatBusinessDate"):
+    for name in (
+        "formatBeijingDateTime",
+        "formatBeijingDate",
+        "beijingToday",
+        "addCalendarDays",
+        "addWorkingDays",
+        "formatBusinessDate",
+    ):
         assert name in utility
     assert 'Asia/Shanghai' in utility
     assert 'Z|[+-]\\d{2}:\\d{2}' in utility
+
+
+def test_index_routes_business_date_arithmetic_through_shared_helpers() -> None:
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert (
+        "const addWorkingDays = (startDate, workingDays=7) => "
+        "TmTime.addWorkingDays(startDate, workingDays);"
+    ) in index
+    assert "return TmTime.addCalendarDays(today(), 1);" in index
+    assert "result.toISOString().slice(0,10)" not in index
+    assert "value.toISOString().slice(0, 10)" not in index
 
 
 def test_vue_views_use_business_date_helpers() -> None:
@@ -129,13 +147,28 @@ def test_shared_js_contract_and_timezone_boundary() -> None:
         "if(t.beijingToday(new Date('2026-07-16T16:00:00Z'))!=='2026-07-17')process.exit(5);"
         "if(t.addCalendarDays('2026-07-17',1)!=='2026-07-18')process.exit(6);"
         "if(t.formatBusinessDate('2026-07-17')!=='2026-07-17')process.exit(7);"
+        "if(t.addWorkingDays('2026-07-17',1)!=='2026-07-20')process.exit(10);"
+        "if(t.addWorkingDays('2026-07-17',7)!=='2026-07-28')process.exit(11);"
+        "if(t.addWorkingDays('2026-12-31',1)!=='2027-01-01')process.exit(12);"
+        "if(t.addWorkingDays('2026-07-19',0)!=='2026-07-19')process.exit(13);"
         "let rejected=false;try{t.formatBeijingDateTime('2026-07-17T00:00:00')}catch(_){rejected=true}"
         "if(!rejected)process.exit(8);"
         "rejected=false;try{t.formatBeijingDate('2026-07-17')}catch(_){rejected=true}"
         "if(!rejected)process.exit(9);"
+        "rejected=false;try{t.addWorkingDays('2026-07-17',-1)}catch(_){rejected=true}"
+        "if(!rejected)process.exit(14);"
     )
-    result = subprocess.run([node, "-e", script, str(utility)], cwd=ROOT, text=True, capture_output=True)
-    assert result.returncode == 0, result.stderr
+    for timezone_name in ("UTC", "America/Los_Angeles", "Pacific/Kiritimati"):
+        environment = os.environ.copy()
+        environment["TZ"] = timezone_name
+        result = subprocess.run(
+            [node, "-e", script, str(utility)],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, timezone_name + ": " + result.stderr
 
 
 def test_typescript_time_contract_is_syntax_checkable() -> None:

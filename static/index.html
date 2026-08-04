@@ -5991,18 +5991,7 @@
       const searchDebounceTimers = new Map();
       const today = () => TmTime.beijingToday();
       const plusDays = (days) => TmTime.addCalendarDays(TmTime.beijingToday(), days);
-      const addWorkingDays = (startDate, workingDays=7) => {
-        const match = String(startDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if (!match) return "";
-        const result = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-        let added = 0;
-        while (added < workingDays) {
-          result.setUTCDate(result.getUTCDate() + 1);
-          const weekday = result.getUTCDay();
-          if (weekday !== 0 && weekday !== 6) added += 1;
-        }
-        return result.toISOString().slice(0,10);
-      };
+      const addWorkingDays = (startDate, workingDays=7) => TmTime.addWorkingDays(startDate, workingDays);
       const month = () => today().slice(0, 7);
       const roleMenus = {
         admin: ["dashboard", "customers", "products", "orders", "requisition", "incoming", "production", "warehouse", "deliveries", "finance", "system"],
@@ -10883,9 +10872,7 @@
             return `等 ${previousNo} 送完`;
           },
           tomorrowDate() {
-            const value = new Date(`${today()}T00:00:00Z`);
-            value.setUTCDate(value.getUTCDate() + 1);
-            return value.toISOString().slice(0, 10);
+            return TmTime.addCalendarDays(today(), 1);
           },
           async openWaitingRequisitionFromDashboard() {
             await this.go("requisition");

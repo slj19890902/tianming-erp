@@ -9580,7 +9580,14 @@
           },
           loginRedirectPath() {
             const target = new URLSearchParams(window.location.search).get("redirect") || "";
-            return ["/incoming.html", "/warehouse.html"].includes(target) ? target : "";
+            if (["/incoming.html", "/warehouse.html"].includes(target)) return target;
+            if (target === "/mobile/erp.html") {
+              const mobilePage = new URLSearchParams(window.location.search).get("mobile_page") || "";
+              return ["home", "search", "production"].includes(mobilePage)
+                ? `${target}#${mobilePage}`
+                : target;
+            }
+            return "";
           },
           initialPageFromLocation() {
             const pages = new Set(["dashboard","customers","contracts","quotations","products","orders","orders_legacy","requisition","incoming","production","warehouse","deliveries","finance","system"]);

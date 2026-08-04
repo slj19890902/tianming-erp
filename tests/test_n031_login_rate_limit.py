@@ -18,6 +18,15 @@ PASSWORD = "RateLimitPass123!"
 USER_AGENT = "N031 login-rate-limit test"
 
 
+def test_login_failure_window_uses_shared_utc_database_clock() -> None:
+    source = (Path(__file__).resolve().parents[1] / "app/api/auth.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from app.core.time_contract import utc_now_naive" in source
+    assert "datetime.utcnow()" not in source
+    assert source.count("utc_now_naive() - LOGIN_FAILURE_WINDOW") == 3
+
+
 @pytest.fixture()
 def login_rate_limit_context(tmp_path: Path):
     from app.api.auth import router

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from threading import Lock
 from typing import Literal
 
@@ -26,6 +26,7 @@ from app.api.deps import (
 from app.core.config import load_settings
 from app.core.password_policy import normalize_username, password_policy_issues
 from app.core.security import create_session_token, hash_password, verify_password
+from app.core.time_contract import utc_now_naive
 from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -558,7 +559,7 @@ def _login_attempt_log(
 
 
 def _recent_failed_login_count(db: Session, *, username: str, ip_address: str | None) -> int:
-    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    cutoff = utc_now_naive() - LOGIN_FAILURE_WINDOW
     last_success_id = db.scalar(
         select(func.max(OperationLog.id)).where(
             OperationLog.action == "LOGIN",
@@ -580,7 +581,7 @@ def _recent_failed_login_count(db: Session, *, username: str, ip_address: str | 
 def _recent_ip_failed_login_count(db: Session, *, ip_address: str | None) -> int:
     if ip_address is None:
         return 0
-    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    cutoff = utc_now_naive() - LOGIN_FAILURE_WINDOW
     return (
         db.scalar(
             select(func.count(OperationLog.id)).where(
@@ -600,7 +601,7 @@ def _throttle_log_exists(
     ip_address: str | None,
     ip_throttled: bool,
 ) -> bool:
-    cutoff = datetime.utcnow() - LOGIN_FAILURE_WINDOW
+    cutoff = utc_now_naive() - LOGIN_FAILURE_WINDOW
     filters = [
         OperationLog.action == "LOGIN_THROTTLED",
         OperationLog.ip_address == ip_address,

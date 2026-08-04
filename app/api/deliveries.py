@@ -4,6 +4,7 @@ import json
 import re
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -457,9 +458,66 @@ class DeliveryPickAssignmentUpdate(BaseModel):
     picker_user_id: int | None = Field(default=None, gt=0)
 
 
+def _pick_task_read_context(
+    db: Session,
+    items: list[DeliveryPickTaskItem],
+) -> dict:
+    """Preload stable task references and empty-source facts in batches."""
+    delivery_item_ids = {
+        item.delivery_item_id for item in items if item.delivery_item_id is not None
+    }
+    order_item_ids = {
+        item.order_item_id for item in items if item.order_item_id is not None
+    }
+    delivery_items = {
+        row.id: row
+        for row in db.scalars(
+            select(DeliveryItem).where(DeliveryItem.id.in_(delivery_item_ids))
+        ).all()
+    } if delivery_item_ids else {}
+    order_items = {
+        row.id: row
+        for row in db.scalars(
+            select(OrderItem).where(OrderItem.id.in_(order_item_ids))
+        ).all()
+    } if order_item_ids else {}
+    composite_order_item_ids = set(
+        db.scalars(
+            select(SalesOrderItemBomComponent.sales_order_item_id)
+            .where(
+                SalesOrderItemBomComponent.sales_order_item_id.in_(order_item_ids)
+            )
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    inventory_source_order_item_ids = set(
+        db.scalars(
+            select(InventoryReservation.order_item_id)
+            .where(
+                InventoryReservation.order_item_id.in_(order_item_ids),
+                InventoryReservation.status != "cancelled",
+                func.coalesce(
+                    InventoryReservation.credited_requirement_quantity,
+                    0,
+                )
+                > InventoryReservation.released_requirement_quantity,
+            )
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    return {
+        "delivery_items": delivery_items,
+        "order_items": order_items,
+        "composite_order_item_ids": composite_order_item_ids,
+        "inventory_source_order_item_ids": inventory_source_order_item_ids,
+    }
+
+
 def _pick_item_component_lines(
     db: Session,
     item: DeliveryPickTaskItem,
+    *,
+    read_context: dict | None = None,
 ) -> list[dict]:
     """Return read-only parent-priced component goods for one pick row.
 
@@ -469,9 +527,13 @@ def _pick_item_component_lines(
     the existing component inventory gate and allocation facts.
     """
     delivery_item = (
-        db.get(DeliveryItem, item.delivery_item_id)
-        if item.delivery_item_id is not None
-        else None
+        read_context["delivery_items"].get(item.delivery_item_id)
+        if read_context is not None
+        else (
+            db.get(DeliveryItem, item.delivery_item_id)
+            if item.delivery_item_id is not None
+            else None
+        )
     )
     if (
         delivery_item is None
@@ -479,8 +541,20 @@ def _pick_item_component_lines(
         or delivery_item.order_item_id != item.order_item_id
     ):
         return []
-    order_item = db.get(OrderItem, item.order_item_id)
-    if order_item is None or not is_composite_order_item(db, order_item.id):
+    order_item = (
+        read_context["order_items"].get(item.order_item_id)
+        if read_context is not None
+        else db.get(OrderItem, item.order_item_id)
+    )
+    is_composite = (
+        order_item is not None
+        and (
+            order_item.id in read_context["composite_order_item_ids"]
+            if read_context is not None
+            else is_composite_order_item(db, order_item.id)
+        )
+    )
+    if order_item is None or not is_composite:
         return []
     return [
         component
@@ -664,13 +738,18 @@ def _pick_item_location_plan(
     *,
     item: DeliveryPickTaskItem,
     component_lines: list[dict],
+    read_context: dict | None = None,
 ) -> tuple[list[dict], bool]:
     """Build a read-only loading plan from current inventory and production facts."""
 
     delivery_item = (
-        db.get(DeliveryItem, item.delivery_item_id)
-        if item.delivery_item_id is not None
-        else None
+        read_context["delivery_items"].get(item.delivery_item_id)
+        if read_context is not None
+        else (
+            db.get(DeliveryItem, item.delivery_item_id)
+            if item.delivery_item_id is not None
+            else None
+        )
     )
     if delivery_item is not None and delivery_item.source_type == "unordered_finished":
         return _pick_unordered_location_plan(
@@ -678,8 +757,23 @@ def _pick_item_location_plan(
             item=item,
             delivery_item=delivery_item,
         )
-    order_item = db.get(OrderItem, item.order_item_id)
+    order_item = (
+        read_context["order_items"].get(item.order_item_id)
+        if read_context is not None
+        else db.get(OrderItem, item.order_item_id)
+    )
     if order_item is None:
+        return [], False
+    composite_hint = (
+        order_item.id in read_context["composite_order_item_ids"]
+        if read_context is not None
+        else None
+    )
+    if (
+        read_context is not None
+        and not composite_hint
+        and order_item.id not in read_context["inventory_source_order_item_ids"]
+    ):
         return [], False
     planned_quantity = max(int(item.original_quantity or 0), 0)
     raw_sources = _inventory_sources_for_order_item(
@@ -688,6 +782,7 @@ def _pick_item_location_plan(
         planned_delivery_quantity=planned_quantity,
         delivery_item_id=item.delivery_item_id,
         dispatched=False,
+        composite_hint=composite_hint,
     )
     if component_lines:
         raw_sources = [
@@ -1011,13 +1106,19 @@ def _pick_item_response(
     item: DeliveryPickTaskItem,
     *,
     include_location_plan: bool = True,
+    read_context: dict | None = None,
 ) -> dict:
-    component_lines = _pick_item_component_lines(db, item)
+    component_lines = _pick_item_component_lines(
+        db,
+        item,
+        read_context=read_context,
+    )
     location_lines, location_plan_complete = (
         _pick_item_location_plan(
             db,
             item=item,
             component_lines=component_lines,
+            read_context=read_context,
         )
         if include_location_plan
         else ([], True)
@@ -1048,13 +1149,16 @@ def _pick_task_response(
     *,
     include_location_plan: bool = True,
 ) -> dict:
+    task_items = list(task.items)
+    read_context = _pick_task_read_context(db, task_items)
     item_responses = [
         _pick_item_response(
             db,
             item,
             include_location_plan=include_location_plan,
+            read_context=read_context,
         )
-        for item in task.items
+        for item in task_items
     ]
     location_groups = (
         _pick_location_groups(db, item_responses) if include_location_plan else []
@@ -1064,7 +1168,7 @@ def _pick_task_response(
             **item_response,
             "customer_name": task.customer.name if task.customer else None,
         }
-        for item, item_response in zip(task.items, item_responses, strict=True)
+        for item, item_response in zip(task_items, item_responses, strict=True)
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
@@ -1742,8 +1846,13 @@ def _inventory_sources_for_order_item(
     planned_delivery_quantity: int,
     delivery_item_id: int | None = None,
     dispatched: bool = False,
+    composite_hint: bool | None = None,
 ) -> list[dict]:
-    if is_composite_order_item(db, order_item.id):
+    if (
+        composite_hint
+        if composite_hint is not None
+        else is_composite_order_item(db, order_item.id)
+    ):
         return _composite_inventory_sources_for_order_item(
             db,
             order_item=order_item,
@@ -1982,6 +2091,8 @@ def _delivery_pick_task_summary(
     customer_name: str | None,
     delivery_number: str | None,
     items: list[DeliveryPickTaskItem],
+    assigned_user: User | None = None,
+    assignee_preloaded: bool = False,
 ) -> dict:
     """List-view summary; full location planning remains on the detail routes."""
 
@@ -2003,7 +2114,8 @@ def _delivery_pick_task_summary(
         if item.status in {"partial", "no_stock"}
         or int(item.picked_quantity) > int(item.original_quantity)
     ]
-    assigned_user = db.get(User, task.assigned_to) if task.assigned_to else None
+    if not assignee_preloaded and task.assigned_to:
+        assigned_user = db.get(User, task.assigned_to)
     return {
         "id": task.id,
         "delivery_id": task.delivery_id,
@@ -2029,6 +2141,58 @@ def _delivery_pick_task_summary(
         "location_groups": [],
         "location_plan_complete": None,
     }
+
+
+def _delivery_pick_task_list_summaries(
+    db: Session,
+    tasks: list[DeliveryPickTask],
+) -> list[dict]:
+    """Build mobile list summaries with a fixed number of batch queries."""
+    if not tasks:
+        return []
+    task_ids = [task.id for task in tasks]
+    customer_ids = {task.customer_id for task in tasks}
+    delivery_ids = {task.delivery_id for task in tasks}
+    assigned_ids = {task.assigned_to for task in tasks if task.assigned_to is not None}
+    customers = {
+        row.id: row
+        for row in db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
+    }
+    deliveries = {
+        row.id: row
+        for row in db.scalars(select(Delivery).where(Delivery.id.in_(delivery_ids))).all()
+    }
+    assignees = {
+        row.id: row
+        for row in db.scalars(select(User).where(User.id.in_(assigned_ids))).all()
+    } if assigned_ids else {}
+    items_by_task: dict[int, list[DeliveryPickTaskItem]] = {}
+    for item in db.scalars(
+        select(DeliveryPickTaskItem)
+        .where(DeliveryPickTaskItem.task_id.in_(task_ids))
+        .order_by(DeliveryPickTaskItem.task_id, DeliveryPickTaskItem.id)
+    ).all():
+        items_by_task.setdefault(int(item.task_id), []).append(item)
+    return [
+        _delivery_pick_task_summary(
+            db,
+            task,
+            customer_name=(
+                customers[task.customer_id].name
+                if task.customer_id in customers
+                else None
+            ),
+            delivery_number=(
+                deliveries[task.delivery_id].delivery_number
+                if task.delivery_id in deliveries
+                else None
+            ),
+            items=items_by_task.get(task.id, []),
+            assigned_user=assignees.get(task.assigned_to),
+            assignee_preloaded=True,
+        )
+        for task in tasks
+    ]
 
 
 def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
@@ -2799,6 +2963,10 @@ def create_or_rebuild_delivery_pick_task(
 @pick_router.get("")
 def list_delivery_pick_tasks(
     status_filter: str | None = Query(default=None, alias="status"),
+    response_mode: Literal["full", "summary"] = Query(default="full"),
+    include_dispatched: bool = Query(default=True),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(_can_view_pick_tasks),
 ) -> dict:
@@ -2813,12 +2981,30 @@ def list_delivery_pick_tasks(
         if normalized_status not in PICK_TASK_STATUSES:
             raise HTTPException(status_code=400, detail="拿货任务状态筛选值无效")
         query = query.where(DeliveryPickTask.status == normalized_status)
+    if not include_dispatched:
+        query = query.where(DeliveryPickTask.status != "dispatched")
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    if page is not None:
+        query = query.offset((page - 1) * page_size).limit(page_size)
     tasks = db.scalars(query).all()
-    return {
-        "items": [
+    items = (
+        _delivery_pick_task_list_summaries(db, tasks)
+        if response_mode == "summary"
+        else [
             _pick_task_response(db, task, include_location_plan=False)
             for task in tasks
         ]
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size if page is not None else total,
+        "total_pages": (
+            (total + page_size - 1) // page_size
+            if page is not None and total
+            else (1 if total else 0)
+        ),
     }
 
 

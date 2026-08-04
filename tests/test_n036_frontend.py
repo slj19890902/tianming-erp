@@ -26,13 +26,11 @@ def test_desktop_delivery_list_exposes_pick_task_contract_and_actions() -> None:
 
 
 def test_desktop_delivery_row_owns_pick_actions_without_duplicate_panel() -> None:
-    row_match = re.search(
-        r'<tbody>\s*<tr v-for="row in deliveries" :key="row.id".*?</tr>\s*</tbody>',
-        INDEX,
-        re.DOTALL,
-    )
-    assert row_match is not None
-    delivery_row = row_match.group(0)
+    action_position = INDEX.index("createDeliveryPickTask(row)")
+    row_start = INDEX.rfind("<tr", 0, action_position)
+    row_end = INDEX.index("</tr>", action_position)
+    assert row_start >= 0
+    delivery_row = INDEX[row_start:row_end]
     for marker in (
         "createDeliveryPickTask(row)",
         "openDeliveryPickTask(row)",
@@ -70,7 +68,11 @@ def test_mobile_page_uses_cookie_auth_and_requested_api_paths() -> None:
 def test_mobile_page_without_task_id_lists_and_selects_pending_tasks() -> None:
     assert "let taskId =" in MOBILE
     assert "if(taskId)" in MOBILE and "else await loadTaskList()" in MOBILE
-    assert 'request("/api/delivery-picks"' in MOBILE
+    assert "/api/delivery-picks?" in MOBILE
+    assert "response_mode=summary" in MOBILE
+    assert "include_dispatched=false" in MOBILE
+    assert "page_size=100" in MOBILE
+    assert "正在读取待拿货任务" in MOBILE
     for marker in ("loadTaskList", "selectTask", "taskChooser", "customer_name"):
         assert marker in MOBILE
     assert "/api/delivery-picks/${encodeURIComponent(taskId)}" in MOBILE

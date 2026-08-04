@@ -1909,7 +1909,7 @@
                     <button class="btn primary" @click="openSupplier()">新增供应商</button>
                   </div>
                 </div>
-                <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }}</div>
+                <div v-if="supplierError" class="notice danger" style="margin-bottom:8px">{{ supplierError }} <button class="btn small" @click="loadSuppliers(true)" :disabled="supplierLoading">重新加载</button></div>
                 <div v-if="supplierLoading" class="muted" style="padding:18px;text-align:center">供应商正在加载…</div>
                 <div v-else-if="!filteredSuppliers.length" class="empty">暂无符合条件的供应商</div>
                 <div v-else class="table-wrap">
@@ -6525,7 +6525,8 @@
             );
             if (!keyword) return rows;
             return rows.filter(row => [
-              row.standard_name, row.display_name, row.business_code, row.contact_name, row.phone
+              row.standard_name, row.display_name, row.business_code, row.contact_name, row.phone,
+              ...(row.aliases || []),
             ].some(value => String(value || "").toLowerCase().includes(keyword)));
           },
           // 新业务只允许选择供应商主数据中启用的标准名称。
@@ -9986,20 +9987,28 @@
             return all;
           },
           async loadSuppliers(includeInactive = this.canAdmin) {
+            const requestKey = "suppliers:list";
+            const controller = this.beginLatestRequest(requestKey);
             this.supplierLoading = true;
             this.supplierError = "";
             try {
               const {data} = includeInactive
-                ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}})
-                : await axios.get("/api/master/suppliers/candidates");
+                ? await axios.get("/api/master/suppliers", {params:{include_inactive:true}, signal:controller.signal})
+                : await axios.get("/api/master/suppliers/candidates", {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return;
               this.suppliers = Array.isArray(data) ? data : (data.items || []);
               this.materialSuppliers = this.activeSupplierNames;
             } catch(error) {
-              this.supplierError = this.errorMessage(error);
-              this.suppliers = [];
-              this.materialSuppliers = [];
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.supplierError = `供应商读取失败：${this.errorMessage(error)}`;
+                this.suppliers = [];
+                this.materialSuppliers = [];
+              }
             } finally {
-              this.supplierLoading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.supplierLoading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           defaultSupplierName() {

@@ -174,6 +174,7 @@ const window={{confirm:()=>true}};
 function allCounted(){{return true}}
 function updateSubmitState(){{}}
 function showMessage(){{}}
+function handleStocktakeAuth(){{return false}}
 function resetLockedInputs(){{state.locked=true}}
 function resetToLocations(){{throw new Error("non-drift error must not clear the draft")}}
 const requests=[];

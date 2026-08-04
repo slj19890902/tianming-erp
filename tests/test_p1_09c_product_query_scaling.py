@@ -129,6 +129,34 @@ def _read_and_count(factory, user_id: int):
     return response, statements
 
 
+def _read_summary_and_count(factory, user_id: int):
+    from app.api.products import list_products
+    from app.models.user import User
+
+    engine = factory.kw["bind"]
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.lstrip().lower())
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        with factory() as db:
+            user = db.get(User, user_id)
+            assert user is not None
+            response = list_products(
+                db=db,
+                user=user,
+                customer_id=1,
+                page=1,
+                page_size=50,
+                response_mode="summary",
+            )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    return response, statements
+
+
 def _select_count(statements: list[str]) -> int:
     return sum(statement.startswith("select") for statement in statements)
 
@@ -170,3 +198,27 @@ def test_product_list_query_growth_is_bounded(
     _large, large_sql = _read_and_count(large_factory, large_user_id)
 
     assert _select_count(large_sql) <= _select_count(small_sql) + 2
+
+
+def test_product_summary_omits_editor_only_relations_and_keeps_list_contract(
+    tmp_path: Path,
+) -> None:
+    _engine, factory, user_id = _fixture(tmp_path, visible_count=2)
+    response, statements = _read_summary_and_count(factory, user_id)
+
+    assert response["total"] == 2
+    first = response["items"][0]
+    assert first["product_code"] == "P1-09C-P-000"
+    assert first["material_code"] == "P1M000"
+    assert first["material_supplier_name"] == "Supplier 0"
+    assert first["readiness"]["status"] in {"资料已完善", "待完善"}
+    assert first["version"] == 1
+    assert "drawings" not in first
+    assert "mold_tool" not in first
+    assert "report_notes" not in first
+    assert "cost_unit_price" not in first
+    assert _select_count(statements) <= 6
+    assert all(
+        not statement.startswith(("insert", "update", "delete"))
+        for statement in statements
+    )

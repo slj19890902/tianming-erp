@@ -24,9 +24,14 @@ def test_product_list_is_customer_scoped_and_cancels_stale_requests() -> None:
 
     assert "!this.selectedProductCustomer" in products
     assert 'this.beginLatestRequest("products:list")' in products
+    assert 'response_mode: "summary"' in products
     assert 'axios.get("/api/master/products", { params, signal:controller.signal })' in products
+    assert "this.productsLoading = true" in products
+    assert "this.productsError = \"\"" in products
     assert 'this.finishLatestRequest("products:list", controller)' in products
     assert "async selectProductCustomer(row)" in INDEX
+    assert 'v-if="productsLoading"' in INDEX
+    assert 'v-else-if="productsError"' in INDEX
 
 
 def test_material_list_is_tab_driven_and_cancels_stale_requests() -> None:
@@ -36,7 +41,20 @@ def test_material_list_is_tab_driven_and_cancels_stale_requests() -> None:
     assert 'if (tab === "materials") await this.loadMaterials();' in tab
     assert 'this.beginLatestRequest("materials:list")' in materials
     assert 'this.fetchAllMaterials(params, controller.signal)' in materials
+    assert "const isUnfilteredCommonView" in materials
+    assert "this.allMaterials = this.materials.slice()" in materials
     assert 'this.finishLatestRequest("materials:list", controller)' in materials
+
+
+def test_product_material_cell_uses_list_snapshot_before_full_material_cache() -> None:
+    cell = _block("          productMaterialCell(row) {", "          materialFullStructure(row) {")
+    title = _block("          materialFullStructure(row) {", "          productLayerFluteText(row) {")
+
+    assert "row.material_code" in cell
+    assert "row.material_supplier_name" in cell
+    assert "row.material_weight" in cell
+    assert "row.material_code" in title
+    assert "row.material_weight" in title
 
 
 def test_product_editor_loads_materials_and_molds_only_when_opened() -> None:

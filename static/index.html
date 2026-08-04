@@ -1895,7 +1895,9 @@
                     <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
                     <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
                   </div>
-                  <div v-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
+                  <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
+                  <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="loadProducts()">重试</button></div>
+                  <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
                   <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="!isWorkshop" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="!isWorkshop" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" @click="toggleProductStatus(row)">{{ row.is_active ? "停用" : "启用" }}</button><button v-if="canDeleteProducts" class="btn small danger" @click="deleteProduct(row)">移入垃圾站</button></td></tr></tbody></table></div>
                 </template>
               </div>
@@ -6330,6 +6332,7 @@
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
+            productsLoading: false, productsError: "",
             showProductMoreFilters: false,
             productTrashOpen: false, productTrashItems: [],
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
@@ -8035,6 +8038,15 @@
               if (weights) parts.push(weights);
               return { text: parts.join("｜"), muted: false };
             }
+            const snapshotCode = String(row.material_code || "").trim();
+            if (snapshotCode) {
+              const flute = row.flute_type || "";
+              const codeFlute = flute ? `${snapshotCode}/${flute}` : snapshotCode;
+              const weights = this.pureWeights(row.material_weight);
+              const parts = [row.material_supplier_name || "-", codeFlute];
+              if (weights) parts.push(weights);
+              return { text: parts.join("｜"), muted: false };
+            }
             const legacy = String(row.legacy_material_text || "").trim();
             if (legacy) {
               const nums = legacy.match(/\d+(?:\.\d+)?/g);
@@ -8045,7 +8057,13 @@
           // 产品材质完整纸种明细（hover 显示，列表只显示压缩格式）
           materialFullStructure(row) {
             const m = this._findMaterial(row.material_id);
-            if (!m) return "";
+            if (!m) {
+              const code = String(row.material_code || "").trim();
+              if (!code) return "";
+              const flute = row.flute_type || "";
+              const struct = row.material_weight || "";
+              return `${code}${flute ? "/" + flute : ""}　${struct}`.trim();
+            }
             const code = this.materialBaseCode(m);
             const flute = row.flute_type || "";
             const struct = this.materialWeightStructure(m) || "";
@@ -9888,7 +9906,7 @@
           },
           async loadProducts() {
             if (this.activePage === "products" && this.productTab === "products" && !this.selectedProductCustomer) {
-              this.products = []; this.productsTotal = 0; return;
+              this.products = []; this.productsTotal = 0; this.productsLoading = false; this.productsError = ""; return;
             }
             const params = {
               keyword: this.filters.productKeyword,
@@ -9898,17 +9916,26 @@
               material: this.filters.productMaterial,
               include_inactive:this.filters.showInactiveProducts,
               page: this.pages.products,
-              page_size: this.pageSize
+              page_size: this.pageSize,
+              response_mode: "summary"
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
             else if (this.filters.productCustomer) params.customer_id = this.filters.productCustomer;
             const controller = this.beginLatestRequest("products:list");
+            this.productsLoading = true;
+            this.productsError = "";
             try {
               const { data } = await axios.get("/api/master/products", { params, signal:controller.signal });
+              if (controller.signal.aborted) return;
               this.products = data.items; this.productsTotal = data.total;
             } catch (error) {
-              if (!this.isCancelledRequest(error)) throw error;
+              if (!this.isCancelledRequest(error)) {
+                this.products = [];
+                this.productsTotal = 0;
+                this.productsError = this.errorMessage(error) || "常用箱读取失败，请重试";
+              }
             } finally {
+              if (latestRequestControllers.get("products:list") === controller) this.productsLoading = false;
               this.finishLatestRequest("products:list", controller);
             }
           },
@@ -10021,8 +10048,9 @@
               // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
               this.materialSuppliers = this.activeSupplierNames;
               if (!this.allMaterials.length) {
-                const all = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
-                this.allMaterials = all;
+                const isUnfilteredCommonView = !this.materialLayerFilter && !this.materialSupplierFilter && this.materialSort === "common";
+                if (isUnfilteredCommonView) this.allMaterials = this.materials.slice();
+                else this.allMaterials = await this.fetchAllMaterials({ sort: "common" }, controller.signal);
               }
             } catch (error) {
               if (!this.isCancelledRequest(error)) throw error;
@@ -13895,6 +13923,8 @@
             this.filters.productSpec = "";
             this.filters.productMaterial = "";
             this.pages.products = 1;
+            this.products = [];
+            this.productsTotal = 0;
             await this.loadProducts();
           },
           async selectProductTab(tab) {
@@ -13922,6 +13952,8 @@
             this.filters.productMaterial = "";
             this.products = [];
             this.productsTotal = 0;
+            this.productsLoading = false;
+            this.productsError = "";
           },
           openMaterial(row=null) {
             this.materialForm = row ? {...blankMaterial(),...JSON.parse(JSON.stringify(row))} : blankMaterial();

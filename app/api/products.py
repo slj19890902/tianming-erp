@@ -603,6 +603,37 @@ def _response(product: Product, user: User) -> dict:
     return data
 
 
+def _summary_response(product: Product, user: User) -> dict:
+    """Return only fields used by the paginated common-box list."""
+    material = product.material
+    data = {
+        "id": product.id,
+        "customer_id": product.customer_id,
+        "product_code": product.product_code,
+        "customer_material_code": product.customer_material_code,
+        "product_name": product.product_name,
+        "length_mm": product.length_mm,
+        "width_mm": product.width_mm,
+        "height_mm": product.height_mm,
+        "material_id": product.material_id,
+        "legacy_material_text": product.legacy_material_text,
+        "material_code": (
+            (material.code or "").split("-")[0].strip() if material else None
+        ),
+        "material_supplier_name": material.supplier_name if material else None,
+        "material_weight": material.basis_weight_description if material else None,
+        "flute_type": product.flute_type,
+        "sale_unit_price": product.sale_unit_price,
+        "manual_modified": product.manual_modified,
+        "version": product.version,
+        "is_active": product.is_active,
+        "readiness": product_readiness(product),
+    }
+    if user.role == "workshop":
+        data.pop("sale_unit_price", None)
+    return data
+
+
 _PRODUCT_SYNC_DECIMAL_FIELDS = {
     "length_mm",
     "width_mm",
@@ -862,6 +893,7 @@ def list_products(
     spec: str = "",
     material: str = "",
     include_inactive: bool = False,
+    response_mode: Literal["full", "summary"] = Query(default="full"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -930,12 +962,17 @@ def list_products(
             )
         )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    items = db.scalars(
-        query.options(
-            selectinload(Product.drawings),
-            selectinload(Product.material),
-            selectinload(Product.mold_tool),
+    is_summary = response_mode == "summary"
+    load_options = [selectinload(Product.material)]
+    if not is_summary:
+        load_options.extend(
+            [
+                selectinload(Product.drawings),
+                selectinload(Product.mold_tool),
+            ]
         )
+    items = db.scalars(
+        query.options(*load_options)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
@@ -944,7 +981,12 @@ def list_products(
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total else 0,
-        "items": [_response(item, user) for item in items],
+        "items": [
+            _summary_response(item, user)
+            if is_summary
+            else _response(item, user)
+            for item in items
+        ],
     }
 
 

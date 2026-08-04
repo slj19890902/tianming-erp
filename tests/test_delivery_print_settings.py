@@ -49,13 +49,21 @@ def _login(client: TestClient, username: str) -> None:
     assert response.status_code == 200
 
 
+DEFAULT_PRINT_PROFILE = {
+    "printer_model": "EPSON SK820",
+    "orientation_mode": "driver_managed",
+    "paper_width_mm": 241.0,
+    "paper_height_mm": 139.5,
+}
+
+
 def test_delivery_print_settings_are_public_and_default_without_writing(delivery_print_settings_app):
     app, _, database_path = delivery_print_settings_app
     settings_path = database_path.parent / "delivery_print_settings.json"
     with TestClient(app) as client:
         response = client.get("/api/system/delivery-print-settings")
     assert response.status_code == 200
-    assert response.json() == {"paper_width_mm": 241.0, "paper_height_mm": 139.5}
+    assert response.json() == DEFAULT_PRINT_PROFILE
     assert not settings_path.exists()
 
 
@@ -71,12 +79,62 @@ def test_admin_can_save_paper_dimensions_and_audit(delivery_print_settings_app):
         )
         reread = client.get("/api/system/delivery-print-settings")
     assert response.status_code == 200
-    assert response.json() == {"paper_width_mm": 250.0, "paper_height_mm": 140.25}
+    assert response.json() == {
+        **DEFAULT_PRINT_PROFILE,
+        "paper_width_mm": 250.0,
+        "paper_height_mm": 140.25,
+    }
     assert reread.json() == response.json()
     assert database_path.parent.joinpath("delivery_print_settings.json").is_file()
     with session_factory() as session:
         audit = session.query(OperationLog).filter_by(action="UPDATE_DELIVERY_PRINT_SETTINGS").one()
     assert "250" in audit.details
+
+
+def test_existing_dimension_only_file_is_upgraded_in_memory_without_rewrite(
+    delivery_print_settings_app,
+):
+    app, _, database_path = delivery_print_settings_app
+    settings_path = database_path.parent / "delivery_print_settings.json"
+    settings_path.write_text(
+        '{"paper_width_mm": 242, "paper_height_mm": 140}\n',
+        encoding="utf-8",
+    )
+    before = settings_path.read_bytes()
+
+    with TestClient(app) as client:
+        response = client.get("/api/system/delivery-print-settings")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        **DEFAULT_PRINT_PROFILE,
+        "paper_width_mm": 242.0,
+        "paper_height_mm": 140.0,
+    }
+    assert settings_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"printer_model": "", "paper_width_mm": 241, "paper_height_mm": 139.5},
+        {
+            "printer_model": "EPSON SK820",
+            "orientation_mode": "landscape",
+            "paper_width_mm": 241,
+            "paper_height_mm": 139.5,
+        },
+    ],
+)
+def test_delivery_print_profile_rejects_invalid_model_or_orientation(
+    delivery_print_settings_app,
+    payload,
+):
+    app, _, _ = delivery_print_settings_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.put("/api/system/delivery-print-settings", json=payload)
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize(

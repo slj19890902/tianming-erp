@@ -74,6 +74,22 @@ def test_print_fonts_are_one_step_larger_without_adding_a_blank_page() -> None:
     )
 
 
+def test_dot_matrix_print_uses_driver_managed_physical_orientation() -> None:
+    source = _source()
+
+    assert "size: auto" in _css_block(source, "@page")
+    assert "size: 241mm 139.5mm" not in source
+    assert "pageStyle.textContent" not in source
+    assert 'data-field="paperGuide"' in source
+    assert "ERP 已自动应用" in source
+    assert "EPSON SK820" in source
+    assert "driver_managed" in source
+    assert "不要交换宽高" in source
+    assert "再次旋转" in source
+    assert "每张纸打印 1 页" in source
+    assert "天明ERP送货单-" not in source
+
+
 def test_delivery_print_inline_javascript_is_syntactically_valid(
     tmp_path: Path,
 ) -> None:

@@ -3167,6 +3167,10 @@
               <div class="section-title" style="margin-top:16px">送货单打印纸张</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:end">
+                  <div class="field" style="margin:0;min-width:210px">
+                    <label>目标打印机型号</label>
+                    <input class="input" type="text" maxlength="80" v-model.trim="deliveryPrintSettings.printer_model" :disabled="user.role !== 'admin'" />
+                  </div>
                   <div class="field" style="margin:0;min-width:170px">
                     <label>打印纸宽（mm）</label>
                     <input class="input" type="number" min="100" max="400" step="0.01" v-model.number="deliveryPrintSettings.paper_width_mm" :disabled="user.role !== 'admin'" />
@@ -3175,9 +3179,9 @@
                     <label>打印纸高（mm）</label>
                     <input class="input" type="number" min="80" max="400" step="0.01" v-model.number="deliveryPrintSettings.paper_height_mm" :disabled="user.role !== 'admin'" />
                   </div>
-                  <button v-if="user.role === 'admin'" class="btn primary" @click="saveDeliveryPrintSettings">保存纸张设置</button>
+                  <button v-if="user.role === 'admin'" class="btn primary" @click="saveDeliveryPrintSettings">保存打印档案</button>
                 </div>
-                <div class="muted" style="font-size:12px;margin-top:8px">默认 241 × 139.5mm。仅在更换针式打印机或连续纸规格时调整；此处保存的设置供送货单打印页读取。</div>
+                <div class="muted" style="font-size:12px;margin-top:8px">该打印档案保存在 ERP 服务器，所有电脑自动读取同一型号和尺寸。默认 EPSON SK820、241 × 139.5mm；宽是两侧针孔之间的横向纸宽，高是相邻横向撕纸线之间的走纸高度，不要交换宽高。为避免新 ERP 再旋转 90°，纸张物理方向沿用实际打印电脑已安装的打印机驱动，与旧 ERP 的正常打印方式一致。</div>
               </div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
                 <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
@@ -6202,7 +6206,7 @@
               {value:"workshop",label:"车间/仓库"}, {value:"delivery_picker",label:"送货拿货员"}, {value:"admin",label:"管理员"},
             ],
             companyConfig: {}, companyForm: {}, showCompanyModal: false,
-            deliveryPrintSettings: { paper_width_mm: 241, paper_height_mm: 139.5 },
+            deliveryPrintSettings: { printer_model: "EPSON SK820", orientation_mode: "driver_managed", paper_width_mm: 241, paper_height_mm: 139.5 },
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
             showPriceAdjustModal: false, priceAdjustLoading: false, priceAdjustError: "",
@@ -12406,7 +12410,7 @@
             try {
               const { data } = await axios.put("/api/system/delivery-print-settings", this.deliveryPrintSettings);
               this.deliveryPrintSettings = data;
-              this.showToast("送货单打印纸张设置已保存");
+              this.showToast("送货单打印档案已保存，所有电脑将自动读取");
             } catch (e) {
               this.showToast("保存纸张设置失败：" + this.errorMessage(e), true);
             }

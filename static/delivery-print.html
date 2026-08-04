@@ -35,6 +35,18 @@
       text-align: center;
       text-decoration: none;
     }
+    .print-guide {
+      max-width: 920px;
+      margin: -6px auto 14px;
+      padding: 9px 12px;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      background: #fffbeb;
+      color: #92400e;
+      font-size: 14px;
+      line-height: 1.55;
+      text-align: center;
+    }
     .sheet {
       position: relative;
       display: flex;
@@ -173,7 +185,8 @@
       text-align: center;
     }
     @page {
-      size: 241mm 139.5mm;
+      /* 物理方向沿用实际打印电脑的驱动，避免浏览器再次旋转 90°。 */
+      size: auto;
       margin: 0;
     }
     @media print {
@@ -213,6 +226,9 @@
   <div class="toolbar no-print">
     <button id="printButton" type="button">确认打印</button>
     <a href="/" aria-label="返回系统">返回系统</a>
+  </div>
+  <div class="print-guide no-print" data-field="paperGuide">
+    正在读取送货单纸张设置…
   </div>
 
   <div id="errorBox" class="error" hidden></div>
@@ -289,20 +305,22 @@
       return document.getElementById("sheetTemplate").content.firstElementChild.cloneNode(true);
     }
 
-    function applyPaperSize(widthValue, heightValue) {
+    function applyPrintProfile(settings = {}) {
+      const widthValue = settings.paper_width_mm;
+      const heightValue = settings.paper_height_mm;
       const width = Number(widthValue);
       const height = Number(heightValue);
       const safeWidth = Number.isFinite(width) && width >= 100 && width <= 400 ? width : 241;
       const safeHeight = Number.isFinite(height) && height >= 80 && height <= 400 ? height : 139.5;
+      const printerModel = String(settings.printer_model || "EPSON SK820").trim() || "EPSON SK820";
       document.documentElement.style.setProperty("--paper-width", `${safeWidth}mm`);
       document.documentElement.style.setProperty("--paper-height", `${safeHeight}mm`);
-      let pageStyle = document.getElementById("dynamicPageSize");
-      if (!pageStyle) {
-        pageStyle = document.createElement("style");
-        pageStyle.id = "dynamicPageSize";
-        document.head.appendChild(pageStyle);
+      document.documentElement.dataset.printerModel = printerModel;
+      document.documentElement.dataset.orientationMode = "driver_managed";
+      const guide = document.querySelector('[data-field="paperGuide"]');
+      if (guide) {
+        guide.textContent = `ERP 已自动应用 ${printerModel} 连续纸档案（${safeWidth} × ${safeHeight}mm）。打印窗口请选择当前电脑已安装的 ${printerModel}，沿用该打印机驱动的纸张和方向、缩放 100%、每张纸打印 1 页；不要交换宽高或再次旋转。`;
       }
-      pageStyle.textContent = `@page { size: ${safeWidth}mm ${safeHeight}mm; margin: 0; }`;
     }
 
     async function loadPaperSettings() {
@@ -312,9 +330,14 @@
         });
         if (!response.ok) throw new Error("读取纸张设置失败");
         const settings = await response.json();
-        applyPaperSize(settings.paper_width_mm, settings.paper_height_mm);
+        applyPrintProfile(settings);
       } catch (_error) {
-        applyPaperSize(241, 139.5);
+        applyPrintProfile({
+          printer_model: "EPSON SK820",
+          orientation_mode: "driver_managed",
+          paper_width_mm: 241,
+          paper_height_mm: 139.5,
+        });
       }
     }
 

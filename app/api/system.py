@@ -75,6 +75,8 @@ class CompanyConfigUpdate(BaseModel):
 
 
 class DeliveryPrintSettingsUpdate(BaseModel):
+    printer_model: str = "EPSON SK820"
+    orientation_mode: str = "driver_managed"
     paper_width_mm: float
     paper_height_mm: float
 

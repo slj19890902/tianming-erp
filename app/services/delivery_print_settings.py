@@ -17,6 +17,8 @@ from app.core.config import load_settings
 
 
 DEFAULT_DELIVERY_PRINT_SETTINGS = {
+    "printer_model": "EPSON SK820",
+    "orientation_mode": "driver_managed",
     "paper_width_mm": 241.0,
     "paper_height_mm": 139.5,
 }
@@ -47,9 +49,32 @@ def _validated_dimension(value: Any, *, minimum: float, maximum: float, label: s
     return rounded
 
 
-def normalize_delivery_print_settings(payload: dict[str, Any]) -> dict[str, float]:
-    """Validate the stable public API contract for print paper dimensions."""
+def _validated_printer_model(value: Any) -> str:
+    if value is None:
+        return str(DEFAULT_DELIVERY_PRINT_SETTINGS["printer_model"])
+    if not isinstance(value, str):
+        raise ValueError("目标打印机型号必须是文字")
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > 80
+        or any(ord(char) < 32 for char in normalized)
+    ):
+        raise ValueError("目标打印机型号必须为 1～80 个可见字符")
+    return normalized
+
+
+def normalize_delivery_print_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the shared ERP print profile used by every client computer."""
+    orientation_mode = payload.get(
+        "orientation_mode",
+        DEFAULT_DELIVERY_PRINT_SETTINGS["orientation_mode"],
+    )
+    if orientation_mode != "driver_managed":
+        raise ValueError("送货单打印方向必须由实际打印电脑的驱动管理")
     return {
+        "printer_model": _validated_printer_model(payload.get("printer_model")),
+        "orientation_mode": orientation_mode,
         "paper_width_mm": _validated_dimension(
             payload.get("paper_width_mm"),
             minimum=MIN_PAPER_WIDTH_MM,
@@ -65,7 +90,7 @@ def normalize_delivery_print_settings(payload: dict[str, Any]) -> dict[str, floa
     }
 
 
-def get_delivery_print_settings() -> dict[str, float]:
+def get_delivery_print_settings() -> dict[str, Any]:
     """Read settings without creating or modifying a file on first access."""
     path = delivery_print_settings_path()
     if not path.is_file():
@@ -74,14 +99,16 @@ def get_delivery_print_settings() -> dict[str, float]:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("配置不是对象")
-        return normalize_delivery_print_settings(raw)
+        return normalize_delivery_print_settings(
+            {**DEFAULT_DELIVERY_PRINT_SETTINGS, **raw}
+        )
     except (OSError, json.JSONDecodeError, ValueError):
         # Printer calibration must never stop printing because a hand-edited
         # local config file is invalid.  Falling back is safe and deterministic.
         return dict(DEFAULT_DELIVERY_PRINT_SETTINGS)
 
 
-def save_delivery_print_settings(payload: dict[str, Any]) -> dict[str, float]:
+def save_delivery_print_settings(payload: dict[str, Any]) -> dict[str, Any]:
     """Atomically persist validated settings beside the selected database."""
     settings = normalize_delivery_print_settings(payload)
     path = delivery_print_settings_path()

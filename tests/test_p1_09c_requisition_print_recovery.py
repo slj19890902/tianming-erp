@@ -31,6 +31,7 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
     )
     assert result.returncode == 0, result.stderr
 
+
 def test_requisition_print_has_loading_retry_and_safe_dom_contract() -> None:
     for marker in (
         'id="printButton"',
